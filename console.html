@@ -431,6 +431,12 @@ asyncio.run(main())</pre>
                 document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
                 tab.classList.add('active');
                 document.getElementById(tab.dataset.panel).classList.add('active');
+                if (tab.dataset.panel === 'onboarding') {
+                    const list = document.getElementById('interfaces-list');
+                    if (list && (list.children.length === 0 || list.querySelector('.loading-state'))) {
+                        loadOnboarding();
+                    }
+                }
             });
         });
         function formatTime(ts) {
@@ -595,7 +601,6 @@ asyncio.run(main())</pre>
             loadStatus();
             loadInterfaces();
             loadConfig();
-            loadOnboarding();
         }
         function startAutoRefresh() {
             timer = setInterval(() => {
