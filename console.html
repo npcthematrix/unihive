@@ -663,6 +663,24 @@ asyncio.run(main())</pre>
                 setTimeout(() => { btn.textContent = '复制'; }, 2000);
             });
         });
+
+        (function setupOnboardingNav() {
+            const navLinks = document.querySelectorAll('#onboarding-nav a');
+            const sections = Array.from(navLinks).map(a => document.getElementById(a.dataset.target)).filter(Boolean);
+            if (sections.length === 0) return;
+
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        navLinks.forEach(l => l.classList.remove('active'));
+                        const link = document.querySelector(`#onboarding-nav a[data-target="${entry.target.id}"]`);
+                        if (link) link.classList.add('active');
+                    }
+                });
+            }, { rootMargin: '-20% 0px -70% 0px' });
+
+            sections.forEach(s => observer.observe(s));
+        })();
     </script>
 </body>
 </html>
