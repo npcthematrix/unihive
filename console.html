@@ -640,6 +640,29 @@ asyncio.run(main())</pre>
                 container.innerHTML = '<div class="loading-state">加载失败<span class="retry-link" onclick="loadOnboarding()">点击重试</span></div>';
             }
         }
+        document.getElementById('onboarding').addEventListener('click', (e) => {
+            if (!e.target.classList.contains('copy-btn')) return;
+            const btn = e.target;
+            const pre = btn.nextElementSibling;
+            if (!pre || pre.tagName !== 'PRE') return;
+            const text = pre.textContent;
+            if (!navigator.clipboard) {
+                btn.textContent = '浏览器不支持';
+                setTimeout(() => { btn.textContent = '复制'; }, 2000);
+                return;
+            }
+            navigator.clipboard.writeText(text).then(() => {
+                btn.textContent = '已复制';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = '复制';
+                    btn.classList.remove('copied');
+                }, 2000);
+            }).catch(() => {
+                btn.textContent = '复制失败';
+                setTimeout(() => { btn.textContent = '复制'; }, 2000);
+            });
+        });
     </script>
 </body>
 </html>
