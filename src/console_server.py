@@ -104,14 +104,24 @@ def get_upstream_status() -> dict:
     }
 
 
+def _derive_source(spec: dict, upstream_tool_mapping: dict) -> str:
+    routing = spec.get("routing") or spec.get("name")
+    mapping = upstream_tool_mapping.get(routing) or {}
+    sources = list(mapping.keys())
+    if sources:
+        return sources[0]
+    return spec.get("source") or spec.get("upstream") or ""
+
+
 def get_interfaces() -> dict:
     config = load_config()
+    upstream_tool_mapping = config.get("upstream_tool_mapping", {}) or {}
     tools = []
     for spec in config.get("tools", []) or []:
         tools.append({
             "name": spec.get("name"),
             "description": spec.get("description", ""),
-            "source": spec.get("source") or spec.get("upstream", ""),
+            "source": _derive_source(spec, upstream_tool_mapping),
             "dangerous": bool(spec.get("dangerous", False)),
             "cache_ttl_key": spec.get("cache_ttl_key"),
             "params": [

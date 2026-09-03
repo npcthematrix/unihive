@@ -6,6 +6,7 @@
     <title>UniHive Console</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
         :root {
             --bg: #f8f9fa;
             --card-bg: #ffffff;
@@ -20,6 +21,7 @@
             --offline: #ef4444;
             --degraded: #f59e0b;
             --disabled: #9ca3af;
+            --primary-soft: #e7f1ff;
         }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 20px; }
         .container { max-width: 1200px; margin: 0 auto; }
@@ -62,33 +64,51 @@
         .latency.good { color: var(--success); }
         .latency.slow { color: var(--warning); }
         .latency.bad { color: var(--danger); }
-        .tool-filters { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-        .tool-filters input { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); color: var(--text); }
-        .tool-filters input:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
-        .tool-filters .tool-counter { font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; }
-        .tool-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; background: var(--card-bg); }
-        .tool-group-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; user-select: none; background: linear-gradient(180deg, #fafbfc 0%, #ffffff 100%); transition: background 0.15s; }
-        .tool-group-header:hover { background: linear-gradient(180deg, #f1f3f5 0%, #fafbfc 100%); }
-        .tool-group-header .caret { display: inline-block; font-size: 0.7rem; color: var(--text-secondary); transition: transform 0.2s ease; width: 12px; }
-        .tool-group-header .group-title { font-weight: 600; font-size: 0.95rem; flex: 1; }
-        .tool-group-header .group-meta { font-size: 0.75rem; color: var(--text-secondary); display: flex; gap: 12px; align-items: center; }
-        .tool-group-header .group-count { background: var(--bg); padding: 2px 10px; border-radius: 12px; font-weight: 600; color: var(--text); }
-        .tool-group.collapsed .tool-group-body { display: none; }
-        .tool-group.collapsed .caret { transform: rotate(90deg); }
-        .tool-group-body table { border-collapse: collapse; }
-        .tool-group-body thead { background: var(--bg); }
-        .tool-group-body th { padding: 8px 16px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); border-bottom: 1px solid var(--border); }
-        .tool-group-body td { padding: 10px 16px; border-bottom: 1px solid #f1f3f5; }
-        .tool-group-body tr:last-child td { border-bottom: none; }
-        .tool-group-body tr:hover { background: #fafbfc; }
-        .tool-group-body .tool-desc { color: var(--text-secondary); font-size: 0.875rem; }
-        .tool-group-body .tool-params { font-family: monospace; font-size: 0.75rem; color: var(--text-secondary); }
+        .ifs-layout { display: grid; grid-template-columns: 240px 1fr; gap: 0; min-height: 500px; }
+        .ifs-sidebar { position: sticky; top: 0; max-height: calc(100vh - 120px); overflow-y: auto; border-right: 1px solid var(--border); padding-right: 8px; }
+        .ifs-search { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; background: var(--card-bg); color: var(--text); margin-bottom: 8px; }
+        .ifs-search:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
+        .ifs-nav { display: flex; flex-direction: column; gap: 2px; }
+        .ifs-nav-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: none; background: transparent; cursor: pointer; border-radius: 6px; font-size: 0.85rem; color: var(--text); text-align: left; transition: background 150ms ease; border-left: 3px solid transparent; }
+        .ifs-nav-item:hover { background: #f8f9fa; }
+        .ifs-nav-item.active { background: var(--primary-soft); border-left-color: var(--primary); font-weight: 500; }
+        .ifs-nav-item.active .dot { background: var(--primary); }
+        .ifs-nav-item .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--disabled); display: inline-block; flex-shrink: 0; }
+        .ifs-nav-item .label { flex: 1; }
+        .ifs-nav-item .count { font-family: monospace; font-size: 0.75rem; color: var(--text-secondary); }
+        .ifs-nav-item .count.has-match { color: var(--primary); font-weight: 600; }
+        .ifs-nav-item .count.zero { color: var(--disabled); }
+        .ifs-nav-item[disabled] { opacity: 0.4; pointer-events: none; }
+        .ifs-content { min-width: 0; overflow-x: auto; padding-left: 16px; }
+        .ifs-content-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+        .ifs-content-header h3 { font-size: 0.95rem; font-weight: 600; }
+        .ifs-content-header h3 code { font-family: monospace; font-size: 0.85rem; color: var(--text-secondary); font-weight: normal; margin-left: 8px; }
+        .ifs-content-meta { font-size: 0.8rem; color: var(--text-secondary); }
+        .ifs-table { width: 100%; border-collapse: collapse; animation: ifsFadeIn 100ms ease; }
+        .ifs-table thead { background: var(--bg); }
+        .ifs-table th { padding: 8px 12px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); border-bottom: 1px solid var(--border); text-align: left; }
+        .ifs-table td { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; overflow-wrap: anywhere; }
+        .ifs-table tr:hover { background: #fafbfc; }
+        .ifs-table .tool-desc { color: var(--text-secondary); font-size: 0.875rem; }
+        .ifs-table .tool-params { font-family: monospace; font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; }
+        .ifs-table .tool-meta-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+        .ifs-empty { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+        .ifs-empty-icon { font-size: 2rem; margin-bottom: 12px; }
+        .ifs-empty-text { margin-bottom: 16px; font-size: 0.9rem; }
+        .ifs-empty-action { padding: 6px 16px; border: 1px solid var(--primary); background: var(--primary); color: white; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+        .ifs-empty-action:hover { background: #0b5ed7; }
         .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
         .badge-dangerous { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
         .badge-cache { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
-        .empty-group { display: none; }
-        .tool-group.empty { display: none; }
-        .tool-meta-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        @keyframes ifsFadeIn { from { opacity: 0.4; } to { opacity: 1; } }
+        @media (max-width: 768px) {
+            .ifs-layout { grid-template-columns: 1fr; }
+            .ifs-sidebar { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); padding-right: 0; padding-bottom: 8px; overflow-x: auto; overflow-y: visible; }
+            .ifs-nav { flex-direction: row; gap: 4px; }
+            .ifs-nav-item { white-space: nowrap; border-left: none; border-bottom: 3px solid transparent; }
+            .ifs-nav-item.active { border-bottom-color: var(--primary); }
+            .ifs-content { padding-left: 0; padding-top: 12px; }
+        }
 
         /* 接入指南 */
         .onboarding-nav {
@@ -239,9 +259,7 @@
         <header>
             <h1>UniHive Console</h1>
             <div class="refresh-info">
-                <span>刷新:</span>
-                <span id="countdown">10</span>
-                <button onclick="refreshAll()">手动刷新</button>
+                <button onclick="refreshAll()">刷新</button>
             </div>
         </header>
         <div class="tabs">
@@ -275,11 +293,16 @@
         <div id="interfaces" class="panel">
             <div class="card">
                 <h2>网关接口列表 <span class="timestamp" id="interfaces-timestamp"></span></h2>
-                <div class="tool-filters">
-                    <input id="tool-search" type="text" placeholder="按名称或描述过滤..." autocomplete="off" />
-                    <span class="tool-counter"><span id="tool-shown">0</span> / <span id="tool-total">0</span></span>
+                <div class="ifs-layout">
+                    <aside class="ifs-sidebar">
+                        <label class="visually-hidden" for="ifs-search">搜索工具</label>
+                        <input id="ifs-search" class="ifs-search" type="text" placeholder="全局搜索工具..." autocomplete="off" />
+                        <nav id="ifs-nav" class="ifs-nav" aria-label="接口分组"></nav>
+                    </aside>
+                    <main id="ifs-content" class="ifs-content">
+                        <div class="loading">加载中...</div>
+                    </main>
                 </div>
-                <div id="interfaces-groups" class="loading">加载中...</div>
             </div>
         </div>
         <div id="config" class="panel">
@@ -451,8 +474,6 @@ asyncio.run(main())</pre>
         </div>
     </div>
     <script>
-        let countdown = 10;
-        let timer = null;
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -526,10 +547,8 @@ asyncio.run(main())</pre>
                 }
             } catch (e) { console.error('Load status error:', e); }
         }
-        const GROUP_ORDER = ['gateway', 'rhths_meta/tdx_local', 'tdx_local', 'rhths_ashare', 'rhths_index', 'rhths_meta', 'rhths_fund', 'tushare'];
+        const GROUP_ORDER = ['tdx_local', 'rhths_ashare', 'rhths_index', 'rhths_meta', 'rhths_fund', 'tushare'];
         const GROUP_META = {
-            'gateway':             { title: '网关内置',   desc: '状态检查、内部工具' },
-            'rhths_meta/tdx_local':{ title: '综合搜索',   desc: '跨数据源降级链' },
             'tdx_local':           { title: 'TDX (通达信)', desc: '本地 stdio, 含高风险 tdx_call' },
             'rhths_ashare':        { title: '同花顺 A 股', desc: '行情/财报/估值/特殊数据' },
             'rhths_index':         { title: '同花顺 指数/板块', desc: '目录/成分股/历史 K 线' },
@@ -537,7 +556,11 @@ asyncio.run(main())</pre>
             'rhths_fund':          { title: '同花顺 基金',   desc: '持仓/业绩/经理/财务' },
             'tushare':             { title: 'Tushare',    desc: '通用 API 透传' },
         };
+        const ALL_KEY = '__all__';
         let allTools = [];
+        let activeGroup = ALL_KEY;
+        let searchQuery = '';
+
         function escapeHtml(s) {
             return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
@@ -546,74 +569,123 @@ asyncio.run(main())</pre>
             const known = GROUP_ORDER.includes(src) ? src : (src.split('/')[0] || '');
             return GROUP_ORDER.includes(known) ? known : src;
         }
-        function groupTools(tools) {
-            const buckets = new Map(GROUP_ORDER.map(k => [k, []]));
+        function bucketByGroup(tools) {
+            const buckets = new Map();
             for (const t of tools) {
                 const key = primarySource(t.source);
                 if (!buckets.has(key)) buckets.set(key, []);
                 buckets.get(key).push(t);
             }
-            return GROUP_ORDER.filter(k => buckets.get(k).length > 0).map(k => ({
-                key: k,
-                meta: GROUP_META[k] || { title: k, desc: '' },
-                tools: buckets.get(k),
-            }));
+            return buckets;
         }
-        function renderTools() {
-            const q = (document.getElementById('tool-search').value || '').trim().toLowerCase();
-            const filtered = !q ? allTools : allTools.filter(t =>
+        function applyFilter(tools, q) {
+            if (!q) return tools;
+            return tools.filter(t =>
                 (t.name || '').toLowerCase().includes(q) ||
                 (t.description || '').toLowerCase().includes(q) ||
                 (t.source || '').toLowerCase().includes(q)
             );
-            document.getElementById('tool-shown').textContent = filtered.length;
-            document.getElementById('tool-total').textContent = allTools.length;
-            const groups = groupTools(filtered);
-            const root = document.getElementById('interfaces-groups');
-            if (groups.length === 0) {
-                root.className = 'loading';
-                root.innerHTML = q ? '没有匹配的工具' : '加载中...';
+        }
+        function filteredAll() {
+            return applyFilter(allTools, searchQuery);
+        }
+        function renderSidebar() {
+            const root = document.getElementById('ifs-nav');
+            if (!root) return;
+            const filtered = filteredAll();
+            const buckets = bucketByGroup(filtered);
+            const allBuckets = bucketByGroup(allTools);
+            const allCount = filtered.length;
+            const groups = [ALL_KEY, ...GROUP_ORDER];
+            root.innerHTML = groups.map(key => {
+                const total = key === ALL_KEY ? allTools.length : (allBuckets.get(key) || []).length;
+                const matched = key === ALL_KEY ? allCount : (buckets.get(key) || []).length;
+                const meta = key === ALL_KEY ? { title: '全部' } : (GROUP_META[key] || { title: key });
+                let countCls = '';
+                if (searchQuery) {
+                    if (matched === 0) countCls = 'zero';
+                    else if (matched < total) countCls = 'has-match';
+                }
+                const countText = searchQuery && total ? `${matched}/${total}` : `${total}`;
+                const isActive = key === activeGroup;
+                const isDisabled = searchQuery && matched === 0;
+                return `<button type="button" class="ifs-nav-item${isActive ? ' active' : ''}" data-group="${escapeHtml(key)}"${isActive ? ' aria-current="true"' : ''}${isDisabled ? ' disabled' : ''}><span class="dot"></span><span class="label">${escapeHtml(meta.title)}</span><span class="count ${countCls}">${countText}</span></button>`;
+            }).join('');
+        }
+        function renderEmpty() {
+            const root = document.getElementById('ifs-content');
+            root.innerHTML = `<div class="ifs-empty"><div class="ifs-empty-icon">🔍</div><div class="ifs-empty-text">此分组无匹配工具</div><button type="button" class="ifs-empty-action" onclick="clearSearch()">清空搜索</button></div>`;
+        }
+        function renderContent() {
+            const root = document.getElementById('ifs-content');
+            if (!root) return;
+            const filtered = filteredAll();
+            const buckets = bucketByGroup(filtered);
+            const tools = activeGroup === ALL_KEY ? filtered : (buckets.get(activeGroup) || []);
+            if (searchQuery && tools.length === 0) {
+                renderEmpty();
                 return;
             }
-            root.className = '';
-            root.innerHTML = groups.map(g => {
-                const isCollapsed = g.tools.length > 8 ? 'collapsed' : '';
-                const rows = g.tools.map(t => {
-                    const badges = [];
-                    if (t.dangerous) badges.push('<span class="badge badge-dangerous">dangerous</span>');
-                    if (t.cache_ttl_key) badges.push(`<span class="badge badge-cache" title="cache_ttl_key=${escapeHtml(t.cache_ttl_key)}">${escapeHtml(t.cache_ttl_key)}</span>`);
-                    const params = (t.params || []).filter(p => p && p !== '?').join(', ');
-                    return `<tr>
-                        <td style="width: 32%"><span class="tool-name">${escapeHtml(t.name)}</span>${badges.length ? '<div class="tool-meta-cell" style="margin-top:4px">' + badges.join('') + '</div>' : ''}</td>
-                        <td style="width: 48%"><div class="tool-desc">${escapeHtml(t.description || '-')}</div>${params ? `<div class="tool-params" style="margin-top:4px">${escapeHtml(params)}</div>` : ''}</td>
-                        <td style="width: 20%"><span class="chain">${escapeHtml(t.source || '-')}</span></td>
-                    </tr>`;
-                }).join('');
-                return `<div class="tool-group ${isCollapsed}" data-group="${escapeHtml(g.key)}">
-                    <div class="tool-group-header" onclick="this.parentElement.classList.toggle('collapsed')">
-                        <span class="caret">▶</span>
-                        <span class="group-title">${escapeHtml(g.meta.title)}</span>
-                        <span class="group-meta">
-                            <span style="font-family:monospace;color:var(--text-secondary)">${escapeHtml(g.key)}</span>
-                            <span class="group-count">${g.tools.length}</span>
-                        </span>
-                    </div>
-                    <div class="tool-group-body">
-                        <table>
-                            <thead><tr><th>接口</th><th>描述</th><th>数据源</th></tr></thead>
-                            <tbody>${rows}</tbody>
-                        </table>
-                    </div>
-                </div>`;
+            const meta = activeGroup === ALL_KEY ? { title: '全部', key: 'all' } : { title: (GROUP_META[activeGroup] || { title: activeGroup }).title, key: activeGroup };
+            const rows = tools.map(t => {
+                const badges = [];
+                if (t.dangerous) badges.push('<span class="badge badge-dangerous">dangerous</span>');
+                if (t.cache_ttl_key) badges.push(`<span class="badge badge-cache" title="cache_ttl_key=${escapeHtml(t.cache_ttl_key)}">${escapeHtml(t.cache_ttl_key)}</span>`);
+                const params = (t.params || []).filter(p => p && p !== '?').join(', ');
+                return `<tr>
+                    <td style="width: 28%"><span class="tool-name">${escapeHtml(t.name)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td>
+                    <td style="width: 52%"><div class="tool-desc">${escapeHtml(t.description || '-')}</div>${params ? `<div class="tool-params">${escapeHtml(params)}</div>` : ''}</td>
+                    <td style="width: 20%"><span class="chain">${escapeHtml(t.source || '-')}</span></td>
+                </tr>`;
             }).join('');
+            root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)} <code>${escapeHtml(meta.key)}</code></h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><table class="ifs-table"><caption style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden">${escapeHtml(meta.title)} 接口列表</caption><thead><tr><th>接口</th><th>描述</th><th>数据源</th></tr></thead><tbody>${rows}</tbody></table>`;
+        }
+        function renderAll() {
+            renderSidebar();
+            renderContent();
+        }
+        function clearSearch() {
+            searchQuery = '';
+            const search = document.getElementById('ifs-search');
+            if (search) search.value = '';
+            renderAll();
+        }
+        function setActiveGroup(key) {
+            activeGroup = key;
+            const hash = key === ALL_KEY ? '' : `#tools=${key}`;
+            const newUrl = location.pathname + location.search + hash;
+            if (location.hash !== hash) {
+                history.replaceState(null, '', newUrl);
+            }
+            renderAll();
+        }
+        function maybeAutoSwitch() {
+            if (!searchQuery) return;
+            if (activeGroup !== ALL_KEY) {
+                const buckets = bucketByGroup(filteredAll());
+                if ((buckets.get(activeGroup) || []).length > 0) return;
+            }
+            const buckets = bucketByGroup(filteredAll());
+            const firstWithMatch = GROUP_ORDER.find(k => (buckets.get(k) || []).length > 0);
+            activeGroup = firstWithMatch || ALL_KEY;
+        }
+        function readHashGroup() {
+            const m = location.hash.match(/^#tools=(.+)$/);
+            if (m && (m[1] === ALL_KEY || GROUP_ORDER.includes(m[1]))) return m[1];
+            return ALL_KEY;
         }
         async function loadInterfaces() {
             try {
                 const data = await fetchJSON('/api/interfaces');
                 document.getElementById('interfaces-timestamp').textContent = formatTime(data.timestamp);
                 allTools = data.tools || [];
-                renderTools();
-            } catch (e) { console.error('Load interfaces error:', e); }
+                activeGroup = readHashGroup();
+                renderAll();
+            } catch (e) {
+                console.error('Load interfaces error:', e);
+                const root = document.getElementById('ifs-content');
+                if (root) root.innerHTML = '<div class="loading">加载失败，请点击「刷新」重试</div>';
+            }
         }
         async function loadConfig() {
             try {
@@ -624,22 +696,50 @@ asyncio.run(main())</pre>
             } catch (e) { console.error('Load config error:', e); }
         }
         function refreshAll() {
-            countdown = 10;
-            document.getElementById('countdown').textContent = countdown;
             loadStatus();
             loadInterfaces();
             loadConfig();
         }
-        function startAutoRefresh() {
-            timer = setInterval(() => {
-                countdown--;
-                document.getElementById('countdown').textContent = countdown;
-                if (countdown <= 0) { refreshAll(); }
-            }, 1000);
-        }
-        document.getElementById('tool-search').addEventListener('input', renderTools);
+        document.getElementById('ifs-search').addEventListener('input', (e) => {
+            searchQuery = (e.target.value || '').trim().toLowerCase();
+            maybeAutoSwitch();
+            renderAll();
+        });
+        document.getElementById('ifs-nav').addEventListener('click', (e) => {
+            const btn = e.target.closest('.ifs-nav-item');
+            if (!btn || btn.hasAttribute('disabled')) return;
+            setActiveGroup(btn.dataset.group);
+        });
+        document.addEventListener('keydown', (e) => {
+            const tag = (e.target.tagName || '').toLowerCase();
+            const inField = tag === 'input' || tag === 'textarea';
+            if (e.key === '/' && !inField) {
+                e.preventDefault();
+                document.getElementById('ifs-search').focus();
+                return;
+            }
+            if (e.key === 'Escape') {
+                const search = document.getElementById('ifs-search');
+                if (document.activeElement === search || (search && search.value)) {
+                    e.preventDefault();
+                    clearSearch();
+                    if (search) search.blur();
+                }
+                return;
+            }
+            if (inField) return;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                const items = Array.from(document.querySelectorAll('.ifs-nav-item:not([disabled])'));
+                if (items.length === 0) return;
+                const idx = items.findIndex(b => b.classList.contains('active'));
+                const next = e.key === 'ArrowDown'
+                    ? items[Math.min(items.length - 1, idx + 1)]
+                    : items[Math.max(0, idx - 1)];
+                if (next && next !== items[idx]) setActiveGroup(next.dataset.group);
+            }
+        });
         refreshAll();
-        startAutoRefresh();
         async function loadOnboarding() {
             const container = document.getElementById('interfaces-list');
             try {
