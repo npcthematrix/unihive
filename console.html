@@ -320,26 +320,54 @@
 
                     <h3 id="sec-integration">2. 接入方式</h3>
 
-                    <h4>2.1 Stdio 模式（Claude Desktop / Cursor）</h4>
-                    <p>在客户端的 MCP 配置中添加：</p>
+                    <h4>2.1 HTTP 模式（推荐）</h4>
+                    <p>网关以 <strong>Streamable HTTP</strong> 模式对外提供 MCP 接口，监听 <code>http://127.0.0.1:18081/mcp</code>。运行 <code>.\scripts\start_console.ps1</code> 会同时启动控制台和 HTTP 网关。</p>
+
+                    <p><strong>Claude Desktop / Cursor 配置：</strong></p>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>{
+  "mcpServers": {
+    "unihive": {
+      "url": "http://127.0.0.1:18081/mcp"
+    }
+  }
+}</pre>
+                    </div>
+
+                    <p><strong>Python SDK 示例：</strong></p>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>import asyncio
+from fastmcp.client import Client
+
+async def main():
+    async with Client("http://127.0.0.1:18081/mcp") as client:
+        tools = await client.list_tools()
+        result = await client.call_tool("get_realtime_quote", {"symbol": "600000"})
+        print(result.data)
+
+asyncio.run(main())</pre>
+                    </div>
+
+                    <h4>2.2 STDIO 模式（备选）</h4>
+                    <p>用于不支持 HTTP MCP 的旧客户端，或本地脚本场景。需要单独启动 gateway 进程：</p>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
                         <pre>{
   "mcpServers": {
     "unihive": {
       "command": "python",
-      "args": ["-m", "mcp_data_gateway.gateway_server"],
+      "args": ["-m", "src.gateway_server", "--transport", "stdio"],
       "cwd": "D:/fintech_workspace/unihive"
     }
   }
 }</pre>
                     </div>
-
-                    <h4>2.2 HTTP 模式（自定义客户端）</h4>
-                    <p>控制台 HTTP 服务暴露了接口元信息查询端点，可用于发现可用工具：</p>
+                    <p>或命令行单独启动 STDIO 模式：</p>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
-                        <pre>curl http://127.0.0.1:18080/api/interfaces</pre>
+                        <pre>python -m src.gateway_server --transport stdio</pre>
                     </div>
 
                     <h3 id="sec-interfaces">3. 接口列表</h3>

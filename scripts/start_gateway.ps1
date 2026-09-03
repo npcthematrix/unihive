@@ -31,7 +31,8 @@ if (-not (Test-Path $LogDir)) {
 }
 
 Write-Host ""
-Write-Host "Starting UniHive gateway (stdio mode)..." -ForegroundColor Green
+Write-Host "Starting UniHive gateway (STDIO mode - 备选模式)..." -ForegroundColor Green
+Write-Host "推荐使用 start_console.ps1 以 HTTP 模式启动网关" -ForegroundColor Yellow
 Write-Host "Press Ctrl+C to stop" -ForegroundColor Yellow
 Write-Host ""
 
