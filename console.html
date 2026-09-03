@@ -595,6 +595,7 @@ asyncio.run(main())</pre>
             loadStatus();
             loadInterfaces();
             loadConfig();
+            loadOnboarding();
         }
         function startAutoRefresh() {
             timer = setInterval(() => {
@@ -606,6 +607,39 @@ asyncio.run(main())</pre>
         document.getElementById('tool-search').addEventListener('input', renderTools);
         refreshAll();
         startAutoRefresh();
+        async function loadOnboarding() {
+            const container = document.getElementById('interfaces-list');
+            try {
+                const data = await fetchJSON('/api/interfaces');
+                const tools = data.tools || [];
+                if (tools.length === 0) {
+                    container.innerHTML = '<div class="loading-state">暂无接口配置</div>';
+                    return;
+                }
+                container.innerHTML = tools.map(tool => `
+                    <details class="interface-card">
+                        <summary>
+                            <span class="tool-name">${escapeHtml(tool.name)}</span>
+                            <span class="chain">${escapeHtml(tool.source || '-')}</span>
+                        </summary>
+                        <div class="interface-body">
+                            <p class="description">${escapeHtml(tool.description || '暂无描述')}</p>
+                            <h4>调用示例</h4>
+                            <div class="code-block">
+                                <button class="copy-btn">复制</button>
+                                <pre>result = await session.call_tool(
+    "${escapeHtml(tool.name)}",
+    { /* 参数见上游文档 */ }
+)</pre>
+                            </div>
+                        </div>
+                    </details>
+                `).join('');
+            } catch (e) {
+                console.error('Load interfaces error:', e);
+                container.innerHTML = '<div class="loading-state">加载失败<span class="retry-link" onclick="loadOnboarding()">点击重试</span></div>';
+            }
+        }
     </script>
 </body>
 </html>
