@@ -225,6 +225,16 @@ class GatewayServer:
         asyncio.create_task(self._health_check_loop())
         await self.mcp.run_stdio_async()
 
+    async def serve_http(self, host: str = "127.0.0.1", port: int = 18080, mount_path: str = "/mcp"):
+        """以 Streamable HTTP 模式启动 gateway（被 console_server 内部调用）"""
+        self._running = True
+        await self.initialize()
+        asyncio.create_task(self._health_check_loop())
+        mcp_app = self.mcp.http_app(path=mount_path)
+        import uvicorn
+        config = uvicorn.Config(mcp_app, host=host, port=port, log_level="info")
+        await uvicorn.Server(config).serve()
+
     async def _health_check_loop(self):
         while self._running:
             try:
@@ -245,17 +255,31 @@ class GatewayServer:
             await self.cache.close()
 
 
-async def async_main():
+async def async_main(transport: str = "stdio", host: str = "127.0.0.1", port: int = 18080):
     import os
     if sys.platform == "win32":
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
     server = GatewayServer()
-    await server.start()
+    if transport == "stdio":
+        await server.start()
+    elif transport == "http":
+        await server.serve_http(host=host, port=port)
+    else:
+        raise ValueError(f"Unknown transport: {transport}")
 
 
 def main():
-    asyncio.run(async_main())
+    import argparse
+    parser = argparse.ArgumentParser(description="UniHive MCP Gateway")
+    parser.add_argument(
+        "--transport", choices=["stdio", "http"], default="stdio",
+        help="Transport mode (default: stdio). 'http' for Streamable HTTP server.",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host (http mode)")
+    parser.add_argument("--port", type=int, default=18080, help="HTTP bind port (http mode)")
+    args = parser.parse_args()
+    asyncio.run(async_main(transport=args.transport, host=args.host, port=args.port))
 
 
 if __name__ == "__main__":
