@@ -1,0 +1,393 @@
+# UniHive MCP Gateway 配置
+# 聚合多个金融数据 MCP Server
+
+upstreams:
+  tdx_local:
+    enabled: true
+    type: "npx"
+    package: "tdx-mcp-server"
+    command: ["npx", "-y", "tdx-mcp-server"]
+    timeout_seconds: 30
+    retry:
+      max_attempts: 3
+      backoff_base: 2
+    capabilities:
+      - realtime_quote
+      - kline
+      - minute_bar
+      - trade_detail
+      - index_data
+      - etf_data
+      - market_stats
+
+  rhths_ashare:
+    enabled: true
+    type: "http"
+    base_url: "https://fuyao.aicubes.cn/mcp/a-share"
+    api_key: "${RHTHS_API_KEY}"
+    timeout_seconds: 30
+    retry:
+      max_attempts: 3
+      backoff_base: 2
+    capabilities:
+      - a_share_snapshot
+      - a_share_history
+      - corporate_actions
+      - financials_income
+      - financials_balance_sheet
+      - financials_cash_flow
+      - financials_indicators
+      - valuation_snapshot
+      - calendar
+      - special_data
+
+  rhths_index:
+    enabled: true
+    type: "http"
+    base_url: "https://fuyao.aicubes.cn/mcp/a-share-index"
+    api_key: "${RHTHS_API_KEY}"
+    timeout_seconds: 30
+    retry:
+      max_attempts: 3
+      backoff_base: 2
+    capabilities:
+      - index_catalog
+      - index_constituents
+      - index_snapshot
+      - index_history
+
+  rhths_meta:
+    enabled: true
+    type: "http"
+    base_url: "https://fuyao.aicubes.cn/mcp/meta"
+    api_key: "${RHTHS_API_KEY}"
+    timeout_seconds: 30
+    retry:
+      max_attempts: 3
+      backoff_base: 2
+    capabilities:
+      - ticker_search
+      - ticker_list
+
+  rhths_fund:
+    enabled: true
+    type: "http"
+    base_url: "https://fuyao.aicubes.cn/mcp/fund"
+    api_key: "${RHTHS_API_KEY}"
+    timeout_seconds: 30
+    retry:
+      max_attempts: 3
+      backoff_base: 2
+    capabilities:
+      - fund_profile
+      - fund_holdings
+      - fund_nav
+      - fund_returns
+      - fund_holders
+      - fund_snapshot
+      - fund_history
+
+  tushare:
+    enabled: true
+    type: "npx"
+    package: "@tushare/mcp"
+    command: ["npx", "-y", "@tushare/mcp"]
+    env:
+      TUSHARE_TOKEN: "${TUSHARE_TOKEN}"
+    timeout_seconds: 60
+    retry:
+      max_attempts: 2
+      backoff_base: 3
+    capabilities:
+      - fundamentals
+      - announcement
+
+# 上游 tool 映射 (gateway_tool -> {upstream_name: upstream_tool_name})
+# 是 routing 链之外的另一种声明方式：当某 gateway_tool 没有 routing chain，
+# router 会用本段的 keys 作为 chain
+upstream_tool_mapping:
+  # TDX 直通
+  get_quote:                                  {tdx_local: get_quote}
+  get_kline:                                  {tdx_local: get_kline}
+  get_minute_data:                            {tdx_local: get_minute}
+  get_trade:                                  {tdx_local: get_trade}
+  get_stock_info:                             {tdx_local: get_stock_info}
+  get_code_list:                              {tdx_local: get_code_list}
+  get_batch_quote:                            {tdx_local: get_batch_quote}
+  get_kline_history:                          {tdx_local: get_kline_history}
+  get_kline_all:                              {tdx_local: get_kline_all}
+  get_kline_all_tdx:                          {tdx_local: get_kline_all_tdx}
+  get_kline_all_ths:                          {tdx_local: get_kline_all_ths}
+  get_index_kline:                            {tdx_local: get_index}
+  get_index_all:                              {tdx_local: get_index_all}
+  get_market_count:                           {tdx_local: get_market_count}
+  get_stock_codes:                            {tdx_local: get_stock_codes}
+  get_etf_codes:                              {tdx_local: get_etf_codes}
+  get_etf_list:                               {tdx_local: get_etf_list}
+  get_trade_history:                          {tdx_local: get_trade_history}
+  get_trade_history_full:                     {tdx_local: get_trade_history_full}
+  get_minute_trade_all:                       {tdx_local: get_minute_trade_all}
+  get_workday:                                {tdx_local: get_workday}
+  get_workday_range:                          {tdx_local: get_workday_range}
+  get_income:                                 {tdx_local: get_income}
+  create_task_kline:                          {tdx_local: create_task_kline}
+  create_task_trade:                          {tdx_local: create_task_trade}
+  get_task_list:                              {tdx_local: get_task_list}
+  get_task_detail:                            {tdx_local: get_task_detail}
+  cancel_task:                                {tdx_local: cancel_task}
+  tdx_call:                                   {tdx_local: tdx_call}
+
+  # RHTHS a-share
+  a_share_prices_snapshot:                    {rhths_ashare: get_a_share_prices_snapshot}
+  a_share_prices_historical:                  {rhths_ashare: get_a_share_prices_historical}
+  a_share_corporate_actions_adjustment_factors: {rhths_ashare: get_a_share_corporate_actions_adjustment_factors}
+  a_share_financials_income_statements:       {rhths_ashare: get_a_share_financials_income_statements}
+  a_share_financials_balance_sheets:          {rhths_ashare: get_a_share_financials_balance_sheets}
+  a_share_financials_cash_flow_statements:    {rhths_ashare: get_a_share_financials_cash_flow_statements}
+  a_share_financials_indicators:              {rhths_ashare: get_a_share_financials_indicators}
+  a_share_valuations_snapshot:                {rhths_ashare: get_a_share_valuations_snapshot}
+  a_share_calendar_trading_days:              {rhths_ashare: get_a_share_calendar_trading_days}
+  a_share_special_data_limit_up_pool:         {rhths_ashare: get_a_share_special_data_limit_up_pool}
+  a_share_special_data_limit_down_pool:       {rhths_ashare: get_a_share_special_data_limit_down_pool}
+  a_share_special_data_limit_break_pool:      {rhths_ashare: get_a_share_special_data_limit_break_pool}
+  a_share_special_data_limit_up_ladder:       {rhths_ashare: get_a_share_special_data_limit_up_ladder}
+  a_share_special_data_anomaly_analysis_stock: {rhths_ashare: get_a_share_special_data_anomaly_analysis_stock}
+  a_share_special_data_skyrocket_list:        {rhths_ashare: get_a_share_special_data_skyrocket_list}
+  a_share_special_data_hot_stock_list:        {rhths_ashare: get_a_share_special_data_hot_stock_list}
+  a_share_special_data_hot_stock_list_history: {rhths_ashare: get_a_share_special_data_hot_stock_list_history}
+  a_share_special_data_hot_stock_rank_trend:  {rhths_ashare: get_a_share_special_data_hot_stock_rank_trend}
+  a_share_special_data_dragon_tiger_list:     {rhths_ashare: get_a_share_special_data_dragon_tiger_list}
+  a_share_auction_snapshot:                   {rhths_ashare: get_a_share_auction_snapshot}
+  a_share_auction_short_term_benchmark:       {rhths_ashare: get_a_share_auction_short_term_benchmark}
+
+  # RHTHS a-share-index
+  a_share_index_catalog:                      {rhths_index: get_a_share_index_catalog_ths_index_list}
+  a_share_index_constituents:                 {rhths_index: get_a_share_index_constituents_ths_stock_list}
+  a_share_index_prices_snapshot:              {rhths_index: get_a_share_index_prices_snapshot}
+  a_share_index_prices_historical:            {rhths_index: get_a_share_index_prices_historical}
+
+  # RHTHS meta
+  meta_tickers_list:                          {rhths_meta: get_meta_tickers_list}
+
+  # RHTHS fund
+  fund_profile_detail:                        {rhths_fund: get_fund_profile_detail}
+  fund_portfolio_holdings:                    {rhths_fund: get_fund_portfolio_holdings}
+  fund_performance_returns:                   {rhths_fund: get_fund_performance_returns}
+  fund_holders_detail:                        {rhths_fund: get_fund_holders_detail}
+  fund_market_historical:                     {rhths_fund: get_fund_market_historical}
+  fund_companies_detail:                      {rhths_fund: get_fund_companies_detail}
+  fund_portfolio_industry_allocation:         {rhths_fund: get_fund_portfolio_industry_allocation}
+  fund_performance_indicators_historical:     {rhths_fund: get_fund_performance_indicators_historical}
+  fund_performance_drawdowns:                 {rhths_fund: get_fund_performance_drawdowns}
+  fund_holders_top:                           {rhths_fund: get_fund_holders_top}
+  fund_corporate_actions_dividends:           {rhths_fund: get_fund_corporate_actions_dividends}
+  fund_diagnostics_detail:                    {rhths_fund: get_fund_diagnostics_detail}
+  fund_financials_indicators:                 {rhths_fund: get_fund_financials_indicators}
+  fund_financials_income_statements:          {rhths_fund: get_fund_financials_income_statements}
+  fund_financials_balance_sheets:             {rhths_fund: get_fund_financials_balance_sheets}
+  fund_managers_investment_style:             {rhths_fund: get_fund_managers_investment_style}
+  fund_managers_performance:                  {rhths_fund: get_fund_managers_performance}
+  fund_managers_experience:                   {rhths_fund: get_fund_managers_experience}
+  fund_managers_detail:                       {rhths_fund: get_fund_managers_detail}
+  fund_news_article_list:                     {rhths_fund: get_fund_news_article_list}
+  fund_offerings_list:                        {rhths_fund: get_fund_offerings_list}
+  fund_portfolio_stock_history:               {rhths_fund: get_fund_portfolio_stock_history}
+  fund_portfolio_stock_report_dates:          {rhths_fund: get_fund_portfolio_stock_report_dates}
+  fund_portfolio_bond_history:                {rhths_fund: get_fund_portfolio_bond_history}
+  fund_portfolio_bond_report_dates:           {rhths_fund: get_fund_portfolio_bond_report_dates}
+  fund_portfolio_asset_allocation:            {rhths_fund: get_fund_portfolio_asset_allocation}
+
+  # Tushare
+  tushare_call:                               {tushare: sdk_call}
+  tushare_schema:                             {tushare: sdk_schema}
+  tushare_search:                             {tushare: sdk_search}
+
+# 路由配置 (带 fallback 链的 gateway_tool)
+routing:
+  get_realtime_quote:
+    chain: ["tdx_local", "rhths_ashare"]
+    description: "实时行情"
+  get_daily_bar:
+    chain: ["tdx_local", "rhths_ashare"]
+    description: "日K线行情"
+  get_minute_bar:
+    chain: ["tdx_local"]
+    description: "分钟K线行情 (TDX)"
+  get_trade_detail:
+    chain: ["tdx_local"]
+    description: "逐笔成交明细"
+  get_index:
+    chain: ["tdx_local", "rhths_index"]
+    description: "指数K线"
+  get_index_snapshot:
+    chain: ["rhths_index"]
+    description: "指数快照"
+  get_index_history:
+    chain: ["rhths_index"]
+    description: "指数历史"
+  get_etf:
+    chain: ["tdx_local", "rhths_fund"]
+    description: "ETF行情"
+  get_fund_snapshot:
+    chain: ["rhths_fund"]
+    description: "基金快照"
+  get_fund_nav:
+    chain: ["rhths_fund"]
+    description: "基金净值"
+  get_fundamentals:
+    chain: ["rhths_ashare"]
+    description: "基本面数据"
+  get_valuation:
+    chain: ["rhths_ashare"]
+    description: "估值快照"
+  get_announcement:
+    chain: ["rhths_ashare"]
+    description: "公告"
+  search_stock:
+    chain: ["tdx_local", "rhths_meta"]
+    description: "股票搜索"
+  get_market_stats:
+    chain: ["tdx_local"]
+    description: "市场统计"
+  get_limit_up_pool:
+    chain: ["rhths_ashare"]
+    description: "涨停池"
+  get_sector_flow:
+    chain: ["rhths_ashare"]
+    description: "板块资金流"
+
+# 对外暴露的工具清单
+# 由 registry.py 解析后自动注册为 FastMCP tool
+tools:
+  # === TDX 直通 (30) ===
+  - {name: get_quote, description: "TDX 实时行情", routing: get_quote, params: [{name: code, type: str, required: true, normalize: code}], cache_ttl_key: realtime_quote}
+  - {name: get_kline, description: "TDX K线 (day/week/month/minute1/5/15/30/60)", routing: get_kline, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: daily_bar}
+  - {name: get_minute_data, description: "TDX 今日分时(240 根)", routing: get_minute_data, params: [{name: code, type: str, required: true, normalize: code}], cache_ttl_key: minute_bar}
+  - {name: get_trade, description: "TDX 逐笔成交", routing: get_trade, params: [{name: code, type: str, required: true, normalize: code}]}
+  - {name: get_stock_info, description: "TDX 单只股票综合信息", routing: get_stock_info, params: [{name: code, type: str, required: true, normalize: code}]}
+  - {name: get_code_list, description: "TDX 全量代码列表 (sh/sz/bj)", routing: get_code_list, params: [{name: exchange, type: str, required: false}], cache_ttl_key: ticker_list}
+  - {name: get_batch_quote, description: "TDX 批量行情", routing: get_batch_quote, params: [{name: codes, type: str, required: true}], cache_ttl_key: realtime_quote}
+  - {name: get_kline_history, description: "TDX 历史K线(指定区间)", routing: get_kline_history, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
+  - {name: get_kline_all, description: "TDX 全量K线(全历史)", routing: get_kline_all, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
+  - {name: get_kline_all_tdx, description: "TDX 全量K线 (TDX 源)", routing: get_kline_all_tdx, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
+  - {name: get_kline_all_ths, description: "TDX 全量K线 (同花顺源, 前复权)", routing: get_kline_all_ths, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
+  - {name: get_index_kline, description: "TDX 指数K线", routing: get_index_kline, params: [{name: code, type: str, required: true}, {name: type, type: str, required: false}], cache_ttl_key: index_data}
+  - {name: get_index_all, description: "TDX 全指K线(含成分股)", routing: get_index_all, params: [{name: code, type: str, required: true}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
+  - {name: get_market_count, description: "TDX 市场证券数量统计", routing: get_market_count, params: [], cache_ttl_key: market_stats}
+  - {name: get_stock_codes, description: "TDX 代码列表(分页)", routing: get_stock_codes, params: [{name: limit, type: int, required: false}, {name: prefix, type: bool, required: false}], cache_ttl_key: ticker_list}
+  - {name: get_etf_codes, description: "TDX ETF 代码列表", routing: get_etf_codes, params: [{name: limit, type: int, required: false}, {name: prefix, type: bool, required: false}], cache_ttl_key: etf_list}
+  - {name: get_etf_list, description: "TDX ETF 列表(含基础信息)", routing: get_etf_list, params: [{name: exchange, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: etf_list}
+  - {name: get_trade_history, description: "TDX 历史逐笔(分页)", routing: get_trade_history, params: [{name: code, type: str, required: true, normalize: code}, {name: date, type: str, required: false}, {name: start, type: int, required: false}, {name: count, type: int, required: false}]}
+  - {name: get_trade_history_full, description: "TDX 历史逐笔(截止日全量)", routing: get_trade_history_full, params: [{name: code, type: str, required: true, normalize: code}, {name: before, type: str, required: false}, {name: limit, type: int, required: false}]}
+  - {name: get_minute_trade_all, description: "TDX 全日分时成交汇总", routing: get_minute_trade_all, params: [{name: code, type: str, required: true, normalize: code}, {name: date, type: str, required: false}]}
+  - {name: get_workday, description: "TDX 交易日查询(基准日前N天)", routing: get_workday, params: [{name: date, type: str, required: false}, {name: count, type: int, required: false}], cache_ttl_key: workday}
+  - {name: get_workday_range, description: "TDX 交易日范围(起止)", routing: get_workday_range, params: [{name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: workday}
+  - {name: get_income, description: "TDX 盘后收益", routing: get_income, params: [{name: code, type: str, required: true, normalize: code}, {name: days, type: int, required: false}, {name: start_date, type: str, required: false}]}
+  - {name: create_task_kline, description: "TDX 创建K线后台拉取任务", routing: create_task_kline, params: [{name: codes, type: str, required: true}, {name: start_date, type: str, required: false}, {name: tables, type: str, required: false}, {name: limit, type: int, required: false}]}
+  - {name: create_task_trade, description: "TDX 创建成交后台拉取任务", routing: create_task_trade, params: [{name: code, type: str, required: true, normalize: code}, {name: start_year, type: int, required: false}, {name: end_year, type: int, required: false}]}
+  - {name: get_task_list, description: "TDX 后台任务列表", routing: get_task_list, params: []}
+  - {name: get_task_detail, description: "TDX 后台任务详情", routing: get_task_detail, params: [{name: id, type: str, required: true}]}
+  - {name: cancel_task, description: "TDX 取消后台任务", routing: cancel_task, params: [{name: id, type: str, required: true}]}
+  - {name: tdx_call, description: "TDX 通用接口调用 (透传, 高风险)", routing: tdx_call, params: [{name: path, type: str, required: true}, {name: method, type: str, required: false}, {name: query, type: str, required: false}, {name: body, type: str, required: false}, {name: raw, type: bool, required: false}], dangerous: true}
+
+  # === RHTHS a-share (21) ===
+  - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: realtime_quote}
+  - {name: a_share_prices_historical, description: "A 股历史K线 (10年)", routing: a_share_prices_historical, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}, {name: adjust, type: str, required: false}], cache_ttl_key: historical}
+  - {name: a_share_corporate_actions_adjustment_factors, description: "A 股复权因子", routing: a_share_corporate_actions_adjustment_factors, params: [{name: thscode, type: str, required: true, normalize: code}], cache_ttl_key: historical}
+  - {name: a_share_financials_income_statements, description: "A 股利润表", routing: a_share_financials_income_statements, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: fundamentals}
+  - {name: a_share_financials_balance_sheets, description: "A 股资产负债表", routing: a_share_financials_balance_sheets, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: fundamentals}
+  - {name: a_share_financials_cash_flow_statements, description: "A 股现金流量表", routing: a_share_financials_cash_flow_statements, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: fundamentals}
+  - {name: a_share_financials_indicators, description: "A 股财务指标", routing: a_share_financials_indicators, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: fundamentals}
+  - {name: a_share_valuations_snapshot, description: "A 股估值快照", routing: a_share_valuations_snapshot, params: [{name: thscodes, type: str, required: false}], cache_ttl_key: valuation}
+  - {name: a_share_calendar_trading_days, description: "A 股交易日历", routing: a_share_calendar_trading_days, params: [{name: date, type: str, required: false}], cache_ttl_key: workday}
+  - {name: a_share_special_data_limit_up_pool, description: "A 股涨停池", routing: a_share_special_data_limit_up_pool, params: [{name: date, type: str, required: false}, {name: page, type: int, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_limit_down_pool, description: "A 股跌停池", routing: a_share_special_data_limit_down_pool, params: [{name: date, type: str, required: false}, {name: page, type: int, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_limit_break_pool, description: "A 股炸板池", routing: a_share_special_data_limit_break_pool, params: [{name: date, type: str, required: false}, {name: page, type: int, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_limit_up_ladder, description: "A 股涨停天梯 (30日 6档)", routing: a_share_special_data_limit_up_ladder, params: [], cache_ttl_key: special_data}
+  - {name: a_share_special_data_anomaly_analysis_stock, description: "A 股异动原因分析", routing: a_share_special_data_anomaly_analysis_stock, params: [{name: thscodes, type: str, required: true}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_skyrocket_list, description: "A 股飙升榜 (火箭榜)", routing: a_share_special_data_skyrocket_list, params: [{name: period, type: str, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_hot_stock_list, description: "A 股热门股 (24h)", routing: a_share_special_data_hot_stock_list, params: [{name: period, type: str, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_hot_stock_list_history, description: "A 股热门股历史", routing: a_share_special_data_hot_stock_list_history, params: [{name: date, type: str, required: true}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_hot_stock_rank_trend, description: "A 股热门股排名趋势", routing: a_share_special_data_hot_stock_rank_trend, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_dragon_tiger_list, description: "A 股龙虎榜", routing: a_share_special_data_dragon_tiger_list, params: [{name: board_type, type: str, required: false}, {name: date, type: str, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_auction_snapshot, description: "A 股集合竞价快照", routing: a_share_auction_snapshot, params: [{name: thscodes, type: str, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_auction_short_term_benchmark, description: "A 股短期竞价基准", routing: a_share_auction_short_term_benchmark, params: [{name: date, type: str, required: false}], cache_ttl_key: special_data}
+
+  # === RHTHS a-share-index (4) ===
+  - {name: a_share_index_catalog, description: "THS 指数/板块目录", routing: a_share_index_catalog, params: [{name: tag, type: str, required: false}], cache_ttl_key: ticker_list}
+  - {name: a_share_index_constituents, description: "指数/板块成分股", routing: a_share_index_constituents, params: [{name: thscode, type: str, required: true}], cache_ttl_key: ticker_list}
+  - {name: a_share_index_prices_snapshot, description: "指数行情快照", routing: a_share_index_prices_snapshot, params: [{name: thscodes, type: str, required: true}], cache_ttl_key: index_data}
+  - {name: a_share_index_prices_historical, description: "指数历史K线 (10年)", routing: a_share_index_prices_historical, params: [{name: thscode, type: str, required: true}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: historical}
+
+  # === RHTHS meta (1, 另一个 search_stock 手写) ===
+  - {name: meta_tickers_list, description: "按资产类型/筛选器分页拉全量 ticker", routing: meta_tickers_list, params: [{name: type, type: str, required: false}, {name: exchange, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: ticker_list}
+
+  # === RHTHS fund (28) ===
+  - {name: fund_profile_detail, description: "基金基础资料", routing: fund_profile_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_portfolio_holdings, description: "基金持仓(最新)", routing: fund_portfolio_holdings, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
+  - {name: fund_performance_returns, description: "基金各期收益 (1M/3M/6M/1Y/3Y/5Y/成立来)", routing: fund_performance_returns, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_holders_detail, description: "基金持有人结构(合并/单类)", routing: fund_holders_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_market_historical, description: "ETF/LOF 历史行情", routing: fund_market_historical, params: [{name: thscode, type: str, required: true}, {name: interval, type: str, required: false}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: fund_history}
+  - {name: fund_companies_detail, description: "基金公司信息", routing: fund_companies_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_portfolio_industry_allocation, description: "基金行业配置", routing: fund_portfolio_industry_allocation, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
+  - {name: fund_performance_indicators_historical, description: "基金历史业绩指标", routing: fund_performance_indicators_historical, params: [{name: thscode, type: str, required: true}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: fund_history}
+  - {name: fund_performance_drawdowns, description: "基金回撤指标", routing: fund_performance_drawdowns, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_holders_top, description: "基金前十大持有人", routing: fund_holders_top, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_corporate_actions_dividends, description: "基金分红记录", routing: fund_corporate_actions_dividends, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_diagnostics_detail, description: "基金诊断", routing: fund_diagnostics_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_financials_indicators, description: "基金财务指标", routing: fund_financials_indicators, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_financials_income_statements, description: "基金利润表", routing: fund_financials_income_statements, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_financials_balance_sheets, description: "基金资产负债表", routing: fund_financials_balance_sheets, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_managers_investment_style, description: "基金经理投资风格", routing: fund_managers_investment_style, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_managers_performance, description: "基金经理业绩", routing: fund_managers_performance, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_managers_experience, description: "基金经理经验", routing: fund_managers_experience, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_managers_detail, description: "基金经理详情", routing: fund_managers_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
+  - {name: fund_news_article_list, description: "基金新闻", routing: fund_news_article_list, params: [{name: thscode, type: str, required: true}, {name: offset, type: int, required: false}, {name: limit, type: int, required: false}]}
+  - {name: fund_offerings_list, description: "基金募集列表", routing: fund_offerings_list, params: [], cache_ttl_key: fund_data}
+  - {name: fund_portfolio_stock_history, description: "基金股票持仓历史", routing: fund_portfolio_stock_history, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_stock_report_dates, description: "基金股票持仓报告日", routing: fund_portfolio_stock_report_dates, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_bond_history, description: "基金债券持仓历史", routing: fund_portfolio_bond_history, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_bond_report_dates, description: "基金债券持仓报告日", routing: fund_portfolio_bond_report_dates, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_asset_allocation, description: "基金资产配置", routing: fund_portfolio_asset_allocation, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
+
+  # === Tushare (3) ===
+  - {name: tushare_call, description: "Tushare 通用 API 调用", routing: tushare_call, params: [{name: api_name, type: str, required: true}, {name: params, type: str, required: false}, {name: fields, type: str, required: false}]}
+  - {name: tushare_schema, description: "Tushare API Schema 查询", routing: tushare_schema, params: [{name: api_name, type: str, required: true}]}
+  - {name: tushare_search, description: "Tushare API 关键词搜索", routing: tushare_search, params: [{name: keyword, type: str, required: true}]}
+
+# 全局开关
+disable_dangerous: false
+strict_registry: true
+
+# 缓存配置
+cache:
+  enabled: true
+  db_path: "logs/cache.db"
+
+  ttl:
+    realtime_quote: 10
+    minute_bar: 60
+    daily_bar: 300
+    index_data: 60
+    fundamentals: 3600
+    announcement: 1800
+    fund_data: 300
+    market_stats: 30
+    search: 300
+    special_data: 60
+    valuation: 300
+    fund_holdings: 3600
+    fund_history: 3600
+    ticker_list: 3600
+    workday: 86400
+    etf_list: 3600
+    historical: 3600
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "json"
+  path: "logs"
+  rotation:
+    max_bytes: 10485760
+    backup_count: 5

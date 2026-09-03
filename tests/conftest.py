@@ -1,0 +1,77 @@
+"""
+共享测试 fixtures
+"""
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+import pytest
+import pytest_asyncio
+
+# 把项目根加入 sys.path
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+
+@pytest.fixture
+def config_path(tmp_path) -> Path:
+    """返回临时 config 路径，方便各测试用"""
+    return tmp_path / "upstreams.yaml"
+
+
+@pytest_asyncio.fixture
+async def temp_cache(tmp_path):
+    """返回一个已初始化的临时 Cache 实例"""
+    from src.cache import Cache, CacheConfig
+
+    cfg = CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db"))
+    cache = Cache(cfg)
+    await cache.initialize()
+    try:
+        yield cache
+    finally:
+        await cache.close()
+
+
+@pytest.fixture
+def mock_upstream(monkeypatch):
+    """返回一个 mock UpstreamClient 工厂"""
+    from src.upstream_client import ToolResult, UpstreamStatus
+
+    class _Mock:
+        def __init__(self, name, tools=None, results=None):
+            self.name = name
+            self._tools = tools or []
+            self._results = results or {}
+            self._status = UpstreamStatus.HEALTHY
+            self.calls = []
+
+        @property
+        def status(self):
+            return self._status
+
+        @property
+        def is_available(self):
+            return self._status == UpstreamStatus.HEALTHY
+
+        async def call_tool(self, tool_name, arguments):
+            self.calls.append((tool_name, arguments))
+            if tool_name in self._results:
+                r = self._results[tool_name]
+                if callable(r):
+                    return r(arguments)
+                return ToolResult(success=True, data=r, source=self.name)
+            return ToolResult(success=False, error="not mocked", source=self.name)
+
+        async def list_tools(self):
+            return [{"name": t, "description": t} for t in self._tools]
+
+        async def start(self):
+            self._status = UpstreamStatus.HEALTHY
+            return True
+
+        async def stop(self):
+            self._status = UpstreamStatus.UNAVAILABLE
+
+    return _Mock
