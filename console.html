@@ -104,25 +104,6 @@
         .badge-cache { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
         @keyframes ifsFadeIn { from { opacity: 0.4; } to { opacity: 1; } }
 
-        /* ===== 上游状态 - KPI 横条 ===== */
-        .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; }
-        .kpi-tile { background: var(--card-bg); border-radius: 8px; padding: 14px 12px; text-align: center; border: 1px solid var(--border); border-left: 3px solid var(--border); transition: transform 120ms ease; }
-        .kpi-tile:hover { transform: translateY(-1px); }
-        .kpi-num { font-size: 1.6rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--text); }
-        .kpi-label { font-size: 0.7rem; color: var(--text-secondary); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .kpi-tile.kpi-total    { border-left-color: var(--primary); }
-        .kpi-tile.kpi-online   { border-left-color: var(--online); }
-        .kpi-tile.kpi-online .kpi-num { color: var(--online); }
-        .kpi-tile.kpi-degraded { border-left-color: var(--degraded); }
-        .kpi-tile.kpi-degraded .kpi-num { color: var(--degraded); }
-        .kpi-tile.kpi-offline  { border-left-color: var(--offline); }
-        .kpi-tile.kpi-offline .kpi-num { color: var(--offline); }
-        .kpi-tile.kpi-disabled { border-left-color: var(--disabled); }
-        .kpi-tile.kpi-disabled .kpi-num { color: var(--disabled); }
-        .kpi-tile.kpi-configured { border-left-color: var(--text-secondary); }
-        .kpi-tile.kpi-configured .kpi-num { color: var(--text-secondary); }
-        .kpi-tile.kpi-zero .kpi-num { opacity: 0.35; }
-
         /* ===== Card toolbar ===== */
         .card-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap; }
         .card-toolbar h2 { font-size: 1rem; font-weight: 600; margin: 0; padding: 0; border: 0; }
@@ -364,15 +345,6 @@
             <button class="tab" data-panel="onboarding">接入指南</button>
         </div>
         <div id="status" class="panel active">
-            <div class="kpi-row" id="kpi-row">
-                <div class="kpi-tile kpi-total"><div class="kpi-num" id="kpi-total">-</div><div class="kpi-label">上游总数</div></div>
-                <div class="kpi-tile kpi-online"><div class="kpi-num" id="kpi-online">-</div><div class="kpi-label">在线</div></div>
-                <div class="kpi-tile kpi-degraded"><div class="kpi-num" id="kpi-degraded">-</div><div class="kpi-label">降级</div></div>
-                <div class="kpi-tile kpi-offline"><div class="kpi-num" id="kpi-offline">-</div><div class="kpi-label">离线</div></div>
-                <div class="kpi-tile kpi-disabled"><div class="kpi-num" id="kpi-disabled">-</div><div class="kpi-label">已禁用</div></div>
-                <div class="kpi-tile kpi-configured"><div class="kpi-num" id="kpi-configured">-</div><div class="kpi-label">就绪 (NPX)</div></div>
-            </div>
-
             <div class="card">
                 <div class="card-toolbar">
                     <h2>上游服务状态</h2>
@@ -683,17 +655,6 @@ asyncio.run(main())</pre>
             });
         }
 
-        function renderKpis(summary) {
-            const keys = ['total', 'online', 'degraded', 'offline', 'disabled', 'configured'];
-            keys.forEach(k => {
-                const el = document.getElementById('kpi-' + k);
-                if (!el) return;
-                const v = summary ? (summary[k] || 0) : 0;
-                el.textContent = v;
-                el.parentElement.classList.toggle('kpi-zero', v === 0);
-            });
-        }
-
         function renderUpstreamsTable() {
             const tbody = document.getElementById('upstreams-body');
             const filtered = applyStatusFilter(statusUpstreams);
@@ -803,7 +764,6 @@ asyncio.run(main())</pre>
             if (showLoading && refreshEl) refreshEl.classList.add('refreshing');
             try {
                 const data = await fetchJSON('/api/status');
-                renderKpis(data.summary);
                 statusUpstreams = Object.entries(data.upstreams || {}).map(([name, info]) => ({ _name: name, ...info }));
                 renderChipCounts();
                 renderUpstreamsTable();
