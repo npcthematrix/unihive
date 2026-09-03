@@ -1,22 +1,20 @@
 """
-UniHive Console Server - 统一入口
-单进程同时托管：
-  - MCP Streamable HTTP 接口（/mcp）
-  - 管理 API（/api/status, /api/interfaces, /api/config）
-  - 控制台静态 HTML（/）
+UniHive Console Server - 轻量管理控制台后端
+独立进程运行，提供只读 HTTP API
+
+端口分配：
+  - 18080: 本控制台（管理 API + 静态 HTML）
+  - 18081: MCP Streamable HTTP 网关（由 start_gateway.ps1 或 start_all.ps1 单独启动）
 """
-import asyncio
 import json
 import logging
 import os
 import sys
 import time
 from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-import uvicorn
 import yaml
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,15 +22,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CONSOLE_HOST = "127.0.0.1"
 CONSOLE_PORT = 18080
-MCP_PATH = "/mcp"
+GATEWAY_HTTP_PORT = 18081
+MCP_URL = f"http://127.0.0.1:{GATEWAY_HTTP_PORT}/mcp"
 GATEWAY_CONFIG_PATH = "config/upstreams.yaml"
 CACHE_DB_PATH = "logs/cache.db"
 CONSOLE_HTML_PATH = "console.html"
-
-# 全局 gateway 状态（在 lifespan 中填充）
-_gateway_state: dict = {}
 
 
 def mask_sensitive(value: str, show_chars: int = 2) -> str:
@@ -110,118 +105,74 @@ def get_upstream_status() -> dict:
 
 
 def get_interfaces() -> dict:
-    """从 gateway 注册的 specs 拉工具元数据；fallback 到读 config"""
-    if _gateway_state.get("specs"):
-        tools = []
-        for spec in _gateway_state["specs"]:
-            tools.append({
-                "name": spec.get("name"),
-                "description": spec.get("description", ""),
-                "source": spec.get("source") or spec.get("upstream", ""),
-                "dangerous": bool(spec.get("dangerous", False)),
-                "cache_ttl_key": spec.get("cache_ttl_key"),
-                "params": [
-                    p.get("name") if isinstance(p, dict) else p
-                    for p in (spec.get("params") or [])
-                ],
-            })
-    else:
-        config = load_config()
-        tools = []
-        for spec in config.get("tools", []) or []:
-            tools.append({
-                "name": spec.get("name"),
-                "description": spec.get("description", ""),
-                "source": spec.get("source") or spec.get("upstream", ""),
-                "dangerous": bool(spec.get("dangerous", False)),
-                "cache_ttl_key": spec.get("cache_ttl_key"),
-                "params": [
-                    p.get("name") if isinstance(p, dict) else p
-                    for p in (spec.get("params") or [])
-                ],
-            })
+    config = load_config()
+    tools = []
+    for spec in config.get("tools", []) or []:
+        tools.append({
+            "name": spec.get("name"),
+            "description": spec.get("description", ""),
+            "source": spec.get("source") or spec.get("upstream", ""),
+            "dangerous": bool(spec.get("dangerous", False)),
+            "cache_ttl_key": spec.get("cache_ttl_key"),
+            "params": [
+                p.get("name") if isinstance(p, dict) else p
+                for p in (spec.get("params") or [])
+            ],
+        })
     return {"timestamp": int(time.time()), "tools": tools}
 
 
-def create_app() -> FastAPI:
-    # 延迟 import 以避免在 create_app 时强依赖 gateway 模块
-    from src.gateway_server import GatewayServer
-    from fastmcp import FastMCP
+class ConsoleHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        logger.info("%s - %s", self.address_string(), format % args)
 
-    global _gateway_state
-    logger.info("Initializing gateway for HTTP mode...")
-    gateway = GatewayServer()
-    # 预创建 FastMCP 实例，注册 tools（同步阻塞调用以保证 lifespan 一致）
-    # 这样构造 http_app 时 session manager 已被 lifespan 正确初始化。
-    import asyncio as _asyncio
-    gateway.mcp = FastMCP("unihive")
-    _asyncio.run(gateway.initialize())
-    mcp_app = gateway.mcp.http_app(path="/mcp")
-    _gateway_state = {
-        "gateway": gateway,
-        "specs": gateway.config.get("tools", []) or [],
-    }
+    def _send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
 
-    # 把 MCP 的 lifespan 透传给 FastAPI，确保 StreamableHTTP session manager
-    # 在 ASGI lifespan 阶段被正确初始化。
-    app = FastAPI(title="UniHive Console", version="1.0.0", lifespan=mcp_app.lifespan)
+    def _send_html(self, html_bytes):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html_bytes)))
+        self.end_headers()
+        self.wfile.write(html_bytes)
 
-    # FastMCP 内部路由固定为 /mcp。Starlette Mount 会剥离 /mcp 前缀，
-    # 因此 mount 到 /mcp 后完整访问路径为 /mcp/mcp。
-    # 在 module 级预先 mount（在添加任何 FastAPI route 之前），
-    # 确保 mount 的匹配优先于 FastAPI 的兜底 404。
-    app.mount(MCP_PATH, mcp_app)
-
-    @app.on_event("startup")
-    async def on_startup():
-        """FastAPI 启动钩子：启动 health check 循环"""
-        global _gateway_state
-        gw = _gateway_state["gateway"]
-        asyncio.create_task(gw._health_check_loop())
-        logger.info(
-            f"Gateway MCP endpoint at {MCP_PATH}/mcp "
-            f"({len(_gateway_state['specs'])} tools)"
-        )
-
-    @app.on_event("shutdown")
-    async def on_shutdown():
-        gw = _gateway_state.get("gateway")
-        if gw:
-            await gw.stop()
-
-    @app.get("/", include_in_schema=False)
-    async def root():
-        if Path(CONSOLE_HTML_PATH).exists():
-            return FileResponse(CONSOLE_HTML_PATH, media_type="text/html")
-        return {"error": "console.html not found"}
-
-    @app.get("/api/status")
-    async def api_status():
-        return get_upstream_status()
-
-    @app.get("/api/interfaces")
-    async def api_interfaces():
-        return get_interfaces()
-
-    @app.get("/api/config")
-    async def api_config():
-        return load_config()
-
-    @app.get("/health")
-    async def health():
-        return {"status": "ok", "timestamp": int(time.time())}
-
-    return app
-
-
-app = create_app()
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/":
+            html_path = Path(CONSOLE_HTML_PATH)
+            if html_path.exists():
+                self._send_html(html_path.read_bytes())
+            else:
+                self._send_json({"error": "console.html not found"}, 404)
+        elif path == "/api/status":
+            self._send_json(get_upstream_status())
+        elif path == "/api/interfaces":
+            self._send_json(get_interfaces())
+        elif path == "/api/config":
+            self._send_json(load_config())
+        elif path == "/health":
+            self._send_json({"status": "ok", "mcp_url": MCP_URL, "timestamp": int(time.time())})
+        else:
+            self._send_json({"error": "not found", "path": path}, 404)
 
 
 def main():
     if sys.platform == "win32":
         os.environ["PYTHONIOENCODING"] = "utf-8"
-    logger.info(f"Starting UniHive console on http://{CONSOLE_HOST}:{CONSOLE_PORT}")
-    uvicorn.run(app, host=CONSOLE_HOST, port=CONSOLE_PORT, log_level="info")
+    logger.info(f"Console listening on http://127.0.0.1:{CONSOLE_PORT}")
+    logger.info(f"MCP HTTP gateway expected at {MCP_URL} (separate process)")
+    server = HTTPServer(("127.0.0.1", CONSOLE_PORT), ConsoleHandler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Shutting down")
+        server.shutdown()
 
 
 if __name__ == "__main__":
