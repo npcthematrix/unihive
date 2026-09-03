@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UniHive Console</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #212529;
+            --text-secondary: #6c757d;
+            --border: #dee2e6;
+            --primary: #0d6efd;
+            --success: #198754;
+            --danger: #dc3545;
+            --warning: #ffc107;
+            --online: #22c55e;
+            --offline: #ef4444;
+            --degraded: #f59e0b;
+            --disabled: #9ca3af;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+        h1 { font-size: 1.5rem; font-weight: 600; }
+        .refresh-info { font-size: 0.875rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; }
+        .refresh-info button { padding: 4px 12px; border: 1px solid var(--border); background: var(--card-bg); border-radius: 4px; cursor: pointer; font-size: 0.875rem; }
+        .refresh-info button:hover { background: var(--bg); }
+        .tabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--card-bg); padding: 4px; border-radius: 8px; }
+        .tab { padding: 8px 16px; border: none; background: transparent; cursor: pointer; border-radius: 6px; font-size: 0.875rem; color: var(--text-secondary); transition: all 0.2s; }
+        .tab:hover { background: var(--bg); }
+        .tab.active { background: var(--primary); color: white; }
+        .card { background: var(--card-bg); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; }
+        .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+        .card h2 .timestamp { font-weight: normal; font-size: 0.75rem; color: var(--text-secondary); }
+        .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+        .status-online { background: var(--online); }
+        .status-offline { background: var(--offline); }
+        .status-degraded { background: var(--degraded); }
+        .status-disabled { background: var(--disabled); }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { font-weight: 600; font-size: 0.875rem; color: var(--text-secondary); }
+        tr:hover { background: #f8f9fa; }
+        .tool-name { font-family: monospace; font-weight: 500; color: var(--primary); }
+        .chain { font-family: monospace; font-size: 0.875rem; color: var(--text-secondary); }
+        .error-msg { color: var(--danger); font-size: 0.875rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cache-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+        .stat-item { background: var(--bg); padding: 12px; border-radius: 6px; text-align: center; }
+        .stat-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-value { font-size: 1.25rem; font-weight: 600; margin-top: 4px; color: var(--text); }
+        .stat-value.success { color: var(--success); }
+        .stat-value.warning { color: var(--warning); }
+        .stat-value.danger { color: var(--danger); }
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .loading { text-align: center; padding: 40px; color: var(--text-secondary); }
+        .json-block { background: var(--bg); padding: 16px; border-radius: 6px; overflow: auto; font-size: 0.8rem; font-family: 'Monaco', 'Menlo', monospace; max-height: 350px; }
+        .latency { font-size: 0.8rem; color: var(--text-secondary); }
+        .latency.good { color: var(--success); }
+        .latency.slow { color: var(--warning); }
+        .latency.bad { color: var(--danger); }
+        .tool-filters { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+        .tool-filters input { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); color: var(--text); }
+        .tool-filters input:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
+        .tool-filters .tool-counter { font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; }
+        .tool-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; background: var(--card-bg); }
+        .tool-group-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; user-select: none; background: linear-gradient(180deg, #fafbfc 0%, #ffffff 100%); transition: background 0.15s; }
+        .tool-group-header:hover { background: linear-gradient(180deg, #f1f3f5 0%, #fafbfc 100%); }
+        .tool-group-header .caret { display: inline-block; font-size: 0.7rem; color: var(--text-secondary); transition: transform 0.2s ease; width: 12px; }
+        .tool-group-header .group-title { font-weight: 600; font-size: 0.95rem; flex: 1; }
+        .tool-group-header .group-meta { font-size: 0.75rem; color: var(--text-secondary); display: flex; gap: 12px; align-items: center; }
+        .tool-group-header .group-count { background: var(--bg); padding: 2px 10px; border-radius: 12px; font-weight: 600; color: var(--text); }
+        .tool-group.collapsed .tool-group-body { display: none; }
+        .tool-group.collapsed .caret { transform: rotate(90deg); }
+        .tool-group-body table { border-collapse: collapse; }
+        .tool-group-body thead { background: var(--bg); }
+        .tool-group-body th { padding: 8px 16px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); border-bottom: 1px solid var(--border); }
+        .tool-group-body td { padding: 10px 16px; border-bottom: 1px solid #f1f3f5; }
+        .tool-group-body tr:last-child td { border-bottom: none; }
+        .tool-group-body tr:hover { background: #fafbfc; }
+        .tool-group-body .tool-desc { color: var(--text-secondary); font-size: 0.875rem; }
+        .tool-group-body .tool-params { font-family: monospace; font-size: 0.75rem; color: var(--text-secondary); }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .badge-dangerous { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
+        .badge-cache { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
+        .empty-group { display: none; }
+        .tool-group.empty { display: none; }
+        .tool-meta-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>UniHive Console</h1>
+            <div class="refresh-info">
+                <span>刷新:</span>
+                <span id="countdown">10</span>
+                <button onclick="refreshAll()">手动刷新</button>
+            </div>
+        </header>
+        <div class="tabs">
+            <button class="tab active" data-panel="status">上游状态</button>
+            <button class="tab" data-panel="interfaces">接口列表</button>
+            <button class="tab" data-panel="config">配置信息</button>
+            <button class="tab" data-panel="onboarding">接入指南</button>
+        </div>
+        <div id="status" class="panel active">
+            <div class="card">
+                <h2>上游服务状态 <span class="timestamp" id="status-timestamp"></span></h2>
+                <table>
+                    <thead>
+                        <tr><th>上游</th><th>类型</th><th>状态</th><th>延迟</th><th>错误信息</th></tr>
+                    </thead>
+                    <tbody id="upstreams-body">
+                        <tr><td colspan="5" class="loading">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card">
+                <h2>缓存统计 <span class="timestamp" id="cache-timestamp"></span></h2>
+                <div class="cache-stats" id="cache-stats">
+                    <div class="stat-item"><div class="stat-label">状态</div><div class="stat-value" id="cache-enabled">-</div></div>
+                    <div class="stat-item"><div class="stat-label">条目数</div><div class="stat-value" id="cache-entries">-</div></div>
+                    <div class="stat-item"><div class="stat-label">数据库大小</div><div class="stat-value" id="cache-size">-</div></div>
+                    <div class="stat-item"><div class="stat-label">命中率</div><div class="stat-value" id="cache-hitrate">-</div></div>
+                </div>
+            </div>
+        </div>
+        <div id="interfaces" class="panel">
+            <div class="card">
+                <h2>网关接口列表 <span class="timestamp" id="interfaces-timestamp"></span></h2>
+                <div class="tool-filters">
+                    <input id="tool-search" type="text" placeholder="按名称或描述过滤..." autocomplete="off" />
+                    <span class="tool-counter"><span id="tool-shown">0</span> / <span id="tool-total">0</span></span>
+                </div>
+                <div id="interfaces-groups" class="loading">加载中...</div>
+            </div>
+        </div>
+        <div id="config" class="panel">
+            <div class="card">
+                <h2>路由配置 <span class="timestamp" id="routing-timestamp"></span></h2>
+                <pre id="routing-config" class="json-block"></pre>
+            </div>
+            <div class="card">
+                <h2>缓存配置</h2>
+                <pre id="cache-config" class="json-block"></pre>
+            </div>
+        </div>
+        <div id="onboarding" class="panel">
+            <div class="card">
+                <h2>接入指南</h2>
+                <p style="color: var(--text-secondary);">UniHive MCP 统一网关，5 分钟接入金融数据。</p>
+                <p style="margin-top: 12px;"><em>章节内容正在加载...</em></p>
+            </div>
+        </div>
+    </div>
+    <script>
+        let countdown = 10;
+        let timer = null;
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.panel).classList.add('active');
+            });
+        });
+        function formatTime(ts) {
+            if (!ts) return '-';
+            const d = new Date(ts * 1000);
+            return d.toLocaleTimeString('zh-CN');
+        }
+        function formatLatency(ms) {
+            if (!ms || ms < 0) return '-';
+            let cls = 'good';
+            if (ms > 1000) cls = 'slow';
+            if (ms > 3000) cls = 'bad';
+            return `<span class="latency ${cls}">${ms}ms</span>`;
+        }
+        function formatPercent(v) {
+            if (v === undefined || v === null) return '-';
+            return (v * 100).toFixed(1) + '%';
+        }
+        async function fetchJSON(url) {
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(resp.statusText);
+            return resp.json();
+        }
+        async function loadStatus() {
+            try {
+                const data = await fetchJSON('/api/status');
+                document.getElementById('status-timestamp').textContent = formatTime(data.timestamp);
+                const tbody = document.getElementById('upstreams-body');
+                const upstreams = data.upstreams || {};
+                if (Object.keys(upstreams).length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="loading">暂无上游配置</td></tr>';
+                } else {
+                    tbody.innerHTML = Object.entries(upstreams).map(([name, info]) => {
+                        const statusClass = info.enabled ? 'status-online' : 'status-disabled';
+                        const statusText = info.enabled ? '在线' : '已禁用';
+                        return `<tr>
+                            <td><strong>${name}</strong></td>
+                            <td>${info.type || '-'}</td>
+                            <td><span class="status-dot ${statusClass}"></span>${statusText}</td>
+                            <td>${formatLatency(info.latency_ms)}</td>
+                            <td>${info.last_error || '-'}</td>
+                        </tr>`;
+                    }).join('');
+                }
+                const cache = data.cache || {};
+                document.getElementById('cache-timestamp').textContent = formatTime(cache.timestamp);
+                document.getElementById('cache-enabled').textContent = cache.enabled ? '已启用' : '未启用';
+                document.getElementById('cache-enabled').className = 'stat-value ' + (cache.enabled ? 'success' : 'danger');
+                document.getElementById('cache-entries').textContent = cache.entries !== undefined ? cache.entries : '-';
+                document.getElementById('cache-size').textContent = cache.db_size_mb ? cache.db_size_mb + ' MB' : '-';
+                const hitrate = cache.hit_rate;
+                const hitrateEl = document.getElementById('cache-hitrate');
+                if (hitrate !== undefined) {
+                    hitrateEl.textContent = formatPercent(hitrate);
+                    hitrateEl.className = 'stat-value ' + (hitrate > 0.5 ? 'success' : hitrate > 0.2 ? 'warning' : 'danger');
+                } else {
+                    hitrateEl.textContent = '-';
+                    hitrateEl.className = 'stat-value';
+                }
+            } catch (e) { console.error('Load status error:', e); }
+        }
+        const GROUP_ORDER = ['gateway', 'rhths_meta/tdx_local', 'tdx_local', 'rhths_ashare', 'rhths_index', 'rhths_meta', 'rhths_fund', 'tushare'];
+        const GROUP_META = {
+            'gateway':             { title: '网关内置',   desc: '状态检查、内部工具' },
+            'rhths_meta/tdx_local':{ title: '综合搜索',   desc: '跨数据源降级链' },
+            'tdx_local':           { title: 'TDX (通达信)', desc: '本地 stdio, 含高风险 tdx_call' },
+            'rhths_ashare':        { title: '同花顺 A 股', desc: '行情/财报/估值/特殊数据' },
+            'rhths_index':         { title: '同花顺 指数/板块', desc: '目录/成分股/历史 K 线' },
+            'rhths_meta':          { title: '同花顺 元数据', desc: '全量 ticker 列表' },
+            'rhths_fund':          { title: '同花顺 基金',   desc: '持仓/业绩/经理/财务' },
+            'tushare':             { title: 'Tushare',    desc: '通用 API 透传' },
+        };
+        let allTools = [];
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+        function primarySource(src) {
+            if (!src) return '';
+            const known = GROUP_ORDER.includes(src) ? src : (src.split('/')[0] || '');
+            return GROUP_ORDER.includes(known) ? known : src;
+        }
+        function groupTools(tools) {
+            const buckets = new Map(GROUP_ORDER.map(k => [k, []]));
+            for (const t of tools) {
+                const key = primarySource(t.source);
+                if (!buckets.has(key)) buckets.set(key, []);
+                buckets.get(key).push(t);
+            }
+            return GROUP_ORDER.filter(k => buckets.get(k).length > 0).map(k => ({
+                key: k,
+                meta: GROUP_META[k] || { title: k, desc: '' },
+                tools: buckets.get(k),
+            }));
+        }
+        function renderTools() {
+            const q = (document.getElementById('tool-search').value || '').trim().toLowerCase();
+            const filtered = !q ? allTools : allTools.filter(t =>
+                (t.name || '').toLowerCase().includes(q) ||
+                (t.description || '').toLowerCase().includes(q) ||
+                (t.source || '').toLowerCase().includes(q)
+            );
+            document.getElementById('tool-shown').textContent = filtered.length;
+            document.getElementById('tool-total').textContent = allTools.length;
+            const groups = groupTools(filtered);
+            const root = document.getElementById('interfaces-groups');
+            if (groups.length === 0) {
+                root.className = 'loading';
+                root.innerHTML = q ? '没有匹配的工具' : '加载中...';
+                return;
+            }
+            root.className = '';
+            root.innerHTML = groups.map(g => {
+                const isCollapsed = g.tools.length > 8 ? 'collapsed' : '';
+                const rows = g.tools.map(t => {
+                    const badges = [];
+                    if (t.dangerous) badges.push('<span class="badge badge-dangerous">dangerous</span>');
+                    if (t.cache_ttl_key) badges.push(`<span class="badge badge-cache" title="cache_ttl_key=${escapeHtml(t.cache_ttl_key)}">${escapeHtml(t.cache_ttl_key)}</span>`);
+                    const params = (t.params || []).filter(p => p && p !== '?').join(', ');
+                    return `<tr>
+                        <td style="width: 32%"><span class="tool-name">${escapeHtml(t.name)}</span>${badges.length ? '<div class="tool-meta-cell" style="margin-top:4px">' + badges.join('') + '</div>' : ''}</td>
+                        <td style="width: 48%"><div class="tool-desc">${escapeHtml(t.description || '-')}</div>${params ? `<div class="tool-params" style="margin-top:4px">${escapeHtml(params)}</div>` : ''}</td>
+                        <td style="width: 20%"><span class="chain">${escapeHtml(t.source || '-')}</span></td>
+                    </tr>`;
+                }).join('');
+                return `<div class="tool-group ${isCollapsed}" data-group="${escapeHtml(g.key)}">
+                    <div class="tool-group-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                        <span class="caret">▶</span>
+                        <span class="group-title">${escapeHtml(g.meta.title)}</span>
+                        <span class="group-meta">
+                            <span style="font-family:monospace;color:var(--text-secondary)">${escapeHtml(g.key)}</span>
+                            <span class="group-count">${g.tools.length}</span>
+                        </span>
+                    </div>
+                    <div class="tool-group-body">
+                        <table>
+                            <thead><tr><th>接口</th><th>描述</th><th>数据源</th></tr></thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+        async function loadInterfaces() {
+            try {
+                const data = await fetchJSON('/api/interfaces');
+                document.getElementById('interfaces-timestamp').textContent = formatTime(data.timestamp);
+                allTools = data.tools || [];
+                renderTools();
+            } catch (e) { console.error('Load interfaces error:', e); }
+        }
+        async function loadConfig() {
+            try {
+                const data = await fetchJSON('/api/config');
+                document.getElementById('routing-timestamp').textContent = '';
+                document.getElementById('routing-config').textContent = JSON.stringify(data.routing || {}, null, 2);
+                document.getElementById('cache-config').textContent = JSON.stringify(data.cache || {}, null, 2);
+            } catch (e) { console.error('Load config error:', e); }
+        }
+        function refreshAll() {
+            countdown = 10;
+            document.getElementById('countdown').textContent = countdown;
+            loadStatus();
+            loadInterfaces();
+            loadConfig();
+        }
+        function startAutoRefresh() {
+            timer = setInterval(() => {
+                countdown--;
+                document.getElementById('countdown').textContent = countdown;
+                if (countdown <= 0) { refreshAll(); }
+            }, 1000);
+        }
+        document.getElementById('tool-search').addEventListener('input', renderTools);
+        refreshAll();
+        startAutoRefresh();
+    </script>
+</body>
+</html>
