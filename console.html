@@ -547,14 +547,15 @@ asyncio.run(main())</pre>
                 }
             } catch (e) { console.error('Load status error:', e); }
         }
-        const GROUP_ORDER = ['tdx_local', 'rhths_ashare', 'rhths_index', 'rhths_meta', 'rhths_fund', 'tushare'];
+        const GROUP_ORDER = ['gateway', 'tdx_local', 'rhths_ashare', 'rhths_index', 'rhths_meta', 'rhths_fund', 'tushare'];
         const GROUP_META = {
-            'tdx_local':           { title: 'TDX (通达信)', desc: '本地 stdio, 含高风险 tdx_call' },
-            'rhths_ashare':        { title: '同花顺 A 股', desc: '行情/财报/估值/特殊数据' },
-            'rhths_index':         { title: '同花顺 指数/板块', desc: '目录/成分股/历史 K 线' },
-            'rhths_meta':          { title: '同花顺 元数据', desc: '全量 ticker 列表' },
-            'rhths_fund':          { title: '同花顺 基金',   desc: '持仓/业绩/经理/财务' },
-            'tushare':             { title: 'Tushare',    desc: '通用 API 透传' },
+            'gateway':            { title: '网关内置',    desc: '状态检查、内部工具' },
+            'tdx_local':         { title: 'TDX (通达信)', desc: '本地 stdio, 含高风险 tdx_call' },
+            'rhths_ashare':       { title: '同花顺 A 股', desc: '行情/财报/估值/特殊数据' },
+            'rhths_index':        { title: '同花顺 指数/板块', desc: '目录/成分股/历史 K 线' },
+            'rhths_meta':         { title: '同花顺 元数据', desc: '全量 ticker 列表' },
+            'rhths_fund':         { title: '同花顺 基金',   desc: '持仓/业绩/经理/财务' },
+            'tushare':            { title: 'Tushare',    desc: '通用 API 透传' },
         };
         const ALL_KEY = '__all__';
         let allTools = [];
@@ -565,9 +566,9 @@ asyncio.run(main())</pre>
             return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
         function primarySource(src) {
-            if (!src) return '';
-            const known = GROUP_ORDER.includes(src) ? src : (src.split('/')[0] || '');
-            return GROUP_ORDER.includes(known) ? known : src;
+            if (!src) return 'gateway';
+            if (GROUP_ORDER.includes(src)) return src;
+            return 'gateway';
         }
         function bucketByGroup(tools) {
             const buckets = new Map();
@@ -634,8 +635,8 @@ asyncio.run(main())</pre>
                 const params = (t.params || []).filter(p => p && p !== '?').join(', ');
                 return `<tr>
                     <td style="width: 28%"><span class="tool-name">${escapeHtml(t.name)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td>
-                    <td style="width: 52%"><div class="tool-desc">${escapeHtml(t.description || '-')}</div>${params ? `<div class="tool-params">${escapeHtml(params)}</div>` : ''}</td>
-                    <td style="width: 20%"><span class="chain">${escapeHtml(t.source || '-')}</span></td>
+                    <td style="width: ${activeGroup === ALL_KEY ? '72' : '52'}%"><div class="tool-desc">${escapeHtml(t.description || '-')}</div>${params ? `<div class="tool-params">${escapeHtml(params)}</div>` : ''}</td>
+                    ${activeGroup === ALL_KEY ? '' : '<td style="width: 20%"><span class="chain">' + escapeHtml(t.source || '-') + '</span></td>'}
                 </tr>`;
             }).join('');
             root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)} <code>${escapeHtml(meta.key)}</code></h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><table class="ifs-table"><caption style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden">${escapeHtml(meta.title)} 接口列表</caption><thead><tr><th>接口</th><th>描述</th><th>数据源</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -654,7 +655,8 @@ asyncio.run(main())</pre>
             activeGroup = key;
             const hash = key === ALL_KEY ? '' : `#tools=${key}`;
             const newUrl = location.pathname + location.search + hash;
-            if (location.hash !== hash) {
+            const oldHash = location.hash || '';
+            if (oldHash !== hash) {
                 history.replaceState(null, '', newUrl);
             }
             renderAll();
@@ -670,7 +672,7 @@ asyncio.run(main())</pre>
             activeGroup = firstWithMatch || ALL_KEY;
         }
         function readHashGroup() {
-            const m = location.hash.match(/^#tools=(.+)$/);
+            const m = window.location.href.match(/#tools=([^&#]+)/);
             if (m && (m[1] === ALL_KEY || GROUP_ORDER.includes(m[1]))) return m[1];
             return ALL_KEY;
         }
