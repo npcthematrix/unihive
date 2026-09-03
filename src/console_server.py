@@ -57,31 +57,43 @@ def load_config() -> dict:
 
 def get_cache_stats() -> dict:
     cache_path = Path(CACHE_DB_PATH)
+    stats_path = Path("logs/cache_stats.json")
     if not cache_path.exists():
         return {"enabled": False, "error": "Cache DB not found", "timestamp": int(time.time())}
     try:
         size_bytes = cache_path.stat().st_size
         entries = None
+        hits = None
+        misses = None
         hit_rate = None
         try:
             import sqlite3
             conn = sqlite3.connect(CACHE_DB_PATH)
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM cache_entries")
+            cursor.execute("SELECT COUNT(*) FROM cache")
             entries = cursor.fetchone()[0]
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cache_stats'")
-            if cursor.fetchone():
-                cursor.execute("SELECT hits, misses FROM cache_stats ORDER BY id DESC LIMIT 1")
-                row = cursor.fetchone()
-                if row and row[1] and (row[0] + row[1]) > 0:
-                    hit_rate = row[0] / (row[0] + row[1])
+            cursor.execute("SELECT COUNT(*) FROM cache WHERE expires_at IS NOT NULL AND expires_at > ?", (int(time.time()),))
+            live_entries = cursor.fetchone()[0]
             conn.close()
         except Exception:
-            pass
+            live_entries = None
+        if stats_path.exists():
+            try:
+                with open(stats_path, encoding="utf-8") as f:
+                    s = json.load(f)
+                hits = int(s.get("hits", 0))
+                misses = int(s.get("misses", 0))
+                total = hits + misses
+                hit_rate = (hits / total) if total > 0 else None
+            except Exception:
+                pass
         return {
             "enabled": True,
             "entries": entries,
+            "live_entries": live_entries,
             "db_size_mb": round(size_bytes / (1024 * 1024), 3),
+            "hits": hits,
+            "misses": misses,
             "hit_rate": hit_rate,
             "timestamp": int(time.time()),
         }
@@ -125,12 +137,24 @@ def _probe_upstream(name: str, cfg: dict) -> dict:
 def get_upstream_status() -> dict:
     config = load_config()
     upstreams_status = {}
+    summary = {"total": 0, "online": 0, "degraded": 0, "offline": 0, "disabled": 0, "configured": 0}
     for name, cfg in config.get("upstreams", {}).items():
         if not isinstance(cfg, dict):
             continue
-        upstreams_status[name] = _probe_upstream(name, cfg)
+        info = _probe_upstream(name, cfg)
+        upstreams_status[name] = info
+        summary["total"] += 1
+        if not info.get("enabled", False):
+            summary["disabled"] += 1
+        else:
+            bucket = info.get("status", "unknown")
+            if bucket in summary:
+                summary[bucket] += 1
+            else:
+                summary["configured"] += 1
     return {
         "timestamp": int(time.time()),
+        "summary": summary,
         "upstreams": upstreams_status,
         "cache": get_cache_stats(),
     }

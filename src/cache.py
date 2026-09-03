@@ -27,6 +27,8 @@ class CacheConfig:
 class Cache:
     """SQLite 缓存实现"""
 
+    STATS_FILE = "logs/cache_stats.json"
+
     def __init__(self, config: CacheConfig):
         self.config = config
         self.enabled = config.enabled
@@ -34,6 +36,31 @@ class Cache:
         self._session_factory = None
         self._lock = asyncio.Lock()
         self._initialized = False
+        self._hits = 0
+        self._misses = 0
+
+    @property
+    def hits(self) -> int:
+        return self._hits
+
+    @property
+    def misses(self) -> int:
+        return self._misses
+
+    def hit_rate(self) -> float | None:
+        total = self._hits + self._misses
+        return self._hits / total if total > 0 else None
+
+    def _persist_stats(self):
+        try:
+            from pathlib import Path
+            Path(self.STATS_FILE).parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.STATS_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"hits": self._hits, "misses": self._misses}, f)
+            Path(tmp).replace(self.STATS_FILE)
+        except Exception as e:
+            logger.warning(f"Failed to persist cache stats: {e}")
 
     async def initialize(self):
         """异步初始化数据库连接"""
@@ -85,8 +112,12 @@ class Cache:
         """
         cached = await self.get(key)
         if cached is not None:
+            self._hits += 1
+            self._persist_stats()
             return cached, True
 
+        self._misses += 1
+        self._persist_stats()
         value = await factory()
         if value is not None:
             await self.set(key, value, ttl=ttl)
