@@ -6,6 +6,7 @@ UniHive Console Server - 轻量管理控制台后端
   - 18080: 本控制台（管理 API + 静态 HTML）
   - 18081: MCP Streamable HTTP 网关（由 start_gateway.ps1 或 start_all.ps1 单独启动）
 """
+import asyncio
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ import time
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+import httpx
 import yaml
 
 logging.basicConfig(
@@ -87,16 +89,46 @@ def get_cache_stats() -> dict:
         return {"enabled": False, "error": str(e), "timestamp": int(time.time())}
 
 
+def _probe_upstream(name: str, cfg: dict) -> dict:
+    """实际探测上游可用性和延迟。"""
+    upstream_type = cfg.get("type", "")
+    base_url = cfg.get("base_url", "")
+    result = {
+        "enabled": cfg.get("enabled", False),
+        "type": upstream_type,
+        "status": "unknown",
+        "latency_ms": None,
+        "last_error": None,
+    }
+    if upstream_type != "http" or not base_url:
+        result["status"] = "configured" if cfg.get("enabled") else "disabled"
+        return result
+    health_url = base_url.rstrip("/") + "/health"
+    try:
+        t0 = time.monotonic()
+        resp = httpx.get(health_url, timeout=5.0)
+        result["latency_ms"] = round((time.monotonic() - t0) * 1000)
+        if resp.status_code == 200:
+            result["status"] = "online"
+        else:
+            result["status"] = "degraded"
+            result["last_error"] = f"HTTP {resp.status_code}"
+    except httpx.TimeoutException:
+        result["status"] = "offline"
+        result["last_error"] = "连接超时 (5s)"
+    except Exception as e:
+        result["status"] = "offline"
+        result["last_error"] = str(e)[:80]
+    return result
+
+
 def get_upstream_status() -> dict:
     config = load_config()
     upstreams_status = {}
     for name, cfg in config.get("upstreams", {}).items():
         if not isinstance(cfg, dict):
             continue
-        upstreams_status[name] = {
-            "enabled": cfg.get("enabled", False),
-            "type": cfg.get("type", "-"),
-        }
+        upstreams_status[name] = _probe_upstream(name, cfg)
     return {
         "timestamp": int(time.time()),
         "upstreams": upstreams_status,

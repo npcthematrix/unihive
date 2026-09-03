@@ -50,12 +50,14 @@
         .chain { font-family: monospace; font-size: 0.875rem; color: var(--text-secondary); }
         .error-msg { color: var(--danger); font-size: 0.875rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .cache-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-        .stat-item { background: var(--bg); padding: 12px; border-radius: 6px; text-align: center; }
+        .stat-item { background: var(--bg); padding: 12px; border-radius: 6px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
         .stat-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
         .stat-value { font-size: 1.25rem; font-weight: 600; margin-top: 4px; color: var(--text); }
         .stat-value.success { color: var(--success); }
         .stat-value.warning { color: var(--warning); }
         .stat-value.danger { color: var(--danger); }
+        .hitrate-bar { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+        .hitrate-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease, background 0.3s ease; }
         .panel { display: none; }
         .panel.active { display: block; }
         .loading { text-align: center; padding: 40px; color: var(--text-secondary); }
@@ -286,7 +288,7 @@
                     <div class="stat-item"><div class="stat-label">状态</div><div class="stat-value" id="cache-enabled">-</div></div>
                     <div class="stat-item"><div class="stat-label">条目数</div><div class="stat-value" id="cache-entries">-</div></div>
                     <div class="stat-item"><div class="stat-label">数据库大小</div><div class="stat-value" id="cache-size">-</div></div>
-                    <div class="stat-item"><div class="stat-label">命中率</div><div class="stat-value" id="cache-hitrate">-</div></div>
+                    <div class="stat-item"><div class="stat-label">命中率</div><div class="stat-value" id="cache-hitrate">-</div><div class="hitrate-bar" id="cache-hitrate-bar"></div></div>
                 </div>
             </div>
         </div>
@@ -519,14 +521,19 @@ asyncio.run(main())</pre>
                     tbody.innerHTML = '<tr><td colspan="5" class="loading">暂无上游配置</td></tr>';
                 } else {
                     tbody.innerHTML = Object.entries(upstreams).map(([name, info]) => {
-                        const statusClass = info.enabled ? 'status-online' : 'status-disabled';
-                        const statusText = info.enabled ? '在线' : '已禁用';
+                        const statusMap = { online: '在线', degraded: '降级', offline: '离线', configured: '就绪', disabled: '已禁用', unknown: '未知' };
+                        const clsMap = { online: 'status-online', degraded: 'status-degraded', offline: 'status-offline', configured: 'status-online', disabled: 'status-disabled', unknown: 'status-offline' };
+                        const typeMap = { 'http': 'HTTP', 'stdio': 'Stdio', 'npx': 'NPX' };
+                        const sc = clsMap[info.status] || 'status-offline';
+                        const st = statusMap[info.status] || '未知';
+                        const tp = typeMap[info.type] || info.type || '-';
+                        const err = info.last_error ? `<span class="error-msg" title="${info.last_error}">${info.last_error}</span>` : '-';
                         return `<tr>
                             <td><strong>${name}</strong></td>
-                            <td>${info.type || '-'}</td>
-                            <td><span class="status-dot ${statusClass}"></span>${statusText}</td>
+                            <td>${tp}</td>
+                            <td><span class="status-dot ${sc}"></span>${st}</td>
                             <td>${formatLatency(info.latency_ms)}</td>
-                            <td>${info.last_error || '-'}</td>
+                            <td>${err}</td>
                         </tr>`;
                     }).join('');
                 }
@@ -534,16 +541,21 @@ asyncio.run(main())</pre>
                 document.getElementById('cache-timestamp').textContent = formatTime(cache.timestamp);
                 document.getElementById('cache-enabled').textContent = cache.enabled ? '已启用' : '未启用';
                 document.getElementById('cache-enabled').className = 'stat-value ' + (cache.enabled ? 'success' : 'danger');
-                document.getElementById('cache-entries').textContent = cache.entries !== undefined ? cache.entries : '-';
+                document.getElementById('cache-entries').textContent = cache.entries != null ? cache.entries : '-';
                 document.getElementById('cache-size').textContent = cache.db_size_mb ? cache.db_size_mb + ' MB' : '-';
                 const hitrate = cache.hit_rate;
                 const hitrateEl = document.getElementById('cache-hitrate');
-                if (hitrate !== undefined) {
+                const hitrateBar = document.getElementById('cache-hitrate-bar');
+                if (hitrate != null) {
                     hitrateEl.textContent = formatPercent(hitrate);
                     hitrateEl.className = 'stat-value ' + (hitrate > 0.5 ? 'success' : hitrate > 0.2 ? 'warning' : 'danger');
+                    const pct = Math.round(hitrate * 100);
+                    const barColor = hitrate > 0.5 ? 'var(--success)' : hitrate > 0.2 ? 'var(--warning)' : 'var(--danger)';
+                    hitrateBar.innerHTML = `<div class="hitrate-bar-fill" style="width:${pct}%;background:${barColor}"></div>`;
                 } else {
                     hitrateEl.textContent = '-';
                     hitrateEl.className = 'stat-value';
+                    hitrateBar.innerHTML = '';
                 }
             } catch (e) { console.error('Load status error:', e); }
         }
