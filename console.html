@@ -293,10 +293,132 @@
             </div>
         </div>
         <div id="onboarding" class="panel">
+            <nav class="onboarding-nav" id="onboarding-nav">
+                <a href="#sec-quickstart" data-target="sec-quickstart">快速开始</a>
+                <a href="#sec-integration" data-target="sec-integration">接入方式</a>
+                <a href="#sec-interfaces" data-target="sec-interfaces">接口列表</a>
+                <a href="#sec-examples" data-target="sec-examples">常用示例</a>
+                <a href="#sec-troubleshoot" data-target="sec-troubleshoot">故障排查</a>
+            </nav>
+
             <div class="card">
-                <h2>接入指南</h2>
-                <p style="color: var(--text-secondary);">UniHive MCP 统一网关，5 分钟接入金融数据。</p>
-                <p style="margin-top: 12px;"><em>章节内容正在加载...</em></p>
+                <div class="onboarding-content">
+
+                    <h3 id="sec-quickstart">1. 快速开始</h3>
+                    <p>UniHive MCP 是一个统一的金融数据网关，把通达信、同花顺、Tushare 等多个数据源聚合在同一个 MCP 接口后面。</p>
+
+                    <h4>1.1 启动网关</h4>
+                    <p>在项目根目录下运行：</p>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>.\scripts\start_all.ps1</pre>
+                    </div>
+                    <p>启动后，控制台默认监听 <code>http://127.0.0.1:18080</code>，网关以 stdio 方式对外提供 MCP 接口。</p>
+
+                    <h4>1.2 配置文件</h4>
+                    <p>上游数据源在 <code>config/upstreams.yaml</code> 中配置。修改后需要重启网关生效。</p>
+
+                    <h3 id="sec-integration">2. 接入方式</h3>
+
+                    <h4>2.1 Stdio 模式（Claude Desktop / Cursor）</h4>
+                    <p>在客户端的 MCP 配置中添加：</p>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>{
+  "mcpServers": {
+    "unihive": {
+      "command": "python",
+      "args": ["-m", "mcp_data_gateway.gateway_server"],
+      "cwd": "D:/fintech_workspace/unihive"
+    }
+  }
+}</pre>
+                    </div>
+
+                    <h4>2.2 HTTP 模式（自定义客户端）</h4>
+                    <p>控制台 HTTP 服务暴露了接口元信息查询端点，可用于发现可用工具：</p>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>curl http://127.0.0.1:18080/api/interfaces</pre>
+                    </div>
+
+                    <h3 id="sec-interfaces">3. 接口列表</h3>
+                    <p>以下接口由当前网关动态发现，<strong>与你实际启用的上游保持一致</strong>。</p>
+                    <div id="interfaces-list">
+                        <div class="loading-state">正在加载接口列表...</div>
+                    </div>
+
+                    <h3 id="sec-examples">4. 常用示例</h3>
+
+                    <h4>4.1 获取实时行情</h4>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>import asyncio
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def main():
+    params = StdioServerParameters(
+        command="python",
+        args=["-m", "mcp_data_gateway.gateway_server"],
+        cwd="D:/fintech_workspace/unihive"
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "get_realtime_quote",
+                {"symbol": "600000"}
+            )
+            print(result.content[0].text)
+
+asyncio.run(main())</pre>
+                    </div>
+
+                    <h4>4.2 获取日 K 线</h4>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>result = await session.call_tool(
+    "get_daily_bar",
+    {"symbol": "600000", "start_date": "20260101", "end_date": "20260301"}
+)</pre>
+                    </div>
+
+                    <h4>4.3 搜索股票</h4>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>result = await session.call_tool(
+    "search_stock",
+    {"keyword": "茅台"}
+)</pre>
+                    </div>
+
+                    <h3 id="sec-troubleshoot">5. 故障排查</h3>
+
+                    <h4>5.1 连接失败</h4>
+                    <ul>
+                        <li>检查网关是否已启动：访问 <code>http://127.0.0.1:18080</code></li>
+                        <li>检查客户端配置中的 <code>cwd</code> 路径是否正确</li>
+                        <li>Windows 下确认 Python 已加入 PATH</li>
+                    </ul>
+
+                    <h4>5.2 接口返回错误</h4>
+                    <ul>
+                        <li>查看控制台"上游状态"标签页，确认对应上游是否在线</li>
+                        <li>查看返回的 <code>last_error</code> 字段</li>
+                        <li>对应上游若被禁用，需修改 <code>config/upstreams.yaml</code> 并重启</li>
+                    </ul>
+
+                    <h4>5.3 参数错误</h4>
+                    <ul>
+                        <li>股票代码需要标准化（参见 <code>src/normalizer.py</code>）</li>
+                        <li>日期格式统一为 <code>YYYYMMDD</code></li>
+                    </ul>
+
+                    <h4>5.4 反馈渠道</h4>
+                    <p>遇到问题请提交 Issue 到项目仓库，并附上控制台截图与接口返回内容。</p>
+
+                </div>
             </div>
         </div>
     </div>
