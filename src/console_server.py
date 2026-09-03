@@ -1,16 +1,22 @@
 """
-UniHive Console Server - 轻量管理控制台后端
-独立进程运行，提供只读 HTTP API
+UniHive Console Server - 统一入口
+单进程同时托管：
+  - MCP Streamable HTTP 接口（/mcp）
+  - 管理 API（/api/status, /api/interfaces, /api/config）
+  - 控制台静态 HTML（/）
 """
+import asyncio
 import json
 import logging
 import os
 import sys
 import time
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
+import uvicorn
 import yaml
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,9 +24,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+CONSOLE_HOST = "127.0.0.1"
 CONSOLE_PORT = 18080
+MCP_PATH = "/mcp"
 GATEWAY_CONFIG_PATH = "config/upstreams.yaml"
 CACHE_DB_PATH = "logs/cache.db"
+CONSOLE_HTML_PATH = "console.html"
+
+# 全局 gateway 状态（在 lifespan 中填充）
+_gateway_state: dict = {}
 
 
 def mask_sensitive(value: str, show_chars: int = 2) -> str:
@@ -34,190 +46,183 @@ def load_config() -> dict:
     if not config_path.exists():
         return {}
     with open(config_path, encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+        config = yaml.safe_load(f) or {}
     for name, upstream in config.get("upstreams", {}).items():
-        if "api_key" in upstream and upstream["api_key"]:
-            upstream["api_key"] = mask_sensitive(upstream["api_key"])
-        if "env" in upstream:
-            for key, val in upstream["env"].items():
-                if any(x in key.upper() for x in ["TOKEN", "KEY", "SECRET"]):
-                    upstream["env"][key] = mask_sensitive(val)
+        if isinstance(upstream, dict):
+            if "api_key" in upstream and upstream["api_key"]:
+                upstream["api_key"] = mask_sensitive(upstream["api_key"])
+            if "env" in upstream and isinstance(upstream["env"], dict):
+                for key, val in upstream["env"].items():
+                    if any(x in key.upper() for x in ["TOKEN", "KEY", "SECRET"]):
+                        upstream["env"][key] = mask_sensitive(val)
     return config
 
 
 def get_cache_stats() -> dict:
-    """获取缓存统计信息"""
     cache_path = Path(CACHE_DB_PATH)
     if not cache_path.exists():
         return {"enabled": False, "error": "Cache DB not found", "timestamp": int(time.time())}
     try:
         size_bytes = cache_path.stat().st_size
-
-        # 尝试从缓存数据库获取更多统计信息
         entries = None
         hit_rate = None
         try:
             import sqlite3
             conn = sqlite3.connect(CACHE_DB_PATH)
             cursor = conn.cursor()
-
-            # 获取条目数
             cursor.execute("SELECT COUNT(*) FROM cache_entries")
             entries = cursor.fetchone()[0]
-
-            # 计算命中率 (如果有 hits 和 misses 列)
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cache_stats'")
             if cursor.fetchone():
                 cursor.execute("SELECT hits, misses FROM cache_stats ORDER BY id DESC LIMIT 1")
                 row = cursor.fetchone()
                 if row and row[1] and (row[0] + row[1]) > 0:
                     hit_rate = row[0] / (row[0] + row[1])
-
             conn.close()
         except Exception:
             pass
-
-        result = {
+        return {
             "enabled": True,
-            "db_size_mb": round(size_bytes / 1024 / 1024, 2),
             "entries": entries,
+            "db_size_mb": round(size_bytes / (1024 * 1024), 3),
             "hit_rate": hit_rate,
-            "timestamp": int(time.time())
+            "timestamp": int(time.time()),
         }
-        return result
     except Exception as e:
         return {"enabled": False, "error": str(e), "timestamp": int(time.time())}
 
 
-def get_router_tools() -> list:
-    """获取完整路由工具列表 - 从 config.tools 动态推导 + 内置工具"""
-    config_path = Path(GATEWAY_CONFIG_PATH)
-    if not config_path.exists():
-        return []
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
-    except Exception:
-        return []
-
-    routing = config.get("routing", {}) or {}
-    mapping = config.get("upstream_tool_mapping", {}) or {}
-    tools: list[dict] = [
-        {"name": "get_server_status", "description": "网关状态", "params": [], "source": "gateway"},
-        {"name": "get_health", "description": "健康检查", "params": [], "source": "gateway"},
-        {"name": "search_stock", "description": "股票搜索 (rhths_meta/TDX)", "params": ["keyword"], "source": "rhths_meta/tdx_local"},
-    ]
-    for spec in (config.get("tools") or []):
-        name = spec.get("name", "?")
-        params = [p.get("name", "?") for p in spec.get("params", [])]
-        source = _source_for(name, routing, mapping)
-        entry = {
-            "name": name,
-            "description": spec.get("description", ""),
-            "params": params,
-            "source": source,
+def get_upstream_status() -> dict:
+    config = load_config()
+    upstreams_status = {}
+    for name, cfg in config.get("upstreams", {}).items():
+        if not isinstance(cfg, dict):
+            continue
+        upstreams_status[name] = {
+            "enabled": cfg.get("enabled", False),
+            "type": cfg.get("type", "-"),
         }
-        if spec.get("cache_ttl_key"):
-            entry["cache_ttl_key"] = spec["cache_ttl_key"]
-        if spec.get("dangerous"):
-            entry["dangerous"] = True
-        tools.append(entry)
-    return tools
+    return {
+        "timestamp": int(time.time()),
+        "upstreams": upstreams_status,
+        "cache": get_cache_stats(),
+    }
 
 
-def _source_for(name: str, routing: dict, mapping: dict) -> str:
-    if name in routing:
-        return "/".join(routing[name].get("chain", [])) or "-"
-    if name in mapping:
-        return "/".join(mapping[name].keys()) or "-"
-    return "-"
-
-
-class ConsoleHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        logger.info(f"{self.client_address[0]} - {format % args}")
-
-    def send_json(self, data: dict, status: int = 200):
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
-
-    def do_GET(self):
-        path = self.path.strip("/")
-        if path == "" or path == "index.html" or path == "/":
-            self.serve_html()
-        elif path == "api/status":
-            self.handle_status()
-        elif path == "api/interfaces":
-            self.handle_interfaces()
-        elif path == "api/config":
-            self.handle_config()
-        elif path == "api/health":
-            self.send_json({"status": "ok", "timestamp": int(time.time())})
-        else:
-            self.send_json({"error": "Not found"}, 404)
-
-    def serve_html(self):
-        html_path = Path("console.html")
-        if html_path.exists():
-            with open(html_path, encoding="utf-8") as f:
-                html = f.read()
-        else:
-            html = "<html><body><h1>UniHive Console</h1><p>Run: python -m src.console_server</p></body></html>"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(html.encode())
-
-    def handle_status(self):
+def get_interfaces() -> dict:
+    """从 gateway 注册的 specs 拉工具元数据；fallback 到读 config"""
+    if _gateway_state.get("specs"):
+        tools = []
+        for spec in _gateway_state["specs"]:
+            tools.append({
+                "name": spec.get("name"),
+                "description": spec.get("description", ""),
+                "source": spec.get("source") or spec.get("upstream", ""),
+                "dangerous": bool(spec.get("dangerous", False)),
+                "cache_ttl_key": spec.get("cache_ttl_key"),
+                "params": [
+                    p.get("name") if isinstance(p, dict) else p
+                    for p in (spec.get("params") or [])
+                ],
+            })
+    else:
         config = load_config()
-        upstreams = config.get("upstreams", {})
-        status = {"timestamp": int(time.time()), "upstreams": {}}
-        for name, cfg in upstreams.items():
-            status["upstreams"][name] = {
-                "enabled": cfg.get("enabled", False),
-                "type": cfg.get("type", "unknown"),
-                "status": "enabled" if cfg.get("enabled") else "disabled",
-            }
-        status["cache"] = get_cache_stats()
-        self.send_json(status)
-
-    def handle_interfaces(self):
-        tools = get_router_tools()
-        self.send_json({"timestamp": int(time.time()), "tools": tools})
-
-    def handle_config(self):
-        config = load_config()
-        simplified = {
-            "upstreams": {},
-            "routing": config.get("routing", {}),
-            "cache": config.get("cache", {}),
-            "cache_stats": get_cache_stats(),
-        }
-        for name, cfg in config.get("upstreams", {}).items():
-            simplified["upstreams"][name] = {
-                "enabled": cfg.get("enabled", False),
-                "type": cfg.get("type", ""),
-                "timeout_seconds": cfg.get("timeout_seconds", 30),
-            }
-        self.send_json(simplified)
+        tools = []
+        for spec in config.get("tools", []) or []:
+            tools.append({
+                "name": spec.get("name"),
+                "description": spec.get("description", ""),
+                "source": spec.get("source") or spec.get("upstream", ""),
+                "dangerous": bool(spec.get("dangerous", False)),
+                "cache_ttl_key": spec.get("cache_ttl_key"),
+                "params": [
+                    p.get("name") if isinstance(p, dict) else p
+                    for p in (spec.get("params") or [])
+                ],
+            })
+    return {"timestamp": int(time.time()), "tools": tools}
 
 
-def run_server(port: int = CONSOLE_PORT):
-    os.chdir(Path(__file__).parent.parent)
-    addr = ("127.0.0.1", port)
-    server = HTTPServer(addr, ConsoleHandler)
-    logger.info(f"Console server started at http://127.0.0.1:{port}")
-    logger.info("Press Ctrl+C to stop")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-        server.shutdown()
+def create_app() -> FastAPI:
+    # 延迟 import 以避免在 create_app 时强依赖 gateway 模块
+    from src.gateway_server import GatewayServer
+    from fastmcp import FastMCP
+
+    global _gateway_state
+    logger.info("Initializing gateway for HTTP mode...")
+    gateway = GatewayServer()
+    # 预创建 FastMCP 实例，注册 tools（同步阻塞调用以保证 lifespan 一致）
+    # 这样构造 http_app 时 session manager 已被 lifespan 正确初始化。
+    import asyncio as _asyncio
+    gateway.mcp = FastMCP("unihive")
+    _asyncio.run(gateway.initialize())
+    mcp_app = gateway.mcp.http_app(path="/mcp")
+    _gateway_state = {
+        "gateway": gateway,
+        "specs": gateway.config.get("tools", []) or [],
+    }
+
+    # 把 MCP 的 lifespan 透传给 FastAPI，确保 StreamableHTTP session manager
+    # 在 ASGI lifespan 阶段被正确初始化。
+    app = FastAPI(title="UniHive Console", version="1.0.0", lifespan=mcp_app.lifespan)
+
+    # FastMCP 内部路由固定为 /mcp。Starlette Mount 会剥离 /mcp 前缀，
+    # 因此 mount 到 /mcp 后完整访问路径为 /mcp/mcp。
+    # 在 module 级预先 mount（在添加任何 FastAPI route 之前），
+    # 确保 mount 的匹配优先于 FastAPI 的兜底 404。
+    app.mount(MCP_PATH, mcp_app)
+
+    @app.on_event("startup")
+    async def on_startup():
+        """FastAPI 启动钩子：启动 health check 循环"""
+        global _gateway_state
+        gw = _gateway_state["gateway"]
+        asyncio.create_task(gw._health_check_loop())
+        logger.info(
+            f"Gateway MCP endpoint at {MCP_PATH}/mcp "
+            f"({len(_gateway_state['specs'])} tools)"
+        )
+
+    @app.on_event("shutdown")
+    async def on_shutdown():
+        gw = _gateway_state.get("gateway")
+        if gw:
+            await gw.stop()
+
+    @app.get("/", include_in_schema=False)
+    async def root():
+        if Path(CONSOLE_HTML_PATH).exists():
+            return FileResponse(CONSOLE_HTML_PATH, media_type="text/html")
+        return {"error": "console.html not found"}
+
+    @app.get("/api/status")
+    async def api_status():
+        return get_upstream_status()
+
+    @app.get("/api/interfaces")
+    async def api_interfaces():
+        return get_interfaces()
+
+    @app.get("/api/config")
+    async def api_config():
+        return load_config()
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok", "timestamp": int(time.time())}
+
+    return app
+
+
+app = create_app()
+
+
+def main():
+    if sys.platform == "win32":
+        os.environ["PYTHONIOENCODING"] = "utf-8"
+    logger.info(f"Starting UniHive console on http://{CONSOLE_HOST}:{CONSOLE_PORT}")
+    uvicorn.run(app, host=CONSOLE_HOST, port=CONSOLE_PORT, log_level="info")
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else CONSOLE_PORT
-    run_server(port)
+    main()
