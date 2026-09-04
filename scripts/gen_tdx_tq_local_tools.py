@@ -75,7 +75,8 @@ def parse_skill_md(text: str) -> list[dict]:
         section_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         section = text[section_start:section_end]
 
-        # description: 跳过紧跟 heading 的 inline title 行, 取第一个真正段落
+        # description: 跳过紧跟 heading 的 inline title 行和 markdown 粗体小标题,
+        # 取第一个真正的段落文字
         description = ""
         skipped_title = False
         for line in section.splitlines():
@@ -85,6 +86,8 @@ def parse_skill_md(text: str) -> list[dict]:
             if stripped.startswith("|"):
                 break
             if stripped.startswith("#"):
+                continue
+            if stripped.startswith("**"):
                 continue
             if not skipped_title:
                 skipped_title = True
