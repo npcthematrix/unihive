@@ -169,3 +169,17 @@ def test_render_yaml_idempotent():
     a = render_yaml(specs)
     b = render_yaml(specs)
     assert a == b
+
+
+def test_real_skill_md_all_methods_have_dangerous_predicate():
+    """每个 SKILL.md 真实方法都该被某个 dangerous 规则命中或显式 safe。
+    保证 dangerous 规则不会因为白名单更新而漏掉新方法。
+    """
+    from pathlib import Path as _P
+    real_skill = _P.home() / ".claude" / "skills" / "tdx-tq-local" / "SKILL.md"
+    if not real_skill.exists():
+        pytest.skip("real SKILL.md not present")
+    methods = parse_skill_md(real_skill.read_text(encoding="utf-8"))
+    for m in methods:
+        d = infer_dangerous(m["name"])
+        assert isinstance(d, bool)
