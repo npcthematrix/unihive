@@ -39,10 +39,11 @@
   - 新增 `src/log_config.py` (`JsonFormatter` + `configure_logging`), `gateway_server` 改为委托
   - 文件走 JSON 行 (机器解析), stderr 保持纯文本 (人眼盯屏); 顺带修掉 logs/ 目录不存在时 FileHandler 抛错
   - 11 个新测试 (`tests/test_log_config.py`)
-- ~~`tdx_call` 等危险 tool 在 FastMCP 层加独立 confirmation hook~~ → `c63d05f feat(registry): gate dangerous tools behind an explicit confirm flag`
-  - 21 个 dangerous tool 的生成签名新增 `confirm: bool = False`; 未传 true 时直接返回 `requires_confirmation` 封装, 不触达上游
-  - `confirm` 不进 `param_specs`, 因此永不转发给上游; 126 个安全工具签名不变
-  - 8 个新测试 (`tests/test_registry.py::TestDangerousConfirmation`)
+- ~~`tdx_call` 等危险 tool 在 FastMCP 层加独立 confirmation hook~~ → `c63d05f feat(registry): gate dangerous tools behind an explicit confirm flag` (**已撤回，见下**)
+  - **2026-09-04 撤回** — 用户决定所有入口都不再要求 confirm=true; 18 个 dangerous tool 的运行时拦截、`_CONFIRM_*` 常量、`disable_dangerous` operator kill switch 一并撤掉
+  - 设计: [`2026-09-04-dangerous-tool-confirmation-removal-design.md`](./2026-09-04-dangerous-tool-confirmation-removal-design.md)
+  - 当前行为: 危险工具的签名中无 `confirm` 参数; 调用直接进入上游; 仅保留 (a) 描述前缀 `⚠️ DANGER`, (b) 每次调用一条 WARNING 审计日志
+  - 原 8 个新测试 (`tests/test_registry.py::TestDangerousConfirmation`) 已删除
 
 ## 复审时新发现 (已全部修复)
 
