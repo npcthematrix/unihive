@@ -22,16 +22,16 @@
 
 | Gateway tool 名 | 在 `tools:` list? | 在 routing chain? | upstream_tool_mapping | 实际可被外部调用? | 实际命中哪个上游? |
 |---|---|---|---|---|---|
-| `get_realtime_quote` | ❌ | ✅ `[tdx_local, fuyao_ashare]` | `{tokenwave_tdx}` | ✅ | ❌ **绕过 tokenwave_tdx** |
+| `get_realtime_quote` | ❌ **未注册** | ✅ `[tdx_local, fuyao_ashare]` | `{tokenwave_tdx}` | ❌ **不暴露** (路由是死链) | — |
 | `get_kline` | ✅ | ❌ | `{tdx_local}` 在 line 141, `{tokenwave_tdx}` 在 line 246 (后写赢) | ✅ | ✅ tokenwave_tdx |
-| `get_minute_bar` | ❌ | ✅ `[tdx_local]` | `{tokenwave_tdx}` | ✅ | ❌ **绕过 tokenwave_tdx** |
+| `get_minute_bar` | ❌ **未注册** | ✅ `[tdx_local]` | `{tokenwave_tdx}` | ❌ **不暴露** (路由是死链) | — |
 | `get_financial_data` | ❌ | ❌ | `{tokenwave_tdx}` | ❌ **不暴露** | — |
 | `get_block_data` | ❌ | ❌ | `{tokenwave_tdx}` | ❌ **不暴露** | — |
 | `get_stock_info` | ❌ (TQ-Local 有同名) | ❌ | `{tokenwave_tdx}` | ✅ (TQ-Local codegen 注册) | ✅ tokenwave_tdx |
 | `get_trade_dates` | ❌ | ❌ | `{tokenwave_tdx}` | ❌ **不暴露** | — |
 | `get_etf_list` | ✅ | ❌ | `{tdx_local}` line 156, `{tokenwave_tdx}` line 252 (后写赢) | ✅ | ✅ tokenwave_tdx |
 
-**结论**：8 个 tokenwave_tdx tool 中，3 个未暴露 (get_financial_data / get_block_data / get_trade_dates)，2 个被 routing chain 绕过 (get_realtime_quote / get_minute_bar)。与最初设计意图 "8 个工具全部可用" 不一致。
+**结论**：8 个 tokenwave_tdx tool 中，**5 个完全不暴露** (get_realtime_quote, get_minute_bar, get_financial_data, get_block_data, get_trade_dates)，3 个已暴露且走 tokenwave_tdx (get_kline, get_stock_info, get_etf_list)。与最初设计意图 "8 个工具全部可用" 不一致。
 
 ### 2. 控制台数据不同步
 
@@ -49,18 +49,25 @@
 
 ### A. 修 tokenwave_tdx 架构缺口 (`config/upstreams.yaml`)
 
-#### A.1 在 `tools:` 列表补 3 个缺失 tool 入口
+#### A.1 在 `tools:` 列表补 5 个缺失 tool 入口
 
 在 `# === Tushare (3) ===` 之前新增一个分组：
 
 ```yaml
   # === TokenWave TDX (8) ===
+  # 5 个新增入口 — 3 个完全没暴露 (get_financial_data / get_block_data / get_trade_dates),
+  # 2 个 routing chain 是死链 (get_realtime_quote / get_minute_bar 之前只在 routing: 块里
+  # 声明, 没有 tools: 入口, 所以从未通过 gateway 暴露)
+  - {name: get_realtime_quote, description: "实时行情 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_realtime_quote, params: [{name: stock_code, type: str, required: true, normalize: code}], cache_ttl_key: realtime_quote}
+  - {name: get_minute_bar, description: "分钟K线 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_minute_bar, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: frequency, type: str, required: false}], cache_ttl_key: minute_bar}
   - {name: get_financial_data, description: "财务数据 (tokenwave_tdx, network only — 本地不支持)", routing: get_financial_data, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: report_type, type: str, required: false}, {name: count, type: int, required: false}], cache_ttl_key: fundamentals}
   - {name: get_block_data, description: "板块/概念数据 (tokenwave_tdx, network only)", routing: get_block_data, params: [{name: block_type, type: str, required: true}], cache_ttl_key: sector}
   - {name: get_trade_dates, description: "交易日历 (tokenwave_tdx, local 优先)", routing: get_trade_dates, params: [{name: start_date, type: str, required: true}, {name: end_date, type: str, required: true}], cache_ttl_key: workday}
 ```
 
 cache_ttl_key 取值说明：
+- `get_realtime_quote` → `realtime_quote` (已有, 10s)
+- `get_minute_bar` → `minute_bar` (已有, 60s)
 - `get_financial_data` → `fundamentals` (已有, 3600s)
 - `get_block_data` → `sector` (新增) — 30s, 加到 `cache.ttl` 区块
 - `get_trade_dates` → `workday` (已有, 86400s)
