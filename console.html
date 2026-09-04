@@ -162,6 +162,7 @@
         .ifs-table .tool-name { font-family: monospace; font-weight: 500; color: var(--primary); font-size: 0.875rem; }
         .ifs-table .tool-desc { color: var(--text); font-size: 0.875rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .ifs-table .tool-params { font-family: monospace; font-size: 0.72rem; color: var(--text-secondary); margin-top: 4px; }
+        .ifs-table .tool-params .params-more { color: var(--primary); font-style: italic; cursor: default; }
         .ifs-table .tool-meta-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
         .ifs-table .row-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 100ms ease; }
         .ifs-table tr:hover .row-actions { opacity: 1; }
@@ -611,10 +612,10 @@
                     <p>UniHive MCP 是一个统一的金融数据网关，把通达信、同花顺、Tushare 等多个数据源聚合在同一个 MCP 接口后面。</p>
 
                     <h4>1.1 启动网关</h4>
-                    <p>在项目根目录下运行任一脚本（PowerShell）：</p>
+                    <p>网关默认以 <strong>HTTP 模式</strong>启动（推荐），同时也支持 STDIO 模式。在项目根目录下运行：</p>
                     <div class="onboarding-toolbox">
-                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_all.ps1">复制 start_all.ps1</button>
-                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_console.ps1">复制 start_console.ps1</button>
+                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_all.ps1">复制 HTTP 启动命令</button>
+                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_console.ps1">复制仅控制台命令</button>
                         <button class="btn-secondary" data-copy-cmd="python -m src.gateway_server --transport stdio">复制 STDIO 启动命令</button>
                     </div>
                     <div class="code-block">
@@ -836,6 +837,15 @@ print(match.data)</pre>
             });
         }
 
+        const UPSTREAM_DISPLAY_NAME = {
+            'tdx_local':          '通达信-行情',
+            'tdx_tq_local':       '通达信-交易终端',
+            'rhths_ashare':       '同花顺-a-share-mcp',
+            'rhths_index':        '同花顺-a-share-index-mcp',
+            'rhths_meta':         '同花顺-meta-mcp',
+            'rhths_fund':         '同花顺-fund-mcp',
+            'tushare':            'Tushare',
+        };
         function renderUpstreamsTable() {
             const tbody = document.getElementById('upstreams-body');
             const filtered = applyStatusFilter(statusUpstreams);
@@ -870,7 +880,7 @@ print(match.data)</pre>
                 }
                 const errHtml = u.last_error ? `<span class="err-icon" title="${escapeHtml(u.last_error)}">!</span>` : '<span style="color:var(--text-secondary);opacity:.3">—</span>';
                 return `<tr>
-                    <td><span class="ups-name">${escapeHtml(u._name)}</span></td>
+                    <td><span class="ups-name">${UPSTREAM_DISPLAY_NAME[u._name] || escapeHtml(u._name)}</span></td>
                     <td><span class="type-pill">${escapeHtml(tp)}</span></td>
                     <td><span class="status-badge ${bcls}"><span class="status-dot ${u.status === 'online' ? 'status-online' : u.status === 'degraded' ? 'status-degraded' : u.status === 'offline' ? 'status-offline' : u.status === 'disabled' ? 'status-disabled' : 'status-offline'}"></span>${st}</span></td>
                     <td class="num">${latHtml}</td>
@@ -991,13 +1001,14 @@ print(match.data)</pre>
         function stopAutoRefresh() {
             if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
         }
-        const GROUP_ORDER = ['tdx_local', 'rhths_ashare', 'rhths_index', 'rhths_meta', 'rhths_fund', 'tushare'];
+        const GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'rhths_ashare', 'rhths_index', 'rhths_meta', 'rhths_fund', 'tushare'];
         const GROUP_META = {
-            'tdx_local':         { title: 'TDX (通达信)', desc: '本地 stdio, 含高风险 tdx_call' },
-            'rhths_ashare':       { title: '同花顺 A 股', desc: '行情/财报/估值/特殊数据' },
-            'rhths_index':        { title: '同花顺 指数/板块', desc: '目录/成分股/历史 K 线' },
-            'rhths_meta':         { title: '同花顺 元数据', desc: '全量 ticker 列表' },
-            'rhths_fund':         { title: '同花顺 基金',   desc: '持仓/业绩/经理/财务' },
+            'tdx_local':          { title: '通达信-行情', desc: '行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call)' },
+            'tdx_tq_local':        { title: '通达信-交易终端', desc: '行情/自选/交易/公式系统, 含 20 个高风险工具 (write ops)' },
+            'rhths_ashare':       { title: '同花顺-a-share-mcp', desc: 'A 股行情/财报/估值/特殊数据, 端点: /mcp/a-share' },
+            'rhths_index':        { title: '同花顺-a-share-index-mcp', desc: '同花顺指数/板块目录/成分股/历史K线, 端点: /mcp/a-share-index' },
+            'rhths_meta':         { title: '同花顺-meta-mcp', desc: '跨宇宙全量 ticker 列表, 端点: /mcp/meta' },
+            'rhths_fund':         { title: '同花顺-fund-mcp',   desc: '公募基金持仓/业绩/经理/财务, 端点: /mcp/fund' },
             'tushare':            { title: 'Tushare',    desc: '通用 API 透传' },
         };
         const ALL_KEY = '__all__';
@@ -1123,17 +1134,19 @@ print(match.data)</pre>
             if (metaEl) metaEl.textContent = `${meta.title} · ${tools.length} 个工具`;
             window._currentFilteredToolNames = tools.map(t => t.name);
             const headerHtml = activeGroup === ALL_KEY
-                ? '<th style="width:28%">接口</th><th>描述</th><th style="width:90px"></th>'
-                : `<th style="width:28%">接口</th><th>描述</th><th style="width:14%" class="col-source">数据源</th><th style="width:90px"></th>`;
+                ? '<th style="width:28%">接口</th><th>描述</th><th style="width:90px">操作</th>'
+                : `<th style="width:28%">接口</th><th>描述</th><th style="width:14%" class="col-source">数据源</th><th style="width:90px">操作</th>`;
             const rows = tools.map((t, i) => {
                 const badges = [];
                 if (t.dangerous) badges.push('<span class="badge badge-dangerous">dangerous</span>');
                 if (t.cache_ttl_key) badges.push(`<span class="badge badge-cache" title="cache_ttl_key=${escapeHtml(t.cache_ttl_key)}">${escapeHtml(t.cache_ttl_key)}</span>`);
                 const params = (t.params || []).filter(p => p && p !== '?');
-                const paramsStr = params.join(', ');
+                const paramNames = params.map(p => typeof p === 'string' ? p : (p.name || '')).filter(Boolean);
+                const moreCount = paramNames.length > 3 ? paramNames.length - 3 : 0;
+                const paramsDisplay = moreCount > 0 ? highlight(paramNames.slice(0, 3).join(', '), searchQuery) + ` <span class="params-more">+${moreCount} more</span>` : (paramNames.length > 0 ? highlight(paramNames.join(', '), searchQuery) : '');
                 const sourceCell = activeGroup === ALL_KEY ? '' : `<td><button type="button" class="chain chain-link" data-source="${escapeHtml(t.source || '')}" title="跳转到该上游分组">${escapeHtml(t.source || '-')} →</button></td>`;
                 const detailBody = buildDetailBody(t);
-                return `<tr data-tool="${escapeHtml(t.name)}"><td><span class="tool-name">${highlight(t.name, searchQuery)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td><td><div class="tool-desc">${highlight(t.description || '-', searchQuery)}</div>${paramsStr ? `<div class="tool-params">${highlight(paramsStr, searchQuery)}</div>` : ''}</td>${sourceCell}<td><div class="row-actions"><button class="row-action-btn copy-name" data-name="${escapeHtml(t.name)}">复制</button><button class="row-action-btn toggle-detail" data-idx="${i}">详情</button></div></td></tr>${detailBody ? `<tr class="ifs-detail-row" data-detail-for="${escapeHtml(t.name)}" style="display:none"><td colspan="${activeGroup === ALL_KEY ? 3 : 4}">${detailBody}</td></tr>` : ''}`;
+                return `<tr data-tool="${escapeHtml(t.name)}"><td><span class="tool-name">${highlight(t.name, searchQuery)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td><td><div class="tool-desc">${highlight(t.description || '-', searchQuery)}</div>${paramsDisplay ? `<div class="tool-params">${paramsDisplay}</div>` : ''}</td>${sourceCell}<td><div class="row-actions"><button class="row-action-btn copy-name" data-name="${escapeHtml(t.name)}">复制</button><button class="row-action-btn toggle-detail" data-idx="${i}">详情</button></div></td></tr>${detailBody ? `<tr class="ifs-detail-row" data-detail-for="${escapeHtml(t.name)}" style="display:none"><td colspan="${activeGroup === ALL_KEY ? 3 : 4}">${detailBody}</td></tr>` : ''}`;
             }).join('');
             root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)}</h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><div class="ifs-table-wrap"><table class="ifs-table"><caption style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden">${escapeHtml(meta.title)} MCP APIs</caption><thead><tr>${headerHtml}</tr></thead><tbody>${rows}</tbody></table></div>`;
         }
