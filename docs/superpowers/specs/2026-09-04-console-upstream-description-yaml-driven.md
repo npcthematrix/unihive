@@ -169,7 +169,7 @@ def test_get_upstreams_includes_description():
 
 ## Acceptance
 
-- pytest 142 + 1 = **143 passed**
+- pytest 142 + 2 = **144 passed**（后端 1 个：`test_get_upstreams_includes_description` + 前端 1 个：`test_console_html_uses_upstream_description`）
 - 8 个 upstream 都有非空 description 字段
 - `/api/upstreams` 响应每个 upstream 含非空 description
 - 手动验证：浏览器开 console，onboarding 标签每个上游卡片显示新描述（来自 YAML）
