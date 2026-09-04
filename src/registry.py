@@ -52,39 +52,12 @@ def _normalize_param(name: str, value: Any, spec: dict) -> Any:
     return value
 
 
-_CONFIRM_PARAM = "confirm"
-
-_CONFIRM_SPEC: dict = {
-    "name": _CONFIRM_PARAM,
-    "type": "bool",
-    "required": False,
-}
-
-_CONFIRM_DOC = (
-    "\n\n⚠️ 这是高风险写操作。默认不执行：必须先向用户说明本次调用的具体影响并取得同意，"
-    "然后重新调用并传 confirm=true。未确认的调用会被网关拒绝，不会触达上游。"
-)
-
-
-def _confirmation_required(name: str) -> dict:
-    return {
-        "success": False,
-        "data": None,
-        "error": (
-            f"{name} 是高风险操作，已被网关拦截。请先向用户说明影响并取得同意，"
-            f"再以 confirm=true 重新调用。"
-        ),
-        "source": None,
-        "hops": [],
-        "requires_confirmation": True,
-    }
-
-
 def build_tool_function(spec: dict, server: Any) -> Callable:
     """从 spec 构造带正确 signature/annotations/doc 的 async 函数。
 
     server 必须有 _execute_cached(name, params, route_key, ttl_key) 方法。
-    dangerous=True 的 spec 会额外获得一个 confirm 参数作为运行时确认门。
+    dangerous=True 的 spec 会在每次调用时写一条 WARNING 审计日志，但
+    不再做任何运行时拦截。
     """
     name: str = spec["name"]
     description: str = spec.get("description", "")
@@ -93,14 +66,9 @@ def build_tool_function(spec: dict, server: Any) -> Callable:
     param_specs: list[dict] = spec.get("params", [])
     dangerous: bool = spec.get("dangerous", False)
 
-    # confirm 只进签名, 不进 param_specs, 所以永远不会被转发给上游
-    signature_specs = param_specs + [_CONFIRM_SPEC] if dangerous else param_specs
-    sig = build_signature(signature_specs)
+    sig = build_signature(param_specs)
 
     async def _runtime(**kwargs) -> dict:
-        if dangerous and not kwargs.get(_CONFIRM_PARAM):
-            logger.warning("DANGEROUS call rejected as unconfirmed: %s", name)
-            return _confirmation_required(name)
         normalized: dict = {}
         for p in param_specs:
             v = kwargs.get(p["name"])
@@ -109,36 +77,28 @@ def build_tool_function(spec: dict, server: Any) -> Callable:
                 continue
             normalized[p["name"]] = v
         if dangerous:
-            logger.warning(
-                "DANGEROUS call: %s args=%s", name, normalized
-            )
+            logger.warning("DANGEROUS call: %s args=%s", name, normalized)
         return await server._execute_cached(
             name, normalized, route_key=route_key, ttl_key=ttl_key
         )
 
-    # 让 FastMCP 通过 inspect.signature() 拿到正确 schema
     _runtime.__signature__ = sig
     _runtime.__annotations__ = {
-        p["name"]: _TYPE_MAP.get(p.get("type", "str"), str) for p in signature_specs
+        p["name"]: _TYPE_MAP.get(p.get("type", "str"), str) for p in param_specs
     }
     _runtime.__annotations__["return"] = dict
     _runtime.__name__ = name
-    _runtime.__doc__ = description + _CONFIRM_DOC if dangerous else description
+    _runtime.__doc__ = description
     return _runtime
 
 
 def register_tools_from_config(
     server: Any,
     specs: list[dict],
-    *,
-    disable_dangerous: bool = False,
 ) -> list[str]:
     """注册所有 spec 为 FastMCP tool。返回注册的 name 列表。"""
     registered: list[str] = []
     for spec in specs:
-        if spec.get("dangerous") and disable_dangerous:
-            logger.info("Skipping dangerous tool: %s", spec.get("name"))
-            continue
         fn = build_tool_function(spec, server)
         server.mcp.tool()(fn)
         registered.append(spec["name"])
