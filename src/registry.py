@@ -38,7 +38,9 @@ def _build_parameter(p: dict) -> inspect.Parameter:
 
 
 def build_signature(params: list[dict]) -> inspect.Signature:
-    return inspect.Signature(parameters=[_build_parameter(p) for p in params])
+    # 排序：required 先于 optional，避免 Python "non-default argument follows default argument"
+    ordered = sorted(params, key=lambda p: 0 if p.get("required", True) else 1)
+    return inspect.Signature(parameters=[_build_parameter(p) for p in ordered])
 
 
 def _normalize_param(name: str, value: Any, spec: dict) -> Any:
