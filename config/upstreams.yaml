@@ -20,6 +20,18 @@ upstreams:
       - etf_data
       - market_stats
 
+  tdx_tq_local:
+    enabled: true
+    type: "http_jsonrpc"
+    base_url: "http://127.0.0.1:17709"
+    timeout_seconds: 10
+    retry:
+      max_attempts: 2
+    capabilities:
+      - user_block
+      - watchlist
+      - conditional_stock
+
   rhths_ashare:
     enabled: true
     type: "http"
@@ -136,6 +148,13 @@ upstream_tool_mapping:
   get_task_detail:                            {tdx_local: get_task_detail}
   cancel_task:                                {tdx_local: cancel_task}
   tdx_call:                                   {tdx_local: tdx_call}
+
+  # TQ-Local (通达信本地 HTTP JSON-RPC, 端口 17709)
+  get_user_sector:                            {tdx_tq_local: get_user_sector}
+  get_stock_list_in_sector:                   {tdx_tq_local: get_stock_list_in_sector}
+  send_user_block:                            {tdx_tq_local: send_user_block}
+  create_sector:                              {tdx_tq_local: create_sector}
+  delete_sector:                              {tdx_tq_local: delete_sector}
 
   # RHTHS a-share
   a_share_prices_snapshot:                    {rhths_ashare: get_a_share_prices_snapshot}
@@ -289,6 +308,13 @@ tools:
   - {name: get_task_detail, description: "TDX 后台任务详情", routing: get_task_detail, params: [{name: id, type: str, required: true}]}
   - {name: cancel_task, description: "TDX 取消后台任务", routing: cancel_task, params: [{name: id, type: str, required: true}]}
   - {name: tdx_call, description: "TDX 通用接口调用 (透传, 高风险)", routing: tdx_call, params: [{name: path, type: str, required: true}, {name: method, type: str, required: false}, {name: query, type: str, required: false}, {name: body, type: str, required: false}, {name: raw, type: bool, required: false}], dangerous: true}
+
+  # === TQ-Local (5) ===
+  - {name: get_user_sector, description: "TQ 列出全部用户自定义板块（含 ZXG/TJG）", routing: get_user_sector, params: []}
+  - {name: get_stock_list_in_sector, description: "TQ 读板块成分股（自选股 ZXG / 临时条件股 TJG 需 block_type=1）", routing: get_stock_list_in_sector, params: [{name: block_code, type: str, required: true}, {name: block_type, type: int, required: true}, {name: list_type, type: int, required: false}]}
+  - {name: send_user_block, description: "TQ 向板块追加股票（高风险）", routing: send_user_block, params: [{name: block_code, type: str, required: true}, {name: stock_list, type: str, required: true}], dangerous: true}
+  - {name: create_sector, description: "TQ 新建自定义板块（高风险）", routing: create_sector, params: [{name: name, type: str, required: true}, {name: block_code, type: str, required: false}], dangerous: true}
+  - {name: delete_sector, description: "TQ 删除自定义板块（高风险）", routing: delete_sector, params: [{name: block_code, type: str, required: true}], dangerous: true}
 
   # === RHTHS a-share (21) ===
   - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: realtime_quote}

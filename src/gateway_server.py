@@ -20,6 +20,7 @@ from .registry import register_tools_from_config, validate_specs
 from .router import Router
 from .upstream_client import UpstreamClient, UpstreamConfig, UpstreamStatus
 from .rhths_client import RhthsClient, RhthsConfig
+from .http_jsonrpc_client import HttpJsonRpcClient, HttpJsonRpcConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,7 +43,7 @@ class GatewayServer:
         if errors:
             for e in errors:
                 logger.warning(f"Config validation: {e}")
-        self.upstreams: dict[str, UpstreamClient | RhthsClient] = {}
+        self.upstreams: dict[str, UpstreamClient | RhthsClient | HttpJsonRpcClient] = {}
         self.cache: Cache | None = None
         self.router: Router | None = None
         self.mcp: FastMCP | None = None
@@ -74,6 +75,15 @@ class GatewayServer:
                     max_retry=cfg.get("retry", {}).get("max_attempts", 3),
                 )
                 client = RhthsClient(rhths_cfg)
+            elif cfg.get("type") == "http_jsonrpc":
+                # 通用 HTTP JSON-RPC 客户端（如 TQ-Local 通达信本地服务）
+                jsonrpc_cfg = HttpJsonRpcConfig(
+                    name=name,
+                    base_url=cfg["base_url"].rstrip("/") + "/",
+                    timeout_seconds=cfg.get("timeout_seconds", 10),
+                    max_retry=cfg.get("retry", {}).get("max_attempts", 3),
+                )
+                client = HttpJsonRpcClient(jsonrpc_cfg)
             else:
                 # stdio MCP 客户端
                 upstream_cfg = UpstreamConfig(
