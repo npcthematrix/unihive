@@ -70,6 +70,7 @@ class TokenWaveTdxClient:
             "get_realtime_quote": self.get_realtime_quote,
             "get_kline": self.get_kline,
             "get_minute_bar": self.get_minute_bar,
+            "get_daily_bar": self.get_daily_bar,
             "get_financial_data": self.get_financial_data,
             "get_block_data": self.get_block_data,
             "get_stock_info": self.get_stock_info,
@@ -178,6 +179,19 @@ class TokenWaveTdxClient:
                 logger.error(f"Network minute failed: {e}")
 
         return ToolResult(success=False, error="无可用数据源")
+
+    async def get_daily_bar(
+        self,
+        stock_code: str,
+        frequency: str = "daily",
+        **kwargs,
+    ) -> ToolResult:
+        """获取日K线: 委托给 get_kline(frequency="daily"), 复用 local+network 兜底"""
+        return await self.get_kline(
+            stock_code=stock_code,
+            frequency=frequency or "daily",
+            **kwargs,
+        )
 
     async def get_financial_data(
         self,

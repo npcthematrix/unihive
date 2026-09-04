@@ -1005,7 +1005,7 @@ print(match.data)</pre>
         const GROUP_META = {
             'tdx_local':          { title: '通达信-行情', desc: '行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call)' },
             'tdx_tq_local':        { title: '通达信-交易终端', desc: '行情/自选/交易/公式系统, 含 17 个高风险工具 (write ops)' },
-            'tokenwave_tdx':      { title: '通达信-MooTDX', desc: '本地通达信行情/财务/板块/日历 (MooTDX wrapper)' },
+            'tokenwave_tdx':      { title: '通达信-MooTDX', desc: '基于 mootdx 的行情/K线/财务/板块/日历, 9 个 gateway 接口 (含 2 个 tokenwave_ 前缀命名避开 TQ-Local 冲突), local 优先 + network 兜底' },
             'fuyao_ashare':       { title: '同花顺-a-share-mcp', desc: 'A 股行情/财报/估值/特殊数据, 端点: /mcp/a-share' },
             'fuyao_index':        { title: '同花顺-a-share-index-mcp', desc: '同花顺指数/板块目录/成分股/历史K线, 端点: /mcp/a-share-index' },
             'fuyao_meta':         { title: '同花顺-meta-mcp', desc: '跨宇宙全量 ticker 列表, 端点: /mcp/meta' },
