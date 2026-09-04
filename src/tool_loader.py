@@ -50,18 +50,29 @@ def get_cache_ttl(config: dict, ttl_key: str | None) -> int | None:
 
 
 def derive_routing_chain(config: dict, routing_key: str) -> list[str]:
-    """Return the routing chain the gateway router would walk for ``routing_key``.
+    """Return the routing chain displayed in the console for ``routing_key``.
 
-    Resolution order (matches ``src/router.py:_get_routing_chain``):
-    1. If ``routing[routing_key].chain`` is defined (list, possibly empty), return it.
-    2. If ``routing[routing_key]`` exists but has no ``chain`` field, return ``[]``.
-    3. Else return ``upstream_tool_mapping[routing_key].keys()`` in insertion order.
+    Resolution order:
+    1. If ``routing[routing_key].chain`` is defined → return it verbatim.
+    2. Else if ``routing[routing_key]`` is a dict without a ``chain`` field
+       (e.g. only has a ``description``) → return ``[]``. This is a deliberate
+       divergence from ``src/router.py:route()``, which in this case would
+       fall back to ``upstream_tool_mapping``. Rationale: an explicit
+       ``routing.X`` block with a description but no chain is treated as a
+       TODO marker (admin hasn't decided the route yet). Surfacing ``[]`` in
+       the UI makes the missing route visible rather than silently using
+       whatever upstream_tool_mapping declares.
+    3. Else if ``upstream_tool_mapping[routing_key]`` exists → return its
+       keys in insertion order.
     4. Else return ``[]``.
 
-    This is intentionally NOT a "fallback by priority" — the router walks a fixed
-    list of upstreams that actually implement the tool, not every upstream sorted
-    by some priority field. Filtering by capability happens upstream via
-    ``upstream_tool_mapping``.
+    This is intentionally NOT a "fallback by priority" — the gateway router
+    walks a fixed list of upstreams that actually implement the tool, not
+    every upstream sorted by some priority field. Capability filtering
+    happens upstream via ``upstream_tool_mapping``.
+
+    See also: ``src/router.py:_get_routing_chain`` (single-step lookup) and
+    ``src/router.py:route()`` (full 2-tier resolution used at runtime).
     """
     routing = config.get("routing") or {}
     entry = routing.get(routing_key)
