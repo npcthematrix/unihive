@@ -99,12 +99,30 @@ def parse_skill_md(text: str) -> list[dict]:
                 description = stripped.rstrip("：:") + "。"
             break
 
-        # 参数表
+        # 参数表：只解析每节中的第一个 markdown 表格（参数表）。
+        # 返回字段表通常出现在「**返回字段：**」之后，被中间的粗体小标题和
+        # 空行隔开，因此只需取第一段连续的 | 开头的行。
+        table_lines: list[str] = []
+        for line in section.splitlines():
+            if line.lstrip().startswith("|"):
+                table_lines.append(line)
+            elif table_lines:
+                break
+
         params: list[dict] = []
-        for row in _PARAM_ROW.finditer(section):
+        first_block = "\n".join(table_lines)
+        _VALID_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        for row in _PARAM_ROW.finditer(first_block):
             cells = row.groupdict()
             pname = cells["name"].strip()
-            if pname in {"参数", "字段", "---"} or pname.startswith("---"):
+            # 分隔行：name 全是 - 与 : 的组合
+            if not pname or set(pname) <= {"-", ":"}:
+                continue
+            # 标题行：首列是中文「参数」或包含「字段」/「返回」
+            if pname in {"参数", "字段"} or "字段" in pname or "返回" in pname:
+                continue
+            # 非合法 Python 标识符（如「无」表示无参数）→ 跳过
+            if not _VALID_IDENT.match(pname):
                 continue
             params.append({
                 "name": pname,

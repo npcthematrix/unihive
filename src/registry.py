@@ -118,7 +118,8 @@ def validate_specs(
     *,
     strict: bool = True,
 ) -> list[str]:
-    """校验 spec 中的 routing 都在 routing_config 或 upstream_tool_mapping 中。"""
+    """校验 spec 中的 routing 都在 routing_config / upstream_tool_mapping 中，
+    或 spec 自带 upstream_tool_mapping（self-routing，如 TQ-Local codegen 产物）。"""
     errors: list[str] = []
     for spec in specs:
         name = spec.get("name")
@@ -131,7 +132,8 @@ def validate_specs(
             continue
         in_routing = routing_key in routing_config
         in_mapping = routing_key in upstream_tool_mapping
-        if not (in_routing or in_mapping):
+        has_self_mapping = bool(spec.get("upstream_tool_mapping"))
+        if not (in_routing or in_mapping or has_self_mapping):
             errors.append(
                 f"Tool {name!r} routing={routing_key!r} not in routing config nor upstream mapping"
             )

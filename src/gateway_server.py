@@ -165,16 +165,13 @@ class GatewayServer:
     def _load_all_tools(self) -> list[dict]:
         """合并 config.upstreams.yaml 与 config/tools_tdx_tq_local.yaml 的 tools 列表。
 
-        自动把生成 spec 中的 routing 与 upstream_tool_mapping 注入到顶层 config,
-        以便 validate_specs 不报错。生成 spec 已自带映射，无需手工修改 upstreams.yaml。
-        同时过滤掉 codegen 偶发的非法参数名（如 'Fz[8]'、':-----' 等），防止 inspect 崩溃。
+        生成 spec 自带 upstream_tool_mapping，validate_specs 会识别这种 self-routing
+        形态（见 registry.validate_specs 的 has_self_mapping 分支），无需手工注入。
         """
-        import re as _re
         from pathlib import Path as _P
         import yaml as _yaml
-        valid_param_name = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
         tools = list(self.config.get("tools", []) or [])
-        # 解析相对 upstreams.yaml 的同级 config 目录（兼容 cwd 与测试 tmp_path）
         base_dir = self.config_path.parent.resolve()
         for candidate in (
             base_dir / "tools_tdx_tq_local.yaml",
@@ -184,34 +181,7 @@ class GatewayServer:
             if candidate.exists():
                 with candidate.open(encoding="utf-8") as f:
                     gen_cfg = _yaml.safe_load(f) or {}
-                gen_tools_raw = list(gen_cfg.get("tools", []) or [])
-                # 过滤非法参数名
-                gen_tools: list[dict] = []
-                for spec in gen_tools_raw:
-                    cleaned_params = [
-                        p for p in (spec.get("params") or [])
-                        if valid_param_name.match(p.get("name", ""))
-                    ]
-                    if len(cleaned_params) != len(spec.get("params") or []):
-                        logger.warning(
-                            f"[{spec.get('name')}] filtered invalid param names; "
-                            f"kept {len(cleaned_params)}/{len(spec.get('params') or [])}"
-                        )
-                    spec = {**spec, "params": cleaned_params}
-                    gen_tools.append(spec)
-                tools.extend(gen_tools)
-                # 把每个生成 spec 的 routing/mapping 提升到顶层，使 validate_specs 通过
-                top_routing = self.config.setdefault("routing", {})
-                top_mapping = self.config.setdefault("upstream_tool_mapping", {})
-                for spec in gen_tools:
-                    rk = spec.get("routing")
-                    if rk and rk not in top_routing:
-                        top_routing[rk] = {
-                            "chain": list((spec.get("upstream_tool_mapping") or {}).keys()),
-                            "description": spec.get("description", rk),
-                        }
-                    if rk and rk not in top_mapping:
-                        top_mapping[rk] = dict(spec.get("upstream_tool_mapping") or {})
+                tools.extend(gen_cfg.get("tools", []) or [])
                 break
         return tools
 
