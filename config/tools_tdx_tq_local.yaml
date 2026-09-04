@@ -1,0 +1,3335 @@
+# Auto-generated from ~/.claude/skills/tdx-tq-local/SKILL.md
+# DO NOT EDIT — re-run scripts/gen_tdx_tq_local_tools.py
+tools:
+- name: get_market_data
+  description: get_market_data
+  routing: get_market_data
+  upstream_tool_mapping:
+    tdx_tq_local: get_market_data
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: field_list
+    required: false
+    type: List[str]
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: period
+    required: true
+    type: str
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: count
+    required: false
+    type: int
+  - name: dividend_type
+    required: false
+    type: str
+  - name: fill_data
+    required: false
+    type: bool
+- name: get_market_snapshot
+  description: get_market_snapshot
+  routing: get_market_snapshot
+  upstream_tool_mapping:
+    tdx_tq_local: get_market_snapshot
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: field_list
+    required: false
+    type: List[str]
+- name: get_stock_info
+  description: get_stock_info
+  routing: get_stock_info
+  upstream_tool_mapping:
+    tdx_tq_local: get_stock_info
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: field_list
+    required: false
+    type: List[str]
+  - name: 数据
+    required: false
+    type: 数据类型
+  - name: :-----
+    required: false
+    type: :-----
+  - name: Name
+    required: true
+    type: str
+  - name: Unit
+    required: true
+    type: str
+  - name: VolBase
+    required: true
+    type: str
+  - name: MinPrice
+    required: true
+    type: str
+  - name: XsFlag
+    required: true
+    type: str
+  - name: Fz[8]
+    required: true
+    type: List[str]
+  - name: DelayMin
+    required: true
+    type: str
+  - name: QHVolBaseRate
+    required: true
+    type: str
+  - name: HKVolBaseRate
+    required: true
+    type: str
+  - name: BelongHS300
+    required: true
+    type: str
+  - name: BelongHasKQZ
+    required: true
+    type: str
+  - name: BelongRZRQ
+    required: true
+    type: str
+  - name: BelongHSGT
+    required: true
+    type: str
+  - name: IsHKGP
+    required: true
+    type: str
+  - name: IsQH
+    required: true
+    type: str
+  - name: IsQQ
+    required: true
+    type: str
+  - name: IsSTGP
+    required: true
+    type: str
+  - name: IsQuitGP
+    required: true
+    type: str
+  - name: TodayDRFlag
+    required: true
+    type: str
+  - name: HSStockKind
+    required: true
+    type: str
+  - name: ActiveCapital
+    required: true
+    type: str
+  - name: J_zgb
+    required: true
+    type: str
+  - name: J_bg
+    required: true
+    type: str
+  - name: J_hg
+    required: true
+    type: str
+  - name: J_zzc
+    required: true
+    type: str
+  - name: J_ldzc
+    required: true
+    type: str
+  - name: J_gdzc
+    required: true
+    type: str
+  - name: J_wxzc
+    required: true
+    type: str
+  - name: J_ldfz
+    required: true
+    type: str
+  - name: J_cqfz
+    required: true
+    type: str
+  - name: J_zbgjj
+    required: true
+    type: str
+  - name: J_jzc
+    required: true
+    type: str
+  - name: J_yysy
+    required: true
+    type: str
+  - name: J_yycb
+    required: true
+    type: str
+  - name: J_yszk
+    required: true
+    type: str
+  - name: J_yyly
+    required: true
+    type: str
+  - name: J_tzsy
+    required: true
+    type: str
+  - name: J_jyxjl
+    required: true
+    type: str
+  - name: J_zxjl
+    required: true
+    type: str
+  - name: J_ch
+    required: true
+    type: str
+  - name: J_lyze
+    required: true
+    type: str
+  - name: J_shly
+    required: true
+    type: str
+  - name: J_jly
+    required: true
+    type: str
+  - name: J_wfply
+    required: true
+    type: str
+  - name: J_jyl
+    required: true
+    type: str
+  - name: J_mgwfp
+    required: true
+    type: str
+  - name: J_mgsy
+    required: true
+    type: str
+  - name: J_mgsy2
+    required: true
+    type: str
+  - name: J_mggjj
+    required: true
+    type: str
+  - name: J_mgjzc
+    required: true
+    type: str
+  - name: J_mgjzc2
+    required: true
+    type: str
+  - name: J_gdqyb
+    required: true
+    type: str
+  - name: J_gdrs
+    required: true
+    type: str
+  - name: J_HalfYearFlag
+    required: true
+    type: str
+  - name: J_start
+    required: true
+    type: str
+  - name: tdx_dycode
+    required: true
+    type: str
+  - name: tdx_dyname
+    required: true
+    type: str
+  - name: rs_hycode_sim
+    required: true
+    type: str
+  - name: rs_hyname
+    required: true
+    type: str
+  - name: blockzscode
+    required: true
+    type: str
+  - name: underly_setcode
+    required: true
+    type: str
+  - name: underly_code
+    required: true
+    type: str
+- name: get_match_stkinfo
+  description: get_match_stkinfo
+  routing: get_match_stkinfo
+  upstream_tool_mapping:
+    tdx_tq_local: get_match_stkinfo
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: key_word
+    required: true
+    type: str
+  - name: 名称
+    required: false
+    type: 数值
+  - name: :-----
+    required: false
+    type: :-----
+  - name: Code
+    required: true
+    type: str
+  - name: Name
+    required: true
+    type: str
+- name: get_stock_list
+  description: get_stock_list
+  routing: get_stock_list
+  upstream_tool_mapping:
+    tdx_tq_local: get_stock_list
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: market
+    required: false
+    type: str
+  - name: list_type
+    required: false
+    type: int
+- name: get_sector_list
+  description: get_sector_list
+  routing: get_sector_list
+  upstream_tool_mapping:
+    tdx_tq_local: get_sector_list
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: list_type
+    required: false
+    type: int
+- name: get_user_sector
+  description: get_user_sector
+  routing: get_user_sector
+  upstream_tool_mapping:
+    tdx_tq_local: get_user_sector
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: 无
+    required: false
+    type: '-'
+- name: get_stock_list_in_sector
+  description: get_stock_list_in_sector
+  routing: get_stock_list_in_sector
+  upstream_tool_mapping:
+    tdx_tq_local: get_stock_list_in_sector
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: block_code
+    required: true
+    type: str
+  - name: block_type
+    required: false
+    type: int
+  - name: list_type
+    required: false
+    type: int
+- name: get_trading_calendar
+  description: get_trading_calendar
+  routing: get_trading_calendar
+  upstream_tool_mapping:
+    tdx_tq_local: get_trading_calendar
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: market
+    required: true
+    type: str
+  - name: start_time
+    required: true
+    type: str
+  - name: end_time
+    required: true
+    type: str
+- name: get_trading_dates
+  description: get_trading_dates
+  routing: get_trading_dates
+  upstream_tool_mapping:
+    tdx_tq_local: get_trading_dates
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: market
+    required: true
+    type: str
+  - name: start_time
+    required: true
+    type: str
+  - name: end_time
+    required: true
+    type: str
+  - name: count
+    required: false
+    type: int
+- name: get_relation
+  description: get_relation
+  routing: get_relation
+  upstream_tool_mapping:
+    tdx_tq_local: get_relation
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: 数据
+    required: false
+    type: 数据类型
+  - name: :-----
+    required: false
+    type: :-----
+  - name: BlockCode
+    required: true
+    type: str
+  - name: BlockName
+    required: true
+    type: str
+  - name: BlockType
+    required: true
+    type: str
+  - name: GPNume
+    required: true
+    type: str
+- name: get_pricevol
+  description: get_pricevol
+  routing: get_pricevol
+  upstream_tool_mapping:
+    tdx_tq_local: get_pricevol
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: 名称
+    required: false
+    type: 数值
+  - name: :-----
+    required: false
+    type: :-----
+  - name: LastClose
+    required: true
+    type: str
+  - name: Now
+    required: true
+    type: str
+  - name: Volume
+    required: true
+    type: str
+- name: get_divid_factors
+  description: get_divid_factors
+  routing: get_divid_factors
+  upstream_tool_mapping:
+    tdx_tq_local: get_divid_factors
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+- name: get_more_info
+  description: get_more_info
+  routing: get_more_info
+  upstream_tool_mapping:
+    tdx_tq_local: get_more_info
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: field_list
+    required: false
+    type: List[str]
+  - name: 数据
+    required: false
+    type: 数据类型
+  - name: :-----
+    required: false
+    type: :-----
+  - name: MainBusiness
+    required: true
+    type: str
+  - name: SafeValue
+    required: true
+    type: str
+  - name: ShineValue
+    required: true
+    type: str
+  - name: ShapeValue
+    required: true
+    type: str
+  - name: TPFlag
+    required: true
+    type: str
+  - name: ZTPrice
+    required: true
+    type: str
+  - name: DTPrice
+    required: true
+    type: str
+  - name: HqDate
+    required: true
+    type: str
+  - name: fHSL
+    required: true
+    type: str
+  - name: fLianB
+    required: true
+    type: str
+  - name: Wtb
+    required: true
+    type: str
+  - name: Zsz
+    required: true
+    type: str
+  - name: Ltsz
+    required: true
+    type: str
+  - name: vzangsu
+    required: true
+    type: str
+  - name: Fzhsl
+    required: true
+    type: str
+  - name: FzAmo
+    required: true
+    type: str
+  - name: VOpenZAF
+    required: true
+    type: str
+  - name: ZAF
+    required: true
+    type: str
+  - name: ZAFYesterday
+    required: true
+    type: str
+  - name: ZAFPre2D
+    required: true
+    type: str
+  - name: ZAFPre5
+    required: true
+    type: str
+  - name: ZAFPre10
+    required: true
+    type: str
+  - name: ZAFPre20
+    required: true
+    type: str
+  - name: ZAFPre30
+    required: true
+    type: str
+  - name: ZAFPre60
+    required: true
+    type: str
+  - name: ZAFYear
+    required: true
+    type: str
+  - name: ZAFPreMyMonth
+    required: true
+    type: str
+  - name: ZAFPreOneYear
+    required: true
+    type: str
+  - name: Zjl
+    required: true
+    type: str
+  - name: Zjl_HB
+    required: true
+    type: str
+  - name: TotalBVol
+    required: true
+    type: str
+  - name: TotalSVol
+    required: true
+    type: str
+  - name: BCancel
+    required: true
+    type: str
+  - name: SCancel
+    required: true
+    type: str
+  - name: L2TicNum
+    required: true
+    type: str
+  - name: L2OrderNum
+    required: true
+    type: str
+  - name: FCAmo
+    required: true
+    type: str
+  - name: FCb
+    required: true
+    type: str
+  - name: OpenAmo
+    required: true
+    type: str
+  - name: OpenZTBuy
+    required: true
+    type: str
+  - name: OpenAmoPre1
+    required: true
+    type: str
+  - name: OpenVolPre1
+    required: true
+    type: str
+  - name: CJJEPre1
+    required: true
+    type: str
+  - name: CJJEPre3
+    required: true
+    type: str
+  - name: FDEPre1
+    required: true
+    type: str
+  - name: FDEPre2
+    required: true
+    type: str
+  - name: ZTGPNum
+    required: true
+    type: str
+  - name: LastStartZT
+    required: true
+    type: str
+  - name: LastZTHzNum
+    required: true
+    type: str
+  - name: EverZTCount
+    required: true
+    type: str
+  - name: ConZAFDateNum
+    required: true
+    type: str
+  - name: YearZTDay
+    required: true
+    type: str
+  - name: MA5Value
+    required: true
+    type: str
+  - name: HisHigh
+    required: true
+    type: str
+  - name: HisLow
+    required: true
+    type: str
+  - name: IPO_Price
+    required: true
+    type: str
+  - name: More_YJL
+    required: true
+    type: str
+  - name: BetaValue
+    required: true
+    type: str
+  - name: DynaPE
+    required: true
+    type: str
+  - name: MorePE
+    required: true
+    type: str
+  - name: StaticPE_TTM
+    required: true
+    type: str
+  - name: DYRatio
+    required: true
+    type: str
+  - name: PB_MRQ
+    required: true
+    type: str
+  - name: IsT0Fund
+    required: true
+    type: str
+  - name: IsZCZGP
+    required: true
+    type: str
+  - name: IsKzz
+    required: true
+    type: str
+  - name: Kzz_HSCode
+    required: true
+    type: str
+  - name: QHMainYYMM
+    required: true
+    type: str
+  - name: FreeLtgb
+    required: true
+    type: str
+  - name: Yield
+    required: true
+    type: str
+  - name: KfEarnMoney
+    required: true
+    type: str
+  - name: RDInputFee
+    required: true
+    type: str
+  - name: CashZJ
+    required: true
+    type: str
+  - name: PreReceiveZJ
+    required: true
+    type: str
+  - name: OtherQYJzc
+    required: true
+    type: str
+  - name: StaffNum
+    required: true
+    type: str
+  - name: RecentGGJYDate
+    required: true
+    type: str
+  - name: RecentHGDate
+    required: true
+    type: str
+  - name: RecentIncentDate
+    required: true
+    type: str
+  - name: NoticeDate_Recent
+    required: true
+    type: str
+  - name: RecentReleaseDate
+    required: true
+    type: str
+  - name: RecentDZDate
+    required: true
+    type: str
+  - name: ReportDate
+    required: true
+    type: str
+  - name: ZTDate_Recent
+    required: true
+    type: str
+  - name: DTDate_Recent
+    required: true
+    type: str
+  - name: TopDate_Recent
+    required: true
+    type: str
+  - name: StopJYDate_Recent
+    required: true
+    type: str
+- name: get_gb_info
+  description: get_gb_info
+  routing: get_gb_info
+  upstream_tool_mapping:
+    tdx_tq_local: get_gb_info
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: date_list
+    required: true
+    type: List[str]
+  - name: count
+    required: true
+    type: int
+  - name: Date
+    required: false
+    type: ''
+  - name: Zgb
+    required: false
+    type: ''
+  - name: Ltgb
+    required: false
+    type: ''
+- name: get_gb_info_by_date
+  description: get_gb_info_by_date
+  routing: get_gb_info_by_date
+  upstream_tool_mapping:
+    tdx_tq_local: get_gb_info_by_date
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: start_date
+    required: true
+    type: str
+  - name: end_date
+    required: true
+    type: str
+  - name: Date
+    required: false
+    type: ''
+  - name: Zgb
+    required: false
+    type: ''
+  - name: Ltgb
+    required: false
+    type: ''
+- name: get_kzz_info
+  description: get_kzz_info
+  routing: get_kzz_info
+  upstream_tool_mapping:
+    tdx_tq_local: get_kzz_info
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_code
+    required: false
+    type: str
+  - name: field_list
+    required: false
+    type: List[str]
+- name: get_ipo_info
+  description: get_ipo_info
+  routing: get_ipo_info
+  upstream_tool_mapping:
+    tdx_tq_local: get_ipo_info
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: ipo_type
+    required: false
+    type: int
+  - name: ipo_date
+    required: false
+    type: int
+  - name: 数据
+    required: false
+    type: 数据类型
+  - name: :-----
+    required: false
+    type: :-----
+  - name: Code
+    required: true
+    type: str
+  - name: Name
+    required: true
+    type: str
+  - name: SGDate
+    required: true
+    type: str
+  - name: SGPrice
+    required: true
+    type: str
+  - name: SGCode
+    required: true
+    type: str
+  - name: MaxSG
+    required: true
+    type: str
+  - name: PE_Issue
+    required: true
+    type: str
+- name: get_trackzs_etf_info
+  description: get_trackzs_etf_info
+  routing: get_trackzs_etf_info
+  upstream_tool_mapping:
+    tdx_tq_local: get_trackzs_etf_info
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: zs_code
+    required: true
+    type: str
+- name: refresh_cache
+  description: refresh_cache
+  routing: refresh_cache
+  upstream_tool_mapping:
+    tdx_tq_local: refresh_cache
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: market
+    required: false
+    type: str
+  - name: force
+    required: false
+    type: bool
+- name: refresh_kline
+  description: refresh_kline
+  routing: refresh_kline
+  upstream_tool_mapping:
+    tdx_tq_local: refresh_kline
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: period
+    required: true
+    type: str
+- name: download_file
+  description: download_file
+  routing: download_file
+  upstream_tool_mapping:
+    tdx_tq_local: download_file
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: stock_code
+    required: false
+    type: str
+  - name: down_time
+    required: false
+    type: str
+  - name: down_type
+    required: false
+    type: int
+- name: send_message
+  description: send_message
+  routing: send_message
+  upstream_tool_mapping:
+    tdx_tq_local: send_message
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: msg_str
+    required: true
+    type: str
+- name: send_file
+  description: send_file
+  routing: send_file
+  upstream_tool_mapping:
+    tdx_tq_local: send_file
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: file_path
+    required: true
+    type: str
+- name: send_warn
+  description: send_warn
+  routing: send_warn
+  upstream_tool_mapping:
+    tdx_tq_local: send_warn
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: time_list
+    required: true
+    type: List[str]
+  - name: price_list
+    required: true
+    type: List[str]
+  - name: close_list
+    required: false
+    type: List[str]
+  - name: volum_list
+    required: false
+    type: List[str]
+  - name: bs_flag_list
+    required: false
+    type: List[str]
+  - name: warn_type_list
+    required: false
+    type: List[str]
+  - name: reason_list
+    required: false
+    type: List[str]
+  - name: count
+    required: true
+    type: int
+- name: send_bt_data
+  description: send_bt_data
+  routing: send_bt_data
+  upstream_tool_mapping:
+    tdx_tq_local: send_bt_data
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: time_list
+    required: true
+    type: List[str]
+  - name: data_list
+    required: true
+    type: List[List[str]]
+  - name: count
+    required: true
+    type: int
+- name: send_user_block
+  description: send_user_block
+  routing: send_user_block
+  upstream_tool_mapping:
+    tdx_tq_local: send_user_block
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: block_code
+    required: true
+    type: str
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: show
+    required: false
+    type: bool
+- name: exec_to_tdx
+  description: exec_to_tdx
+  routing: exec_to_tdx
+  upstream_tool_mapping:
+    tdx_tq_local: exec_to_tdx
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: url
+    required: true
+    type: str
+- name: create_sector
+  description: create_sector
+  routing: create_sector
+  upstream_tool_mapping:
+    tdx_tq_local: create_sector
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: block_code
+    required: true
+    type: str
+  - name: block_name
+    required: true
+    type: str
+- name: delete_sector
+  description: delete_sector
+  routing: delete_sector
+  upstream_tool_mapping:
+    tdx_tq_local: delete_sector
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: block_code
+    required: true
+    type: str
+- name: rename_sector
+  description: rename_sector
+  routing: rename_sector
+  upstream_tool_mapping:
+    tdx_tq_local: rename_sector
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: block_code
+    required: true
+    type: str
+  - name: block_name
+    required: true
+    type: str
+- name: clear_sector
+  description: clear_sector
+  routing: clear_sector
+  upstream_tool_mapping:
+    tdx_tq_local: clear_sector
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: block_code
+    required: true
+    type: str
+- name: get_financial_data
+  description: get_financial_data
+  routing: get_financial_data
+  upstream_tool_mapping:
+    tdx_tq_local: get_financial_data
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: report_type
+    required: false
+    type: str
+  - name: announce_time
+    required: false
+    type: ''
+  - name: tag_time
+    required: false
+    type: ''
+  - name: FN1
+    required: false
+    type: ''
+  - name: FN2
+    required: false
+    type: ''
+  - name: FN3
+    required: false
+    type: ''
+  - name: FN4
+    required: false
+    type: ''
+  - name: FN5
+    required: false
+    type: ''
+  - name: FN6
+    required: false
+    type: ''
+  - name: FN7
+    required: false
+    type: ''
+  - name: FN8
+    required: false
+    type: ''
+  - name: FN9
+    required: false
+    type: ''
+  - name: FN10
+    required: false
+    type: ''
+  - name: FN11
+    required: false
+    type: ''
+  - name: FN12
+    required: false
+    type: ''
+  - name: FN13
+    required: false
+    type: ''
+  - name: FN14
+    required: false
+    type: ''
+  - name: FN15
+    required: false
+    type: ''
+  - name: FN16
+    required: false
+    type: ''
+  - name: FN17
+    required: false
+    type: ''
+  - name: FN18
+    required: false
+    type: ''
+  - name: FN19
+    required: false
+    type: ''
+  - name: FN20
+    required: false
+    type: ''
+  - name: FN21
+    required: false
+    type: ''
+  - name: FN22
+    required: false
+    type: ''
+  - name: FN23
+    required: false
+    type: ''
+  - name: FN24
+    required: false
+    type: ''
+  - name: FN25
+    required: false
+    type: ''
+  - name: FN26
+    required: false
+    type: ''
+  - name: FN27
+    required: false
+    type: ''
+  - name: FN28
+    required: false
+    type: ''
+  - name: FN29
+    required: false
+    type: ''
+  - name: FN30
+    required: false
+    type: ''
+  - name: FN31
+    required: false
+    type: ''
+  - name: FN32
+    required: false
+    type: ''
+  - name: FN33
+    required: false
+    type: ''
+  - name: FN34
+    required: false
+    type: ''
+  - name: FN35
+    required: false
+    type: ''
+  - name: FN36
+    required: false
+    type: ''
+  - name: FN37
+    required: false
+    type: ''
+  - name: FN38
+    required: false
+    type: ''
+  - name: FN39
+    required: false
+    type: ''
+  - name: FN40
+    required: false
+    type: ''
+  - name: FN41
+    required: false
+    type: ''
+  - name: FN42
+    required: false
+    type: ''
+  - name: FN43
+    required: false
+    type: ''
+  - name: FN44
+    required: false
+    type: ''
+  - name: FN45
+    required: false
+    type: ''
+  - name: FN46
+    required: false
+    type: ''
+  - name: FN47
+    required: false
+    type: ''
+  - name: FN48
+    required: false
+    type: ''
+  - name: FN49
+    required: false
+    type: ''
+  - name: FN50
+    required: false
+    type: ''
+  - name: FN51
+    required: false
+    type: ''
+  - name: FN52
+    required: false
+    type: ''
+  - name: FN53
+    required: false
+    type: ''
+  - name: FN54
+    required: false
+    type: ''
+  - name: FN55
+    required: false
+    type: ''
+  - name: FN56
+    required: false
+    type: ''
+  - name: FN57
+    required: false
+    type: ''
+  - name: FN58
+    required: false
+    type: ''
+  - name: FN59
+    required: false
+    type: ''
+  - name: FN60
+    required: false
+    type: ''
+  - name: FN61
+    required: false
+    type: ''
+  - name: FN62
+    required: false
+    type: ''
+  - name: FN63
+    required: false
+    type: ''
+  - name: FN64
+    required: false
+    type: ''
+  - name: FN65
+    required: false
+    type: ''
+  - name: FN66
+    required: false
+    type: ''
+  - name: FN67
+    required: false
+    type: ''
+  - name: FN68
+    required: false
+    type: ''
+  - name: FN69
+    required: false
+    type: ''
+  - name: FN70
+    required: false
+    type: ''
+  - name: FN71
+    required: false
+    type: ''
+  - name: FN72
+    required: false
+    type: ''
+  - name: FN73
+    required: false
+    type: ''
+  - name: FN98
+    required: false
+    type: ''
+  - name: FN99
+    required: false
+    type: ''
+  - name: FN100
+    required: false
+    type: ''
+  - name: FN101
+    required: false
+    type: ''
+  - name: FN102
+    required: false
+    type: ''
+  - name: FN103
+    required: false
+    type: ''
+  - name: FN104
+    required: false
+    type: ''
+  - name: FN105
+    required: false
+    type: ''
+  - name: FN106
+    required: false
+    type: ''
+  - name: FN107
+    required: false
+    type: ''
+  - name: FN108
+    required: false
+    type: ''
+  - name: FN109
+    required: false
+    type: ''
+  - name: FN110
+    required: false
+    type: ''
+  - name: FN111
+    required: false
+    type: ''
+  - name: FN112
+    required: false
+    type: ''
+  - name: FN113
+    required: false
+    type: ''
+  - name: FN114
+    required: false
+    type: ''
+  - name: FN115
+    required: false
+    type: ''
+  - name: FN116
+    required: false
+    type: ''
+  - name: FN117
+    required: false
+    type: ''
+  - name: FN118
+    required: false
+    type: ''
+  - name: FN119
+    required: false
+    type: ''
+  - name: FN120
+    required: false
+    type: ''
+  - name: FN121
+    required: false
+    type: ''
+  - name: FN122
+    required: false
+    type: ''
+  - name: FN123
+    required: false
+    type: ''
+  - name: FN124
+    required: false
+    type: ''
+  - name: FN125
+    required: false
+    type: ''
+  - name: FN126
+    required: false
+    type: ''
+  - name: FN127
+    required: false
+    type: ''
+  - name: FN128
+    required: false
+    type: ''
+  - name: FN129
+    required: false
+    type: ''
+  - name: FN130
+    required: false
+    type: ''
+  - name: FN131
+    required: false
+    type: ''
+  - name: FN132
+    required: false
+    type: ''
+  - name: FN133
+    required: false
+    type: ''
+  - name: FN134
+    required: false
+    type: ''
+  - name: FN135
+    required: false
+    type: ''
+  - name: FN136
+    required: false
+    type: ''
+  - name: FN137
+    required: false
+    type: ''
+  - name: FN138
+    required: false
+    type: ''
+  - name: FN139
+    required: false
+    type: ''
+  - name: FN140
+    required: false
+    type: ''
+  - name: FN141
+    required: false
+    type: ''
+  - name: FN142
+    required: false
+    type: ''
+  - name: FN143
+    required: false
+    type: ''
+  - name: FN144
+    required: false
+    type: ''
+  - name: FN145
+    required: false
+    type: ''
+  - name: FN146
+    required: false
+    type: ''
+  - name: FN147
+    required: false
+    type: ''
+  - name: FN148
+    required: false
+    type: ''
+  - name: FN149
+    required: false
+    type: ''
+  - name: FN150
+    required: false
+    type: ''
+  - name: FN151
+    required: false
+    type: ''
+  - name: FN152
+    required: false
+    type: ''
+  - name: FN153
+    required: false
+    type: ''
+  - name: FN154
+    required: false
+    type: ''
+  - name: FN155
+    required: false
+    type: ''
+  - name: FN156
+    required: false
+    type: ''
+  - name: FN157
+    required: false
+    type: ''
+  - name: FN158
+    required: false
+    type: ''
+  - name: FN159
+    required: false
+    type: ''
+  - name: FN160
+    required: false
+    type: ''
+  - name: FN161
+    required: false
+    type: ''
+  - name: FN162
+    required: false
+    type: ''
+  - name: FN163
+    required: false
+    type: ''
+  - name: FN164
+    required: false
+    type: ''
+  - name: FN166
+    required: false
+    type: ''
+  - name: FN167
+    required: false
+    type: ''
+  - name: FN168
+    required: false
+    type: ''
+  - name: FN169
+    required: false
+    type: ''
+  - name: FN170
+    required: false
+    type: ''
+  - name: FN171
+    required: false
+    type: ''
+  - name: FN172
+    required: false
+    type: ''
+  - name: FN173
+    required: false
+    type: ''
+  - name: FN174
+    required: false
+    type: ''
+  - name: FN175
+    required: false
+    type: ''
+  - name: FN176
+    required: false
+    type: ''
+  - name: FN177
+    required: false
+    type: ''
+  - name: FN178
+    required: false
+    type: ''
+  - name: FN179
+    required: false
+    type: ''
+  - name: FN180
+    required: false
+    type: ''
+  - name: FN181
+    required: false
+    type: ''
+  - name: FN182
+    required: false
+    type: ''
+  - name: FN183
+    required: false
+    type: ''
+  - name: FN184
+    required: false
+    type: ''
+  - name: FN185
+    required: false
+    type: ''
+  - name: FN186
+    required: false
+    type: ''
+  - name: FN187
+    required: false
+    type: ''
+  - name: FN188
+    required: false
+    type: ''
+  - name: FN189
+    required: false
+    type: ''
+  - name: FN190
+    required: false
+    type: ''
+  - name: FN191
+    required: false
+    type: ''
+  - name: FN192
+    required: false
+    type: ''
+  - name: FN193
+    required: false
+    type: ''
+  - name: FN194
+    required: false
+    type: ''
+  - name: FN195
+    required: false
+    type: ''
+  - name: FN196
+    required: false
+    type: ''
+  - name: FN197
+    required: false
+    type: ''
+  - name: FN198
+    required: false
+    type: ''
+  - name: FN199
+    required: false
+    type: ''
+  - name: FN200
+    required: false
+    type: ''
+  - name: FN201
+    required: false
+    type: ''
+  - name: FN202
+    required: false
+    type: ''
+  - name: FN203
+    required: false
+    type: ''
+  - name: FN204
+    required: false
+    type: ''
+  - name: FN205
+    required: false
+    type: ''
+  - name: FN206
+    required: false
+    type: ''
+  - name: FN207
+    required: false
+    type: ''
+  - name: FN208
+    required: false
+    type: ''
+  - name: FN209
+    required: false
+    type: ''
+  - name: FN210
+    required: false
+    type: ''
+  - name: FN211
+    required: false
+    type: ''
+  - name: FN212
+    required: false
+    type: ''
+  - name: FN213
+    required: false
+    type: ''
+  - name: FN214
+    required: false
+    type: ''
+  - name: FN215
+    required: false
+    type: ''
+  - name: FN216
+    required: false
+    type: ''
+  - name: FN217
+    required: false
+    type: ''
+  - name: FN218
+    required: false
+    type: ''
+  - name: FN219
+    required: false
+    type: ''
+  - name: FN220
+    required: false
+    type: ''
+  - name: FN221
+    required: false
+    type: ''
+  - name: FN222
+    required: false
+    type: ''
+  - name: FN223
+    required: false
+    type: ''
+  - name: FN224
+    required: false
+    type: ''
+  - name: FN225
+    required: false
+    type: ''
+  - name: FN226
+    required: false
+    type: ''
+  - name: FN227
+    required: false
+    type: ''
+  - name: FN228
+    required: false
+    type: ''
+  - name: FN229
+    required: false
+    type: ''
+  - name: FN230
+    required: false
+    type: ''
+  - name: FN231
+    required: false
+    type: ''
+  - name: FN232
+    required: false
+    type: ''
+  - name: FN233
+    required: false
+    type: ''
+  - name: FN234
+    required: false
+    type: ''
+  - name: FN235
+    required: false
+    type: ''
+  - name: FN236
+    required: false
+    type: ''
+  - name: FN237
+    required: false
+    type: ''
+  - name: FN238
+    required: false
+    type: ''
+  - name: FN239
+    required: false
+    type: ''
+  - name: FN240
+    required: false
+    type: ''
+  - name: FN241
+    required: false
+    type: ''
+  - name: FN242
+    required: false
+    type: ''
+  - name: FN243
+    required: false
+    type: ''
+  - name: FN244
+    required: false
+    type: ''
+  - name: FN245
+    required: false
+    type: ''
+  - name: FN246
+    required: false
+    type: ''
+  - name: FN247
+    required: false
+    type: ''
+  - name: FN248
+    required: false
+    type: ''
+  - name: FN249
+    required: false
+    type: ''
+  - name: FN250
+    required: false
+    type: ''
+  - name: FN251
+    required: false
+    type: ''
+  - name: FN252
+    required: false
+    type: ''
+  - name: FN253
+    required: false
+    type: ''
+  - name: FN254
+    required: false
+    type: ''
+  - name: FN255
+    required: false
+    type: ''
+  - name: FN256
+    required: false
+    type: ''
+  - name: FN257
+    required: false
+    type: ''
+  - name: FN258
+    required: false
+    type: ''
+  - name: FN259
+    required: false
+    type: ''
+  - name: FN260
+    required: false
+    type: ''
+  - name: FN261
+    required: false
+    type: ''
+  - name: FN262
+    required: false
+    type: ''
+  - name: FN263
+    required: false
+    type: ''
+  - name: FN264
+    required: false
+    type: ''
+  - name: FN265
+    required: false
+    type: ''
+  - name: FN266
+    required: false
+    type: ''
+  - name: FN267
+    required: false
+    type: ''
+  - name: FN268
+    required: false
+    type: ''
+  - name: FN269
+    required: false
+    type: ''
+  - name: FN270
+    required: false
+    type: ''
+  - name: FN271
+    required: false
+    type: ''
+  - name: FN272
+    required: false
+    type: ''
+  - name: FN273
+    required: false
+    type: ''
+  - name: FN274
+    required: false
+    type: ''
+  - name: FN275
+    required: false
+    type: ''
+  - name: FN276
+    required: false
+    type: ''
+  - name: FN277
+    required: false
+    type: ''
+  - name: FN278
+    required: false
+    type: ''
+  - name: FN279
+    required: false
+    type: ''
+  - name: FN280
+    required: false
+    type: ''
+  - name: FN281
+    required: false
+    type: ''
+  - name: FN282
+    required: false
+    type: ''
+  - name: FN283
+    required: false
+    type: ''
+  - name: FN284
+    required: false
+    type: ''
+  - name: FN285
+    required: false
+    type: ''
+  - name: FN286
+    required: false
+    type: ''
+  - name: FN287
+    required: false
+    type: ''
+  - name: FN288
+    required: false
+    type: ''
+  - name: FN289
+    required: false
+    type: ''
+  - name: FN290
+    required: false
+    type: ''
+  - name: FN291
+    required: false
+    type: ''
+  - name: FN292
+    required: false
+    type: ''
+  - name: FN293
+    required: false
+    type: ''
+  - name: FN294
+    required: false
+    type: ''
+  - name: FN295
+    required: false
+    type: ''
+  - name: FN296
+    required: false
+    type: ''
+  - name: FN297
+    required: false
+    type: ''
+  - name: FN298
+    required: false
+    type: ''
+  - name: FN299
+    required: false
+    type: ''
+  - name: FN300
+    required: false
+    type: ''
+  - name: FN301
+    required: false
+    type: ''
+  - name: FN302
+    required: false
+    type: ''
+  - name: FN303
+    required: false
+    type: ''
+  - name: FN304
+    required: false
+    type: ''
+  - name: FN305
+    required: false
+    type: ''
+  - name: FN306
+    required: false
+    type: ''
+  - name: FN307
+    required: false
+    type: ''
+  - name: FN308
+    required: false
+    type: ''
+  - name: FN309
+    required: false
+    type: ''
+  - name: FN310
+    required: false
+    type: ''
+  - name: FN311
+    required: false
+    type: ''
+  - name: FN312
+    required: false
+    type: ''
+  - name: FN313
+    required: false
+    type: ''
+  - name: FN314
+    required: false
+    type: ''
+  - name: FN315
+    required: false
+    type: ''
+  - name: FN316
+    required: false
+    type: ''
+  - name: FN317
+    required: false
+    type: ''
+  - name: FN318
+    required: false
+    type: ''
+  - name: FN319
+    required: false
+    type: ''
+  - name: FN320
+    required: false
+    type: ''
+  - name: FN321
+    required: false
+    type: ''
+  - name: FN322
+    required: false
+    type: ''
+  - name: FN323
+    required: false
+    type: ''
+  - name: FN324
+    required: false
+    type: ''
+  - name: FN325
+    required: false
+    type: ''
+  - name: FN326
+    required: false
+    type: ''
+  - name: FN327
+    required: false
+    type: ''
+  - name: FN328
+    required: false
+    type: ''
+  - name: FN329
+    required: false
+    type: ''
+  - name: FN330
+    required: false
+    type: ''
+  - name: FN331
+    required: false
+    type: ''
+  - name: FN332
+    required: false
+    type: ''
+  - name: FN333
+    required: false
+    type: ''
+  - name: FN334
+    required: false
+    type: ''
+  - name: FN335
+    required: false
+    type: ''
+  - name: FN336
+    required: false
+    type: ''
+  - name: FN337
+    required: false
+    type: ''
+  - name: FN338
+    required: false
+    type: ''
+  - name: FN339
+    required: false
+    type: ''
+  - name: FN340
+    required: false
+    type: ''
+  - name: FN341
+    required: false
+    type: ''
+  - name: FN342
+    required: false
+    type: ''
+  - name: FN343
+    required: false
+    type: ''
+  - name: FN344
+    required: false
+    type: ''
+  - name: FN345
+    required: false
+    type: ''
+  - name: FN346
+    required: false
+    type: ''
+  - name: FN347
+    required: false
+    type: ''
+  - name: FN348
+    required: false
+    type: ''
+  - name: FN349
+    required: false
+    type: ''
+  - name: FN350
+    required: false
+    type: ''
+  - name: FN351
+    required: false
+    type: ''
+  - name: FN352
+    required: false
+    type: ''
+  - name: FN353
+    required: false
+    type: ''
+  - name: FN354
+    required: false
+    type: ''
+  - name: FN355
+    required: false
+    type: ''
+  - name: FN356
+    required: false
+    type: ''
+  - name: FN357
+    required: false
+    type: ''
+  - name: FN358
+    required: false
+    type: ''
+  - name: FN359
+    required: false
+    type: ''
+  - name: FN360
+    required: false
+    type: ''
+  - name: FN361
+    required: false
+    type: ''
+  - name: FN362
+    required: false
+    type: ''
+  - name: FN401
+    required: false
+    type: ''
+  - name: FN402
+    required: false
+    type: ''
+  - name: FN403
+    required: false
+    type: ''
+  - name: FN404
+    required: false
+    type: ''
+  - name: FN405
+    required: false
+    type: ''
+  - name: FN406
+    required: false
+    type: ''
+  - name: FN407
+    required: false
+    type: ''
+  - name: FN408
+    required: false
+    type: ''
+  - name: FN409
+    required: false
+    type: ''
+  - name: FN410
+    required: false
+    type: ''
+  - name: FN411
+    required: false
+    type: ''
+  - name: FN412
+    required: false
+    type: ''
+  - name: FN413
+    required: false
+    type: ''
+  - name: FN414
+    required: false
+    type: ''
+  - name: FN415
+    required: false
+    type: ''
+  - name: FN416
+    required: false
+    type: ''
+  - name: FN417
+    required: false
+    type: ''
+  - name: FN418
+    required: false
+    type: ''
+  - name: FN419
+    required: false
+    type: ''
+  - name: FN420
+    required: false
+    type: ''
+  - name: FN421
+    required: false
+    type: ''
+  - name: FN422
+    required: false
+    type: ''
+  - name: FN423
+    required: false
+    type: ''
+  - name: FN424
+    required: false
+    type: ''
+  - name: FN425
+    required: false
+    type: ''
+  - name: FN426
+    required: false
+    type: ''
+  - name: FN427
+    required: false
+    type: ''
+  - name: FN428
+    required: false
+    type: ''
+  - name: FN429
+    required: false
+    type: ''
+  - name: FN430
+    required: false
+    type: ''
+  - name: FN431
+    required: false
+    type: ''
+  - name: FN432
+    required: false
+    type: ''
+  - name: FN433
+    required: false
+    type: ''
+  - name: FN434
+    required: false
+    type: ''
+  - name: FN435
+    required: false
+    type: ''
+  - name: FN436
+    required: false
+    type: ''
+  - name: FN437
+    required: false
+    type: ''
+  - name: FN438
+    required: false
+    type: ''
+  - name: FN439
+    required: false
+    type: ''
+  - name: FN440
+    required: false
+    type: ''
+  - name: FN441
+    required: false
+    type: ''
+  - name: FN442
+    required: false
+    type: ''
+  - name: FN443
+    required: false
+    type: ''
+  - name: FN444
+    required: false
+    type: ''
+  - name: FN445
+    required: false
+    type: ''
+  - name: FN446
+    required: false
+    type: ''
+  - name: FN447
+    required: false
+    type: ''
+  - name: FN448
+    required: false
+    type: ''
+  - name: FN449
+    required: false
+    type: ''
+  - name: FN450
+    required: false
+    type: ''
+  - name: FN451
+    required: false
+    type: ''
+  - name: FN452
+    required: false
+    type: ''
+  - name: FN453
+    required: false
+    type: ''
+  - name: FN501
+    required: false
+    type: ''
+  - name: FN502
+    required: false
+    type: ''
+  - name: FN503
+    required: false
+    type: ''
+  - name: FN504
+    required: false
+    type: ''
+  - name: FN505
+    required: false
+    type: ''
+  - name: FN506
+    required: false
+    type: ''
+  - name: FN507
+    required: false
+    type: ''
+  - name: FN508
+    required: false
+    type: ''
+  - name: FN509
+    required: false
+    type: ''
+  - name: FN510
+    required: false
+    type: ''
+  - name: FN511
+    required: false
+    type: ''
+  - name: FN512
+    required: false
+    type: ''
+  - name: FN513
+    required: false
+    type: ''
+  - name: FN514
+    required: false
+    type: ''
+  - name: FN515
+    required: false
+    type: ''
+  - name: FN516
+    required: false
+    type: ''
+  - name: FN517
+    required: false
+    type: ''
+  - name: FN518
+    required: false
+    type: ''
+  - name: FN519
+    required: false
+    type: ''
+  - name: FN520
+    required: false
+    type: ''
+  - name: FN521
+    required: false
+    type: ''
+  - name: FN522
+    required: false
+    type: ''
+  - name: FN523
+    required: false
+    type: ''
+  - name: FN524
+    required: false
+    type: ''
+  - name: FN561
+    required: false
+    type: ''
+  - name: FN562
+    required: false
+    type: ''
+  - name: FN563
+    required: false
+    type: ''
+  - name: FN564
+    required: false
+    type: ''
+  - name: FN565
+    required: false
+    type: ''
+  - name: FN566
+    required: false
+    type: ''
+  - name: FN567
+    required: false
+    type: ''
+  - name: FN568
+    required: false
+    type: ''
+  - name: FN569
+    required: false
+    type: ''
+  - name: FN570
+    required: false
+    type: ''
+  - name: FN571
+    required: false
+    type: ''
+  - name: FN572
+    required: false
+    type: ''
+  - name: FN573
+    required: false
+    type: ''
+  - name: FN574
+    required: false
+    type: ''
+  - name: FN575
+    required: false
+    type: ''
+  - name: FN576
+    required: false
+    type: ''
+  - name: FN577
+    required: false
+    type: ''
+  - name: FN578
+    required: false
+    type: ''
+  - name: FN579
+    required: false
+    type: ''
+  - name: FN580
+    required: false
+    type: ''
+  - name: FN581
+    required: false
+    type: ''
+  - name: FN582
+    required: false
+    type: ''
+  - name: FN583
+    required: false
+    type: ''
+  - name: FN584
+    required: false
+    type: ''
+- name: get_financial_data_by_date
+  description: get_financial_data_by_date
+  routing: get_financial_data_by_date
+  upstream_tool_mapping:
+    tdx_tq_local: get_financial_data_by_date
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: year
+    required: false
+    type: int
+  - name: mmdd
+    required: false
+    type: int
+- name: get_gpjy_value
+  description: get_gpjy_value
+  routing: get_gpjy_value
+  upstream_tool_mapping:
+    tdx_tq_local: get_gpjy_value
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: GP01
+    required: false
+    type: ''
+  - name: GP02
+    required: false
+    type: ''
+  - name: GP03
+    required: false
+    type: ''
+  - name: GP04
+    required: false
+    type: ''
+  - name: GP05
+    required: false
+    type: ''
+  - name: GP06
+    required: false
+    type: ''
+  - name: GP07
+    required: false
+    type: ''
+  - name: GP08
+    required: false
+    type: ''
+  - name: GP09
+    required: false
+    type: ''
+  - name: GP10
+    required: false
+    type: ''
+  - name: GP11
+    required: false
+    type: ''
+  - name: GP12
+    required: false
+    type: ''
+  - name: GP13
+    required: false
+    type: ''
+  - name: GP14
+    required: false
+    type: ''
+  - name: GP15
+    required: false
+    type: ''
+  - name: GP16
+    required: false
+    type: ''
+  - name: GP17
+    required: false
+    type: ''
+  - name: GP18
+    required: false
+    type: ''
+  - name: GP19
+    required: false
+    type: ''
+  - name: GP20
+    required: false
+    type: ''
+  - name: GP21
+    required: false
+    type: ''
+  - name: GP22
+    required: false
+    type: ''
+  - name: GP23
+    required: false
+    type: ''
+  - name: GP24
+    required: false
+    type: ''
+  - name: GP25
+    required: false
+    type: ''
+  - name: GP26
+    required: false
+    type: ''
+  - name: GP27
+    required: false
+    type: ''
+  - name: GP28
+    required: false
+    type: ''
+  - name: GP29
+    required: false
+    type: ''
+  - name: GP30
+    required: false
+    type: ''
+  - name: GP31
+    required: false
+    type: ''
+  - name: GP32
+    required: false
+    type: ''
+  - name: GP33
+    required: false
+    type: ''
+  - name: GP34
+    required: false
+    type: ''
+  - name: GP35
+    required: false
+    type: ''
+  - name: GP36
+    required: false
+    type: ''
+  - name: GP37
+    required: false
+    type: ''
+  - name: GP38
+    required: false
+    type: ''
+  - name: GP39
+    required: false
+    type: ''
+  - name: GP40
+    required: false
+    type: ''
+  - name: GP41
+    required: false
+    type: ''
+  - name: GP42
+    required: false
+    type: ''
+  - name: GP43
+    required: false
+    type: ''
+  - name: GP44
+    required: false
+    type: ''
+  - name: GP45
+    required: false
+    type: ''
+  - name: GP46
+    required: false
+    type: ''
+- name: get_gpjy_value_by_date
+  description: get_gpjy_value_by_date
+  routing: get_gpjy_value_by_date
+  upstream_tool_mapping:
+    tdx_tq_local: get_gpjy_value_by_date
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: year
+    required: false
+    type: int
+  - name: mmdd
+    required: false
+    type: int
+- name: get_bkjy_value
+  description: get_bkjy_value
+  routing: get_bkjy_value
+  upstream_tool_mapping:
+    tdx_tq_local: get_bkjy_value
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: BK5
+    required: false
+    type: ''
+  - name: BK6
+    required: false
+    type: ''
+  - name: BK7
+    required: false
+    type: ''
+  - name: BK8
+    required: false
+    type: ''
+  - name: BK9
+    required: false
+    type: ''
+  - name: BK10
+    required: false
+    type: ''
+  - name: BK11
+    required: false
+    type: ''
+  - name: BK12
+    required: false
+    type: ''
+  - name: BK13
+    required: false
+    type: ''
+  - name: BK14
+    required: false
+    type: ''
+  - name: BK15
+    required: false
+    type: ''
+  - name: BK16
+    required: false
+    type: ''
+  - name: BK17
+    required: false
+    type: ''
+  - name: BK18
+    required: false
+    type: ''
+  - name: BK19
+    required: false
+    type: ''
+- name: get_bkjy_value_by_date
+  description: get_bkjy_value_by_date
+  routing: get_bkjy_value_by_date
+  upstream_tool_mapping:
+    tdx_tq_local: get_bkjy_value_by_date
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: year
+    required: false
+    type: int
+  - name: mmdd
+    required: false
+    type: int
+- name: get_scjy_value
+  description: get_scjy_value
+  routing: get_scjy_value
+  upstream_tool_mapping:
+    tdx_tq_local: get_scjy_value
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: SC01
+    required: false
+    type: ''
+  - name: SC02
+    required: false
+    type: ''
+  - name: SC03
+    required: false
+    type: ''
+  - name: SC04
+    required: false
+    type: ''
+  - name: SC05
+    required: false
+    type: ''
+  - name: SC06
+    required: false
+    type: ''
+  - name: SC07
+    required: false
+    type: ''
+  - name: SC08
+    required: false
+    type: ''
+  - name: SC09
+    required: false
+    type: ''
+  - name: SC10
+    required: false
+    type: ''
+  - name: SC11
+    required: false
+    type: ''
+  - name: SC12
+    required: false
+    type: ''
+  - name: SC13
+    required: false
+    type: ''
+  - name: SC14
+    required: false
+    type: ''
+  - name: SC15
+    required: false
+    type: ''
+  - name: SC16
+    required: false
+    type: ''
+  - name: SC17
+    required: false
+    type: ''
+  - name: SC18
+    required: false
+    type: ''
+  - name: SC19
+    required: false
+    type: ''
+  - name: SC20
+    required: false
+    type: ''
+  - name: SC21
+    required: false
+    type: ''
+  - name: SC22
+    required: false
+    type: ''
+  - name: SC23
+    required: false
+    type: ''
+  - name: SC24
+    required: false
+    type: ''
+  - name: SC25
+    required: false
+    type: ''
+  - name: SC26
+    required: false
+    type: ''
+  - name: SC27
+    required: false
+    type: ''
+  - name: SC28
+    required: false
+    type: ''
+  - name: SC29
+    required: false
+    type: ''
+  - name: SC30
+    required: false
+    type: ''
+  - name: SC31
+    required: false
+    type: ''
+  - name: SC32
+    required: false
+    type: ''
+  - name: SC33
+    required: false
+    type: ''
+  - name: SC34
+    required: false
+    type: ''
+  - name: SC35
+    required: false
+    type: ''
+  - name: SC36
+    required: false
+    type: ''
+  - name: SC37
+    required: false
+    type: ''
+  - name: SC38
+    required: false
+    type: ''
+  - name: SC39
+    required: false
+    type: ''
+  - name: SC40
+    required: false
+    type: ''
+  - name: SC41
+    required: false
+    type: ''
+  - name: SC42
+    required: false
+    type: ''
+- name: get_scjy_value_by_date
+  description: get_scjy_value_by_date
+  routing: get_scjy_value_by_date
+  upstream_tool_mapping:
+    tdx_tq_local: get_scjy_value_by_date
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: year
+    required: false
+    type: int
+  - name: mmdd
+    required: false
+    type: int
+- name: get_gp_one_data
+  description: get_gp_one_data
+  routing: get_gp_one_data
+  upstream_tool_mapping:
+    tdx_tq_local: get_gp_one_data
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: field_list
+    required: true
+    type: List[str]
+  - name: GO1
+    required: false
+    type: ''
+  - name: GO2
+    required: false
+    type: ''
+  - name: GO3
+    required: false
+    type: ''
+  - name: GO4
+    required: false
+    type: ''
+  - name: GO5
+    required: false
+    type: ''
+  - name: GO6
+    required: false
+    type: ''
+  - name: GO7
+    required: false
+    type: ''
+  - name: GO8
+    required: false
+    type: ''
+  - name: GO9
+    required: false
+    type: ''
+  - name: GO10
+    required: false
+    type: ''
+  - name: GO11
+    required: false
+    type: ''
+  - name: GO12
+    required: false
+    type: ''
+  - name: GO13
+    required: false
+    type: ''
+  - name: GO14
+    required: false
+    type: ''
+  - name: GO15
+    required: false
+    type: ''
+  - name: GO16
+    required: false
+    type: ''
+  - name: GO17
+    required: false
+    type: ''
+  - name: GO18
+    required: false
+    type: ''
+  - name: GO19
+    required: false
+    type: ''
+  - name: GO20
+    required: false
+    type: ''
+  - name: GO21
+    required: false
+    type: ''
+  - name: GO22
+    required: false
+    type: ''
+  - name: GO23
+    required: false
+    type: ''
+  - name: GO24
+    required: false
+    type: ''
+  - name: GO25
+    required: false
+    type: ''
+  - name: GO26
+    required: false
+    type: ''
+  - name: GO27
+    required: false
+    type: ''
+  - name: GO28
+    required: false
+    type: ''
+  - name: GO29
+    required: false
+    type: ''
+  - name: GO30
+    required: false
+    type: ''
+  - name: GO31
+    required: false
+    type: ''
+  - name: GO32
+    required: false
+    type: ''
+  - name: GO33
+    required: false
+    type: ''
+  - name: GO34
+    required: false
+    type: ''
+  - name: GO35
+    required: false
+    type: ''
+  - name: GO36
+    required: false
+    type: ''
+  - name: GO37
+    required: false
+    type: ''
+  - name: GO38
+    required: false
+    type: ''
+  - name: GO39
+    required: false
+    type: ''
+  - name: GO40
+    required: false
+    type: ''
+  - name: GO41
+    required: false
+    type: ''
+  - name: GO42
+    required: false
+    type: ''
+  - name: GO43
+    required: false
+    type: ''
+  - name: GO44
+    required: false
+    type: ''
+  - name: GO45
+    required: false
+    type: ''
+  - name: GO46
+    required: false
+    type: ''
+  - name: GO47
+    required: false
+    type: ''
+- name: formula_set_data
+  description: formula_set_data
+  routing: formula_set_data
+  upstream_tool_mapping:
+    tdx_tq_local: formula_set_data
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: stock_period
+    required: false
+    type: str
+  - name: stock_data
+    required: true
+    type: List
+  - name: count
+    required: false
+    type: int
+  - name: dividend_type
+    required: false
+    type: int
+- name: formula_set_data_info
+  description: formula_set_data_info
+  routing: formula_set_data_info
+  upstream_tool_mapping:
+    tdx_tq_local: formula_set_data_info
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: stock_code
+    required: true
+    type: str
+  - name: stock_period
+    required: false
+    type: str
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: count
+    required: false
+    type: int
+  - name: dividend_type
+    required: false
+    type: int
+- name: formula_get_data
+  description: formula_get_data
+  routing: formula_get_data
+  upstream_tool_mapping:
+    tdx_tq_local: formula_get_data
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: 无
+    required: false
+    type: '-'
+- name: formula_zb
+  description: formula_zb
+  routing: formula_zb
+  upstream_tool_mapping:
+    tdx_tq_local: formula_zb
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: formula_name
+    required: true
+    type: str
+  - name: formula_arg
+    required: false
+    type: str
+  - name: xsflag
+    required: false
+    type: int
+- name: formula_xg
+  description: formula_xg
+  routing: formula_xg
+  upstream_tool_mapping:
+    tdx_tq_local: formula_xg
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: formula_name
+    required: true
+    type: str
+  - name: formula_arg
+    required: false
+    type: str
+  - name: xsflag
+    required: false
+    type: int
+- name: formula_exp
+  description: formula_exp
+  routing: formula_exp
+  upstream_tool_mapping:
+    tdx_tq_local: formula_exp
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: formula_name
+    required: true
+    type: str
+  - name: formula_arg
+    required: false
+    type: str
+  - name: xsflag
+    required: false
+    type: int
+- name: formula_process_mul_xg
+  description: formula_process_mul_xg
+  routing: formula_process_mul_xg
+  upstream_tool_mapping:
+    tdx_tq_local: formula_process_mul_xg
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: formula_name
+    required: true
+    type: str
+  - name: formula_arg
+    required: false
+    type: str
+  - name: return_count
+    required: false
+    type: int
+  - name: return_date
+    required: false
+    type: bool
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: stock_period
+    required: false
+    type: str
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: count
+    required: false
+    type: int
+  - name: dividend_type
+    required: false
+    type: int
+- name: formula_process_mul_zb
+  description: formula_process_mul_zb
+  routing: formula_process_mul_zb
+  upstream_tool_mapping:
+    tdx_tq_local: formula_process_mul_zb
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: formula_name
+    required: true
+    type: str
+  - name: formula_arg
+    required: false
+    type: str
+  - name: return_count
+    required: false
+    type: int
+  - name: return_date
+    required: false
+    type: bool
+  - name: xsflag
+    required: false
+    type: int
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: stock_period
+    required: false
+    type: str
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: count
+    required: false
+    type: int
+  - name: dividend_type
+    required: false
+    type: int
+- name: formula_process_mul_exp
+  description: formula_process_mul_exp
+  routing: formula_process_mul_exp
+  upstream_tool_mapping:
+    tdx_tq_local: formula_process_mul_exp
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: formula_name
+    required: true
+    type: str
+  - name: formula_arg
+    required: false
+    type: str
+  - name: return_count
+    required: false
+    type: int
+  - name: return_date
+    required: false
+    type: bool
+  - name: xsflag
+    required: false
+    type: int
+  - name: stock_list
+    required: true
+    type: List[str]
+  - name: stock_period
+    required: false
+    type: str
+  - name: start_time
+    required: false
+    type: str
+  - name: end_time
+    required: false
+    type: str
+  - name: count
+    required: false
+    type: int
+  - name: dividend_type
+    required: false
+    type: int
+- name: formula_get_all
+  description: formula_get_all
+  routing: formula_get_all
+  upstream_tool_mapping:
+    tdx_tq_local: formula_get_all
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: formula_type
+    required: false
+    type: int
+- name: formula_get_info
+  description: formula_get_info
+  routing: formula_get_info
+  upstream_tool_mapping:
+    tdx_tq_local: formula_get_info
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: formula_type
+    required: false
+    type: int
+  - name: formula_code
+    required: true
+    type: str
+- name: stock_account
+  description: stock_account
+  routing: stock_account
+  upstream_tool_mapping:
+    tdx_tq_local: stock_account
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: account
+    required: true
+    type: str
+  - name: account_type
+    required: false
+    type: str
+- name: query_stock_asset
+  description: query_stock_asset
+  routing: query_stock_asset
+  upstream_tool_mapping:
+    tdx_tq_local: query_stock_asset
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: account_id
+    required: true
+    type: int
+- name: query_stock_orders
+  description: query_stock_orders
+  routing: query_stock_orders
+  upstream_tool_mapping:
+    tdx_tq_local: query_stock_orders
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: account_id
+    required: true
+    type: int
+  - name: stock_code
+    required: false
+    type: str
+  - name: cancelable_only
+    required: false
+    type: bool
+- name: query_stock_positions
+  description: query_stock_positions
+  routing: query_stock_positions
+  upstream_tool_mapping:
+    tdx_tq_local: query_stock_positions
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: account_id
+    required: true
+    type: int
+- name: order_stock
+  description: order_stock
+  routing: order_stock
+  upstream_tool_mapping:
+    tdx_tq_local: order_stock
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: account_id
+    required: true
+    type: int
+  - name: stock_code
+    required: true
+    type: str
+  - name: order_type
+    required: true
+    type: int
+  - name: order_volume
+    required: true
+    type: int
+  - name: price_type
+    required: true
+    type: int
+  - name: price
+    required: false
+    type: float
+  - name: notify
+    required: false
+    type: int
+- name: cancel_order_stock
+  description: cancel_order_stock
+  routing: cancel_order_stock
+  upstream_tool_mapping:
+    tdx_tq_local: cancel_order_stock
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: account_id
+    required: true
+    type: int
+  - name: stock_code
+    required: true
+    type: str
+  - name: order_id
+    required: true
+    type: str
