@@ -39,15 +39,226 @@ class TokenWaveTdxClient:
     async def start(self):
         """初始化客户端"""
         # 初始化 local 和 network 客户端
-        pass
+        try:
+            self._local_client = LocalClient()
+        except Exception as e:
+            logger.warning(f"Failed to init local client: {e}")
+
+        try:
+            self._network_client = NetworkClient()
+        except Exception as e:
+            logger.warning(f"Failed to init network client: {e}")
+
+        # 检查可用性
+        local_ok = self._local_client and self._local_client.is_available()
+        network_ok = self._network_client and self._network_client.is_available()
+
+        if local_ok or network_ok:
+            self._status = UpstreamStatus.AVAILABLE
+        else:
+            self._status = UpstreamStatus.UNAVAILABLE
 
     async def stop(self):
         """停止客户端"""
-        pass
+        self._local_client = None
+        self._network_client = None
+        self._status = UpstreamStatus.UNKNOWN
 
     async def call_tool(self, tool_name: str, params: dict) -> ToolResult:
-        """调用工具"""
-        pass
+        """工具路由"""
+        method_map = {
+            "get_realtime_quote": self.get_realtime_quote,
+            "get_kline": self.get_kline,
+            "get_minute_bar": self.get_minute_bar,
+            "get_financial_data": self.get_financial_data,
+            "get_block_data": self.get_block_data,
+            "get_stock_info": self.get_stock_info,
+            "get_trade_dates": self.get_trade_dates,
+            "get_etf_list": self.get_etf_list,
+        }
+
+        method = method_map.get(tool_name)
+        if not method:
+            return ToolResult(success=False, error=f"Unknown tool: {tool_name}")
+
+        return await method(**params)
+
+    # ========== 工具方法实现 ==========
+
+    async def get_realtime_quote(self, stock_code: str) -> ToolResult:
+        """获取实时行情: local 优先，network 兜底"""
+        # 1. 尝试 local
+        if self._local_client and self._local_client.is_available():
+            try:
+                data = self._local_client.get_realtime_quote(stock_code)
+                if data:
+                    return ToolResult(success=True, data=data, source="local")
+            except Exception as e:
+                logger.warning(f"Local quote failed: {e}")
+
+        # 2. 兜底 network
+        if self._network_client and self._network_client.is_available():
+            try:
+                data = self._network_client.get_realtime_quote(stock_code)
+                if data:
+                    return ToolResult(success=True, data=data, source="network")
+            except Exception as e:
+                logger.error(f"Network quote failed: {e}")
+
+        return ToolResult(success=False, error="无可用数据源")
+
+    async def get_kline(
+        self,
+        stock_code: str,
+        frequency: str = "daily",
+        start_date: str = None,
+        end_date: str = None,
+        count: int = 100,
+    ) -> ToolResult:
+        """获取K线数据: local 优先，network 兜底"""
+        # 1. 尝试 local
+        if self._local_client and self._local_client.is_available():
+            try:
+                data = self._local_client.get_kline(
+                    stock_code=stock_code,
+                    frequency=frequency,
+                    count=count,
+                )
+                if data is not None:
+                    # 转换 DataFrame 为 dict 列表
+                    if hasattr(data, 'to_dict'):
+                        data = data.to_dict(orient='records')
+                    return ToolResult(success=True, data=data, source="local")
+            except Exception as e:
+                logger.warning(f"Local kline failed: {e}")
+
+        # 2. 兜底 network
+        if self._network_client and self._network_client.is_available():
+            try:
+                data = self._network_client.get_kline(
+                    stock_code=stock_code,
+                    frequency=frequency,
+                    count=count,
+                )
+                if data is not None:
+                    if hasattr(data, 'to_dict'):
+                        data = data.to_dict(orient='records')
+                    return ToolResult(success=True, data=data, source="network")
+            except Exception as e:
+                logger.error(f"Network kline failed: {e}")
+
+        return ToolResult(success=False, error="无可用数据源")
+
+    async def get_minute_bar(
+        self,
+        stock_code: str,
+        frequency: str = "5min",
+    ) -> ToolResult:
+        """获取分钟K线: local 优先，network 兜底"""
+        # 1. 尝试 local
+        if self._local_client and self._local_client.is_available():
+            try:
+                data = self._local_client.get_minute(stock_code, frequency)
+                if data is not None:
+                    if hasattr(data, 'to_dict'):
+                        data = data.to_dict(orient='records')
+                    return ToolResult(success=True, data=data, source="local")
+            except Exception as e:
+                logger.warning(f"Local minute failed: {e}")
+
+        # 2. 兜底 network
+        if self._network_client and self._network_client.is_available():
+            try:
+                data = self._network_client.get_minute(stock_code, frequency)
+                if data is not None:
+                    if hasattr(data, 'to_dict'):
+                        data = data.to_dict(orient='records')
+                    return ToolResult(success=True, data=data, source="network")
+            except Exception as e:
+                logger.error(f"Network minute failed: {e}")
+
+        return ToolResult(success=False, error="无可用数据源")
+
+    async def get_financial_data(
+        self,
+        stock_code: str,
+        report_type: str = "income",
+        count: int = 4,
+    ) -> ToolResult:
+        """获取财务数据: network only (本地无财务数据)"""
+        if self._network_client and self._network_client.is_available():
+            try:
+                data = self._network_client.get_financial_data(
+                    stock_code=stock_code,
+                    report_type=report_type,
+                    count=count,
+                )
+                if data is not None:
+                    if hasattr(data, 'to_dict'):
+                        data = data.to_dict(orient='records')
+                    return ToolResult(success=True, data=data, source="network")
+            except Exception as e:
+                logger.error(f"Network financial failed: {e}")
+
+        return ToolResult(success=False, error="无可用数据源")
+
+    async def get_block_data(self, block_type: str) -> ToolResult:
+        """获取板块数据: network only (本地无板块数据)"""
+        if self._network_client and self._network_client.is_available():
+            try:
+                data = self._network_client.get_block_data(block_type)
+                if data is not None:
+                    if hasattr(data, 'to_dict'):
+                        data = data.to_dict(orient='records')
+                    return ToolResult(success=True, data=data, source="network")
+            except Exception as e:
+                logger.error(f"Network block failed: {e}")
+
+        return ToolResult(success=False, error="无可用数据源")
+
+    async def get_stock_info(self, stock_code: str) -> ToolResult:
+        """获取股票信息: network only"""
+        if self._network_client and self._network_client.is_available():
+            try:
+                data = self._network_client.get_stock_info(stock_code)
+                if data:
+                    return ToolResult(success=True, data=data, source="network")
+            except Exception as e:
+                logger.error(f"Network stock info failed: {e}")
+
+        return ToolResult(success=False, error="无可用数据源")
+
+    async def get_trade_dates(
+        self,
+        start_date: str,
+        end_date: str,
+    ) -> ToolResult:
+        """获取交易日历: network only"""
+        if self._network_client and self._network_client.is_available():
+            try:
+                data = self._network_client.get_trade_dates(start_date, end_date)
+                if data is not None:
+                    if hasattr(data, 'to_dict'):
+                        data = data.to_dict(orient='records')
+                    return ToolResult(success=True, data=data, source="network")
+            except Exception as e:
+                logger.error(f"Network trade dates failed: {e}")
+
+        return ToolResult(success=False, error="无可用数据源")
+
+    async def get_etf_list(self) -> ToolResult:
+        """获取ETF列表: network only"""
+        if self._network_client and self._network_client.is_available():
+            try:
+                data = self._network_client.get_etf_list()
+                if data is not None:
+                    if hasattr(data, 'to_dict'):
+                        data = data.to_dict(orient='records')
+                    return ToolResult(success=True, data=data, source="network")
+            except Exception as e:
+                logger.error(f"Network ETF list failed: {e}")
+
+        return ToolResult(success=False, error="无可用数据源")
 
 
 class LocalClient:
@@ -394,4 +605,76 @@ class NetworkClient:
             return None
         except Exception as e:
             logger.warning(f"Failed to get block data ({block_type}): {e}")
+            return None
+
+    def get_stock_info(self, stock_code: str):
+        """
+        获取股票基本信息
+
+        Args:
+            stock_code: 股票代码, 如 "600036"
+
+        Returns:
+            dict: 股票基本信息
+        """
+        q = self._get_quotes()
+        try:
+            df = q.quotes(symbol=stock_code)
+            if df is not None and not df.empty:
+                latest = df.iloc[-1]
+                return {
+                    "symbol": stock_code,
+                    "name": str(latest.get("name", "")),
+                    "close": float(latest.get("close", 0)),
+                    "change": float(latest.get("change", 0)),
+                    "pct_chg": float(latest.get("pct_chg", 0)),
+                    "volume": float(latest.get("vol", 0)),
+                    "amount": float(latest.get("amount", 0)),
+                    "open": float(latest.get("open", 0)),
+                    "high": float(latest.get("high", 0)),
+                    "low": float(latest.get("low", 0)),
+                    "pre_close": float(latest.get("pre_close", 0)),
+                    "date": str(latest.get("date", "")),
+                    "time": str(latest.get("time", "")),
+                }
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get stock info for {stock_code}: {e}")
+            return None
+
+    def get_trade_dates(self, start_date: str, end_date: str):
+        """
+        获取交易日历
+
+        Args:
+            start_date: 开始日期, 格式 "YYYYMMDD"
+            end_date: 结束日期, 格式 "YYYYMMDD"
+
+        Returns:
+            pd.DataFrame: 交易日历数据
+        """
+        q = self._get_quotes()
+        try:
+            df = q.trade_cal(start_date=start_date, end_date=end_date)
+            if df is not None and not df.empty:
+                return df
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get trade dates: {e}")
+            return None
+
+    def get_etf_list(self):
+        """
+        获取ETF列表
+
+        Returns:
+            pd.DataFrame: ETF列表数据
+        """
+        q = self._get_quotes()
+        try:
+            # mootdx 没有直接的 ETF 列表接口，返回空
+            # 可以通过查询特定 ETF 代码实现
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get ETF list: {e}")
             return None
