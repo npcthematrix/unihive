@@ -39,10 +39,18 @@ Write-Host "  - MCP HTTP Gateway:    http://127.0.0.1:18081/mcp" -ForegroundColo
 Write-Host "Press Ctrl+C to stop" -ForegroundColor Yellow
 Write-Host ""
 
+# HTTP mode requires GATEWAY_BEARER_TOKEN; stdio mode does not
+if ([string]::IsNullOrWhiteSpace($env:GATEWAY_BEARER_TOKEN)) {
+    Write-Host "[ERROR] GATEWAY_BEARER_TOKEN is not set; HTTP gateway will fail to start." -ForegroundColor Red
+    Write-Host '  Add to .env (generate via: python -c "import secrets; print(secrets.token_urlsafe(32))"):' -ForegroundColor Yellow
+    Write-Host "    GATEWAY_BEARER_TOKEN=<your-token>" -ForegroundColor Yellow
+    exit 1
+}
+
 # 启动控制台
 Start-Process python -ArgumentList "-m", "src.console_server" -NoNewWindow
 
-# 启动 HTTP gateway
+# 启动 HTTP gateway (child inherits parent env, so token above is forwarded)
 Start-Process python -ArgumentList "-m", "src.gateway_server", "--transport", "http", "--port", "18081" -NoNewWindow
 
 # 等待 gateway HTTP 端口就绪（最多 15 秒）
