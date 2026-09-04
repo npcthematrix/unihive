@@ -33,10 +33,22 @@
 - **pytest 基线**: 修复后 106 passed (无 regress)
 - **initialize 响应**: HTTP mode 下验证含 `protocolVersion` + `serverInfo` + `capabilities` (FastMCP 框架保证, 详见 `docs/superpowers/specs/2026-09-04-unihive-mcp-review-design.md` §3.2)
 
-## 留作 future work (P3)
+## 留作 future work (P3) — 已完成
 
-- JSON 化结构日志 (替换 `%(asctime)s` Formatter 为 JSON)
-- `tdx_call` 等危险 tool 在 FastMCP 层加独立 confirmation hook (目前仅 description 警示)
+- ~~JSON 化结构日志~~ → `dc2c9ae feat(logging): emit JSON lines to the log file`
+  - 新增 `src/log_config.py` (`JsonFormatter` + `configure_logging`), `gateway_server` 改为委托
+  - 文件走 JSON 行 (机器解析), stderr 保持纯文本 (人眼盯屏); 顺带修掉 logs/ 目录不存在时 FileHandler 抛错
+  - 11 个新测试 (`tests/test_log_config.py`)
+- ~~`tdx_call` 等危险 tool 在 FastMCP 层加独立 confirmation hook~~ → `c63d05f feat(registry): gate dangerous tools behind an explicit confirm flag`
+  - 21 个 dangerous tool 的生成签名新增 `confirm: bool = False`; 未传 true 时直接返回 `requires_confirmation` 封装, 不触达上游
+  - `confirm` 不进 `param_specs`, 因此永不转发给上游; 126 个安全工具签名不变
+  - 8 个新测试 (`tests/test_registry.py::TestDangerousConfirmation`)
+
+## 复审时新发现 (未修复)
+
+| ID | 严重度 | 问题 | 证据 |
+|----|-------|------|------|
+| T-6 | P2 | stdio 启动时 FastMCP 反复告警 `Component already exists: tool:<name>@`, 说明 147 个 tool 中存在重名, 后注册者静默覆盖先注册者 | stdio 实测 stderr, 涉及 `get_stock_info` / `get_user_sector` / `get_stock_list_in_sector` / `send_user_block` 等 |
 
 ## 严重问题清单 (按严重度排序, 已全部完成)
 
