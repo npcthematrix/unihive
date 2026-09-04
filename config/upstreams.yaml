@@ -32,11 +32,11 @@ upstreams:
       - watchlist
       - conditional_stock
 
-  rhths_ashare:
+  fuyao_ashare:
     enabled: true
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share"
-    api_key: "${RHTHS_API_KEY}"
+    api_key: "${FUYAO_API_KEY}"
     timeout_seconds: 30
     retry:
       max_attempts: 3
@@ -53,11 +53,11 @@ upstreams:
       - calendar
       - special_data
 
-  rhths_index:
+  fuyao_index:
     enabled: true
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share-index"
-    api_key: "${RHTHS_API_KEY}"
+    api_key: "${FUYAO_API_KEY}"
     timeout_seconds: 30
     retry:
       max_attempts: 3
@@ -68,11 +68,11 @@ upstreams:
       - index_snapshot
       - index_history
 
-  rhths_meta:
+  fuyao_meta:
     enabled: true
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/meta"
-    api_key: "${RHTHS_API_KEY}"
+    api_key: "${FUYAO_API_KEY}"
     timeout_seconds: 30
     retry:
       max_attempts: 3
@@ -81,11 +81,11 @@ upstreams:
       - ticker_search
       - ticker_list
 
-  rhths_fund:
+  fuyao_fund:
     enabled: true
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/fund"
-    api_key: "${RHTHS_API_KEY}"
+    api_key: "${FUYAO_API_KEY}"
     timeout_seconds: 30
     retry:
       max_attempts: 3
@@ -153,65 +153,65 @@ upstream_tool_mapping:
   # 工具与路由均由 config/tools_tdx_tq_local.yaml 自带 upstream_tool_mapping 提供,
   # 这里不再重复声明, 避免与 codegen 产物重名互相覆盖。
 
-  # RHTHS a-share
-  a_share_prices_snapshot:                    {rhths_ashare: get_a_share_prices_snapshot}
-  a_share_prices_historical:                  {rhths_ashare: get_a_share_prices_historical}
-  a_share_corporate_actions_adjustment_factors: {rhths_ashare: get_a_share_corporate_actions_adjustment_factors}
-  a_share_financials_income_statements:       {rhths_ashare: get_a_share_financials_income_statements}
-  a_share_financials_balance_sheets:          {rhths_ashare: get_a_share_financials_balance_sheets}
-  a_share_financials_cash_flow_statements:    {rhths_ashare: get_a_share_financials_cash_flow_statements}
-  a_share_financials_indicators:              {rhths_ashare: get_a_share_financials_indicators}
-  a_share_valuations_snapshot:                {rhths_ashare: get_a_share_valuations_snapshot}
-  a_share_calendar_trading_days:              {rhths_ashare: get_a_share_calendar_trading_days}
-  a_share_special_data_limit_up_pool:         {rhths_ashare: get_a_share_special_data_limit_up_pool}
-  a_share_special_data_limit_down_pool:       {rhths_ashare: get_a_share_special_data_limit_down_pool}
-  a_share_special_data_limit_break_pool:      {rhths_ashare: get_a_share_special_data_limit_break_pool}
-  a_share_special_data_limit_up_ladder:       {rhths_ashare: get_a_share_special_data_limit_up_ladder}
-  a_share_special_data_anomaly_analysis_stock: {rhths_ashare: get_a_share_special_data_anomaly_analysis_stock}
-  a_share_special_data_skyrocket_list:        {rhths_ashare: get_a_share_special_data_skyrocket_list}
-  a_share_special_data_hot_stock_list:        {rhths_ashare: get_a_share_special_data_hot_stock_list}
-  a_share_special_data_hot_stock_list_history: {rhths_ashare: get_a_share_special_data_hot_stock_list_history}
-  a_share_special_data_hot_stock_rank_trend:  {rhths_ashare: get_a_share_special_data_hot_stock_rank_trend}
-  a_share_special_data_dragon_tiger_list:     {rhths_ashare: get_a_share_special_data_dragon_tiger_list}
-  a_share_auction_snapshot:                   {rhths_ashare: get_a_share_auction_snapshot}
-  a_share_auction_short_term_benchmark:       {rhths_ashare: get_a_share_auction_short_term_benchmark}
+  # Fuyao a-share
+  a_share_prices_snapshot:                    {fuyao_ashare: get_a_share_prices_snapshot}
+  a_share_prices_historical:                  {fuyao_ashare: get_a_share_prices_historical}
+  a_share_corporate_actions_adjustment_factors: {fuyao_ashare: get_a_share_corporate_actions_adjustment_factors}
+  a_share_financials_income_statements:       {fuyao_ashare: get_a_share_financials_income_statements}
+  a_share_financials_balance_sheets:          {fuyao_ashare: get_a_share_financials_balance_sheets}
+  a_share_financials_cash_flow_statements:    {fuyao_ashare: get_a_share_financials_cash_flow_statements}
+  a_share_financials_indicators:              {fuyao_ashare: get_a_share_financials_indicators}
+  a_share_valuations_snapshot:                {fuyao_ashare: get_a_share_valuations_snapshot}
+  a_share_calendar_trading_days:              {fuyao_ashare: get_a_share_calendar_trading_days}
+  a_share_special_data_limit_up_pool:         {fuyao_ashare: get_a_share_special_data_limit_up_pool}
+  a_share_special_data_limit_down_pool:       {fuyao_ashare: get_a_share_special_data_limit_down_pool}
+  a_share_special_data_limit_break_pool:      {fuyao_ashare: get_a_share_special_data_limit_break_pool}
+  a_share_special_data_limit_up_ladder:       {fuyao_ashare: get_a_share_special_data_limit_up_ladder}
+  a_share_special_data_anomaly_analysis_stock: {fuyao_ashare: get_a_share_special_data_anomaly_analysis_stock}
+  a_share_special_data_skyrocket_list:        {fuyao_ashare: get_a_share_special_data_skyrocket_list}
+  a_share_special_data_hot_stock_list:        {fuyao_ashare: get_a_share_special_data_hot_stock_list}
+  a_share_special_data_hot_stock_list_history: {fuyao_ashare: get_a_share_special_data_hot_stock_list_history}
+  a_share_special_data_hot_stock_rank_trend:  {fuyao_ashare: get_a_share_special_data_hot_stock_rank_trend}
+  a_share_special_data_dragon_tiger_list:     {fuyao_ashare: get_a_share_special_data_dragon_tiger_list}
+  a_share_auction_snapshot:                   {fuyao_ashare: get_a_share_auction_snapshot}
+  a_share_auction_short_term_benchmark:       {fuyao_ashare: get_a_share_auction_short_term_benchmark}
 
-  # RHTHS a-share-index
-  a_share_index_catalog:                      {rhths_index: get_a_share_index_catalog_ths_index_list}
-  a_share_index_constituents:                 {rhths_index: get_a_share_index_constituents_ths_stock_list}
-  a_share_index_prices_snapshot:              {rhths_index: get_a_share_index_prices_snapshot}
-  a_share_index_prices_historical:            {rhths_index: get_a_share_index_prices_historical}
+  # Fuyao a-share-index
+  a_share_index_catalog:                      {fuyao_index: get_a_share_index_catalog_ths_index_list}
+  a_share_index_constituents:                 {fuyao_index: get_a_share_index_constituents_ths_stock_list}
+  a_share_index_prices_snapshot:              {fuyao_index: get_a_share_index_prices_snapshot}
+  a_share_index_prices_historical:            {fuyao_index: get_a_share_index_prices_historical}
 
-  # RHTHS meta
-  meta_tickers_list:                          {rhths_meta: get_meta_tickers_list}
+  # Fuyao meta
+  meta_tickers_list:                          {fuyao_meta: get_meta_tickers_list}
 
-  # RHTHS fund
-  fund_profile_detail:                        {rhths_fund: get_fund_profile_detail}
-  fund_portfolio_holdings:                    {rhths_fund: get_fund_portfolio_holdings}
-  fund_performance_returns:                   {rhths_fund: get_fund_performance_returns}
-  fund_holders_detail:                        {rhths_fund: get_fund_holders_detail}
-  fund_market_historical:                     {rhths_fund: get_fund_market_historical}
-  fund_companies_detail:                      {rhths_fund: get_fund_companies_detail}
-  fund_portfolio_industry_allocation:         {rhths_fund: get_fund_portfolio_industry_allocation}
-  fund_performance_indicators_historical:     {rhths_fund: get_fund_performance_indicators_historical}
-  fund_performance_drawdowns:                 {rhths_fund: get_fund_performance_drawdowns}
-  fund_holders_top:                           {rhths_fund: get_fund_holders_top}
-  fund_corporate_actions_dividends:           {rhths_fund: get_fund_corporate_actions_dividends}
-  fund_diagnostics_detail:                    {rhths_fund: get_fund_diagnostics_detail}
-  fund_financials_indicators:                 {rhths_fund: get_fund_financials_indicators}
-  fund_financials_income_statements:          {rhths_fund: get_fund_financials_income_statements}
-  fund_financials_balance_sheets:             {rhths_fund: get_fund_financials_balance_sheets}
-  fund_managers_investment_style:             {rhths_fund: get_fund_managers_investment_style}
-  fund_managers_performance:                  {rhths_fund: get_fund_managers_performance}
-  fund_managers_experience:                   {rhths_fund: get_fund_managers_experience}
-  fund_managers_detail:                       {rhths_fund: get_fund_managers_detail}
-  fund_news_article_list:                     {rhths_fund: get_fund_news_article_list}
-  fund_offerings_list:                        {rhths_fund: get_fund_offerings_list}
-  fund_portfolio_stock_history:               {rhths_fund: get_fund_portfolio_stock_history}
-  fund_portfolio_stock_report_dates:          {rhths_fund: get_fund_portfolio_stock_report_dates}
-  fund_portfolio_bond_history:                {rhths_fund: get_fund_portfolio_bond_history}
-  fund_portfolio_bond_report_dates:           {rhths_fund: get_fund_portfolio_bond_report_dates}
-  fund_portfolio_asset_allocation:            {rhths_fund: get_fund_portfolio_asset_allocation}
+  # Fuyao fund
+  fund_profile_detail:                        {fuyao_fund: get_fund_profile_detail}
+  fund_portfolio_holdings:                    {fuyao_fund: get_fund_portfolio_holdings}
+  fund_performance_returns:                   {fuyao_fund: get_fund_performance_returns}
+  fund_holders_detail:                        {fuyao_fund: get_fund_holders_detail}
+  fund_market_historical:                     {fuyao_fund: get_fund_market_historical}
+  fund_companies_detail:                      {fuyao_fund: get_fund_companies_detail}
+  fund_portfolio_industry_allocation:         {fuyao_fund: get_fund_portfolio_industry_allocation}
+  fund_performance_indicators_historical:     {fuyao_fund: get_fund_performance_indicators_historical}
+  fund_performance_drawdowns:                 {fuyao_fund: get_fund_performance_drawdowns}
+  fund_holders_top:                           {fuyao_fund: get_fund_holders_top}
+  fund_corporate_actions_dividends:           {fuyao_fund: get_fund_corporate_actions_dividends}
+  fund_diagnostics_detail:                    {fuyao_fund: get_fund_diagnostics_detail}
+  fund_financials_indicators:                 {fuyao_fund: get_fund_financials_indicators}
+  fund_financials_income_statements:          {fuyao_fund: get_fund_financials_income_statements}
+  fund_financials_balance_sheets:             {fuyao_fund: get_fund_financials_balance_sheets}
+  fund_managers_investment_style:             {fuyao_fund: get_fund_managers_investment_style}
+  fund_managers_performance:                  {fuyao_fund: get_fund_managers_performance}
+  fund_managers_experience:                   {fuyao_fund: get_fund_managers_experience}
+  fund_managers_detail:                       {fuyao_fund: get_fund_managers_detail}
+  fund_news_article_list:                     {fuyao_fund: get_fund_news_article_list}
+  fund_offerings_list:                        {fuyao_fund: get_fund_offerings_list}
+  fund_portfolio_stock_history:               {fuyao_fund: get_fund_portfolio_stock_history}
+  fund_portfolio_stock_report_dates:          {fuyao_fund: get_fund_portfolio_stock_report_dates}
+  fund_portfolio_bond_history:                {fuyao_fund: get_fund_portfolio_bond_history}
+  fund_portfolio_bond_report_dates:           {fuyao_fund: get_fund_portfolio_bond_report_dates}
+  fund_portfolio_asset_allocation:            {fuyao_fund: get_fund_portfolio_asset_allocation}
 
   # Tushare
   tushare_call:                               {tushare: sdk_call}
@@ -221,10 +221,10 @@ upstream_tool_mapping:
 # 路由配置 (带 fallback 链的 gateway_tool)
 routing:
   get_realtime_quote:
-    chain: ["tdx_local", "rhths_ashare"]
+    chain: ["tdx_local", "fuyao_ashare"]
     description: "实时行情"
   get_daily_bar:
-    chain: ["tdx_local", "rhths_ashare"]
+    chain: ["tdx_local", "fuyao_ashare"]
     description: "日K线行情"
   get_minute_bar:
     chain: ["tdx_local"]
@@ -233,43 +233,43 @@ routing:
     chain: ["tdx_local"]
     description: "逐笔成交明细"
   get_index:
-    chain: ["tdx_local", "rhths_index"]
+    chain: ["tdx_local", "fuyao_index"]
     description: "指数K线"
   get_index_snapshot:
-    chain: ["rhths_index"]
+    chain: ["fuyao_index"]
     description: "指数快照"
   get_index_history:
-    chain: ["rhths_index"]
+    chain: ["fuyao_index"]
     description: "指数历史"
   get_etf:
-    chain: ["tdx_local", "rhths_fund"]
+    chain: ["tdx_local", "fuyao_fund"]
     description: "ETF行情"
   get_fund_snapshot:
-    chain: ["rhths_fund"]
+    chain: ["fuyao_fund"]
     description: "基金快照"
   get_fund_nav:
-    chain: ["rhths_fund"]
+    chain: ["fuyao_fund"]
     description: "基金净值"
   get_fundamentals:
-    chain: ["rhths_ashare"]
+    chain: ["fuyao_ashare"]
     description: "基本面数据"
   get_valuation:
-    chain: ["rhths_ashare"]
+    chain: ["fuyao_ashare"]
     description: "估值快照"
   get_announcement:
-    chain: ["rhths_ashare"]
+    chain: ["fuyao_ashare"]
     description: "公告"
   search_stock:
-    chain: ["tdx_local", "rhths_meta"]
+    chain: ["tdx_local", "fuyao_meta"]
     description: "股票搜索"
   get_market_stats:
     chain: ["tdx_local"]
     description: "市场统计"
   get_limit_up_pool:
-    chain: ["rhths_ashare"]
+    chain: ["fuyao_ashare"]
     description: "涨停池"
   get_sector_flow:
-    chain: ["rhths_ashare"]
+    chain: ["fuyao_ashare"]
     description: "板块资金流"
 
 # 对外暴露的工具清单
