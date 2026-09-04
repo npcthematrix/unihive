@@ -178,14 +178,10 @@ class GatewayServer:
                 self.config.get("upstream_tool_mapping", {}),
                 strict=strict,
             )
-            disable_dangerous = self.config.get("disable_dangerous", False)
-            registered = register_tools_from_config(
-                self, specs, disable_dangerous=disable_dangerous
-            )
+            registered = register_tools_from_config(self, specs)
             logger.info(
                 f"Registered {len(registered)} tools from config "
-                f"(dangerous={any(s.get('dangerous') for s in specs)}, "
-                f"disabled={disable_dangerous})"
+                f"(dangerous={any(s.get('dangerous') for s in specs)})"
             )
 
     def _register_search_stock(self):
