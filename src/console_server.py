@@ -6,14 +6,13 @@ UniHive Console Server - 轻量管理控制台后端
   - 18080: 本控制台（管理 API + 静态 HTML）
   - 18081: MCP Streamable HTTP 网关（由 start_gateway.ps1 或 start_all.ps1 单独启动）
 """
-import asyncio
 import json
 import logging
 import os
 import sys
 import time
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 import httpx
 import yaml
@@ -101,8 +100,19 @@ def get_cache_stats() -> dict:
         return {"enabled": False, "error": str(e), "timestamp": int(time.time())}
 
 
+_probe_cache: dict[str, tuple[float, dict]] = {}
+_PROBE_TTL_SECONDS = 5.0
+_PROBE_ERROR_MAX_CHARS = 200
+
+
 def _probe_upstream(name: str, cfg: dict) -> dict:
-    """实际探测上游可用性和延迟。"""
+    """实际探测上游可用性和延迟，结果按名称缓存 5s。"""
+    cached = _probe_cache.get(name)
+    if cached is not None:
+        ts, payload = cached
+        if (time.monotonic() - ts) < _PROBE_TTL_SECONDS:
+            return payload
+
     upstream_type = cfg.get("type", "")
     base_url = cfg.get("base_url", "")
     result = {
@@ -114,23 +124,27 @@ def _probe_upstream(name: str, cfg: dict) -> dict:
     }
     if upstream_type != "http" or not base_url:
         result["status"] = "configured" if cfg.get("enabled") else "disabled"
-        return result
-    health_url = base_url.rstrip("/") + "/health"
-    try:
-        t0 = time.monotonic()
-        resp = httpx.get(health_url, timeout=5.0)
-        result["latency_ms"] = round((time.monotonic() - t0) * 1000)
-        if resp.status_code == 200:
-            result["status"] = "online"
-        else:
-            result["status"] = "degraded"
-            result["last_error"] = f"HTTP {resp.status_code}"
-    except httpx.TimeoutException:
-        result["status"] = "offline"
-        result["last_error"] = "连接超时 (5s)"
-    except Exception as e:
-        result["status"] = "offline"
-        result["last_error"] = str(e)[:80]
+    else:
+        health_url = base_url.rstrip("/") + "/health"
+        try:
+            t0 = time.monotonic()
+            resp = httpx.get(health_url, timeout=5.0)
+            result["latency_ms"] = round((time.monotonic() - t0) * 1000)
+            if resp.status_code == 200:
+                result["status"] = "online"
+            else:
+                result["status"] = "degraded"
+                result["last_error"] = f"HTTP {resp.status_code}"
+        except httpx.TimeoutException:
+            result["status"] = "offline"
+            result["last_error"] = "连接超时 (5s)"
+        except Exception as e:
+            result["status"] = "offline"
+            full = str(e)
+            logger.warning(f"[{name}] upstream probe failed: {full}")
+            result["last_error"] = full[:_PROBE_ERROR_MAX_CHARS]
+
+    _probe_cache[name] = (time.monotonic(), result)
     return result
 
 
@@ -233,7 +247,7 @@ def main():
         os.environ["PYTHONIOENCODING"] = "utf-8"
     logger.info(f"Console listening on http://127.0.0.1:{CONSOLE_PORT}")
     logger.info(f"MCP HTTP gateway expected at {MCP_URL} (separate process)")
-    server = HTTPServer(("127.0.0.1", CONSOLE_PORT), ConsoleHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", CONSOLE_PORT), ConsoleHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -45,5 +45,26 @@ Start-Process python -ArgumentList "-m", "src.console_server" -NoNewWindow
 # 启动 HTTP gateway
 Start-Process python -ArgumentList "-m", "src.gateway_server", "--transport", "http", "--port", "18081" -NoNewWindow
 
-Start-Sleep -Seconds 3
+# 等待 gateway HTTP 端口就绪（最多 15 秒）
+$GatewayReady = $false
+for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Milliseconds 500
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.BeginConnect("127.0.0.1", 18081, $null, $null) | Out-Null
+        Start-Sleep -Milliseconds 50
+        if ($tcp.Connected) {
+            $GatewayReady = $true
+            $tcp.Close()
+            break
+        }
+        $tcp.Close()
+    } catch { }
+}
+if ($GatewayReady) {
+    Write-Host "Gateway HTTP port 18081 is ready" -ForegroundColor Green
+} else {
+    Write-Host "[WARN] Gateway HTTP port 18081 not ready after 15s, continuing anyway" -ForegroundColor Yellow
+}
+
 Start-Process "http://127.0.0.1:18080"

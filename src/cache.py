@@ -28,6 +28,7 @@ class Cache:
     """SQLite 缓存实现"""
 
     STATS_FILE = "logs/cache_stats.json"
+    STATS_FLUSH_INTERVAL = 50
 
     def __init__(self, config: CacheConfig):
         self.config = config
@@ -38,6 +39,7 @@ class Cache:
         self._initialized = False
         self._hits = 0
         self._misses = 0
+        self._dirty_events = 0
 
     @property
     def hits(self) -> int:
@@ -59,8 +61,21 @@ class Cache:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"hits": self._hits, "misses": self._misses}, f)
             Path(tmp).replace(self.STATS_FILE)
+            self._dirty_events = 0
         except Exception as e:
             logger.warning(f"Failed to persist cache stats: {e}")
+
+    def _record_hit(self):
+        self._hits += 1
+        self._dirty_events += 1
+        if self._dirty_events >= self.STATS_FLUSH_INTERVAL:
+            self._persist_stats()
+
+    def _record_miss(self):
+        self._misses += 1
+        self._dirty_events += 1
+        if self._dirty_events >= self.STATS_FLUSH_INTERVAL:
+            self._persist_stats()
 
     async def initialize(self):
         """异步初始化数据库连接"""
@@ -112,12 +127,10 @@ class Cache:
         """
         cached = await self.get(key)
         if cached is not None:
-            self._hits += 1
-            self._persist_stats()
+            self._record_hit()
             return cached, True
 
-        self._misses += 1
-        self._persist_stats()
+        self._record_miss()
         value = await factory()
         if value is not None:
             await self.set(key, value, ttl=ttl)
@@ -250,6 +263,8 @@ class Cache:
 
     async def close(self):
         """关闭数据库连接"""
+        if self._dirty_events > 0:
+            self._persist_stats()
         if self._engine:
             await self._engine.dispose()
             self._engine = None

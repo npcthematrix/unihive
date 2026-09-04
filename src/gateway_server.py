@@ -5,10 +5,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
 
+import uvicorn
 from fastmcp import FastMCP
 
 from .cache import Cache, CacheConfig
@@ -231,7 +233,6 @@ class GatewayServer:
         await self.initialize()
         asyncio.create_task(self._health_check_loop())
         mcp_app = self.mcp.http_app(path=mount_path)
-        import uvicorn
         config = uvicorn.Config(mcp_app, host=host, port=port, log_level="info")
         await uvicorn.Server(config).serve()
 
@@ -256,7 +257,6 @@ class GatewayServer:
 
 
 async def async_main(transport: str = "stdio", host: str = "127.0.0.1", port: int = 18080):
-    import os
     if sys.platform == "win32":
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
