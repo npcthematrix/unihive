@@ -286,7 +286,7 @@ tools:
     required: true
     type: str
 - name: refresh_cache
-  description: refresh_cache
+  description: "⚠️ DANGER: TQ 刷新本地数据缓存, 清空并重建. 不可逆."
   routing: refresh_cache
   upstream_tool_mapping:
     tdx_tq_local: refresh_cache
@@ -300,7 +300,7 @@ tools:
     required: false
     type: bool
 - name: refresh_kline
-  description: refresh_kline
+  description: "⚠️ DANGER: TQ 刷新本地 K 线数据. 不可逆."
   routing: refresh_kline
   upstream_tool_mapping:
     tdx_tq_local: refresh_kline
@@ -314,7 +314,7 @@ tools:
     required: true
     type: str
 - name: download_file
-  description: download_file
+  description: "⚠️ DANGER: TQ 从服务器下载文件到本地, 覆盖已有同名文件."
   routing: download_file
   upstream_tool_mapping:
     tdx_tq_local: download_file
@@ -331,7 +331,7 @@ tools:
     required: false
     type: int
 - name: send_message
-  description: send_message
+  description: "⚠️ DANGER: TQ 发送消息到 TQ 终端, 用户会立即看到."
   routing: send_message
   upstream_tool_mapping:
     tdx_tq_local: send_message
@@ -342,7 +342,7 @@ tools:
     required: true
     type: str
 - name: send_file
-  description: send_file
+  description: "⚠️ DANGER: TQ 发送文件到 TQ 终端."
   routing: send_file
   upstream_tool_mapping:
     tdx_tq_local: send_file
@@ -353,7 +353,7 @@ tools:
     required: true
     type: str
 - name: send_warn
-  description: send_warn
+  description: "⚠️ DANGER: TQ 弹出警告消息到 TQ 终端, 不可撤销."
   routing: send_warn
   upstream_tool_mapping:
     tdx_tq_local: send_warn
@@ -388,7 +388,7 @@ tools:
     required: true
     type: int
 - name: send_bt_data
-  description: send_bt_data
+  description: "⚠️ DANGER: TQ 发送回测数据到 TQ 终端."
   routing: send_bt_data
   upstream_tool_mapping:
     tdx_tq_local: send_bt_data
@@ -425,7 +425,7 @@ tools:
     required: false
     type: bool
 - name: exec_to_tdx
-  description: exec_to_tdx
+  description: "⚠️ DANGER: TQ 调用 TDX 函数 (任意代码执行), 不可逆."
   routing: exec_to_tdx
   upstream_tool_mapping:
     tdx_tq_local: exec_to_tdx
@@ -461,7 +461,7 @@ tools:
     required: true
     type: str
 - name: rename_sector
-  description: rename_sector
+  description: "⚠️ DANGER: TQ 重命名自定义板块, 修改本地数据. 不可逆."
   routing: rename_sector
   upstream_tool_mapping:
     tdx_tq_local: rename_sector
@@ -475,7 +475,7 @@ tools:
     required: true
     type: str
 - name: clear_sector
-  description: clear_sector
+  description: "⚠️ DANGER: TQ 清空自定义板块内全部股票, 不可逆."
   routing: clear_sector
   upstream_tool_mapping:
     tdx_tq_local: clear_sector
@@ -657,7 +657,7 @@ tools:
     required: true
     type: List[str]
 - name: formula_set_data
-  description: formula_set_data
+  description: "⚠️ DANGER: TQ 写入公式数据, 修改本地公式存储. 不可逆."
   routing: formula_set_data
   upstream_tool_mapping:
     tdx_tq_local: formula_set_data
@@ -680,7 +680,7 @@ tools:
     required: false
     type: int
 - name: formula_set_data_info
-  description: formula_set_data_info
+  description: "⚠️ DANGER: TQ 写入公式元数据, 修改本地存储. 不可逆."
   routing: formula_set_data_info
   upstream_tool_mapping:
     tdx_tq_local: formula_set_data_info
@@ -963,7 +963,7 @@ tools:
     required: true
     type: int
 - name: order_stock
-  description: order_stock
+  description: "⚠️ DANGER: TQ 下单买入/卖出股票, 真实资金变动, 不可撤销."
   routing: order_stock
   upstream_tool_mapping:
     tdx_tq_local: order_stock
@@ -992,7 +992,7 @@ tools:
     required: false
     type: int
 - name: cancel_order_stock
-  description: cancel_order_stock
+  description: "⚠️ DANGER: TQ 撤销未成交委托, 修改订单状态."
   routing: cancel_order_stock
   upstream_tool_mapping:
     tdx_tq_local: cancel_order_stock
