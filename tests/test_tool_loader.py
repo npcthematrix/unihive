@@ -111,25 +111,62 @@ def test_get_cache_ttl_empty_key_returns_none():
     assert get_cache_ttl(config, "") is None
 
 
-def test_derive_fallback_chain_single_upstream():
-    from src.tool_loader import derive_fallback_chain
-    config = {"upstreams": {"t1": {"priority": 1}}}
-    assert derive_fallback_chain(config, "t1") == ["t1"]
-
-
-def test_derive_fallback_chain_multiple_upstreams():
-    from src.tool_loader import derive_fallback_chain
+def test_derive_routing_chain_from_explicit_routing_config():
+    """When YAML routing.X.chain is defined, return it verbatim."""
+    from src.tool_loader import derive_routing_chain
     config = {
-        "upstreams": {
-            "t1": {"priority": 1},
-            "t2": {"priority": 2},
-            "t3": {"priority": 3},
-        }
+        "routing": {
+            "get_minute_bar": {"chain": ["tokenwave_tdx", "tdx_local"]},
+        },
+        "upstream_tool_mapping": {
+            "get_minute_bar": {"tokenwave_tdx": "x", "tdx_local": "y",
+                               "fuyao_fund": "z"},  # noise — chain should win
+        },
     }
-    assert derive_fallback_chain(config, "t1") == ["t1", "t2", "t3"]
+    assert derive_routing_chain(config, "get_minute_bar") == [
+        "tokenwave_tdx", "tdx_local",
+    ]
 
 
-def test_derive_fallback_chain_missing_upstream_returns_empty():
-    from src.tool_loader import derive_fallback_chain
-    config = {"upstreams": {"t1": {"priority": 1}}}
-    assert derive_fallback_chain(config, "missing") == []
+def test_derive_routing_chain_falls_back_to_tool_mapping_keys():
+    """When routing.X is missing, derive chain from upstream_tool_mapping keys (insertion order)."""
+    from src.tool_loader import derive_routing_chain
+    config = {
+        "upstream_tool_mapping": {
+            "search_stock": {"tdx_local": "a", "fuyao_meta": "b"},
+        },
+    }
+    assert derive_routing_chain(config, "search_stock") == [
+        "tdx_local", "fuyao_meta",
+    ]
+
+
+def test_derive_routing_chain_unknown_routing_key_returns_empty():
+    from src.tool_loader import derive_routing_chain
+    config = {
+        "routing": {"get_minute_bar": {"chain": ["tokenwave_tdx"]}},
+        "upstream_tool_mapping": {},
+    }
+    assert derive_routing_chain(config, "no_such_tool") == []
+
+
+def test_derive_routing_chain_empty_when_nothing_defined():
+    """Empty config — neither routing nor upstream_tool_mapping has the key."""
+    from src.tool_loader import derive_routing_chain
+    config = {"routing": {}, "upstream_tool_mapping": {}}
+    assert derive_routing_chain(config, "anything") == []
+
+
+def test_derive_routing_chain_routing_block_without_chain_field_returns_empty():
+    """If routing.X exists but has no chain field, return empty (don't fall back to mapping)."""
+    from src.tool_loader import derive_routing_chain
+    config = {
+        "routing": {"get_minute_bar": {"description": "分钟K线行情 (TDX)"}},
+        "upstream_tool_mapping": {
+            "get_minute_bar": {"tokenwave_tdx": "x"},
+        },
+    }
+    # Spec decision: explicit routing block with no chain = no fallback.
+    # The router (`src/router.py:_get_routing_chain`) treats empty chain as "no route",
+    # so we match that contract here. Console callers see empty chain consistently.
+    assert derive_routing_chain(config, "get_minute_bar") == []

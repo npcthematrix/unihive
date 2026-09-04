@@ -49,19 +49,28 @@ def get_cache_ttl(config: dict, ttl_key: str | None) -> int | None:
     return ttl.get(ttl_key)
 
 
-def derive_fallback_chain(config: dict, upstream: str) -> list[str]:
-    """Derive the fallback chain for ``upstream`` by sorting all upstreams
-    by priority (ascending). The requested upstream comes first, then all
-    others in priority order. Returns empty list if upstream not found.
+def derive_routing_chain(config: dict, routing_key: str) -> list[str]:
+    """Return the routing chain the gateway router would walk for ``routing_key``.
+
+    Resolution order (matches ``src/router.py:_get_routing_chain``):
+    1. If ``routing[routing_key].chain`` is defined (list, possibly empty), return it.
+    2. If ``routing[routing_key]`` exists but has no ``chain`` field, return ``[]``.
+    3. Else return ``upstream_tool_mapping[routing_key].keys()`` in insertion order.
+    4. Else return ``[]``.
+
+    This is intentionally NOT a "fallback by priority" — the router walks a fixed
+    list of upstreams that actually implement the tool, not every upstream sorted
+    by some priority field. Filtering by capability happens upstream via
+    ``upstream_tool_mapping``.
     """
-    upstreams = config.get("upstreams") or {}
-    if upstream not in upstreams:
+    routing = config.get("routing") or {}
+    entry = routing.get(routing_key)
+    if isinstance(entry, dict):
+        if "chain" in entry:
+            return list(entry.get("chain") or [])
+        # routing entry exists but no chain field -> explicit routing block without chain
         return []
-    # Sort by priority, ascending
-    sorted_upstreams = sorted(upstreams.items(), key=lambda kv: kv[1].get("priority", 999))
-    names = [name for name, _ in sorted_upstreams]
-    # Move requested upstream to front if present
-    if upstream in names:
-        names.remove(upstream)
-        names.insert(0, upstream)
-    return names
+    mapping = config.get("upstream_tool_mapping") or {}
+    if routing_key in mapping:
+        return list(mapping[routing_key].keys())
+    return []
