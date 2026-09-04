@@ -340,9 +340,10 @@ tools:
   - {name: tdx_call, description: "⚠️ DANGER: TDX 通用接口透传, 调用前必须经用户明确同意. 可执行任意 TDX API (含可能的写操作), 不可逆.", routing: tdx_call, params: [{name: path, type: str, required: true}, {name: method, type: str, required: false}, {name: query, type: str, required: false}, {name: body, type: str, required: false}, {name: raw, type: bool, required: false}], dangerous: true}
 
   # === TokenWave TDX (8) ===
-  # 5 个新增入口 — 3 个完全没暴露 (get_financial_data / get_block_data / get_trade_dates),
-  # 2 个 routing chain 是死链 (get_realtime_quote / get_minute_bar 之前只在 routing: 块里
-  # 声明, 没有 tools: 入口, 所以从未通过 gateway 暴露)
+  # 5 个新增入口 — get_financial_data 由 TQ-Local codegen 接管 (避免重名),
+  # 另 4 个完全没暴露 (get_block_data / get_trade_dates / get_daily_bar / 2 个 routing 死链
+  # get_realtime_quote / get_minute_bar — 之前只在 routing: 块里声明, 没有 tools: 入口,
+  # 所以从未通过 gateway 暴露)
   - {name: get_realtime_quote, description: "实时行情 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_realtime_quote, params: [{name: stock_code, type: str, required: true, normalize: code}], cache_ttl_key: realtime_quote}
   - {name: get_minute_bar, description: "分钟K线 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_minute_bar, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: frequency, type: str, required: false}], cache_ttl_key: minute_bar}
   - {name: get_daily_bar, description: "日K线 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_daily_bar, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: frequency, type: str, required: false}], cache_ttl_key: daily_bar}

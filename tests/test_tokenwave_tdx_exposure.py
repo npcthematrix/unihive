@@ -2,7 +2,6 @@
 
 Validates that all tokenwave_tdx tools are properly exposed via the gateway.
 """
-import pytest
 
 
 def test_all_tokenwave_tools_in_tools_list():
