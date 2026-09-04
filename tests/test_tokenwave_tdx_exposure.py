@@ -42,3 +42,42 @@ def test_all_tokenwave_tools_in_tools_list():
 
     # Should have exactly 6 tokenwave_tdx tools
     assert len(expected_tools) == 6
+
+
+def test_realtime_quote_chain_starts_with_tokenwave():
+    """get_realtime_quote routing chain must start with tokenwave_tdx."""
+    import yaml
+
+    config_path = "config/upstreams.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    routing = config.get("routing", {})
+    chain = routing.get("get_realtime_quote", {}).get("chain", [])
+    assert chain and chain[0] == "tokenwave_tdx", f"Expected tokenwave_tdx first, got {chain}"
+
+
+def test_minute_bar_chain_starts_with_tokenwave():
+    """get_minute_bar routing chain must start with tokenwave_tdx."""
+    import yaml
+
+    config_path = "config/upstreams.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    routing = config.get("routing", {})
+    chain = routing.get("get_minute_bar", {}).get("chain", [])
+    assert chain and chain[0] == "tokenwave_tdx", f"Expected tokenwave_tdx first, got {chain}"
+
+
+def test_daily_bar_chain_starts_with_tokenwave():
+    """get_daily_bar routing chain must start with tokenwave_tdx."""
+    import yaml
+
+    config_path = "config/upstreams.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    routing = config.get("routing", {})
+    chain = routing.get("get_daily_bar", {}).get("chain", [])
+    assert chain and chain[0] == "tokenwave_tdx", f"Expected tokenwave_tdx first, got {chain}"

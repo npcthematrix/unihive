@@ -254,13 +254,13 @@ upstream_tool_mapping:
 # 路由配置 (带 fallback 链的 gateway_tool)
 routing:
   get_realtime_quote:
-    chain: ["tdx_local", "fuyao_ashare"]
+    chain: ["tokenwave_tdx", "tdx_local", "fuyao_ashare"]
     description: "实时行情"
   get_daily_bar:
-    chain: ["tdx_local", "fuyao_ashare"]
+    chain: ["tokenwave_tdx", "tdx_local", "fuyao_ashare"]
     description: "日K线行情"
   get_minute_bar:
-    chain: ["tdx_local"]
+    chain: ["tokenwave_tdx", "tdx_local"]
     description: "分钟K线行情 (TDX)"
   get_trade_detail:
     chain: ["tdx_local"]
