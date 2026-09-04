@@ -34,7 +34,7 @@ class TokenWaveTdxClient:
 
     @property
     def is_available(self) -> bool:
-        return self._status == UpstreamStatus.AVAILABLE
+        return self._status == UpstreamStatus.HEALTHY
 
     async def start(self):
         """初始化客户端"""
@@ -54,7 +54,7 @@ class TokenWaveTdxClient:
         network_ok = self._network_client and self._network_client.is_available()
 
         if local_ok or network_ok:
-            self._status = UpstreamStatus.AVAILABLE
+            self._status = UpstreamStatus.HEALTHY
         else:
             self._status = UpstreamStatus.UNAVAILABLE
 
