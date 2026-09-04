@@ -609,7 +609,7 @@
                 <div class="onboarding-content">
 
                     <h3 id="sec-quickstart">1. 快速开始</h3>
-                    <p>UniHive MCP 是一个统一的金融数据网关，把通达信、同花顺、Tushare 等多个数据源聚合在同一个 MCP 接口后面。</p>
+                    <p>UniHive MCP 是一个统一的金融数据网关，把通达信、同花顺等数据源聚合在同一个 MCP 接口后面。</p>
 
                     <h4>1.1 启动网关</h4>
                     <p>网关默认以 <strong>HTTP 模式</strong>启动（推荐），同时也支持 STDIO 模式。在项目根目录下运行：</p>
@@ -844,7 +844,6 @@ print(match.data)</pre>
             'fuyao_index':        '同花顺-a-share-index-mcp',
             'fuyao_meta':         '同花顺-meta-mcp',
             'fuyao_fund':         '同花顺-fund-mcp',
-            'tushare':            'Tushare',
         };
         function renderUpstreamsTable() {
             const tbody = document.getElementById('upstreams-body');
@@ -1001,7 +1000,7 @@ print(match.data)</pre>
         function stopAutoRefresh() {
             if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
         }
-        const GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'tokenwave_tdx', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund', 'tushare'];
+        const GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'tokenwave_tdx', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
         const GROUP_META = {
             'tdx_local':          { title: '通达信-行情', desc: '行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call)' },
             'tdx_tq_local':        { title: '通达信-交易终端', desc: '行情/自选/交易/公式系统, 含 17 个高风险工具 (write ops)' },
@@ -1010,7 +1009,6 @@ print(match.data)</pre>
             'fuyao_index':        { title: '同花顺-a-share-index-mcp', desc: '同花顺指数/板块目录/成分股/历史K线, 端点: /mcp/a-share-index' },
             'fuyao_meta':         { title: '同花顺-meta-mcp', desc: '跨宇宙全量 ticker 列表, 端点: /mcp/meta' },
             'fuyao_fund':         { title: '同花顺-fund-mcp',   desc: '公募基金持仓/业绩/经理/财务, 端点: /mcp/fund' },
-            'tushare':            { title: 'Tushare',    desc: '通用 API 透传 (sdk_call / sdk_schema / sdk_search)' },
         };
         const ALL_KEY = '__all__';
         let allTools = [];

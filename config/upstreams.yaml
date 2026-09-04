@@ -105,22 +105,6 @@ upstreams:
       - fund_snapshot
       - fund_history
 
-  tushare:
-    enabled: true
-    description: "Tushare: 通用 API 透传 (sdk_call / sdk_schema / sdk_search), 3 个 gateway 工具, 含财务/公告/通用"
-    type: "npx"
-    package: "@tushare/mcp"
-    command: ["npx", "-y", "@tushare/mcp"]
-    env:
-      TUSHARE_TOKEN: "${TUSHARE_TOKEN}"
-    timeout_seconds: 60
-    retry:
-      max_attempts: 2
-      backoff_base: 3
-    capabilities:
-      - fundamentals
-      - announcement
-
   tokenwave_tdx:
     enabled: true
     description: "通达信-MooTDX: 基于 mootdx 的行情/K线/财务/板块/日历, 9 个 gateway 接口 (含 2 个 tokenwave_ 前缀命名避开 TQ-Local 冲突), local 优先 + network 兜底"
@@ -243,11 +227,6 @@ upstream_tool_mapping:
   fund_portfolio_bond_history:                {fuyao_fund: get_fund_portfolio_bond_history}
   fund_portfolio_bond_report_dates:           {fuyao_fund: get_fund_portfolio_bond_report_dates}
   fund_portfolio_asset_allocation:            {fuyao_fund: get_fund_portfolio_asset_allocation}
-
-  # Tushare
-  tushare_call:                               {tushare: sdk_call}
-  tushare_schema:                             {tushare: sdk_schema}
-  tushare_search:                             {tushare: sdk_search}
 
   # TokenWave TDX 工具
   get_realtime_quote:                        {tokenwave_tdx: get_realtime_quote}
@@ -426,10 +405,6 @@ tools:
   - {name: fund_portfolio_bond_report_dates, description: "基金债券持仓报告日", routing: fund_portfolio_bond_report_dates, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
   - {name: fund_portfolio_asset_allocation, description: "基金资产配置", routing: fund_portfolio_asset_allocation, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
 
-  # === Tushare (3) ===
-  - {name: tushare_call, description: "Tushare 通用 API 调用", routing: tushare_call, params: [{name: api_name, type: str, required: true}, {name: params, type: str, required: false}, {name: fields, type: str, required: false}]}
-  - {name: tushare_schema, description: "Tushare API Schema 查询", routing: tushare_schema, params: [{name: api_name, type: str, required: true}]}
-  - {name: tushare_search, description: "Tushare API 关键词搜索", routing: tushare_search, params: [{name: keyword, type: str, required: true}]}
 
 # 全局开关
 disable_dangerous: false
