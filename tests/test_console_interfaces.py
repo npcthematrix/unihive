@@ -2,8 +2,8 @@
 from unittest.mock import patch
 
 
-def test_get_interfaces_returns_142_tools():
-    """Regression: /api/interfaces returns 142 tools (84 manual + 58 generated).
+def test_get_interfaces_returns_147_tools():
+    """Regression: /api/interfaces returns 147 tools (89 manual + 58 generated).
 
     Generated TQ-Local tools (tools_tdx_tq_local.yaml) are the authoritative
     source for any shared tool name — manual upstreams.yaml must not redeclare
@@ -18,7 +18,7 @@ def test_get_interfaces_returns_142_tools():
         from src.console_server import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 142, f"Expected 142 tools, got {tool_count}"
+        assert tool_count == 147, f"Expected 147 tools, got {tool_count}"
 
 
 def test_merged_tool_specs_have_unique_names():
