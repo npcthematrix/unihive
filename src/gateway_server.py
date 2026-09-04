@@ -20,7 +20,7 @@ from .normalizer import Normalizer
 from .registry import register_tools_from_config, validate_specs
 from .router import Router
 from .upstream_client import UpstreamClient, UpstreamConfig, UpstreamStatus
-from .rhths_client import RhthsClient, RhthsConfig
+from .fuyao_client import FuyaoClient, FuyaoConfig
 from .http_jsonrpc_client import HttpJsonRpcClient, HttpJsonRpcConfig
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class GatewayServer:
         if errors:
             for e in errors:
                 logger.warning(f"Config validation: {e}")
-        self.upstreams: dict[str, UpstreamClient | RhthsClient | HttpJsonRpcClient] = {}
+        self.upstreams: dict[str, UpstreamClient | FuyaoClient | HttpJsonRpcClient] = {}
         self.cache: Cache | None = None
         self.router: Router | None = None
         self.mcp: FastMCP | None = None
@@ -61,14 +61,14 @@ class GatewayServer:
 
             if cfg.get("type") == "http":
                 # HTTP MCP 客户端
-                rhths_cfg = RhthsConfig(
+                fuyao_cfg = FuyaoConfig(
                     name=name,
                     base_url=cfg["base_url"],
                     api_key=cfg.get("api_key", ""),
                     timeout_seconds=cfg.get("timeout_seconds", 30),
                     max_retry=cfg.get("retry", {}).get("max_attempts", 3),
                 )
-                client = RhthsClient(rhths_cfg)
+                client = FuyaoClient(fuyao_cfg)
             elif cfg.get("type") == "http_jsonrpc":
                 # 通用 HTTP JSON-RPC 客户端（如 TQ-Local 通达信本地服务）
                 jsonrpc_cfg = HttpJsonRpcConfig(
@@ -188,8 +188,8 @@ class GatewayServer:
         @self.mcp.tool()
         async def search_stock(keyword: str) -> dict:
             """【按关键词模糊搜索】输入股票名称或代码片段 (如 '茅台'/'600000'), 返回 Top 10 匹配股票. 适合用户问"某只股票"时调用. 全量列表请用 meta_tickers_list."""
-            if "rhths_meta" in self.upstreams:
-                client = self.upstreams["rhths_meta"]
+            if "fuyao_meta" in self.upstreams:
+                client = self.upstreams["fuyao_meta"]
                 if client.is_available:
                     result = await client.call_tool(
                         "get_meta_tickers_search",
@@ -199,7 +199,7 @@ class GatewayServer:
                         return Normalizer.to_gateway_response(
                             success=True,
                             data=result.data,
-                            source="rhths_meta",
+                            source="fuyao_meta",
                         )
             return await self._execute_cached(
                 "search_stock",

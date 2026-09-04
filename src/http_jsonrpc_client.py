@@ -28,7 +28,7 @@ class HttpJsonRpcConfig:
 class HttpJsonRpcClient:
     """通用 HTTP JSON-RPC 客户端。
 
-    与 RhthsClient 不同的关键点：不发 `tools/call`，直接把 tool_name
+    与 FuyaoClient 不同的关键点：不发 `tools/call`，直接把 tool_name
     作为 JSON-RPC `method` 转发，`arguments` 作为 `params`。
     """
 

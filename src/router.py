@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .upstream_client import ToolResult, UpstreamClient
-from .rhths_client import RhthsClient
+from .fuyao_client import FuyaoClient
 from .http_jsonrpc_client import HttpJsonRpcClient
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class Router:
 
     def __init__(
         self,
-        upstreams: dict[str, UpstreamClient | RhthsClient | HttpJsonRpcClient],
+        upstreams: dict[str, UpstreamClient | FuyaoClient | HttpJsonRpcClient],
         routing_config: dict[str, dict],
         upstream_tool_mapping: dict[str, dict[str, str]] | None = None,
     ):

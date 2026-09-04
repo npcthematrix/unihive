@@ -1,5 +1,5 @@
 """
-RHTHS (同花顺) HTTP MCP Client
+FUYAO (同花顺) HTTP MCP Client
 连接同花顺金融数据服务的 HTTP MCP 端点
 """
 import httpx
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class RhthsConfig:
+class FuyaoConfig:
     """RHTHS 上游配置"""
     name: str
     base_url: str
@@ -24,10 +24,10 @@ class RhthsConfig:
     max_retry: int = 3
 
 
-class RhthsClient:
+class FuyaoClient:
     """同花顺 HTTP MCP 客户端"""
 
-    def __init__(self, config: RhthsConfig):
+    def __init__(self, config: FuyaoConfig):
         self.config = config
         self.name = config.name
         self._status = UpstreamStatus.UNKNOWN
