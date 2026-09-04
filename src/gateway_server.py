@@ -48,6 +48,7 @@ class GatewayServer:
         self.router: Router | None = None
         self.mcp: FastMCP | None = None
         self._running = False
+        self.bearer_token: str = os.environ.get("GATEWAY_BEARER_TOKEN", "").strip()
 
     async def initialize(self):
         logger.info("Initializing UniHive Gateway Server...")
@@ -242,7 +243,14 @@ class GatewayServer:
         self._running = True
         await self.initialize()
         asyncio.create_task(self._health_check_loop())
-        mcp_app = self.mcp.http_app(path=mount_path)
+        if not self.bearer_token:
+            raise RuntimeError(
+                "GATEWAY_BEARER_TOKEN must be set for HTTP mode. "
+                "Set it in .env or environment, or use --transport stdio."
+            )
+        from .auth_middleware import BearerTokenMiddleware
+        raw_app = self.mcp.http_app(path=mount_path)
+        mcp_app = BearerTokenMiddleware(raw_app, token=self.bearer_token)
         config = uvicorn.Config(mcp_app, host=host, port=port, log_level="info")
         await uvicorn.Server(config).serve()
 
