@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class FuyaoConfig:
-    """RHTHS 上游配置"""
+    """FUYAO 上游配置"""
     name: str
     base_url: str
     api_key: str

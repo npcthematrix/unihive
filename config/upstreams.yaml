@@ -309,7 +309,7 @@ tools:
   # === TQ-Local (5) ===
   # TQ-Local 工具全部由 config/tools_tdx_tq_local.yaml (codegen) 提供, 参数以那里为准。
 
-  # === RHTHS a-share (21) ===
+  # === Fuyao a-share (21) ===
   - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: realtime_quote}
   - {name: a_share_prices_historical, description: "A 股历史K线 (10年)", routing: a_share_prices_historical, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}, {name: adjust, type: str, required: false}], cache_ttl_key: historical}
   - {name: a_share_corporate_actions_adjustment_factors, description: "A 股复权因子", routing: a_share_corporate_actions_adjustment_factors, params: [{name: thscode, type: str, required: true, normalize: code}], cache_ttl_key: historical}
@@ -332,16 +332,16 @@ tools:
   - {name: a_share_auction_snapshot, description: "A 股集合竞价快照", routing: a_share_auction_snapshot, params: [{name: thscodes, type: str, required: false}], cache_ttl_key: special_data}
   - {name: a_share_auction_short_term_benchmark, description: "A 股短期竞价基准", routing: a_share_auction_short_term_benchmark, params: [{name: date, type: str, required: false}], cache_ttl_key: special_data}
 
-  # === RHTHS a-share-index (4) ===
+  # === Fuyao a-share-index (4) ===
   - {name: a_share_index_catalog, description: "THS 指数/板块目录", routing: a_share_index_catalog, params: [{name: tag, type: str, required: false}], cache_ttl_key: ticker_list}
   - {name: a_share_index_constituents, description: "指数/板块成分股", routing: a_share_index_constituents, params: [{name: thscode, type: str, required: true}], cache_ttl_key: ticker_list}
   - {name: a_share_index_prices_snapshot, description: "指数行情快照", routing: a_share_index_prices_snapshot, params: [{name: thscodes, type: str, required: true}], cache_ttl_key: index_data}
   - {name: a_share_index_prices_historical, description: "指数历史K线 (10年)", routing: a_share_index_prices_historical, params: [{name: thscode, type: str, required: true}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: historical}
 
-  # === RHTHS meta (1, 另一个 search_stock 手写) ===
+  # === Fuyao meta (1, 另一个 search_stock 手写) ===
   - {name: meta_tickers_list, description: "【分页拉全量 ticker 列表】按 type (stock/fund/...) 与 exchange 过滤, 用于浏览全部可用标的. 模糊搜索请用 search_stock.", routing: meta_tickers_list, params: [{name: type, type: str, required: false}, {name: exchange, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: ticker_list}
 
-  # === RHTHS fund (28) ===
+  # === Fuyao fund (28) ===
   - {name: fund_profile_detail, description: "基金基础资料", routing: fund_profile_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
   - {name: fund_portfolio_holdings, description: "基金持仓(最新)", routing: fund_portfolio_holdings, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
   - {name: fund_performance_returns, description: "基金各期收益 (1M/3M/6M/1Y/3Y/5Y/成立来)", routing: fund_performance_returns, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
