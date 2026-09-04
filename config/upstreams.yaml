@@ -310,7 +310,7 @@ routing:
 tools:
   # === TDX 直通 (30) ===
   - {name: get_quote, description: "TDX 实时行情", routing: get_quote, params: [{name: code, type: str, required: true, normalize: code}], cache_ttl_key: realtime_quote}
-  - {name: get_kline, description: "TDX K线 (day/week/month/minute1/5/15/30/60)", routing: get_kline, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: daily_bar}
+  - {name: get_kline, description: "K线 (tokenwave_tdx 优先 + tdx_local 兜底, day/week/month/minute1/5/15/30/60)", routing: get_kline, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: daily_bar}
   - {name: get_minute_data, description: "TDX 今日分时(240 根)", routing: get_minute_data, params: [{name: code, type: str, required: true, normalize: code}], cache_ttl_key: minute_bar}
   - {name: get_trade, description: "TDX 逐笔成交", routing: get_trade, params: [{name: code, type: str, required: true, normalize: code}]}
   - {name: tdx_get_stock_info, description: "TDX 单只股票综合信息 (行情服务; 交易终端的同名工具见 get_stock_info)", routing: tdx_get_stock_info, params: [{name: code, type: str, required: true, normalize: code}]}
@@ -325,7 +325,7 @@ tools:
   - {name: get_market_count, description: "TDX 市场证券数量统计", routing: get_market_count, params: [], cache_ttl_key: market_stats}
   - {name: get_stock_codes, description: "TDX 代码列表(分页)", routing: get_stock_codes, params: [{name: limit, type: int, required: false}, {name: prefix, type: bool, required: false}], cache_ttl_key: ticker_list}
   - {name: get_etf_codes, description: "TDX ETF 代码列表", routing: get_etf_codes, params: [{name: limit, type: int, required: false}, {name: prefix, type: bool, required: false}], cache_ttl_key: etf_list}
-  - {name: get_etf_list, description: "TDX ETF 列表(含基础信息)", routing: get_etf_list, params: [{name: exchange, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: etf_list}
+  - {name: get_etf_list, description: "ETF 列表 (tokenwave_tdx 优先 + tdx_local 兜底)", routing: get_etf_list, params: [{name: exchange, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: etf_list}
   - {name: get_trade_history, description: "TDX 历史逐笔(分页)", routing: get_trade_history, params: [{name: code, type: str, required: true, normalize: code}, {name: date, type: str, required: false}, {name: start, type: int, required: false}, {name: count, type: int, required: false}]}
   - {name: get_trade_history_full, description: "TDX 历史逐笔(截止日全量)", routing: get_trade_history_full, params: [{name: code, type: str, required: true, normalize: code}, {name: before, type: str, required: false}, {name: limit, type: int, required: false}]}
   - {name: get_minute_trade_all, description: "TDX 全日分时成交汇总", routing: get_minute_trade_all, params: [{name: code, type: str, required: true, normalize: code}, {name: date, type: str, required: false}]}

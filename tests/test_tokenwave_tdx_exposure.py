@@ -81,3 +81,33 @@ def test_daily_bar_chain_starts_with_tokenwave():
     routing = config.get("routing", {})
     chain = routing.get("get_daily_bar", {}).get("chain", [])
     assert chain and chain[0] == "tokenwave_tdx", f"Expected tokenwave_tdx first, got {chain}"
+
+
+def test_get_kline_description_mentions_tokenwave():
+    """get_kline description must mention tokenwave_tdx as primary."""
+    import yaml
+
+    config_path = "config/upstreams.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    tools = config.get("tools", [])
+    tool = next((t for t in tools if t.get("name") == "get_kline"), None)
+    assert tool is not None, "get_kline tool not found"
+    desc = tool.get("description", "")
+    assert "tokenwave_tdx" in desc, f"get_kline description should mention tokenwave_tdx: {desc}"
+
+
+def test_get_etf_list_description_mentions_tokenwave():
+    """get_etf_list description must mention tokenwave_tdx as primary."""
+    import yaml
+
+    config_path = "config/upstreams.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    tools = config.get("tools", [])
+    tool = next((t for t in tools if t.get("name") == "get_etf_list"), None)
+    assert tool is not None, "get_etf_list tool not found"
+    desc = tool.get("description", "")
+    assert "tokenwave_tdx" in desc, f"get_etf_list description should mention tokenwave_tdx: {desc}"
