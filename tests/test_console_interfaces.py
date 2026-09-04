@@ -182,5 +182,5 @@ def test_console_html_uses_upstream_description():
     with open(html_path, encoding="utf-8") as f:
         html = f.read()
 
-    assert "/api/upstreams" in html, "console.html must fetch /api/upstreams"
+    assert "/api/status" in html, "console.html must fetch /api/status for upstream descriptions"
     assert "descByName" in html, "console.html must build descByName map from upstream description"

@@ -1693,7 +1693,7 @@ print(match.data)</pre>
             try {
                 const [ifsRes, upsRes] = await Promise.allSettled([
                     fetchJSON('/api/interfaces'),
-                    fetchJSON('/api/upstreams'),
+                    fetchJSON('/api/status'),
                 ]);
                 if (ifsRes.status !== 'fulfilled') {
                     throw ifsRes.reason;
