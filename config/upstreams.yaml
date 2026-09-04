@@ -4,6 +4,7 @@
 upstreams:
   tdx_local:
     enabled: true
+    description: "通达信-行情: 行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call), 39 个 gateway 工具"
     type: "npx"
     package: "tdx-mcp-server"
     command: ["npx", "-y", "tdx-mcp-server"]
@@ -22,6 +23,7 @@ upstreams:
 
   tdx_tq_local:
     enabled: true
+    description: "通达信-交易终端: 行情/自选/交易/公式系统, 含 17 个高风险工具 (write ops), 58 个 gateway 工具 (TQ-Local codegen)"
     type: "http_jsonrpc"
     base_url: "http://127.0.0.1:17709"
     timeout_seconds: 10
@@ -34,6 +36,7 @@ upstreams:
 
   fuyao_ashare:
     enabled: true
+    description: "同花顺-a-share-mcp: A 股行情/财报/估值/特殊数据, 28 个 gateway 工具, 端点: /mcp/a-share"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share"
     api_key: "${FUYAO_API_KEY}"
@@ -55,6 +58,7 @@ upstreams:
 
   fuyao_index:
     enabled: true
+    description: "同花顺-a-share-index-mcp: 指数/板块目录/成分股/历史K线, 7 个 gateway 工具, 端点: /mcp/a-share-index"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share-index"
     api_key: "${FUYAO_API_KEY}"
@@ -70,6 +74,7 @@ upstreams:
 
   fuyao_meta:
     enabled: true
+    description: "同花顺-meta-mcp: 跨市场 ticker 搜索/列表, 2 个 gateway 工具, 端点: /mcp/meta"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/meta"
     api_key: "${FUYAO_API_KEY}"
@@ -83,6 +88,7 @@ upstreams:
 
   fuyao_fund:
     enabled: true
+    description: "同花顺-fund-mcp: 公募基金持仓/业绩/经理/财务/历史, 30 个 gateway 工具, 端点: /mcp/fund"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/fund"
     api_key: "${FUYAO_API_KEY}"
@@ -101,6 +107,7 @@ upstreams:
 
   tushare:
     enabled: true
+    description: "Tushare: 通用 API 透传 (sdk_call / sdk_schema / sdk_search), 3 个 gateway 工具, 含财务/公告/通用"
     type: "npx"
     package: "@tushare/mcp"
     command: ["npx", "-y", "@tushare/mcp"]
@@ -116,6 +123,7 @@ upstreams:
 
   tokenwave_tdx:
     enabled: true
+    description: "通达信-MooTDX: 基于 mootdx 的行情/K线/财务/板块/日历, 9 个 gateway 接口 (含 2 个 tokenwave_ 前缀命名避开 TQ-Local 冲突), local 优先 + network 兜底"
     type: "python"
     mode: "auto"
     timeout_seconds: 30
