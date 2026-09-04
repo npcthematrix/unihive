@@ -232,3 +232,22 @@ def test_console_html_uses_upstream_description():
 
     assert "/api/status" in html, "console.html must fetch /api/status for upstream descriptions"
     assert "descByName" in html, "console.html must build descByName map from upstream description"
+
+
+def test_console_html_routes_section_uses_chain_label():
+    """Regression: console.html must label the routing walk order as 'Chain', not 'Fallback'.
+
+    Pre-fix: label was 'Fallback' but data was an unfiltered priority-sorted list —
+    mismatched with src/router.py behavior.
+    """
+    html_path = "console.html"
+    with open(html_path, encoding="utf-8") as f:
+        html = f.read()
+
+    # The interface detail panel must use Chain as the key label
+    assert "Fallback" not in html or html.count("Fallback") == html.count("Chain"), (
+        "console.html still uses 'Fallback' label for routing walk order; "
+        "should be 'Chain' to match src/router.py behavior"
+    )
+    # Sanity: at least one Chain label exists for routing
+    assert ">Chain<" in html, "console.html missing 'Chain' label for routing section"

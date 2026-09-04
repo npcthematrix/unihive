@@ -175,8 +175,8 @@
         .ifs-detail-val { color: var(--text); font-family: monospace; }
         .ifs-section-title { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; margin: 16px 0 8px 0; letter-spacing: 0.5px; }
         .ifs-section-title:first-child { margin-top: 0; }
-        .ifs-fallback-item { display: inline-block; padding: 2px 8px; background: #e2e8f0; border-radius: 3px; font-size: 0.75rem; margin: 0 2px; }
-        .ifs-fallback-item.primary { background: var(--primary); color: white; font-weight: 500; }
+        .ifs-chain-item { display: inline-block; padding: 2px 8px; background: #e2e8f0; border-radius: 3px; font-size: 0.75rem; margin: 0 2px; }
+        .ifs-chain-item.primary { background: var(--primary); color: white; font-weight: 500; }
         .ifs-param-item { padding: 6px 8px; background: #f8fafc; border-radius: 4px; margin-bottom: 6px; }
         .ifs-param-item code { font-weight: 600; color: var(--text); }
         .ifs-param-type { font-size: 0.7rem; color: #64748b; margin-left: 8px; }
@@ -1165,17 +1165,17 @@ print(match.data)</pre>
             }
 
             // Routing section
-            if (t.routing || (t.fallback_chain && t.fallback_chain.length)) {
+            if (t.routing || (t.chain && t.chain.length)) {
                 parts.push(`<div class="ifs-section-title">路由</div>`);
                 if (t.routing) {
                     parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">Routing Key</div><div class="ifs-detail-val"><code>${escapeHtml(t.routing)}</code></div></div>`);
                 }
-                if (t.fallback_chain && t.fallback_chain.length) {
-                    const chainHtml = t.fallback_chain.map((u, i) => {
+                if (t.chain && t.chain.length) {
+                    const chainHtml = t.chain.map((u, i) => {
                         const isPrimary = i === 0;
-                        return `<span class="ifs-fallback-item${isPrimary ? ' primary' : ''}">${escapeHtml(u)}</span>`;
+                        return `<span class="ifs-chain-item${isPrimary ? ' primary' : ''}">${escapeHtml(u)}</span>`;
                     }).join(' → ');
-                    parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">Fallback</div><div class="ifs-detail-val">${chainHtml}</div></div>`);
+                    parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">Chain</div><div class="ifs-detail-val">${chainHtml}</div></div>`);
                 }
             }
 
