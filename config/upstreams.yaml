@@ -307,14 +307,14 @@ tools:
   - {name: get_task_list, description: "TDX 后台任务列表", routing: get_task_list, params: []}
   - {name: get_task_detail, description: "TDX 后台任务详情", routing: get_task_detail, params: [{name: id, type: str, required: true}]}
   - {name: cancel_task, description: "TDX 取消后台任务", routing: cancel_task, params: [{name: id, type: str, required: true}]}
-  - {name: tdx_call, description: "TDX 通用接口调用 (透传, 高风险)", routing: tdx_call, params: [{name: path, type: str, required: true}, {name: method, type: str, required: false}, {name: query, type: str, required: false}, {name: body, type: str, required: false}, {name: raw, type: bool, required: false}], dangerous: true}
+  - {name: tdx_call, description: "⚠️ DANGER: TDX 通用接口透传, 调用前必须经用户明确同意. 可执行任意 TDX API (含可能的写操作), 不可逆.", routing: tdx_call, params: [{name: path, type: str, required: true}, {name: method, type: str, required: false}, {name: query, type: str, required: false}, {name: body, type: str, required: false}, {name: raw, type: bool, required: false}], dangerous: true}
 
   # === TQ-Local (5) ===
   - {name: get_user_sector, description: "TQ 列出全部用户自定义板块（含 ZXG/TJG）", routing: get_user_sector, params: []}
   - {name: get_stock_list_in_sector, description: "TQ 读板块成分股（自选股 ZXG / 临时条件股 TJG 需 block_type=1）", routing: get_stock_list_in_sector, params: [{name: block_code, type: str, required: true}, {name: block_type, type: int, required: true}, {name: list_type, type: int, required: false}]}
-  - {name: send_user_block, description: "TQ 向板块追加股票（高风险）", routing: send_user_block, params: [{name: block_code, type: str, required: true}, {name: stock_list, type: str, required: true}], dangerous: true}
-  - {name: create_sector, description: "TQ 新建自定义板块（高风险）", routing: create_sector, params: [{name: name, type: str, required: true}, {name: block_code, type: str, required: false}], dangerous: true}
-  - {name: delete_sector, description: "TQ 删除自定义板块（高风险）", routing: delete_sector, params: [{name: block_code, type: str, required: true}], dangerous: true}
+  - {name: send_user_block, description: "⚠️ DANGER: TQ 向板块追加股票 (修改用户本地板块数据), 需用户明确确认.", routing: send_user_block, params: [{name: block_code, type: str, required: true}, {name: stock_list, type: str, required: true}], dangerous: true}
+  - {name: create_sector, description: "⚠️ DANGER: TQ 新建自定义板块 (创建本地数据), 需用户明确确认.", routing: create_sector, params: [{name: name, type: str, required: true}, {name: block_code, type: str, required: false}], dangerous: true}
+  - {name: delete_sector, description: "⚠️ DANGER: TQ 删除自定义板块 (不可逆 — 删除本地数据), 需用户明确确认.", routing: delete_sector, params: [{name: block_code, type: str, required: true}], dangerous: true}
 
   # === RHTHS a-share (21) ===
   - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: realtime_quote}
@@ -346,7 +346,7 @@ tools:
   - {name: a_share_index_prices_historical, description: "指数历史K线 (10年)", routing: a_share_index_prices_historical, params: [{name: thscode, type: str, required: true}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: historical}
 
   # === RHTHS meta (1, 另一个 search_stock 手写) ===
-  - {name: meta_tickers_list, description: "按资产类型/筛选器分页拉全量 ticker", routing: meta_tickers_list, params: [{name: type, type: str, required: false}, {name: exchange, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: ticker_list}
+  - {name: meta_tickers_list, description: "【分页拉全量 ticker 列表】按 type (stock/fund/...) 与 exchange 过滤, 用于浏览全部可用标的. 模糊搜索请用 search_stock.", routing: meta_tickers_list, params: [{name: type, type: str, required: false}, {name: exchange, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: ticker_list}
 
   # === RHTHS fund (28) ===
   - {name: fund_profile_detail, description: "基金基础资料", routing: fund_profile_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
