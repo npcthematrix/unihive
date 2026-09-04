@@ -114,6 +114,24 @@ upstreams:
       - fundamentals
       - announcement
 
+  tokenwave_tdx:
+    enabled: true
+    type: "python"
+    mode: "auto"
+    timeout_seconds: 30
+    retry:
+      max_attempts: 3
+      backoff_base: 2
+    capabilities:
+      - realtime_quote
+      - kline
+      - minute_bar
+      - financial_data
+      - block_data
+      - stock_info
+      - trade_dates
+      - etf_list
+
 # 上游 tool 映射 (gateway_tool -> {upstream_name: upstream_tool_name})
 # 是 routing 链之外的另一种声明方式：当某 gateway_tool 没有 routing chain，
 # router 会用本段的 keys 作为 chain
@@ -222,6 +240,16 @@ upstream_tool_mapping:
   tushare_call:                               {tushare: sdk_call}
   tushare_schema:                             {tushare: sdk_schema}
   tushare_search:                             {tushare: sdk_search}
+
+  # TokenWave TDX 工具
+  get_realtime_quote:                        {tokenwave_tdx: get_realtime_quote}
+  get_kline:                                  {tokenwave_tdx: get_kline}
+  get_minute_bar:                            {tokenwave_tdx: get_minute_bar}
+  get_financial_data:                       {tokenwave_tdx: get_financial_data}
+  get_block_data:                            {tokenwave_tdx: get_block_data}
+  get_stock_info:                            {tokenwave_tdx: get_stock_info}
+  get_trade_dates:                           {tokenwave_tdx: get_trade_dates}
+  get_etf_list:                             {tokenwave_tdx: get_etf_list}
 
 # 路由配置 (带 fallback 链的 gateway_tool)
 routing:
