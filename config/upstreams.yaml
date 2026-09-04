@@ -123,7 +123,7 @@ upstream_tool_mapping:
   get_kline:                                  {tdx_local: get_kline}
   get_minute_data:                            {tdx_local: get_minute}
   get_trade:                                  {tdx_local: get_trade}
-  get_stock_info:                             {tdx_local: get_stock_info}
+  tdx_get_stock_info:                         {tdx_local: get_stock_info}
   get_code_list:                              {tdx_local: get_code_list}
   get_batch_quote:                            {tdx_local: get_batch_quote}
   get_kline_history:                          {tdx_local: get_kline_history}
@@ -150,11 +150,8 @@ upstream_tool_mapping:
   tdx_call:                                   {tdx_local: tdx_call}
 
   # TQ-Local (通达信本地 HTTP JSON-RPC, 端口 17709)
-  get_user_sector:                            {tdx_tq_local: get_user_sector}
-  get_stock_list_in_sector:                   {tdx_tq_local: get_stock_list_in_sector}
-  send_user_block:                            {tdx_tq_local: send_user_block}
-  create_sector:                              {tdx_tq_local: create_sector}
-  delete_sector:                              {tdx_tq_local: delete_sector}
+  # 工具与路由均由 config/tools_tdx_tq_local.yaml 自带 upstream_tool_mapping 提供,
+  # 这里不再重复声明, 避免与 codegen 产物重名互相覆盖。
 
   # RHTHS a-share
   a_share_prices_snapshot:                    {rhths_ashare: get_a_share_prices_snapshot}
@@ -283,7 +280,7 @@ tools:
   - {name: get_kline, description: "TDX K线 (day/week/month/minute1/5/15/30/60)", routing: get_kline, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: daily_bar}
   - {name: get_minute_data, description: "TDX 今日分时(240 根)", routing: get_minute_data, params: [{name: code, type: str, required: true, normalize: code}], cache_ttl_key: minute_bar}
   - {name: get_trade, description: "TDX 逐笔成交", routing: get_trade, params: [{name: code, type: str, required: true, normalize: code}]}
-  - {name: get_stock_info, description: "TDX 单只股票综合信息", routing: get_stock_info, params: [{name: code, type: str, required: true, normalize: code}]}
+  - {name: tdx_get_stock_info, description: "TDX 单只股票综合信息 (行情服务; 交易终端的同名工具见 get_stock_info)", routing: tdx_get_stock_info, params: [{name: code, type: str, required: true, normalize: code}]}
   - {name: get_code_list, description: "TDX 全量代码列表 (sh/sz/bj)", routing: get_code_list, params: [{name: exchange, type: str, required: false}], cache_ttl_key: ticker_list}
   - {name: get_batch_quote, description: "TDX 批量行情", routing: get_batch_quote, params: [{name: codes, type: str, required: true}], cache_ttl_key: realtime_quote}
   - {name: get_kline_history, description: "TDX 历史K线(指定区间)", routing: get_kline_history, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
@@ -310,11 +307,7 @@ tools:
   - {name: tdx_call, description: "⚠️ DANGER: TDX 通用接口透传, 调用前必须经用户明确同意. 可执行任意 TDX API (含可能的写操作), 不可逆.", routing: tdx_call, params: [{name: path, type: str, required: true}, {name: method, type: str, required: false}, {name: query, type: str, required: false}, {name: body, type: str, required: false}, {name: raw, type: bool, required: false}], dangerous: true}
 
   # === TQ-Local (5) ===
-  - {name: get_user_sector, description: "TQ 列出全部用户自定义板块（含 ZXG/TJG）", routing: get_user_sector, params: []}
-  - {name: get_stock_list_in_sector, description: "TQ 读板块成分股（自选股 ZXG / 临时条件股 TJG 需 block_type=1）", routing: get_stock_list_in_sector, params: [{name: block_code, type: str, required: true}, {name: block_type, type: int, required: true}, {name: list_type, type: int, required: false}]}
-  - {name: send_user_block, description: "⚠️ DANGER: TQ 向板块追加股票 (修改用户本地板块数据), 需用户明确确认.", routing: send_user_block, params: [{name: block_code, type: str, required: true}, {name: stock_list, type: str, required: true}], dangerous: true}
-  - {name: create_sector, description: "⚠️ DANGER: TQ 新建自定义板块 (创建本地数据), 需用户明确确认.", routing: create_sector, params: [{name: name, type: str, required: true}, {name: block_code, type: str, required: false}], dangerous: true}
-  - {name: delete_sector, description: "⚠️ DANGER: TQ 删除自定义板块 (不可逆 — 删除本地数据), 需用户明确确认.", routing: delete_sector, params: [{name: block_code, type: str, required: true}], dangerous: true}
+  # TQ-Local 工具全部由 config/tools_tdx_tq_local.yaml (codegen) 提供, 参数以那里为准。
 
   # === RHTHS a-share (21) ===
   - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: realtime_quote}

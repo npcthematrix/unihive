@@ -48,7 +48,7 @@ tools:
     required: false
     type: List[str]
 - name: get_stock_info
-  description: get_stock_info
+  description: "TQ 交易终端单只股票信息 (行情服务的同类工具见 tdx_get_stock_info)"
   routing: get_stock_info
   upstream_tool_mapping:
     tdx_tq_local: get_stock_info
@@ -98,7 +98,7 @@ tools:
     required: false
     type: int
 - name: get_user_sector
-  description: get_user_sector
+  description: "TQ 列出全部用户自定义板块（含 ZXG/TJG）"
   routing: get_user_sector
   upstream_tool_mapping:
     tdx_tq_local: get_user_sector
@@ -106,7 +106,7 @@ tools:
   dangerous: false
   params: []
 - name: get_stock_list_in_sector
-  description: get_stock_list_in_sector
+  description: "TQ 读板块成分股（自选股 ZXG / 临时条件股 TJG 需 block_type=1）"
   routing: get_stock_list_in_sector
   upstream_tool_mapping:
     tdx_tq_local: get_stock_list_in_sector
@@ -408,7 +408,7 @@ tools:
     required: true
     type: int
 - name: send_user_block
-  description: send_user_block
+  description: "⚠️ DANGER: TQ 向板块追加股票 (修改用户本地板块数据), 需用户明确确认."
   routing: send_user_block
   upstream_tool_mapping:
     tdx_tq_local: send_user_block
@@ -436,7 +436,7 @@ tools:
     required: true
     type: str
 - name: create_sector
-  description: create_sector
+  description: "⚠️ DANGER: TQ 新建自定义板块 (创建本地数据), 需用户明确确认."
   routing: create_sector
   upstream_tool_mapping:
     tdx_tq_local: create_sector
@@ -450,7 +450,7 @@ tools:
     required: true
     type: str
 - name: delete_sector
-  description: delete_sector
+  description: "⚠️ DANGER: TQ 删除自定义板块 (不可逆 — 删除本地数据), 需用户明确确认."
   routing: delete_sector
   upstream_tool_mapping:
     tdx_tq_local: delete_sector

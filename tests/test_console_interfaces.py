@@ -2,21 +2,44 @@
 from unittest.mock import patch
 
 
-def test_get_interfaces_returns_147_tools():
-    """Regression: /api/interfaces returns 147 tools (89 manual + 58 generated)."""
-    # Mock load_config to return the real config, which has 89 manual tools
-    # and the generated tools file adds 58 more
+def test_get_interfaces_returns_142_tools():
+    """Regression: /api/interfaces returns 142 tools (84 manual + 58 generated).
+
+    Generated TQ-Local tools (tools_tdx_tq_local.yaml) are the authoritative
+    source for any shared tool name — manual upstreams.yaml must not redeclare
+    them or the second registration would silently overwrite the first.
+    """
     import yaml
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    # The generated file adds 58 tools
     with patch("src.console_server.load_config", return_value=full_config):
         from src.console_server import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 147, f"Expected 147 tools, got {tool_count}"
+        assert tool_count == 142, f"Expected 142 tools, got {tool_count}"
+
+
+def test_merged_tool_specs_have_unique_names():
+    """T-6 regression: tool_loader must not produce duplicate tool names.
+
+    Manual + generated tool specs are merged into one registry; if a name
+    appears in both, FastMCP logs `Component already exists` and the second
+    registration wins silently, so the manual one is dead code.
+    """
+    from pathlib import Path
+
+    import yaml
+    from src.tool_loader import load_all_tools
+
+    config_path = Path("config/upstreams.yaml")
+    with config_path.open(encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    specs = load_all_tools(config_path, config)
+    names = [s.get("name") for s in specs if s.get("name")]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert dupes == [], f"Duplicate tool names in merged specs: {dupes}"
 
 
 def test_get_interfaces_enriches_with_generated_tools():

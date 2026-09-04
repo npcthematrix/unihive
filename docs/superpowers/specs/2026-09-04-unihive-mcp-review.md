@@ -44,11 +44,11 @@
   - `confirm` 不进 `param_specs`, 因此永不转发给上游; 126 个安全工具签名不变
   - 8 个新测试 (`tests/test_registry.py::TestDangerousConfirmation`)
 
-## 复审时新发现 (未修复)
+## 复审时新发现 (已全部修复)
 
-| ID | 严重度 | 问题 | 证据 |
-|----|-------|------|------|
-| T-6 | P2 | stdio 启动时 FastMCP 反复告警 `Component already exists: tool:<name>@`, 说明 147 个 tool 中存在重名, 后注册者静默覆盖先注册者 | stdio 实测 stderr, 涉及 `get_stock_info` / `get_user_sector` / `get_stock_list_in_sector` / `send_user_block` 等 |
+| ID | 严重度 | 问题 | 证据 | 修复 |
+|----|-------|------|------|------|
+| T-6 | P2 | stdio 启动时 FastMCP 反复告警 `Component already exists: tool:<name>@`, 说明 147 个 tool 中存在重名, 后注册者静默覆盖先注册者 | stdio 实测 stderr, 涉及 `get_stock_info` / `get_user_sector` / `get_stock_list_in_sector` / `send_user_block` / `create_sector` / `delete_sector` 6 个 | 按"以生成版为准"决议: 移除 manual `upstreams.yaml` 中 5 个 TQ-Local 工具定义 + 5 条 upstream_tool_mapping 重复; 重命名 manual `get_stock_info` → `tdx_get_stock_info` 避免与 TQ 端同名工具混淆; 修复后总数 142 (84 manual + 58 generated), 0 重名; `tests/test_console_interfaces.py::test_merged_tool_specs_have_unique_names` 回归保护 |
 
 ## 严重问题清单 (按严重度排序, 已全部完成)
 
@@ -58,3 +58,4 @@
 4. ~~**T-NEW-1 [P1]**: validate_config 不识别 http_jsonrpc~~ → `fix(config): recognize http_jsonrpc type`
 5. ~~**T-4 [P2]**: version bump~~ → `chore(version): bump to 0.1.1`
 6. ~~**T-5 [P2]**: 依赖 upper bound~~ → `chore(deps): add upper bounds`
+7. ~~**T-6 [P2]**: 工具重名 (后注册者静默覆盖)~~ → `fix(config): resolve duplicate tool names (generated yaml authoritative)`
