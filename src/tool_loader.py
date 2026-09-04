@@ -20,14 +20,11 @@ def load_all_tools(config_path: Path, config: dict) -> list[dict]:
     tools: list[dict] = list(config.get("tools", []) or [])
     top_mapping = config.setdefault("upstream_tool_mapping", {})
     base_dir = config_path.parent.resolve()
-    candidates = [
+    for candidate in (
         base_dir / _GENERATED_FILENAME,
         base_dir / "config" / _GENERATED_FILENAME,
-    ]
-    # Only check cwd-relative "config/" candidate when config_path is at project root.
-    if base_dir == Path(".").resolve():
-        candidates.append(base_dir / "config" / _GENERATED_FILENAME)
-    for candidate in candidates:
+        Path("config") / _GENERATED_FILENAME,
+    ):
         if candidate.exists():
             with candidate.open(encoding="utf-8") as f:
                 gen_cfg = yaml.safe_load(f) or {}
@@ -39,3 +36,32 @@ def load_all_tools(config_path: Path, config: dict) -> list[dict]:
                     top_mapping[rk] = dict(spec.get("upstream_tool_mapping") or {})
             break
     return tools
+
+
+def get_cache_ttl(config: dict, ttl_key: str | None) -> int | None:
+    """Resolve ``cache.ttl[ttl_key]`` → seconds. Returns ``None`` when
+    the key is empty, missing from config, or the cache section itself
+    is not configured.
+    """
+    if not ttl_key:
+        return None
+    ttl = (config.get("cache") or {}).get("ttl") or {}
+    return ttl.get(ttl_key)
+
+
+def derive_fallback_chain(config: dict, upstream: str) -> list[str]:
+    """Derive the fallback chain for ``upstream`` by sorting all upstreams
+    by priority (ascending). The requested upstream comes first, then all
+    others in priority order. Returns empty list if upstream not found.
+    """
+    upstreams = config.get("upstreams") or {}
+    if upstream not in upstreams:
+        return []
+    # Sort by priority, ascending
+    sorted_upstreams = sorted(upstreams.items(), key=lambda kv: kv[1].get("priority", 999))
+    names = [name for name, _ in sorted_upstreams]
+    # Move requested upstream to front if present
+    if upstream in names:
+        names.remove(upstream)
+        names.insert(0, upstream)
+    return names

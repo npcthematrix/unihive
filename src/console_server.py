@@ -218,22 +218,38 @@ def _derive_source(spec: dict, upstream_tool_mapping: dict) -> str:
 
 
 def get_interfaces() -> dict:
+    config_path = Path(GATEWAY_CONFIG_PATH)
     config = load_config()
+    # Use tool_loader helpers for full data
+    from .tool_loader import load_all_tools, get_cache_ttl, derive_fallback_chain
+    tools = load_all_tools(config_path, config)
     upstream_tool_mapping = config.get("upstream_tool_mapping", {}) or {}
-    tools = []
-    for spec in config.get("tools", []) or []:
-        tools.append({
+    result = []
+    for spec in tools:
+        # Get upstream name for routing/fallback
+        routing_key = spec.get("routing")
+        upstream_name = None
+        if routing_key and routing_key in upstream_tool_mapping:
+            upstream_name = list(upstream_tool_mapping[routing_key].keys())[0] if upstream_tool_mapping[routing_key] else None
+        # Resolve TTL
+        cache_ttl_key = spec.get("cache_ttl_key")
+        cache_ttl_seconds = get_cache_ttl(config, cache_ttl_key) if cache_ttl_key else None
+        # Derive fallback chain
+        fallback_chain = derive_fallback_chain(config, upstream_name) if upstream_name else []
+        # Full params with schema
+        params = spec.get("params") or []
+        result.append({
             "name": spec.get("name"),
             "description": spec.get("description", ""),
             "source": _derive_source(spec, upstream_tool_mapping),
             "dangerous": bool(spec.get("dangerous", False)),
-            "cache_ttl_key": spec.get("cache_ttl_key"),
-            "params": [
-                p.get("name") if isinstance(p, dict) else p
-                for p in (spec.get("params") or [])
-            ],
+            "cache_ttl_key": cache_ttl_key,
+            "cache_ttl_seconds": cache_ttl_seconds,
+            "routing": routing_key,
+            "fallback_chain": fallback_chain,
+            "params": params,
         })
-    return {"timestamp": int(time.time()), "tools": tools}
+    return {"timestamp": int(time.time()), "tools": result}
 
 
 class ConsoleHandler(BaseHTTPRequestHandler):

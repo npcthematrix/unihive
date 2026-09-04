@@ -172,6 +172,18 @@
         .ifs-detail-grid { display: grid; grid-template-columns: 100px 1fr; gap: 6px 12px; font-size: 0.8rem; }
         .ifs-detail-key { color: var(--text-secondary); font-weight: 500; }
         .ifs-detail-val { color: var(--text); font-family: monospace; }
+        .ifs-section-title { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; margin: 16px 0 8px 0; letter-spacing: 0.5px; }
+        .ifs-section-title:first-child { margin-top: 0; }
+        .ifs-fallback-item { display: inline-block; padding: 2px 8px; background: #e2e8f0; border-radius: 3px; font-size: 0.75rem; margin: 0 2px; }
+        .ifs-fallback-item.primary { background: var(--primary); color: white; font-weight: 500; }
+        .ifs-param-item { padding: 6px 8px; background: #f8fafc; border-radius: 4px; margin-bottom: 6px; }
+        .ifs-param-item code { font-weight: 600; color: var(--text); }
+        .ifs-param-type { font-size: 0.7rem; color: #64748b; margin-left: 8px; }
+        .ifs-param-req { font-size: 0.65rem; padding: 1px 5px; border-radius: 3px; margin-left: 6px; }
+        .ifs-param-req.required { background: #fef3c7; color: #b45309; }
+        .ifs-param-req.optional { background: #e2e8f0; color: #64748b; }
+        .ifs-param-desc { font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; }
+        .ifs-params-list { margin-top: 8px; }
         .ifs-danger-banner { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; padding: 8px 10px; border-radius: 4px; font-size: 0.78rem; margin-bottom: 8px; }
         mark.ifs-hl { background: #fef08a; color: inherit; padding: 0 1px; border-radius: 2px; }
         .ifs-empty { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
@@ -1128,13 +1140,54 @@ print(match.data)</pre>
         function buildDetailBody(t) {
             const parts = [];
             if (t.dangerous) parts.push('<div class="ifs-danger-banner">⚠️ 高风险工具:可透传任意路径到上游,需谨慎授权</div>');
-            const grid = [];
-            if (t.cache_ttl_key) grid.push(['cache_ttl_key', escapeHtml(t.cache_ttl_key)]);
-            if (t.params && t.params.length) grid.push(['参数', (t.params || []).filter(p => p && p !== '?').map(p => `<code>${escapeHtml(p)}</code>`).join(', ') || '—']);
-            if (t.source) grid.push(['数据源', escapeHtml(t.source)]);
-            if (grid.length) {
-                parts.push('<div class="ifs-detail-grid">' + grid.map(([k, v]) => `<div class="ifs-detail-key">${k}</div><div class="ifs-detail-val">${v}</div>`).join('') + '</div>');
+
+            // Cache section
+            if (t.cache_ttl_key) {
+                const ttlVal = t.cache_ttl_seconds != null ? `${t.cache_ttl_seconds}秒` : 'no TTL';
+                parts.push(`<div class="ifs-section-title">缓存</div>`);
+                parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">TTL Key</div><div class="ifs-detail-val">${escapeHtml(t.cache_ttl_key)}</div></div>`);
+                parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">TTL</div><div class="ifs-detail-val">${ttlVal}</div></div>`);
+            } else {
+                parts.push(`<div class="ifs-section-title">缓存</div>`);
+                parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">缓存</div><div class="ifs-detail-val">无</div></div>`);
             }
+
+            // Routing section
+            if (t.routing || (t.fallback_chain && t.fallback_chain.length)) {
+                parts.push(`<div class="ifs-section-title">路由</div>`);
+                if (t.routing) {
+                    parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">Routing Key</div><div class="ifs-detail-val"><code>${escapeHtml(t.routing)}</code></div></div>`);
+                }
+                if (t.fallback_chain && t.fallback_chain.length) {
+                    const chainHtml = t.fallback_chain.map((u, i) => {
+                        const isPrimary = i === 0;
+                        return `<span class="ifs-fallback-item${isPrimary ? ' primary' : ''}">${escapeHtml(u)}</span>`;
+                    }).join(' → ');
+                    parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">Fallback</div><div class="ifs-detail-val">${chainHtml}</div></div>`);
+                }
+            }
+
+            // Params section (full schema)
+            if (t.params && t.params.length) {
+                parts.push(`<div class="ifs-section-title">参数</div>`);
+                const paramsHtml = t.params.map(p => {
+                    if (typeof p === 'string') {
+                        return `<div class="ifs-param-item"><code>${escapeHtml(p)}</code></div>`;
+                    } else {
+                        const required = p.required ? 'required' : 'optional';
+                        const type = p.type || 'any';
+                        return `<div class="ifs-param-item"><code>${escapeHtml(p.name)}</code><span class="ifs-param-type">${type}</span><span class="ifs-param-req">${required}</span>${p.description ? `<div class="ifs-param-desc">${escapeHtml(p.description)}</div>` : ''}</div>`;
+                    }
+                }).join('');
+                parts.push(`<div class="ifs-params-list">${paramsHtml}</div>`);
+            }
+
+            // Source (legacy)
+            if (t.source) {
+                parts.push(`<div class="ifs-section-title">数据源</div>`);
+                parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">Source</div><div class="ifs-detail-val">${escapeHtml(t.source)}</div></div>`);
+            }
+
             return parts.join('');
         }
         function renderAll() {

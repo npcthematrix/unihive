@@ -166,33 +166,9 @@ class GatewayServer:
         return cached
 
     def _load_all_tools(self) -> list[dict]:
-        """合并 config.upstreams.yaml 与 config/tools_tdx_tq_local.yaml 的 tools 列表。
-
-        生成 spec 自带 upstream_tool_mapping；为了 Router 能在运行时按 gateway_tool
-        查表，把每个生成 spec 的映射也写回顶层 upstream_tool_mapping。
-        """
-        from pathlib import Path as _P
-        import yaml as _yaml
-
-        tools = list(self.config.get("tools", []) or [])
-        top_mapping = self.config.setdefault("upstream_tool_mapping", {})
-        base_dir = self.config_path.parent.resolve()
-        for candidate in (
-            base_dir / "tools_tdx_tq_local.yaml",
-            base_dir / "config" / "tools_tdx_tq_local.yaml",
-            _P("config/tools_tdx_tq_local.yaml"),
-        ):
-            if candidate.exists():
-                with candidate.open(encoding="utf-8") as f:
-                    gen_cfg = _yaml.safe_load(f) or {}
-                gen_tools = list(gen_cfg.get("tools", []) or [])
-                tools.extend(gen_tools)
-                for spec in gen_tools:
-                    rk = spec.get("routing")
-                    if rk and rk not in top_mapping:
-                        top_mapping[rk] = dict(spec.get("upstream_tool_mapping") or {})
-                break
-        return tools
+        """Delegate to tool_loader.load_all_tools for YAML merge."""
+        from .tool_loader import load_all_tools
+        return load_all_tools(self.config_path, self.config)
 
     def _register_tools(self):
         # 特殊工具：手写（带特殊逻辑或网关内部）
