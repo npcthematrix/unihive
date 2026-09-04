@@ -5,18 +5,14 @@ Validates that all tokenwave_tdx tools are properly exposed via the gateway.
 
 
 def test_all_tokenwave_tools_in_tools_list():
-    """All 6 tokenwave_tdx tools must appear in gateway tools/list.
+    """All 8 tokenwave_tdx tools must appear in gateway tools/list.
 
-    The 6 tools exposed via manual config are:
-    - get_realtime_quote (NEW - was only in routing)
-    - get_minute_bar (NEW - was only in routing)
-    - get_daily_bar (NEW)
-    - get_block_data (NEW)
-    - get_trade_dates (NEW)
-    - get_kline (already existed)
-
-    Note: get_stock_info and get_financial_data are owned by TQ-Local codegen,
-    not manually configured here.
+    The 8 tokenwave_tdx-served tools (manual config) are:
+    - get_realtime_quote, get_kline, get_minute_bar, get_daily_bar
+    - get_block_data, get_trade_dates, get_etf_list
+    - tokenwave_get_financial_data, tokenwave_get_stock_info (renamed from
+      get_financial_data/get_stock_info to avoid param-shape conflict with
+      TQ-Local codegen)
     """
     import yaml
 
@@ -29,18 +25,20 @@ def test_all_tokenwave_tools_in_tools_list():
 
     expected_tools = [
         "get_realtime_quote",
+        "get_kline",
         "get_minute_bar",
         "get_daily_bar",
         "get_block_data",
         "get_trade_dates",
-        "get_kline",
+        "get_etf_list",
+        "tokenwave_get_financial_data",
+        "tokenwave_get_stock_info",
     ]
 
     for tool in expected_tools:
         assert tool in tool_names, f"Missing tool: {tool}"
 
-    # Should have exactly 6 tokenwave_tdx tools
-    assert len(expected_tools) == 6
+    assert len(expected_tools) == 9
 
 
 def test_realtime_quote_chain_starts_with_tokenwave():

@@ -245,9 +245,9 @@ upstream_tool_mapping:
   get_realtime_quote:                        {tokenwave_tdx: get_realtime_quote}
   get_kline:                                  {tokenwave_tdx: get_kline}
   get_minute_bar:                            {tokenwave_tdx: get_minute_bar}
-  get_financial_data:                       {tokenwave_tdx: get_financial_data}
+  tokenwave_get_financial_data:              {tokenwave_tdx: get_financial_data}
   get_block_data:                            {tokenwave_tdx: get_block_data}
-  get_stock_info:                            {tokenwave_tdx: get_stock_info}
+  tokenwave_get_stock_info:                  {tokenwave_tdx: get_stock_info}
   get_trade_dates:                           {tokenwave_tdx: get_trade_dates}
   get_etf_list:                             {tokenwave_tdx: get_etf_list}
 
@@ -349,6 +349,11 @@ tools:
   - {name: get_daily_bar, description: "日K线 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_daily_bar, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: frequency, type: str, required: false}], cache_ttl_key: daily_bar}
   - {name: get_block_data, description: "板块/概念数据 (tokenwave_tdx, network only)", routing: get_block_data, params: [{name: block_type, type: str, required: true}], cache_ttl_key: sector}
   - {name: get_trade_dates, description: "交易日历 (tokenwave_tdx, local 优先)", routing: get_trade_dates, params: [{name: start_date, type: str, required: true}, {name: end_date, type: str, required: true}], cache_ttl_key: workday}
+  # 以下两个原 get_financial_data / get_stock_info 因 TQ-Local codegen 拥有同名条目
+  # 且参数形状不同 (TQ-Local 用 stock_list/field_list, tokenwave 用 stock_code/count),
+  # 改名前缀以避免 routing 时 tokenwave 报 TypeError
+  - {name: tokenwave_get_financial_data, description: "tokenwave_tdx 财务数据 (单股 + count, 区别于 TQ-Local get_financial_data 的 stock_list 风格)", routing: tokenwave_get_financial_data, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: report_type, type: str, required: false}, {name: count, type: int, required: false}], cache_ttl_key: fundamentals}
+  - {name: tokenwave_get_stock_info, description: "tokenwave_tdx 单只股票信息 (单参数, 区别于 TQ-Local get_stock_info 的 field_list 风格)", routing: tokenwave_get_stock_info, params: [{name: stock_code, type: str, required: true, normalize: code}]}
 
   # === TQ-Local (5) ===
   # TQ-Local 工具全部由 config/tools_tdx_tq_local.yaml (codegen) 提供, 参数以那里为准。

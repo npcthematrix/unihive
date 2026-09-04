@@ -2,12 +2,12 @@
 from unittest.mock import patch
 
 
-def test_get_interfaces_returns_147_tools():
-    """Regression: /api/interfaces returns 147 tools (89 manual + 58 generated).
+def test_get_interfaces_returns_149_tools():
+    """Regression: /api/interfaces returns 149 tools (91 manual + 58 generated).
 
-    Generated TQ-Local tools (tools_tdx_tq_local.yaml) are the authoritative
-    source for any shared tool name — manual upstreams.yaml must not redeclare
-    them or the second registration would silently overwrite the first.
+    History: 142 -> 147 (tokenwave_tdx exposure) -> 149 (rename
+    tokenwave_get_financial_data + tokenwave_get_stock_info to avoid param-shape
+    conflict with TQ-Local codegen).
     """
     import yaml
     config_path = "config/upstreams.yaml"
@@ -18,7 +18,7 @@ def test_get_interfaces_returns_147_tools():
         from src.console_server import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 147, f"Expected 147 tools, got {tool_count}"
+        assert tool_count == 149, f"Expected 149 tools, got {tool_count}"
 
 
 def test_merged_tool_specs_have_unique_names():
