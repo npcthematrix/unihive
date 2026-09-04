@@ -118,6 +118,7 @@ def _probe_upstream(name: str, cfg: dict) -> dict:
     result = {
         "enabled": cfg.get("enabled", False),
         "type": upstream_type,
+        "description": cfg.get("description", ""),
         "status": "unknown",
         "latency_ms": None,
         "last_error": None,

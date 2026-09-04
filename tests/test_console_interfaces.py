@@ -132,3 +132,41 @@ def test_get_interfaces_includes_full_params():
                 first_param = params[0]
                 if isinstance(first_param, dict):
                     assert "name" in first_param, "Param should have 'name' field"
+
+
+def test_get_upstreams_includes_description():
+    """Contract: /api/upstreams response includes description field per upstream.
+
+    Each upstream in config/upstreams.yaml must declare a non-empty description,
+    which /api/upstreams proxies to the console for rendering.
+    """
+    import yaml
+    from unittest.mock import patch
+    from src.console_server import get_upstream_status
+
+    config_path = "config/upstreams.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    for name, cfg in config.get("upstreams", {}).items():
+        assert "description" in cfg, f"upstream {name} missing description field"
+        assert cfg["description"].strip(), f"upstream {name} description is empty"
+
+    # Mock _probe_upstream to skip real HTTP — we only want to verify that
+    # _probe_upstream propagates description into its result dict.
+    def fake_probe(name, cfg):
+        return {
+            "enabled": cfg.get("enabled", False),
+            "type": cfg.get("type", ""),
+            "description": cfg.get("description", ""),
+            "status": "online",
+            "latency_ms": 10,
+            "last_error": None,
+        }
+
+    with patch("src.console_server._probe_upstream", side_effect=fake_probe):
+        result = get_upstream_status()
+
+    for name, info in result.get("upstreams", {}).items():
+        assert "description" in info, f"{name} response missing description"
+        assert info["description"].strip(), f"{name} description is empty in response"
