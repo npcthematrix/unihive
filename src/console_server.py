@@ -122,9 +122,7 @@ def _probe_upstream(name: str, cfg: dict) -> dict:
         "latency_ms": None,
         "last_error": None,
     }
-    if upstream_type != "http" or not base_url:
-        result["status"] = "configured" if cfg.get("enabled") else "disabled"
-    else:
+    if upstream_type == "http" and base_url:
         health_url = base_url.rstrip("/") + "/health"
         try:
             t0 = time.monotonic()
@@ -143,6 +141,42 @@ def _probe_upstream(name: str, cfg: dict) -> dict:
             full = str(e)
             logger.warning(f"[{name}] upstream probe failed: {full}")
             result["last_error"] = full[:_PROBE_ERROR_MAX_CHARS]
+    elif upstream_type == "http_jsonrpc" and base_url:
+        rpc_url = base_url.rstrip("/") + "/"
+        try:
+            t0 = time.monotonic()
+            resp = httpx.post(
+                rpc_url,
+                json={"jsonrpc": "2.0", "id": 1, "method": "get_user_sector", "params": {}},
+                timeout=5.0,
+            )
+            result["latency_ms"] = round((time.monotonic() - t0) * 1000)
+            if resp.status_code == 200:
+                data: dict = {}
+                try:
+                    data = resp.json()
+                except Exception:
+                    pass
+                rpc_err = data.get("error") if isinstance(data, dict) else None
+                if rpc_err is not None:
+                    result["status"] = "degraded"
+                    msg = str(rpc_err)[:_PROBE_ERROR_MAX_CHARS]
+                    result["last_error"] = f"RPC error: {msg}"
+                else:
+                    result["status"] = "online"
+            else:
+                result["status"] = "degraded"
+                result["last_error"] = f"HTTP {resp.status_code}"
+        except httpx.TimeoutException:
+            result["status"] = "offline"
+            result["last_error"] = "连接超时 (5s)"
+        except Exception as e:
+            result["status"] = "offline"
+            full = str(e)
+            logger.warning(f"[{name}] upstream probe failed: {full}")
+            result["last_error"] = full[:_PROBE_ERROR_MAX_CHARS]
+    else:
+        result["status"] = "configured" if cfg.get("enabled") else "disabled"
 
     _probe_cache[name] = (time.monotonic(), result)
     return result
