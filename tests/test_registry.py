@@ -127,76 +127,44 @@ class TestBuildToolFunction:
         fn = build_tool_function(spec, server)
         import asyncio
         with caplog.at_level("WARNING"):
-            asyncio.run(fn(path="/api/test", confirm=True))
+            asyncio.run(fn(path="/api/test"))
         assert any("DANGEROUS call" in r.message for r in caplog.records)
+        assert not any("rejected" in r.message for r in caplog.records)
+        assert not any("unconfirmed" in r.message for r in caplog.records)
 
-
-class TestDangerousConfirmation:
-    """危险工具必须显式确认后才触达上游。"""
-
-    SPEC = {
-        "name": "delete_sector",
-        "description": "⚠️ DANGER 删除板块",
-        "routing": "delete_sector",
-        "dangerous": True,
-        "params": [{"name": "sector", "type": "str", "required": True}],
-    }
-
-    def _run(self, server, **kwargs):
-        import asyncio
-        fn = build_tool_function(self.SPEC, server)
-        return asyncio.run(fn(**kwargs))
-
-    def test_unconfirmed_call_does_not_reach_upstream(self):
+    def test_dangerous_tool_signature_has_no_confirm(self):
+        """Post-removal: dangerous tools expose only their upstream params, no confirm gate."""
         server = _FakeServer()
-        result = self._run(server, sector="自选")
-        assert server.calls == []
-        assert result["success"] is False
-        assert result["requires_confirmation"] is True
-
-    def test_unconfirmed_error_names_the_tool_and_the_remedy(self):
-        server = _FakeServer()
-        result = self._run(server, sector="自选")
-        assert "delete_sector" in result["error"]
-        assert "confirm=true" in result["error"]
-
-    def test_confirmed_call_reaches_upstream(self):
-        server = _FakeServer()
-        result = self._run(server, sector="自选", confirm=True)
-        assert result["success"] is True
-        assert server.calls == [("delete_sector", {"sector": "自选"}, "delete_sector", None)]
-
-    def test_confirm_flag_is_not_forwarded_upstream(self):
-        server = _FakeServer()
-        self._run(server, sector="自选", confirm=True)
-        assert "confirm" not in server.calls[0][1]
-
-    def test_confirm_param_exposed_in_signature_as_optional(self):
-        fn = build_tool_function(self.SPEC, _FakeServer())
-        sig = inspect.signature(fn)
-        assert sig.parameters["confirm"].default is False
-        assert sig.parameters["confirm"].annotation is bool
-
-    def test_docstring_tells_model_to_get_user_approval(self):
-        fn = build_tool_function(self.SPEC, _FakeServer())
-        assert "⚠️ DANGER 删除板块" in fn.__doc__
-        assert "confirm=true" in fn.__doc__
-
-    def test_safe_tool_gets_no_confirm_param(self):
         spec = {
-            "name": "get_quote",
-            "description": "行情",
-            "routing": "get_quote",
-            "params": [{"name": "symbol", "type": "str", "required": True}],
+            "name": "delete_sector",
+            "description": "⚠️ DANGER 删除板块 (高风险写操作，操作不可逆)",
+            "routing": "delete_sector",
+            "dangerous": True,
+            "params": [{"name": "sector", "type": "str", "required": True}],
         }
-        fn = build_tool_function(spec, _FakeServer())
-        assert "confirm" not in inspect.signature(fn).parameters
+        fn = build_tool_function(spec, server)
+        sig = inspect.signature(fn)
+        assert "confirm" not in sig.parameters
+        assert "sector" in sig.parameters
 
-    def test_blocked_call_is_logged(self, caplog):
+    def test_dangerous_tool_calls_execute_cached_immediately(self):
+        """Post-removal: dangerous tool dispatches to upstream without any confirm dance."""
         server = _FakeServer()
-        with caplog.at_level("WARNING"):
-            self._run(server, sector="自选")
-        assert any("unconfirmed" in r.message for r in caplog.records)
+        spec = {
+            "name": "delete_sector",
+            "description": "⚠️ DANGER",
+            "routing": "delete_sector",
+            "dangerous": True,
+            "params": [{"name": "sector", "type": "str", "required": True}],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        result = asyncio.run(fn(sector="自选"))
+        # Reaches _execute_cached (server.calls non-empty) and returns the upstream echo
+        assert server.calls == [("delete_sector", {"sector": "自选"}, "delete_sector", None)]
+        assert result["success"] is True
+        # No refusal envelope
+        assert "requires_confirmation" not in result
 
 
 class TestRegisterToolsFromConfig:
@@ -209,26 +177,6 @@ class TestRegisterToolsFromConfig:
         names = register_tools_from_config(server, specs)
         assert names == ["a", "b"]
         assert set(server.mcp.tools.keys()) == {"a", "b"}
-
-    def test_skips_dangerous_when_disabled(self):
-        server = _FakeServer()
-        specs = [
-            {"name": "safe", "description": "S", "routing": "safe", "params": []},
-            {"name": "risky", "description": "R", "routing": "risky",
-             "params": [], "dangerous": True},
-        ]
-        names = register_tools_from_config(server, specs, disable_dangerous=True)
-        assert names == ["safe"]
-        assert "risky" not in server.mcp.tools
-
-    def test_includes_dangerous_by_default(self):
-        server = _FakeServer()
-        specs = [
-            {"name": "risky", "description": "R", "routing": "risky",
-             "params": [], "dangerous": True},
-        ]
-        names = register_tools_from_config(server, specs)
-        assert names == ["risky"]
 
 
 class TestValidateSpecs:
