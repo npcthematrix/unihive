@@ -1691,8 +1691,20 @@ print(match.data)</pre>
             const container = document.getElementById('interfaces-summary');
             const totalEl = document.getElementById('ifs-total-count');
             try {
-                const data = await fetchJSON('/api/interfaces');
-                const tools = data.tools || [];
+                const [ifsRes, upsRes] = await Promise.allSettled([
+                    fetchJSON('/api/interfaces'),
+                    fetchJSON('/api/upstreams'),
+                ]);
+                if (ifsRes.status !== 'fulfilled') {
+                    throw ifsRes.reason;
+                }
+                const ifsData = ifsRes.value;
+                const upsData = upsRes.status === 'fulfilled' ? upsRes.value : { upstreams: {} };
+                const tools = ifsData.tools || [];
+                const descByName = {};
+                for (const [name, info] of Object.entries(upsData.upstreams || {})) {
+                    descByName[name] = info.description || '';
+                }
                 if (totalEl) totalEl.textContent = tools.length;
                 if (tools.length === 0) {
                     container.innerHTML = '<div class="loading-state" style="grid-column:1/-1">暂无接口配置</div>';
@@ -1707,7 +1719,8 @@ print(match.data)</pre>
                 container.innerHTML = groups.map(key => {
                     const meta = key === ALL_KEY ? { title: '全部接口', desc: '一次性查看所有上游的 tool' } : (GROUP_META[key] || { title: key, desc: '' });
                     const count = key === ALL_KEY ? tools.length : (counts.get(key) || 0);
-                    return `<a href="#" data-jump-panel="interfaces" data-jump-group="${escapeHtml(key)}"><span><strong>${escapeHtml(meta.title)}</strong><br><small style="color:var(--text-secondary)">${escapeHtml(meta.desc)}</small></span><span><span class="count">${count}</span> <span class="arrow">→</span></span></a>`;
+                    const desc = (key !== ALL_KEY && descByName[key]) || meta.desc || '';
+                    return `<a href="#" data-jump-panel="interfaces" data-jump-group="${escapeHtml(key)}"><span><strong>${escapeHtml(meta.title)}</strong><br><small style="color:var(--text-secondary)">${escapeHtml(desc)}</small></span><span><span class="count">${count}</span> <span class="arrow">→</span></span></a>`;
                 }).join('');
             } catch (e) {
                 console.error('Load interfaces error:', e);

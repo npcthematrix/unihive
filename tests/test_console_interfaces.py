@@ -170,3 +170,17 @@ def test_get_upstreams_includes_description():
     for name, info in result.get("upstreams", {}).items():
         assert "description" in info, f"{name} response missing description"
         assert info["description"].strip(), f"{name} description is empty in response"
+
+
+def test_console_html_uses_upstream_description():
+    """Regression: console.html onboarding must fetch /api/upstreams and prefer description.
+
+    Without this, onboarding cards fall back to GROUP_META forever — re-introducing
+    the rot problem this spec solved.
+    """
+    html_path = "console.html"
+    with open(html_path, encoding="utf-8") as f:
+        html = f.read()
+
+    assert "/api/upstreams" in html, "console.html must fetch /api/upstreams"
+    assert "descByName" in html, "console.html must build descByName map from upstream description"
