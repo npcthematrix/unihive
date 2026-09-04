@@ -15,6 +15,7 @@ from fastmcp import FastMCP
 
 from .cache import Cache, CacheConfig
 from .config_loader import load_config, validate_config
+from .log_config import configure_logging
 from .normalizer import Normalizer
 from .registry import register_tools_from_config, validate_specs
 from .router import Router
@@ -23,22 +24,6 @@ from .rhths_client import RhthsClient, RhthsConfig
 from .http_jsonrpc_client import HttpJsonRpcClient, HttpJsonRpcConfig
 
 logger = logging.getLogger(__name__)
-
-
-def _configure_logging(transport: str) -> None:
-    """按 transport 配置日志输出. stdio 时 stdout 留给 JSON-RPC stream."""
-    root = logging.getLogger()
-    for h in list(root.handlers):
-        root.removeHandler(h)
-    root.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    file_handler = logging.FileHandler("logs/gateway.log", encoding="utf-8")
-    file_handler.setFormatter(fmt)
-    root.addHandler(file_handler)
-    if transport != "stdio":
-        stream_handler = logging.StreamHandler(sys.stderr)
-        stream_handler.setFormatter(fmt)
-        root.addHandler(stream_handler)
 
 
 class GatewayServer:
@@ -294,7 +279,7 @@ async def async_main(transport: str = "stdio", host: str = "127.0.0.1", port: in
     if sys.platform == "win32":
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
-    _configure_logging(transport)
+    configure_logging(transport)
 
     server = GatewayServer()
     if transport == "stdio":
