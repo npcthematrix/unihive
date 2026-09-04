@@ -94,9 +94,12 @@ def test_get_interfaces_includes_routing():
             assert "routing" in tool, "Missing routing field"
 
 
-def test_get_interfaces_includes_fallback_chain():
-    """Contract: response includes fallback_chain field."""
+def test_get_interfaces_includes_chain():
+    """Contract: response includes chain field (router-walk order, not priority sort)."""
     import yaml
+    from unittest.mock import patch
+    from src.console_server import get_interfaces
+
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
@@ -104,12 +107,57 @@ def test_get_interfaces_includes_fallback_chain():
     with patch("src.console_server.load_config", return_value=full_config):
         from src.console_server import get_interfaces
         result = get_interfaces()
-        # Should have fallback chains for tools with upstream
-        tools_with_chain = [t for t in result["tools"] if t.get("fallback_chain")]
-        if tools_with_chain:
-            tool = tools_with_chain[0]
-            assert "fallback_chain" in tool, "Missing fallback_chain field"
-            assert isinstance(tool["fallback_chain"], list), "fallback_chain should be a list"
+
+    tools_with_chain = [t for t in result["tools"] if t.get("chain")]
+    assert tools_with_chain, "Expected at least one tool with chain"
+    for tool in tools_with_chain:
+        assert "chain" in tool, f"Missing chain field for {tool.get('name')}"
+        assert isinstance(tool["chain"], list), "chain should be a list"
+        # Contract: no legacy fallback_chain field
+        assert "fallback_chain" not in tool, (
+            f"{tool.get('name')} still emits legacy fallback_chain field"
+        )
+
+
+def test_get_interfaces_chain_matches_router_for_short_chain_tools():
+    """Regression: get_minute_bar must show exactly 2 sources (the YAML chain),
+    NOT the full upstream list (which was the derive_fallback_chain bug).
+
+    Pre-fix: get_minute_bar chain showed [tokenwave_tdx, tdx_local, tdx_tq_local,
+    fuyao_ashare, fuyao_index, fuyao_meta, fuyao_fund] — a lie, since the router
+    only walks the first 2.
+    """
+    import yaml
+    from unittest.mock import patch
+    from src.console_server import get_interfaces
+
+    config_path = "config/upstreams.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        full_config = yaml.safe_load(f)
+
+    with patch("src.console_server.load_config", return_value=full_config):
+        result = get_interfaces()
+
+    by_name = {t["name"]: t for t in result["tools"]}
+
+    # get_minute_bar: YAML chain is [tokenwave_tdx, tdx_local]
+    minute_bar = by_name.get("get_minute_bar")
+    assert minute_bar is not None, "get_minute_bar not exposed"
+    assert minute_bar["chain"] == ["tokenwave_tdx", "tdx_local"], (
+        f"get_minute_bar chain mismatch: {minute_bar['chain']}"
+    )
+    # Specifically: no fuyao_* entries (those upstreams don't implement get_minute_bar)
+    fuyao_in_chain = [u for u in minute_bar["chain"] if u.startswith("fuyao_")]
+    assert fuyao_in_chain == [], (
+        f"get_minute_bar chain leaked non-implementing upstreams: {fuyao_in_chain}"
+    )
+
+    # get_realtime_quote: YAML chain is [tokenwave_tdx, tdx_local, fuyao_ashare]
+    rtq = by_name.get("get_realtime_quote")
+    assert rtq is not None, "get_realtime_quote not exposed"
+    assert rtq["chain"] == ["tokenwave_tdx", "tdx_local", "fuyao_ashare"], (
+        f"get_realtime_quote chain mismatch: {rtq['chain']}"
+    )
 
 
 def test_get_interfaces_includes_full_params():
