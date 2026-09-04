@@ -192,3 +192,206 @@ class LocalClient:
                 "source": "local",
             }
         return None
+
+
+class NetworkClient:
+    """网络模式: 直连通达信行情服务器"""
+
+    def __init__(self):
+        from mootdx import quotes
+
+        self._quotes = None
+        self._quotes_cls = quotes.Quotes
+
+    def _get_quotes(self):
+        """获取或创建 Quotes 实例"""
+        if self._quotes is None:
+            self._quotes = self._quotes_cls()
+        return self._quotes
+
+    def is_available(self) -> bool:
+        """
+        检查网络连接是否可用
+
+        Returns:
+            bool: 如果能成功连接则返回 True
+        """
+        try:
+            q = self._get_quotes()
+            return q is not None
+        except Exception:
+            return False
+
+    def get_realtime_quote(self, stock_code: str):
+        """
+        获取实时行情
+
+        Args:
+            stock_code: 股票代码, 如 "600036"
+
+        Returns:
+            dict: 实时行情数据
+        """
+        q = self._get_quotes()
+        try:
+            # mootdx quotes API
+            df = q.quotes(symbol=stock_code)
+            if df is not None and not df.empty:
+                latest = df.iloc[-1]
+                return {
+                    "symbol": stock_code,
+                    "open": float(latest.get("open", 0)),
+                    "high": float(latest.get("high", 0)),
+                    "low": float(latest.get("low", 0)),
+                    "close": float(latest.get("close", 0)),
+                    "volume": float(latest.get("vol", 0)),
+                    "amount": float(latest.get("amount", 0)),
+                    "date": str(latest.get("date", "")),
+                    "time": str(latest.get("time", "")),
+                    "source": "network",
+                }
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get realtime quote for {stock_code}: {e}")
+            return None
+
+    def get_kline(
+        self,
+        stock_code: str,
+        frequency: str = "daily",
+        count: int = 100,
+    ):
+        """
+        获取K线数据
+
+        Args:
+            stock_code: 股票代码, 如 "600036"
+            frequency: K线频率, 支持 "daily", "weekly", "monthly", "5min", "15min", "30min", "60min"
+            count: 返回的K线数量
+
+        Returns:
+            pd.DataFrame: K线数据
+        """
+        q = self._get_quotes()
+
+        freq_map = {
+            "daily": 9,
+            "weekly": 5,
+            "monthly": 6,
+            "5min": 0,
+            "15min": 1,
+            "30min": 2,
+            "60min": 3,
+        }
+
+        freq = freq_map.get(frequency, 9)
+
+        try:
+            df = q.daily(symbol=stock_code)
+            if df is not None and not df.empty:
+                if count and count > 0:
+                    df = df.tail(count)
+                return df
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get kline for {stock_code}: {e}")
+            return None
+
+    def get_minute(self, stock_code: str, frequency: str = "5min"):
+        """
+        获取分钟K线
+
+        Args:
+            stock_code: 股票代码, 如 "600036"
+            frequency: 分钟频率, 支持 "1min", "5min", "15min", "30min", "60min"
+
+        Returns:
+            pd.DataFrame: 分钟K线数据
+        """
+        q = self._get_quotes()
+
+        freq_map = {
+            "1min": 0,
+            "5min": 1,
+            "15min": 2,
+            "30min": 3,
+            "60min": 4,
+        }
+
+        freq = freq_map.get(frequency, 1)
+
+        try:
+            df = q.minute(symbol=stock_code, freq=freq)
+            if df is not None and not df.empty:
+                return df
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get minute for {stock_code}: {e}")
+            return None
+
+    def get_financial_data(
+        self,
+        stock_code: str,
+        report_type: str = "income",
+        count: int = 4,
+    ):
+        """
+        获取财务数据
+
+        Args:
+            stock_code: 股票代码, 如 "600036"
+            report_type: 报表类型, "income"(利润表), "balance"(资产负债表), "cashflow"(现金流量表)
+            count: 返回的报表期数
+
+        Returns:
+            pd.DataFrame: 财务数据
+        """
+        q = self._get_quotes()
+
+        type_map = {
+            "income": 0,
+            "balance": 1,
+            "cashflow": 2,
+        }
+
+        rtype = type_map.get(report_type, 0)
+
+        try:
+            df = q.financial(symbol=stock_code, rtype=rtype)
+            if df is not None and not df.empty:
+                if count and count > 0:
+                    df = df.tail(count)
+                return df
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get financial data for {stock_code}: {e}")
+            return None
+
+    def get_block_data(self, block_type: str):
+        """
+        获取板块数据
+
+        Args:
+            block_type: 板块类型, "industry"(行业), "concept"(概念), "region"(地区)
+
+        Returns:
+            pd.DataFrame: 板块数据
+        """
+        q = self._get_quotes()
+
+        type_map = {
+            "industry": 0,
+            "concept": 1,
+            "region": 2,
+        }
+
+        btype = type_map.get(block_type, 0)
+
+        try:
+            df = q.block(symbol=btype)
+            if df is not None and not df.empty:
+                return df
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get block data ({block_type}): {e}")
+            return None
