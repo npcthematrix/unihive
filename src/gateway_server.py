@@ -22,15 +22,23 @@ from .upstream_client import UpstreamClient, UpstreamConfig, UpstreamStatus
 from .rhths_client import RhthsClient, RhthsConfig
 from .http_jsonrpc_client import HttpJsonRpcClient, HttpJsonRpcConfig
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("logs/gateway.log", encoding="utf-8")
-    ]
-)
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging(transport: str) -> None:
+    """按 transport 配置日志输出. stdio 时 stdout 留给 JSON-RPC stream."""
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    file_handler = logging.FileHandler("logs/gateway.log", encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)
+    if transport != "stdio":
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(fmt)
+        root.addHandler(stream_handler)
 
 
 class GatewayServer:
@@ -198,7 +206,7 @@ class GatewayServer:
     def _register_search_stock(self):
         @self.mcp.tool()
         async def search_stock(keyword: str) -> dict:
-            """搜索股票 (rhths_meta 优先, TDX 降级)"""
+            """【按关键词模糊搜索】输入股票名称或代码片段 (如 '茅台'/'600000'), 返回 Top 10 匹配股票. 适合用户问"某只股票"时调用. 全量列表请用 meta_tickers_list."""
             if "rhths_meta" in self.upstreams:
                 client = self.upstreams["rhths_meta"]
                 if client.is_available:
@@ -286,6 +294,8 @@ async def async_main(transport: str = "stdio", host: str = "127.0.0.1", port: in
     if sys.platform == "win32":
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
+    _configure_logging(transport)
+
     server = GatewayServer()
     if transport == "stdio":
         await server.start()
@@ -299,8 +309,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="UniHive MCP Gateway")
     parser.add_argument(
-        "--transport", choices=["stdio", "http"], default="stdio",
-        help="Transport mode (default: stdio). 'http' for Streamable HTTP server.",
+        "--transport", choices=["stdio", "http"], default="http",
+        help="Transport mode (default: http). 'stdio' for stdio transport.",
     )
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host (http mode)")
     parser.add_argument("--port", type=int, default=18080, help="HTTP bind port (http mode)")
