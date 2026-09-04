@@ -107,6 +107,9 @@ def validate_config(config: dict) -> list[str]:
                 errors.append(f"upstream {name!r} type=http missing 'base_url'")
             if not cfg.get("api_key"):
                 errors.append(f"upstream {name!r} type=http missing 'api_key'")
+        elif cfg.get("type") == "http_jsonrpc":
+            if not cfg.get("base_url"):
+                errors.append(f"upstream {name!r} type=http_jsonrpc missing 'base_url'")
         elif cfg.get("type") == "npx":
             if not cfg.get("command") and not cfg.get("package"):
                 errors.append(f"upstream {name!r} type=npx missing 'command' or 'package'")
