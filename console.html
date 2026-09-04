@@ -26,12 +26,12 @@
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 20px; }
         .container { max-width: 1200px; margin: 0 auto; }
         header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-        h1 { font-size: 1.5rem; font-weight: 600; }
+        h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.01em; }
         .refresh-info { font-size: 0.875rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; }
         .refresh-info button { padding: 4px 12px; border: 1px solid var(--border); background: var(--card-bg); border-radius: 4px; cursor: pointer; font-size: 0.875rem; }
         .refresh-info button:hover { background: var(--bg); }
-        .tabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--card-bg); padding: 4px; border-radius: 8px; }
-        .tab { padding: 8px 16px; border: none; background: transparent; cursor: pointer; border-radius: 6px; font-size: 0.875rem; color: var(--text-secondary); transition: all 0.2s; }
+        .tabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--card-bg); padding: 4px; border-radius: 8px; overflow-x: auto; scrollbar-width: thin; }
+        .tab { padding: 8px 16px; border: none; background: transparent; cursor: pointer; border-radius: 6px; font-size: 0.875rem; color: var(--text-secondary); transition: all 0.2s; white-space: nowrap; flex-shrink: 0; }
         .tab:hover { background: var(--bg); }
         .tab.active { background: var(--primary); color: white; }
         .card { background: var(--card-bg); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; }
@@ -47,7 +47,7 @@
         th { font-weight: 600; font-size: 0.875rem; color: var(--text-secondary); }
         tr:hover { background: #f8f9fa; }
         .tool-name { font-family: monospace; font-weight: 500; color: var(--primary); }
-        .chain { font-family: monospace; font-size: 0.875rem; color: var(--text-secondary); }
+        .chain { font-family: monospace; font-size: 0.875rem; color: var(--text-secondary); } .chain-link { background: transparent; border: 1px solid transparent; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.875rem; color: var(--primary); cursor: pointer; transition: all 120ms ease; } .chain-link:hover { background: var(--primary-soft); border-color: var(--primary); }
         .error-msg { color: var(--danger); font-size: 0.875rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .cache-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
         .stat-item { background: var(--bg); padding: 12px; border-radius: 6px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
@@ -66,6 +66,59 @@
         .latency.good { color: var(--success); }
         .latency.slow { color: var(--warning); }
         .latency.bad { color: var(--danger); }
+
+        /* ===== Config panel ===== */
+        .cfg-banner { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 10px 14px; border-radius: 6px; font-size: 0.82rem; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; } .cfg-cache-banner { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 10px 14px; border-radius: 6px; font-size: 0.82rem; margin-bottom: 12px; }
+        .cfg-banner-icon { font-size: 1rem; }
+        .cfg-subtabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+        .cfg-subtab { padding: 8px 16px; border: 0; background: transparent; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: all 120ms ease; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; min-width: 100px; justify-content: center; }
+        .cfg-subtab:hover { color: var(--text); }
+        .cfg-subtab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+        .cfg-subtab .cfg-subtab-count { font-family: monospace; font-size: 0.7rem; padding: 1px 6px; background: var(--bg); color: var(--text-secondary); border-radius: 999px; }
+        .cfg-subtab.active .cfg-subtab-count { background: var(--primary-soft); color: var(--primary); }
+        .cfg-search { width: 100%; max-width: 360px; padding: 6px 28px 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.82rem; background: var(--card-bg); color: var(--text); margin-bottom: 10px; display: block; }
+        .cfg-search:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
+        .cfg-search-clear { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; border: 0; background: var(--bg); color: var(--text-secondary); border-radius: 50%; cursor: pointer; font-size: 0.9rem; line-height: 1; display: none; align-items: center; justify-content: center; }
+        .cfg-search-clear:hover { background: var(--border); color: var(--text); }
+        .cfg-search-wrap { position: relative; display: inline-block; }
+        .cfg-search-wrap.has-value .cfg-search-clear { display: flex; }
+        .cfg-panel { display: none; }
+        .cfg-panel.active { display: block; }
+        .cfg-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+        .cfg-section-header { padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; background: var(--bg); border-bottom: 1px solid var(--border); }
+        .cfg-section-header:hover { background: #f1f5f9; }
+        .cfg-section-title { font-size: 0.9rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .cfg-section-toggle { color: var(--text-secondary); font-size: 0.85rem; transition: transform 150ms ease; display: inline-block; }
+        .cfg-section.collapsed .cfg-section-toggle { transform: rotate(-90deg); }
+        .cfg-section.collapsed .cfg-section-body { display: none; }
+        .cfg-section-body { padding: 12px 16px; }
+        .cfg-section-meta { font-size: 0.75rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 8px; }
+        .cfg-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .cfg-table th { text-align: left; padding: 8px 10px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); background: var(--bg); border-bottom: 1px solid var(--border); font-weight: 600; }
+        .cfg-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+        .cfg-table tbody tr:hover { background: #f8f9fa; }
+        .cfg-table .num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'SF Mono', monospace; }
+        .cfg-table tr.cfg-env-row > td { background: #f8fafc !important; border-top: 1px dashed var(--border); padding: 10px 12px 12px 24px; }
+        .cfg-table tr.cfg-expandable { cursor: pointer; }
+        .cfg-table tr.cfg-detail-row > td { background: #f8fafc; padding: 10px 16px; border-top: 1px dashed var(--border); font-size: 0.78rem; color: var(--text); white-space: pre-wrap; }
+        .cfg-table .tool-name { font-family: monospace; font-size: 0.78rem; color: var(--primary); font-weight: 500; }
+        .cfg-table .chain-list { display: flex; gap: 4px; flex-wrap: wrap; }
+        .cfg-table .chain-pill { background: var(--bg); border: 1px solid var(--border); padding: 1px 8px; border-radius: 4px; font-size: 0.7rem; font-family: monospace; }
+        .cfg-table .chain-pill.primary { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); font-weight: 500; }
+        .cfg-mask { color: var(--text-secondary); font-style: italic; cursor: help; border-bottom: 1px dotted var(--text-secondary); }
+        .cfg-switch { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 500; white-space: nowrap; cursor: default; border: 1px solid transparent; }
+        .cfg-switch.on { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+        .cfg-switch.off { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+        .cfg-kv-grid { display: grid; grid-template-columns: 180px 1fr; gap: 8px 16px; font-size: 0.85rem; }
+        .cfg-kv-grid .k { color: var(--text-secondary); font-weight: 500; }
+        .cfg-kv-grid .v { font-family: monospace; color: var(--text); }
+        .cfg-json { background: #1e293b; color: #e2e8f0; padding: 14px; border-radius: 6px; font-size: 0.78rem; font-family: 'SF Mono', 'Monaco', 'Menlo', monospace; overflow: auto; max-height: 500px; line-height: 1.5; }
+        .cfg-json .k { color: #93c5fd; }
+        .cfg-json .s { color: #86efac; }
+        .cfg-json .n { color: #fdba74; }
+        .cfg-json .b { color: #c4b5fd; }
+        .cfg-json .nl { color: #fca5a5; }
+        .cfg-cap { display: inline-block; padding: 2px 6px; background: var(--primary-soft); color: var(--primary); border-radius: 3px; font-size: 0.7rem; font-family: monospace; margin: 1px 2px 1px 0; }
         .ifs-layout { display: grid; grid-template-columns: 220px 1fr; gap: 0; min-height: 500px; }
         .ifs-sidebar { position: sticky; top: 0; max-height: calc(100vh - 120px); overflow-y: auto; border-right: 1px solid var(--border); padding-right: 8px; }
         .ifs-search-wrap { position: relative; margin-bottom: 8px; }
@@ -136,7 +189,7 @@
 
         /* ===== Card toolbar ===== */
         .card-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap; }
-        .card-toolbar h2 { font-size: 1rem; font-weight: 600; margin: 0; padding: 0; border: 0; }
+        .card-toolbar h2 { font-size: 1rem; font-weight: 600; margin: 0; padding: 0; border: 0; } .card-toolbar h2 .timestamp { font-weight: normal; font-size: 0.75rem; color: var(--text-secondary); margin-left: 8px; } .ifs-meta { font-size: 0.8rem; color: var(--text-secondary); }
         .toolbar-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .last-refresh { font-size: 0.75rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
         .last-refresh.refreshing { color: var(--primary); }
@@ -156,6 +209,16 @@
         .chip.active .chip-count { background: rgba(255,255,255,0.2); color: white; }
 
         /* ===== Upstream table ===== */
+        .status-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: 12px 16px; background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+        .status-summary-item { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 8px; border-radius: 6px; transition: background 150ms ease; }
+        .status-summary-item:hover { background: rgba(0,0,0,0.03); }
+        .status-summary-num { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+        .status-summary-label { font-size: 0.72rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+        .status-summary-item.sum-online .status-summary-num { color: var(--success); }
+        .status-summary-item.sum-degraded .status-summary-num { color: var(--warning); }
+        .status-summary-item.sum-offline .status-summary-num { color: var(--danger); }
+        .status-summary-item.sum-disabled .status-summary-num { color: var(--disabled); }
+        .status-summary-item.sum-configured .status-summary-num { color: #475569; }
         .ups-table { width: 100%; border-collapse: collapse; }
         .ups-table th { padding: 10px 12px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg); text-align: left; user-select: none; }
         .ups-table th.sortable { cursor: pointer; }
@@ -186,7 +249,7 @@
 
         /* ===== Cache ===== */
         .cache-grid { display: grid; grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(110px, 1fr)); gap: 12px; }
-        @media (max-width: 900px) { .cache-grid { grid-template-columns: 1fr 1fr; } .cache-hitrate-card { grid-column: 1 / -1; } }
+        @media (max-width: 900px) { .cache-grid { grid-template-columns: 1fr 1fr; } .cache-hitrate-card { grid-column: 1 / -1; } .ifs-table td.col-source, .ifs-table th.col-source { display: none; } .ifs-table th:first-child, .ifs-table td:first-child { width: 35% !important; } }
         .cache-hitrate-card { background: linear-gradient(135deg, #f0f9ff 0%, #ecfeff 100%); border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
         .cache-hitrate-head { display: flex; justify-content: space-between; align-items: baseline; }
         .cache-hitrate-value { font-size: 2rem; font-weight: 700; color: #0c4a6e; font-variant-numeric: tabular-nums; line-height: 1; }
@@ -242,18 +305,39 @@
         .onboarding-nav a.active { color: var(--primary); background: rgba(13,110,253,0.08); }
 
         .onboarding-content h3 {
-            font-size: 1.125rem;
-            font-weight: 600;
-            margin: 24px 0 12px 0;
-            padding-bottom: 8px;
-            border-bottom: 2px solid var(--primary);
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-top: 28px;
+            margin-bottom: 12px;
+            padding-bottom: 6px;
+            border-bottom: 2px solid var(--border);
+            scroll-margin-top: 80px;
         }
+        .onboarding-content h3:first-child { margin-top: 0; }
         .onboarding-content h4 {
-            font-size: 0.9rem;
+            font-size: 1rem;
             font-weight: 600;
-            margin: 16px 0 8px 0;
+            margin-top: 18px;
+            margin-bottom: 8px;
             color: var(--text);
+            scroll-margin-top: 80px;
         }
+        .onboarding-content p, .onboarding-content ul { line-height: 1.7; margin: 8px 0; }
+        .onboarding-content ul { padding-left: 22px; }
+        .onboarding-content li { margin: 4px 0; }
+        .badge-recommend { display: inline-block; padding: 2px 8px; background: var(--primary-soft); color: var(--primary); border-radius: 4px; font-size: 0.72rem; font-weight: 600; margin-left: 8px; vertical-align: middle; }
+        .badge-optional { display: inline-block; padding: 2px 8px; background: #f1f5f9; color: var(--text-secondary); border-radius: 4px; font-size: 0.72rem; font-weight: 500; margin-left: 8px; vertical-align: middle; }
+        .onboarding-link-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 12px 0; }
+        .onboarding-link-grid a {
+            display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px; text-decoration: none; color: var(--text); background: var(--card-bg); transition: all 0.15s;
+        }
+        .onboarding-link-grid a:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+        .onboarding-link-grid .arrow { color: var(--text-secondary); font-size: 0.9rem; }
+        .onboarding-toolbox { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 16px; }
+        .onboarding-toolbox button { padding: 6px 12px; font-size: 0.82rem; }
+        .onboarding-section-meta { background: #f8fafc; border-left: 3px solid var(--primary); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 0.85rem; }
+        .code-block { position: relative; }
+        .code-block .copy-btn { z-index: 5; }
         .onboarding-content p {
             margin: 8px 0;
             color: var(--text);
@@ -364,13 +448,10 @@
     <div class="container">
         <header>
             <h1>UniHive Console</h1>
-            <div class="refresh-info">
-                <button onclick="refreshAll()">刷新</button>
-            </div>
         </header>
         <div class="tabs">
             <button class="tab active" data-panel="status">上游状态</button>
-            <button class="tab" data-panel="interfaces">接口列表</button>
+            <button class="tab" data-panel="interfaces">MCP APIs</button>
             <button class="tab" data-panel="config">配置信息</button>
             <button class="tab" data-panel="onboarding">接入指南</button>
         </div>
@@ -387,10 +468,18 @@
                         </label>
                     </div>
                 </div>
+                <div class="status-summary" id="status-summary" aria-label="上游汇总">
+                    <div class="status-summary-item"><span class="status-summary-num" id="sum-total">—</span><span class="status-summary-label">上游总数</span></div>
+                    <div class="status-summary-item sum-online"><span class="status-summary-num" id="sum-online">—</span><span class="status-summary-label">在线</span></div>
+                    <div class="status-summary-item sum-degraded"><span class="status-summary-num" id="sum-degraded">—</span><span class="status-summary-label">降级</span></div>
+                    <div class="status-summary-item sum-offline"><span class="status-summary-num" id="sum-offline">—</span><span class="status-summary-label">离线</span></div>
+                    <div class="status-summary-item sum-configured"><span class="status-summary-num" id="sum-configured">—</span><span class="status-summary-label">已配置</span></div>
+                    <div class="status-summary-item sum-disabled"><span class="status-summary-num" id="sum-disabled">—</span><span class="status-summary-label">已禁用</span></div>
+                </div>
                 <div class="filter-chips">
                     <button class="chip active" data-filter="all">全部 <span class="chip-count" id="chip-count-all">0</span></button>
-                    <button class="chip" data-filter="healthy">正常 <span class="chip-count" id="chip-count-healthy">0</span></button>
-                    <button class="chip" data-filter="unhealthy">异常 <span class="chip-count" id="chip-count-unhealthy">0</span></button>
+                    <button class="chip" data-filter="healthy" title="status ∈ {online, configured} 的上游（已就绪但未探测算在线）">正常 <span class="chip-count" id="chip-count-healthy">0</span></button>
+                    <button class="chip" data-filter="unhealthy" title="除 online + configured 之外的上游">异常 <span class="chip-count" id="chip-count-unhealthy">0</span></button>
                 </div>
                 <table class="ups-table">
                     <thead>
@@ -410,8 +499,11 @@
 
             <div class="card">
                 <div class="card-toolbar">
-                    <h2>缓存</h2>
-                    <span class="timestamp" id="cache-timestamp"></span>
+                    <h2>缓存 <small style="font-weight:normal;color:var(--text-secondary);font-size:0.75rem;margin-left:6px">(运行时统计)</small></h2>
+                    <div class="toolbar-actions">
+                        <span class="timestamp" id="cache-timestamp"></span>
+                        <button class="btn-secondary" id="cache-reload" title="立即刷新缓存统计">↻ 立即刷新</button>
+                    </div>
                 </div>
                 <div class="cache-grid">
                     <div class="cache-hitrate-card">
@@ -435,12 +527,18 @@
         </div>
         <div id="interfaces" class="panel">
             <div class="card">
-                <h2>网关接口列表 <span class="timestamp" id="interfaces-timestamp"></span></h2>
+                <div class="card-toolbar">
+                    <h2>MCP APIs <span class="timestamp" id="interfaces-timestamp"></span></h2>
+                    <div class="toolbar-actions">
+                        <span class="ifs-meta" id="ifs-total-meta"></span>
+                        <button class="btn-secondary" id="ifs-copy-all" title="复制当前过滤结果的所有 tool 名为换行分隔文本">复制全部 tool 名</button>
+                    </div>
+                </div>
                 <div class="ifs-layout">
                     <aside class="ifs-sidebar">
                         <label class="visually-hidden" for="ifs-search">搜索工具</label>
                         <div class="ifs-search-wrap" id="ifs-search-wrap">
-                            <input id="ifs-search" class="ifs-search" type="text" placeholder="全局搜索工具... (按 / 聚焦)" autocomplete="off" />
+                            <input id="ifs-search" class="ifs-search" type="text" placeholder="搜索工具... (按 / 聚焦)" autocomplete="off" style="font-size:0.8rem" />
                             <button class="ifs-search-clear" id="ifs-search-clear" type="button" title="清空">×</button>
                         </div>
                         <div class="ifs-filter-toggles" id="ifs-toggles">
@@ -457,37 +555,61 @@
             </div>
         </div>
         <div id="config" class="panel">
-            <div class="card">
-                <h2>路由配置 <span class="timestamp" id="routing-timestamp"></span></h2>
-                <pre id="routing-config" class="json-block"></pre>
+            <div class="cfg-banner"><span class="cfg-banner-icon">⚠️</span><span>此面板展示从 <code>config/upstreams.yaml</code> 加载的运行时配置。<strong>修改后需重启网关</strong>才能生效,本页不会自动重载文件。</span></div>
+            <div class="card-toolbar">
+                <h2>配置信息 <span class="cfg-section-meta" id="config-meta"></span></h2>
+                <div class="toolbar-actions">
+                    <span class="last-refresh" id="config-last-refresh">从未刷新</span>
+                    <button class="btn-secondary" id="config-reload" title="从 YAML 重新读取">↻ 立即刷新</button>
+                    <button class="btn-secondary" id="config-copy-all" title="复制当前运行时视图为 JSON（api_key 已脱敏）">复制 JSON</button>
+                </div>
             </div>
-            <div class="card">
-                <h2>缓存配置</h2>
-                <pre id="cache-config" class="json-block"></pre>
+            <div class="cfg-subtabs" id="cfg-subtabs">
+                <button class="cfg-subtab active" data-cfg="upstreams">上游 <span class="cfg-subtab-count" id="cfg-count-upstreams">0</span></button>
+                <button class="cfg-subtab" data-cfg="mapping">工具映射 <span class="cfg-subtab-count" id="cfg-count-mapping">0</span></button>
+                <button class="cfg-subtab" data-cfg="tools">工具规格 <span class="cfg-subtab-count" id="cfg-count-tools">0</span></button>
+                <button class="cfg-subtab" data-cfg="cache">缓存</button>
+                <button class="cfg-subtab" data-cfg="global">全局</button>
             </div>
+            <div class="cfg-panel active" data-cfg-panel="upstreams" id="cfg-panel-upstreams"></div>
+            <div class="cfg-panel" data-cfg-panel="mapping" id="cfg-panel-mapping"></div>
+            <div class="cfg-panel" data-cfg-panel="tools" id="cfg-panel-tools"></div>
+            <div class="cfg-panel" data-cfg-panel="cache" id="cfg-panel-cache"></div>
+            <div class="cfg-panel" data-cfg-panel="global" id="cfg-panel-global"></div>
         </div>
         <div id="onboarding" class="panel">
             <nav class="onboarding-nav" id="onboarding-nav">
                 <a href="#sec-quickstart" data-target="sec-quickstart">快速开始</a>
                 <a href="#sec-integration" data-target="sec-integration">接入方式</a>
-                <a href="#sec-interfaces" data-target="sec-interfaces">接口列表</a>
+                <a href="#sec-interfaces" data-target="sec-interfaces">MCP APIs</a>
                 <a href="#sec-examples" data-target="sec-examples">常用示例</a>
                 <a href="#sec-troubleshoot" data-target="sec-troubleshoot">故障排查</a>
             </nav>
 
             <div class="card">
+                <div class="card-toolbar">
+                    <h2>接入指南</h2>
+                    <div class="toolbar-actions">
+                        <button class="btn-secondary" data-jump-panel="interfaces" data-jump-group="__all__">→ MCP APIs</button>
+                    </div>
+                </div>
                 <div class="onboarding-content">
 
                     <h3 id="sec-quickstart">1. 快速开始</h3>
                     <p>UniHive MCP 是一个统一的金融数据网关，把通达信、同花顺、Tushare 等多个数据源聚合在同一个 MCP 接口后面。</p>
 
                     <h4>1.1 启动网关</h4>
-                    <p>在项目根目录下运行：</p>
+                    <p>在项目根目录下运行任一脚本（PowerShell）：</p>
+                    <div class="onboarding-toolbox">
+                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_all.ps1">复制 start_all.ps1</button>
+                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_console.ps1">复制 start_console.ps1</button>
+                        <button class="btn-secondary" data-copy-cmd="python -m src.gateway_server --transport stdio">复制 STDIO 启动命令</button>
+                    </div>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
                         <pre>.\scripts\start_all.ps1</pre>
                     </div>
-                    <p>启动后，控制台默认监听 <code>http://127.0.0.1:18080</code>，网关以 stdio 方式对外提供 MCP 接口。</p>
+                    <p>启动后，控制台默认监听 <code>http://127.0.0.1:18080</code>，HTTP 网关（同时启用）监听 <code>http://127.0.0.1:18081/mcp</code>。</p>
 
                     <h4>1.2 配置文件</h4>
                     <p>上游数据源在 <code>config/upstreams.yaml</code> 中配置。修改后需要重启网关生效。</p>
@@ -544,55 +666,63 @@ asyncio.run(main())</pre>
                         <pre>python -m src.gateway_server --transport stdio</pre>
                     </div>
 
-                    <h3 id="sec-interfaces">3. 接口列表</h3>
-                    <p>以下接口由当前网关动态发现，<strong>与你实际启用的上游保持一致</strong>。</p>
-                    <div id="interfaces-list">
-                        <div class="loading-state">正在加载接口列表...</div>
+                    <h3 id="sec-interfaces">3. MCP APIs</h3>
+                    <p>当前网关对外暴露 <strong id="ifs-total-count">—</strong> 个 MCP 接口，按上游自动分组、路由与缓存。完整列表（含每个 tool 的描述、参数、缓存策略）都在 <strong>"MCP APIs"</strong> 标签页。下表按上游给出入口，点击直接跳转到对应分组：</p>
+                    <div class="onboarding-link-grid" id="interfaces-summary">
+                        <div class="loading-state" style="grid-column: 1/-1;">正在加载接口摘要...</div>
                     </div>
 
                     <h3 id="sec-examples">4. 常用示例</h3>
 
-                    <h4>4.1 获取实时行情</h4>
+                    <h4>4.1 Python SDK（推荐）</h4>
+                    <p>通过 <a href="https://github.com/jlowin/fastmcp" target="_blank" rel="noopener">FastMCP</a> 客户端连接 HTTP 网关（默认 <code>http://127.0.0.1:18081/mcp</code>）。所有 tool 名、参数和返回结构以 <strong>"MCP APIs"</strong> 标签页为准。</p>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
                         <pre>import asyncio
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from fastmcp.client import Client
+
+GATEWAY_URL = "http://127.0.0.1:18081/mcp"
 
 async def main():
-    params = StdioServerParameters(
-        command="python",
-        args=["-m", "mcp_data_gateway.gateway_server"],
-        cwd="D:/fintech_workspace/unihive"
-    )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(
-                "get_realtime_quote",
-                {"symbol": "600000"}
-            )
-            print(result.content[0].text)
+    async with Client(GATEWAY_URL) as client:
+        # 1) 列工具名
+        tools = await client.list_tools()
+        print("available tools:", [t.name for t in tools])
+
+        # 2) 调用实时行情（任意上游的 tool 都能这样调）
+        quote = await client.call_tool(
+            "get_realtime_quote",
+            {"symbol": "sh600519"}
+        )
+        print(quote.data)
 
 asyncio.run(main())</pre>
                     </div>
 
-                    <h4>4.2 获取日 K 线</h4>
+                    <h4>4.2 日 K 线（含日期范围）</h4>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
-                        <pre>result = await session.call_tool(
+                        <pre>bar = await client.call_tool(
     "get_daily_bar",
-    {"symbol": "600000", "start_date": "20260101", "end_date": "20260301"}
-)</pre>
+    {"symbol": "sh600519", "start_date": "20260101", "end_date": "20260301"}
+)
+print(bar.data)</pre>
                     </div>
 
                     <h4>4.3 搜索股票</h4>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
-                        <pre>result = await session.call_tool(
+                        <pre>match = await client.call_tool(
     "search_stock",
     {"keyword": "茅台"}
-)</pre>
+)
+print(match.data)</pre>
+                    </div>
+
+                    <div class="onboarding-section-meta">
+                        <strong>提示：</strong>如果你的客户端只支持 stdio，启动 STDIO 模式：
+                        <code>python -m src.gateway_server --transport stdio</code>。
+                        调试可用 MCP Inspector（<code>npx -y @modelcontextprotocol/inspector</code>），Python 可用官方 SDK（<code>from mcp import ClientSession, StdioServerParameters</code>）。Windows 下 <code>cwd</code> 用项目绝对路径。
                     </div>
 
                     <h3 id="sec-troubleshoot">5. 故障排查</h3>
@@ -613,12 +743,13 @@ asyncio.run(main())</pre>
 
                     <h4>5.3 参数错误</h4>
                     <ul>
-                        <li>股票代码需要标准化（参见 <code>src/normalizer.py</code>）</li>
-                        <li>日期格式统一为 <code>YYYYMMDD</code></li>
+                        <li>股票代码由网关自动标准化（<code>000001</code>、<code>sh600519</code>、<code>600519.SH</code>、<code>sz000001</code> 都能识别</li>
+                        <li>日期统一使用 <code>YYYYMMDD</code>（如 <code>20260301</code>）</li>
+                        <li>具体参数以 <strong>"MCP APIs"</strong> 标签页每个 tool 行的"详情"展开为准</li>
                     </ul>
 
                     <h4>5.4 反馈渠道</h4>
-                    <p>遇到问题请提交 Issue 到项目仓库，并附上控制台截图与接口返回内容。</p>
+                    <p>遇到问题请提交 Issue 到 <a href="https://github.com/unihive/unihive" target="_blank" rel="noopener">github.com/unihive/unihive</a><!-- TODO: 替换为实际仓库 URL -->,并附上控制台截图与接口返回内容。点击 <strong>"MCP APIs"</strong> → 对应 tool 行 → <code>复制</code> 按钮即可拿到完整 tool 名与参数。</p>
 
                 </div>
             </div>
@@ -632,7 +763,7 @@ asyncio.run(main())</pre>
                 tab.classList.add('active');
                 document.getElementById(tab.dataset.panel).classList.add('active');
                 if (tab.dataset.panel === 'onboarding') {
-                    const list = document.getElementById('interfaces-list');
+                    const list = document.getElementById('interfaces-summary');
                     if (list && (list.children.length === 0 || list.querySelector('.loading-state'))) {
                         loadOnboarding();
                     }
@@ -716,7 +847,9 @@ asyncio.run(main())</pre>
                 const tp = TYPE_TEXT[u.type] || u.type || '-';
                 let latHtml;
                 if (u.latency_ms == null) {
-                    latHtml = '<span class="latency-cell dim">-</span>';
+                    latHtml = '<span class="latency-cell dim" title="未探测 - 上游未在线或未发起请求">未探测</span>';
+                } else if (u.latency_ms === 0) {
+                    latHtml = '<span class="latency-cell good">0<span style="opacity:.6">ms</span></span>';
                 } else {
                     let cls = 'good';
                     if (u.latency_ms > 1000) cls = 'slow';
@@ -804,6 +937,7 @@ asyncio.run(main())</pre>
                 const data = await fetchJSON('/api/status');
                 statusUpstreams = Object.entries(data.upstreams || {}).map(([name, info]) => ({ _name: name, ...info }));
                 Object.entries(data.upstreams || {}).forEach(([n, info]) => { upstreamDotStatus[n] = info.status; });
+                renderStatusSummary(data.summary);
                 renderSidebar();
                 renderChipCounts();
                 renderUpstreamsTable();
@@ -816,6 +950,16 @@ asyncio.run(main())</pre>
             } finally {
                 if (refreshEl) refreshEl.classList.remove('refreshing');
             }
+        }
+        function renderStatusSummary(s) {
+            if (!s) return;
+            const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? '—'; };
+            set('sum-total', s.total);
+            set('sum-online', s.online);
+            set('sum-degraded', s.degraded);
+            set('sum-offline', s.offline);
+            set('sum-configured', s.configured);
+            set('sum-disabled', s.disabled);
         }
 
         function setStatusFilter(f) {
@@ -963,20 +1107,23 @@ asyncio.run(main())</pre>
                 return;
             }
             const meta = activeGroup === ALL_KEY ? { title: '全部', key: '全部' } : { title: (GROUP_META[activeGroup] || { title: activeGroup }).title, key: activeGroup };
+            const metaEl = document.getElementById('ifs-total-meta');
+            if (metaEl) metaEl.textContent = `${meta.title} · ${tools.length} 个工具`;
+            window._currentFilteredToolNames = tools.map(t => t.name);
             const headerHtml = activeGroup === ALL_KEY
                 ? '<th style="width:28%">接口</th><th>描述</th><th style="width:90px"></th>'
-                : `<th style="width:28%">接口</th><th>描述</th><th style="width:14%">数据源</th><th style="width:90px"></th>`;
+                : `<th style="width:28%">接口</th><th>描述</th><th style="width:14%" class="col-source">数据源</th><th style="width:90px"></th>`;
             const rows = tools.map((t, i) => {
                 const badges = [];
                 if (t.dangerous) badges.push('<span class="badge badge-dangerous">dangerous</span>');
                 if (t.cache_ttl_key) badges.push(`<span class="badge badge-cache" title="cache_ttl_key=${escapeHtml(t.cache_ttl_key)}">${escapeHtml(t.cache_ttl_key)}</span>`);
                 const params = (t.params || []).filter(p => p && p !== '?');
                 const paramsStr = params.join(', ');
-                const sourceCell = activeGroup === ALL_KEY ? '' : `<td><span class="chain">${escapeHtml(t.source || '-')}</span></td>`;
+                const sourceCell = activeGroup === ALL_KEY ? '' : `<td><button type="button" class="chain chain-link" data-source="${escapeHtml(t.source || '')}" title="跳转到该上游分组">${escapeHtml(t.source || '-')} →</button></td>`;
                 const detailBody = buildDetailBody(t);
                 return `<tr data-tool="${escapeHtml(t.name)}"><td><span class="tool-name">${highlight(t.name, searchQuery)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td><td><div class="tool-desc">${highlight(t.description || '-', searchQuery)}</div>${paramsStr ? `<div class="tool-params">${highlight(paramsStr, searchQuery)}</div>` : ''}</td>${sourceCell}<td><div class="row-actions"><button class="row-action-btn copy-name" data-name="${escapeHtml(t.name)}">复制</button><button class="row-action-btn toggle-detail" data-idx="${i}">详情</button></div></td></tr>${detailBody ? `<tr class="ifs-detail-row" data-detail-for="${escapeHtml(t.name)}" style="display:none"><td colspan="${activeGroup === ALL_KEY ? 3 : 4}">${detailBody}</td></tr>` : ''}`;
             }).join('');
-            root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)}</h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><div class="ifs-table-wrap"><table class="ifs-table"><caption style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden">${escapeHtml(meta.title)} 接口列表</caption><thead><tr>${headerHtml}</tr></thead><tbody>${rows}</tbody></table></div>`;
+            root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)}</h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><div class="ifs-table-wrap"><table class="ifs-table"><caption style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden">${escapeHtml(meta.title)} MCP APIs</caption><thead><tr>${headerHtml}</tr></thead><tbody>${rows}</tbody></table></div>`;
         }
         function buildDetailBody(t) {
             const parts = [];
@@ -1039,14 +1186,345 @@ asyncio.run(main())</pre>
                 if (root) root.innerHTML = '<div class="loading">加载失败，请点击「刷新」重试</div>';
             }
         }
-        async function loadConfig() {
+        function humanizeDuration(seconds) {
+            if (seconds == null) return '永不过期';
+            const s = Number(seconds);
+            if (!Number.isFinite(s)) return String(seconds);
+            if (s < 60) return `${s} 秒`;
+            if (s < 3600) { const m = s / 60; return `${Number.isInteger(m) ? m : m.toFixed(1)} 分钟`; }
+            if (s < 86400) { const h = s / 3600; return `${Number.isInteger(h) ? h : h.toFixed(1)} 小时`; }
+            const d = s / 86400;
+            return `${Number.isInteger(d) ? d : d.toFixed(1)} 天`;
+        }
+        function syntaxHighlight(json) {
+            const safe = escapeHtml(typeof json === 'string' ? json : JSON.stringify(json, null, 2));
+            return safe.replace(
+                /(&quot;)([^&]*?)(&quot;)(\s*:)|(&quot;)([^&]*?)(&quot;)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\b(?:true|false|null)\b)/g,
+                (m, kq, k, kqc, sq, sv, sqc, num, lit) => {
+                    if (kq) return `<span class="k">${kq}${k}${kqc}</span>`;
+                    if (sq) return `<span class="s">${sq}${sv}${sqc}</span>`;
+                    if (num) return `<span class="n">${num}</span>`;
+                    if (lit === 'true' || lit === 'false') return `<span class="b">${lit}</span>`;
+                    if (lit === 'null') return `<span class="nl">${lit}</span>`;
+                    return m;
+                }
+            );
+        }
+        function renderCfgUpstreams(data) {
+            const root = document.getElementById('cfg-panel-upstreams');
+            const ups = data.upstreams || {};
+            const entries = Object.entries(ups);
+            document.getElementById('cfg-count-upstreams').textContent = entries.length;
+            if (entries.length === 0) { root.innerHTML = '<div class="loading">暂无上游配置</div>'; return; }
+            const rows = entries.map(([name, cfg]) => {
+                const enabled = cfg.enabled ? '<span class="cfg-switch on">● 启用</span>' : '<span class="cfg-switch off">○ 停用</span>';
+                const caps = (cfg.capabilities || []);
+                const capHtml = caps.length ? caps.map(c => `<span class="cfg-cap">${escapeHtml(c)}</span>`).join('') : '<span style="color:var(--text-secondary)">-</span>';
+                const apiKeyHtml = cfg.api_key
+                    ? `<span class="cfg-mask" title="已脱敏显示 — 原始值在 YAML 中">${escapeHtml(cfg.api_key)}</span>`
+                    : '<span style="color:var(--text-secondary)">-</span>';
+                const envEntries = cfg.env ? Object.entries(cfg.env) : [];
+                const envRowsHtml = envEntries.length
+                    ? envEntries.map(([k, v]) => `<tr><td class="tool-name">${escapeHtml(k)}</td><td>${/TOKEN|KEY|SECRET/i.test(k) ? `<span class="cfg-mask" title="已脱敏">${escapeHtml(String(v))}</span>` : escapeHtml(String(v))}</td></tr>`).join('')
+                    : '';
+                const envRowHtml = envEntries.length ? `
+                    <tr class="cfg-env-row" data-env-for="${escapeHtml(name)}">
+                        <td colspan="7">
+                            <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:6px">环境变量 (env)</div>
+                            <table class="cfg-table" style="background:var(--card-bg);border:1px solid var(--border);border-radius:4px">
+                                <thead><tr><th style="width:30%">变量</th><th>值</th></tr></thead>
+                                <tbody>${envRowsHtml}</tbody>
+                            </table>
+                            ${cfg.retry ? `<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:8px">retry: ${escapeHtml(JSON.stringify(cfg.retry))}</div>` : ''}
+                        </td>
+                    </tr>` : '';
+                return `
+                    <tr>
+                        <td><span class="tool-name">${escapeHtml(name)}</span></td>
+                        <td><span class="cfg-cap">${escapeHtml(cfg.type || '-')}</span></td>
+                        <td>${enabled}</td>
+                        <td style="font-family:monospace;font-size:0.75rem;word-break:break-all">${escapeHtml(cfg.base_url || '-')}</td>
+                        <td class="num">${cfg.timeout_seconds != null ? cfg.timeout_seconds : '-'}</td>
+                        <td style="font-family:monospace;font-size:0.75rem">${apiKeyHtml}</td>
+                        <td>${capHtml}</td>
+                    </tr>${envRowHtml}`;
+            }).join('');
+            root.innerHTML = `
+                <div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> ${entries.length} 个上游 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— type / enabled / endpoint / 能力</span></span>
+                    </div>
+                    <div class="cfg-section-body">
+                        <table class="cfg-table">
+                            <thead>
+                                <tr><th style="width:13%">名称</th><th style="width:7%">类型</th><th style="width:9%">状态</th><th style="width:30%">Endpoint</th><th class="num" style="width:7%">超时(s)</th><th style="width:14%">API Key</th><th>能力</th></tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
+                </div>`;
+            root.querySelectorAll('[data-toggle-section]').forEach(hdr => {
+                hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
+            });
+        }
+        function renderCfgMapping(data) {
+            const root = document.getElementById('cfg-panel-mapping');
+            const map = data.upstream_tool_mapping || {};
+            const entries = Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]));
+            document.getElementById('cfg-count-mapping').textContent = entries.length;
+            if (entries.length === 0) { root.innerHTML = '<div class="loading">暂无工具映射</div>'; return; }
+            const allRowsHtml = entries.map(([toolName, chain]) => {
+                const items = Object.entries(chain || {});
+                if (items.length === 0) return `<tr data-search="${escapeHtml(toolName.toLowerCase())}"><td><span class="tool-name">${escapeHtml(toolName)}</span></td><td colspan="2" style="color:var(--text-secondary)">无上游映射</td></tr>`;
+                const pills = items.map(([upstream, toolCall], idx) =>
+                    `<span class="chain-pill${idx === 0 ? ' primary' : ''}" title="${escapeHtml(upstream)} :: ${escapeHtml(toolCall)}">${escapeHtml(upstream)} <span style="opacity:0.6">::</span> ${escapeHtml(toolCall)}</span>`
+                ).join('<span style="color:var(--text-secondary);margin:0 2px">→</span>');
+                const searchKey = (toolName + ' ' + items.map(([u, t]) => `${u} ${t}`).join(' ')).toLowerCase();
+                return `<tr data-search="${escapeHtml(searchKey)}"><td><span class="tool-name">${escapeHtml(toolName)}</span></td><td><div class="chain-list">${pills}</div></td></tr>`;
+            }).join('');
+            root.innerHTML = `
+                <div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> ${entries.length} 条工具映射 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 路由键 → 上游 + 上游 tool 名</span></span>
+                    </div>
+                    <div class="cfg-section-body">
+                        <div class="cfg-search-wrap" style="margin-bottom:10px">
+                            <input type="text" class="cfg-search" id="cfg-search-mapping" placeholder="按路由键 / 上游 / 上游 tool 筛选…" />
+                            <button type="button" class="cfg-search-clear" id="cfg-search-mapping-clear" title="清空">×</button>
+                        </div>
+                        <table class="cfg-table">
+                            <thead><tr><th style="width:30%">路由键</th><th>调用链 (上游 → 上游 tool)</th></tr></thead>
+                            <tbody id="cfg-mapping-tbody">${allRowsHtml}</tbody>
+                        </table>
+                        <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:6px" id="cfg-mapping-count"></div>
+                    </div>
+                </div>`;
+            const search = document.getElementById('cfg-search-mapping');
+            const clear = document.getElementById('cfg-search-mapping-clear');
+            const tbody = document.getElementById('cfg-mapping-tbody');
+            const countEl = document.getElementById('cfg-mapping-count');
+            const applyFilter = () => {
+                const q = (search.value || '').trim().toLowerCase();
+                const rows = tbody.querySelectorAll('tr[data-search]');
+                let shown = 0;
+                rows.forEach(r => {
+                    const match = !q || (r.dataset.search || '').includes(q);
+                    r.style.display = match ? '' : 'none';
+                    if (match) shown++;
+                });
+                countEl.textContent = q ? `显示 ${shown} / ${rows.length}` : '';
+                document.getElementById('cfg-search-mapping-wrap')?.classList.toggle('has-value', !!q);
+                search.parentElement.classList.toggle('has-value', !!q);
+            };
+            search.addEventListener('input', applyFilter);
+            clear.addEventListener('click', () => { search.value = ''; applyFilter(); });
+            root.querySelectorAll('[data-toggle-section]').forEach(hdr => {
+                hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
+            });
+        }
+        function renderCfgTools(data) {
+            const root = document.getElementById('cfg-panel-tools');
+            const tools = data.tools || [];
+            document.getElementById('cfg-count-tools').textContent = tools.length;
+            if (tools.length === 0) { root.innerHTML = '<div class="loading">暂无工具规格</div>'; return; }
+            const sorted = [...tools].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+            const allRowsHtml = sorted.map(t => {
+                const danger = t.dangerous ? '<span class="cfg-switch off" title="需要调用方显式启用">⚠ 危险</span>' : '<span style="color:var(--text-secondary)">-</span>';
+                const ttl = t.cache_ttl_key ? `<span class="cfg-cap">${escapeHtml(t.cache_ttl_key)}</span>` : '<span style="color:var(--text-secondary)">-</span>';
+                const paramsDisplay = (t.params || []).map(p => {
+                        if (typeof p === 'object' && p) {
+                            const tag = p.required ? '<span style="color:#b91c1c">*</span>' : '<span style="color:var(--text-secondary)">·</span>';
+                            return `${tag}${escapeHtml(p.name || '?')}`;
+                        }
+                        return escapeHtml(String(p));
+                    }).join(' ') || '-';
+                const desc = t.description || '(无描述)';
+                const trunc = desc.length > 80 ? desc.slice(0, 80) + '…' : desc;
+                const expandable = desc.length > 80 ? ' cfg-expandable' : '';
+                const searchKey = `${t.name} ${desc} ${(t.params||[]).map(p => p && p.name || p).join(' ')} ${t.cache_ttl_key || ''}`.toLowerCase();
+                const detailHtml = desc.length > 80 ? `
+                    <tr class="cfg-detail-row" data-detail-for="${escapeHtml(t.name)}" style="display:none">
+                        <td colspan="5">${escapeHtml(desc)}</td>
+                    </tr>` : '';
+                return `
+                    <tr class="${expandable.trim()}" data-tool="${escapeHtml(t.name)}" data-search="${escapeHtml(searchKey)}">
+                        <td><span class="tool-name">${escapeHtml(t.name)}</span></td>
+                        <td>${escapeHtml(trunc)}</td>
+                        <td>${ttl}</td>
+                        <td style="font-family:monospace;font-size:0.75rem">${paramsDisplay}</td>
+                        <td>${danger}</td>
+                    </tr>${detailHtml}`;
+            }).join('');
+            root.innerHTML = `
+                <div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> ${tools.length} 个工具规格 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 名称 / 描述 / 缓存键 / 参数 / 危险标记 · 点行展开完整描述</span></span>
+                    </div>
+                    <div class="cfg-section-body">
+                        <div class="cfg-search-wrap" style="margin-bottom:10px">
+                            <input type="text" class="cfg-search" id="cfg-search-tools" placeholder="按名称 / 描述 / 参数筛选…" />
+                            <button type="button" class="cfg-search-clear" id="cfg-search-tools-clear" title="清空">×</button>
+                        </div>
+                        <table class="cfg-table">
+                            <thead><tr><th style="width:20%">名称</th><th>描述</th><th style="width:11%">缓存键</th><th style="width:24%">参数 <span style="text-transform:none; color:var(--text-secondary); font-weight:400"><span style="color:#b91c1c">*</span>必填 · <span style="color:var(--text-secondary)">·</span>可选</span></th><th style="width:8%">危险</th></tr></thead>
+                            <tbody id="cfg-tools-tbody">${allRowsHtml}</tbody>
+                        </table>
+                        <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:6px" id="cfg-tools-count"></div>
+                    </div>
+                </div>`;
+            const search = document.getElementById('cfg-search-tools');
+            const clear = document.getElementById('cfg-search-tools-clear');
+            const tbody = document.getElementById('cfg-tools-tbody');
+            const countEl = document.getElementById('cfg-tools-count');
+            const applyFilter = () => {
+                const q = (search.value || '').trim().toLowerCase();
+                const rows = tbody.querySelectorAll('tr[data-search]');
+                let shown = 0;
+                rows.forEach(r => {
+                    const match = !q || (r.dataset.search || '').includes(q);
+                    r.style.display = match ? '' : 'none';
+                    const detail = tbody.querySelector(`tr.cfg-detail-row[data-detail-for="${r.dataset.tool}"]`);
+                    if (detail) detail.style.display = 'none';
+                    if (match) shown++;
+                });
+                countEl.textContent = q ? `显示 ${shown} / ${rows.length}` : '';
+                search.parentElement.classList.toggle('has-value', !!q);
+            };
+            search.addEventListener('input', applyFilter);
+            clear.addEventListener('click', () => { search.value = ''; applyFilter(); });
+            tbody.addEventListener('click', (e) => {
+                const tr = e.target.closest('tr.cfg-expandable');
+                if (!tr) return;
+                const detail = tbody.querySelector(`tr.cfg-detail-row[data-detail-for="${tr.dataset.tool}"]`);
+                if (detail) {
+                    const show = detail.style.display === 'none';
+                    detail.style.display = show ? '' : 'none';
+                }
+            });
+            root.querySelectorAll('[data-toggle-section]').forEach(hdr => {
+                hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
+            });
+        }
+        function renderCfgCache(data) {
+            const root = document.getElementById('cfg-panel-cache');
+            const cache = data.cache || {};
+            const enabled = cache.enabled ? '<span class="cfg-switch on">● 启用</span>' : '<span class="cfg-switch off">○ 停用</span>';
+            const ttl = cache.ttl || {};
+            const ttlEntries = Object.entries(ttl).sort((a, b) => Number(a[1]) - Number(b[1]));
+            const ttlRows = ttlEntries.map(([k, v]) =>
+                `<tr><td><span class="tool-name">${escapeHtml(k)}</span></td><td class="num">${v}</td><td>${humanizeDuration(v)}</td></tr>`
+            ).join('') || '<tr><td colspan="3" style="color:var(--text-secondary)">无 TTL 配置</td></tr>';
+            const kvHtml = `
+                <div class="cfg-kv-grid">
+                    <div class="k">启用</div><div class="v">${enabled}</div>
+                    <div class="k">DB 路径</div><div class="v">${escapeHtml(cache.db_path || '-')}</div>
+                    <div class="k">TTL 配置</div><div class="v"><span class="num">${ttlEntries.length}</span> 条 · 最短 <strong>${ttlEntries.length ? humanizeDuration(ttlEntries[0][1]) : '-'}</strong> · 最长 <strong>${ttlEntries.length ? humanizeDuration(ttlEntries[ttlEntries.length-1][1]) : '-'}</strong></div>
+                </div>`;
+            root.innerHTML = '<div class="cfg-cache-banner">⚠️ 此处显示的是 <code>config/upstreams.yaml</code> 里的 <code>cache.ttl</code> 配置，与"上游状态"标签页里的运行时缓存（hits/命中率）是不同的概念。<strong>修改后需重启网关</strong>才会生效。</div>'
+                + `<div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> 缓存基本配置</span>
+                    </div>
+                    <div class="cfg-section-body">${kvHtml}</div>
+                </div>
+                <div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> ${ttlEntries.length} 条 TTL 配置 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 按 TTL 升序排列</span></span>
+                    </div>
+                    <div class="cfg-section-body">
+                        <table class="cfg-table">
+                            <thead><tr><th>键</th><th class="num">秒</th><th>人类可读</th></tr></thead>
+                            <tbody>${ttlRows}</tbody>
+                        </table>
+                    </div>
+                </div>`;
+            root.querySelectorAll('[data-toggle-section]').forEach(hdr => {
+                hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
+            });
+        }
+        function renderCfgGlobal(data) {
+            const root = document.getElementById('cfg-panel-global');
+            const dd = data.disable_dangerous;
+            const sr = data.strict_registry;
+            const logging = data.logging || {};
+            const sw = (label, val, hint) => val
+                ? `<span class="cfg-switch on" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">● ${escapeHtml(label)}</span>`
+                : `<span class="cfg-switch off" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">○ ${escapeHtml(label)}</span>`;
+            const loggingKv = Object.entries(logging).map(([k, v]) => {
+                const display = typeof v === 'object' && v
+                    ? Object.entries(v).map(([k2, v2]) => `${escapeHtml(k2)}=${escapeHtml(String(v2))}`).join(', ')
+                    : escapeHtml(String(v));
+                return `<div class="k">${escapeHtml(k)}</div><div class="v">${display}</div>`;
+            }).join('') || '<div class="k">(无)</div><div class="v">-</div>';
+            root.innerHTML = `
+                <div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> 全局开关</span>
+                    </div>
+                    <div class="cfg-section-body">
+                        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+                            ${sw('disable_dangerous', dd, '启用后跳过所有 dangerous: true 的 tool')}
+                            ${sw('strict_registry', sr, '启用后启动校验 YAML 工具名都在上游 tools/list 中实际出现')}
+                        </div>
+                    </div>
+                </div>
+                <div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> Logging <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 日志配置</span></span>
+                    </div>
+                    <div class="cfg-section-body">
+                        <div class="cfg-kv-grid">${loggingKv}</div>
+                    </div>
+                </div>`;
+            root.querySelectorAll('[data-toggle-section]').forEach(hdr => {
+                hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
+            });
+        }
+        let _cfgCache = null;
+        async function loadConfig(silent = false) {
             try {
                 const data = await fetchJSON('/api/config');
-                document.getElementById('routing-timestamp').textContent = '';
-                document.getElementById('routing-config').textContent = JSON.stringify(data.routing || {}, null, 2);
-                document.getElementById('cache-config').textContent = JSON.stringify(data.cache || {}, null, 2);
-            } catch (e) { console.error('Load config error:', e); }
+                _cfgCache = data;
+                renderCfgUpstreams(data);
+                renderCfgMapping(data);
+                renderCfgTools(data);
+                renderCfgCache(data);
+                renderCfgGlobal(data);
+                if (!silent) {
+                    const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+                    const el = document.getElementById('config-last-refresh');
+                    if (el) el.textContent = `已刷新 ${ts}`;
+                    const meta = document.getElementById('config-meta');
+                    if (meta) {
+                        const upCount = Object.keys(data.upstreams || {}).length;
+                        const toolCount = (data.tools || []).length;
+                        meta.textContent = `·  ${upCount} 上游 · ${toolCount} 工具`;
+                    }
+                }
+            } catch (e) {
+                console.error('Load config error:', e);
+                _cfgCache = null;
+                const failMsg = '<div class="loading">加载失败，请点击「立即刷新」重试</div>';
+                ['cfg-panel-upstreams', 'cfg-panel-mapping', 'cfg-panel-tools', 'cfg-panel-cache', 'cfg-panel-global']
+                .forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = failMsg; });
+                const meta = document.getElementById('config-meta');
+                if (meta) meta.textContent = '加载失败';
+            }
         }
+        function setCfgTab(name) {
+            document.querySelectorAll('.cfg-subtab').forEach(b => b.classList.toggle('active', b.dataset.cfg === name));
+            document.querySelectorAll('.cfg-panel').forEach(p => p.classList.toggle('active', p.dataset.cfgPanel === name));
+        }
+        document.getElementById('cfg-subtabs').addEventListener('click', (e) => {
+            const btn = e.target.closest('.cfg-subtab');
+            if (!btn) return;
+            setCfgTab(btn.dataset.cfg);
+        });
+        document.getElementById('config-reload').addEventListener('click', () => loadConfig(false));
+        document.getElementById('config-copy-all').addEventListener('click', async (e) => {
+            if (!_cfgCache) { showToast('尚未加载配置'); return; }
+            await copyText(JSON.stringify(_cfgCache, null, 2), e.currentTarget);
+        });
         function refreshAll() {
             loadStatus();
             loadInterfaces();
@@ -1078,6 +1556,17 @@ asyncio.run(main())</pre>
                     tr.style.display = show ? '' : 'none';
                     detailBtn.textContent = show ? '收起' : '详情';
                 }
+            }
+        });
+        document.getElementById('ifs-copy-all').addEventListener('click', (e) => {
+            const names = window._currentFilteredToolNames || [];
+            if (!names.length) { showToast('暂无可复制的工具'); return; }
+            copyText(names.join('\n'), e.currentTarget);
+        });
+        document.getElementById('ifs-content').addEventListener('click', (e) => {
+            const srcBtn = e.target.closest('.chain-link');
+            if (srcBtn && srcBtn.dataset.source) {
+                setActiveGroup(srcBtn.dataset.source);
             }
         });
         document.getElementById('ifs-nav').addEventListener('click', (e) => {
@@ -1116,6 +1605,7 @@ asyncio.run(main())</pre>
         });
         // ===== 上游状态 - 事件接线 =====
         document.getElementById('refresh-now').addEventListener('click', () => loadStatus(true));
+        document.getElementById('cache-reload').addEventListener('click', () => loadStatus(true));
         document.getElementById('auto-refresh').addEventListener('change', (e) => {
             if (e.target.checked) startAutoRefresh(); else stopAutoRefresh();
         });
@@ -1131,60 +1621,59 @@ asyncio.run(main())</pre>
         startAutoRefresh();
         refreshAll();
         async function loadOnboarding() {
-            const container = document.getElementById('interfaces-list');
+            const container = document.getElementById('interfaces-summary');
+            const totalEl = document.getElementById('ifs-total-count');
             try {
                 const data = await fetchJSON('/api/interfaces');
                 const tools = data.tools || [];
+                if (totalEl) totalEl.textContent = tools.length;
                 if (tools.length === 0) {
-                    container.innerHTML = '<div class="loading-state">暂无接口配置</div>';
+                    container.innerHTML = '<div class="loading-state" style="grid-column:1/-1">暂无接口配置</div>';
                     return;
                 }
-                container.innerHTML = tools.map(tool => `
-                    <details class="interface-card">
-                        <summary>
-                            <span class="tool-name">${escapeHtml(tool.name)}</span>
-                            <span class="chain">${escapeHtml(tool.source || '-')}</span>
-                        </summary>
-                        <div class="interface-body">
-                            <p class="description">${escapeHtml(tool.description || '暂无描述')}</p>
-                            <h4>调用示例</h4>
-                            <div class="code-block">
-                                <button class="copy-btn">复制</button>
-                                <pre>result = await session.call_tool(
-    "${escapeHtml(tool.name)}",
-    { /* 参数见上游文档 */ }
-)</pre>
-                            </div>
-                        </div>
-                    </details>
-                `).join('');
+                const counts = new Map();
+                for (const t of tools) {
+                    const k = primarySource(t.source) || '其他';
+                    counts.set(k, (counts.get(k) || 0) + 1);
+                }
+                const groups = [ALL_KEY, ...GROUP_ORDER].filter(k => k === ALL_KEY || counts.has(k));
+                container.innerHTML = groups.map(key => {
+                    const meta = key === ALL_KEY ? { title: '全部接口', desc: '一次性查看所有上游的 tool' } : (GROUP_META[key] || { title: key, desc: '' });
+                    const count = key === ALL_KEY ? tools.length : (counts.get(key) || 0);
+                    return `<a href="#" data-jump-panel="interfaces" data-jump-group="${escapeHtml(key)}"><span><strong>${escapeHtml(meta.title)}</strong><br><small style="color:var(--text-secondary)">${escapeHtml(meta.desc)}</small></span><span><span class="count">${count}</span> <span class="arrow">→</span></span></a>`;
+                }).join('');
             } catch (e) {
                 console.error('Load interfaces error:', e);
-                container.innerHTML = '<div class="loading-state">加载失败<span class="retry-link" onclick="loadOnboarding()">点击重试</span></div>';
+                if (totalEl) totalEl.textContent = '加载失败';
+                container.innerHTML = `<div class="loading-state" style="grid-column:1/-1">加载失败 <span class="retry-link" onclick="loadOnboarding()">点击重试</span></div>`;
+            }
+        }
+        function jumpToPanel(panelId, groupKey) {
+            const tab = document.querySelector(`.tab[data-panel="${panelId}"]`);
+            if (!tab) return;
+            tab.click();
+            if (groupKey && typeof setActiveGroup === 'function') {
+                // 等 interfaces 渲染完成后再切分组（避免初次加载时找不到 .ifs-nav-item）
+                setTimeout(() => setActiveGroup(groupKey), 50);
             }
         }
         document.getElementById('onboarding').addEventListener('click', (e) => {
-            if (!e.target.classList.contains('copy-btn')) return;
-            const btn = e.target;
-            const pre = btn.nextElementSibling;
-            if (!pre || pre.tagName !== 'PRE') return;
-            const text = pre.textContent;
-            if (!navigator.clipboard) {
-                btn.textContent = '浏览器不支持';
-                setTimeout(() => { btn.textContent = '复制'; }, 2000);
+            const jumpBtn = e.target.closest('[data-jump-panel]');
+            if (jumpBtn) {
+                e.preventDefault();
+                jumpToPanel(jumpBtn.dataset.jumpPanel, jumpBtn.dataset.jumpGroup);
                 return;
             }
-            navigator.clipboard.writeText(text).then(() => {
-                btn.textContent = '已复制';
-                btn.classList.add('copied');
-                setTimeout(() => {
-                    btn.textContent = '复制';
-                    btn.classList.remove('copied');
-                }, 2000);
-            }).catch(() => {
-                btn.textContent = '复制失败';
-                setTimeout(() => { btn.textContent = '复制'; }, 2000);
-            });
+            const cmdBtn = e.target.closest('[data-copy-cmd]');
+            if (cmdBtn) {
+                copyText(cmdBtn.dataset.copyCmd, cmdBtn);
+                return;
+            }
+            const copyBtn = e.target.closest('.copy-btn');
+            if (copyBtn) {
+                const pre = copyBtn.nextElementSibling;
+                if (pre && pre.tagName === 'PRE') copyText(pre.textContent, copyBtn);
+            }
         });
 
         (function setupOnboardingNav() {
