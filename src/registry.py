@@ -52,10 +52,39 @@ def _normalize_param(name: str, value: Any, spec: dict) -> Any:
     return value
 
 
+_CONFIRM_PARAM = "confirm"
+
+_CONFIRM_SPEC: dict = {
+    "name": _CONFIRM_PARAM,
+    "type": "bool",
+    "required": False,
+}
+
+_CONFIRM_DOC = (
+    "\n\n⚠️ 这是高风险写操作。默认不执行：必须先向用户说明本次调用的具体影响并取得同意，"
+    "然后重新调用并传 confirm=true。未确认的调用会被网关拒绝，不会触达上游。"
+)
+
+
+def _confirmation_required(name: str) -> dict:
+    return {
+        "success": False,
+        "data": None,
+        "error": (
+            f"{name} 是高风险操作，已被网关拦截。请先向用户说明影响并取得同意，"
+            f"再以 confirm=true 重新调用。"
+        ),
+        "source": None,
+        "hops": [],
+        "requires_confirmation": True,
+    }
+
+
 def build_tool_function(spec: dict, server: Any) -> Callable:
     """从 spec 构造带正确 signature/annotations/doc 的 async 函数。
 
     server 必须有 _execute_cached(name, params, route_key, ttl_key) 方法。
+    dangerous=True 的 spec 会额外获得一个 confirm 参数作为运行时确认门。
     """
     name: str = spec["name"]
     description: str = spec.get("description", "")
@@ -64,9 +93,14 @@ def build_tool_function(spec: dict, server: Any) -> Callable:
     param_specs: list[dict] = spec.get("params", [])
     dangerous: bool = spec.get("dangerous", False)
 
-    sig = build_signature(param_specs)
+    # confirm 只进签名, 不进 param_specs, 所以永远不会被转发给上游
+    signature_specs = param_specs + [_CONFIRM_SPEC] if dangerous else param_specs
+    sig = build_signature(signature_specs)
 
     async def _runtime(**kwargs) -> dict:
+        if dangerous and not kwargs.get(_CONFIRM_PARAM):
+            logger.warning("DANGEROUS call rejected as unconfirmed: %s", name)
+            return _confirmation_required(name)
         normalized: dict = {}
         for p in param_specs:
             v = kwargs.get(p["name"])
@@ -85,11 +119,11 @@ def build_tool_function(spec: dict, server: Any) -> Callable:
     # 让 FastMCP 通过 inspect.signature() 拿到正确 schema
     _runtime.__signature__ = sig
     _runtime.__annotations__ = {
-        p["name"]: _TYPE_MAP.get(p.get("type", "str"), str) for p in param_specs
+        p["name"]: _TYPE_MAP.get(p.get("type", "str"), str) for p in signature_specs
     }
     _runtime.__annotations__["return"] = dict
     _runtime.__name__ = name
-    _runtime.__doc__ = description
+    _runtime.__doc__ = description + _CONFIRM_DOC if dangerous else description
     return _runtime
 
 
