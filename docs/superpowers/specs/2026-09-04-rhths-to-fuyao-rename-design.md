@@ -44,7 +44,7 @@
 | 文件 | 操作 | 改动摘要 |
 |------|------|---------|
 | `src/rhths_client.py` | rename → `src/fuyao_client.py` | `RhthsClient` → `FuyaoClient`, `RhthsConfig` → `FuyaoConfig`, docstring 同步 |
-| `src/gateway_server.py` | modify | import 路径, type hint, 4 处 upstream key 字面量, env var 名 (`${RHTHS_API_KEY}` → `${FUYAO_API_KEY}`) |
+| `src/gateway_server.py` | modify | import 路径 (`rhths_client` → `fuyao_client`), type hint (`RhthsClient` → `FuyaoClient`), 局部变量 `rhths_cfg` → `fuyao_cfg`, `"rhths_meta"` 字面量 (用于 `search_stock` 路由 fallback) |
 | `src/router.py` | modify | import 路径, type hint |
 | `src/http_jsonrpc_client.py` | modify | 1 处注释里的 `RhthsClient` 字面引用 |
 | `config/upstreams.yaml` | modify | 4 个 upstream key + 4 处 `${RHTHS_API_KEY}` env var + 章节注释 + 54 条 capability 映射 + 17 条 fallback chain |
@@ -235,7 +235,7 @@ def test_no_rhths_in_active_code():
 - [ ] `src/fuyao_client.py` 存在, `src/rhths_client.py` 已删除
 - [ ] `grep -rn "RHTHS_API_KEY" config/ src/ tests/ .env.example scripts/` → 0 hits (除文档)
 - [ ] `grep -rn "FuyaoClient" src/ tests/` → ≥ 4 hits (class + import + tests)
-- [ ] `pytest -q` → 118 passed (含 7 个新增 migrate 测试 + 1 个 grep 回归测试)
+- [ ] `pytest -q` → 126 passed (= 既有 118 + 新增 7 个 migrate 测试 + 1 个 grep 回归测试)
 - [ ] `python scripts/migrate_rhths_env.py --dry-run` 在含 `RHTHS_API_KEY=xxx` 的 `.env` 上输出 `would rename ...`, 不写盘
 - [ ] 实际跑 `python scripts/migrate_rhths_env.py` 后, `.env` 含 `FUYAO_API_KEY=xxx`, `.env.bak` 含原 `RHTHS_API_KEY=xxx`
 - [ ] 网关启动 (stdio 模式) 不报 missing key 错
