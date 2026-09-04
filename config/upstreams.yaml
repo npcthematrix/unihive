@@ -148,6 +148,10 @@ upstream_tool_mapping:
   get_task_detail:                            {tdx_local: get_task_detail}
   cancel_task:                                {tdx_local: cancel_task}
   tdx_call:                                   {tdx_local: tdx_call}
+  search_stock:                               {tdx_local: search_stock}
+  get_market_stats:                          {tdx_local: get_market_stats}
+  get_health:                                {tdx_local: get_health}
+  get_server_status:                         {tdx_local: get_server_status}
 
   # TQ-Local (通达信本地 HTTP JSON-RPC, 端口 17709)
   # 工具与路由均由 config/tools_tdx_tq_local.yaml 自带 upstream_tool_mapping 提供,
