@@ -16,7 +16,7 @@ def test_load_all_tools_merges_both_sources(tmp_path, monkeypatch):
     cfg = tmp_path / "upstreams.yaml"
     cfg.write_text("""
 upstreams:
-  rhths_meta:
+  fuyao_meta:
     enabled: true
     type: http
     base_url: http://127.0.0.1:9999
@@ -25,7 +25,7 @@ tools:
     description: hand-written
     routing: manual_tool
     upstream_tool_mapping:
-      rhths_meta: manual_tool
+      fuyao_meta: manual_tool
 """, encoding="utf-8")
 
     # 临时生成文件：含 1 个生成的 tool

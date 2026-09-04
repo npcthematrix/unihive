@@ -840,10 +840,10 @@ print(match.data)</pre>
         const UPSTREAM_DISPLAY_NAME = {
             'tdx_local':          '通达信-行情',
             'tdx_tq_local':       '通达信-交易终端',
-            'rhths_ashare':       '同花顺-a-share-mcp',
-            'rhths_index':        '同花顺-a-share-index-mcp',
-            'rhths_meta':         '同花顺-meta-mcp',
-            'rhths_fund':         '同花顺-fund-mcp',
+            'fuyao_ashare':       '同花顺-a-share-mcp',
+            'fuyao_index':        '同花顺-a-share-index-mcp',
+            'fuyao_meta':         '同花顺-meta-mcp',
+            'fuyao_fund':         '同花顺-fund-mcp',
             'tushare':            'Tushare',
         };
         function renderUpstreamsTable() {
@@ -1001,14 +1001,14 @@ print(match.data)</pre>
         function stopAutoRefresh() {
             if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
         }
-        const GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'rhths_ashare', 'rhths_index', 'rhths_meta', 'rhths_fund', 'tushare'];
+        const GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund', 'tushare'];
         const GROUP_META = {
             'tdx_local':          { title: '通达信-行情', desc: '行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call)' },
             'tdx_tq_local':        { title: '通达信-交易终端', desc: '行情/自选/交易/公式系统, 含 20 个高风险工具 (write ops)' },
-            'rhths_ashare':       { title: '同花顺-a-share-mcp', desc: 'A 股行情/财报/估值/特殊数据, 端点: /mcp/a-share' },
-            'rhths_index':        { title: '同花顺-a-share-index-mcp', desc: '同花顺指数/板块目录/成分股/历史K线, 端点: /mcp/a-share-index' },
-            'rhths_meta':         { title: '同花顺-meta-mcp', desc: '跨宇宙全量 ticker 列表, 端点: /mcp/meta' },
-            'rhths_fund':         { title: '同花顺-fund-mcp',   desc: '公募基金持仓/业绩/经理/财务, 端点: /mcp/fund' },
+            'fuyao_ashare':       { title: '同花顺-a-share-mcp', desc: 'A 股行情/财报/估值/特殊数据, 端点: /mcp/a-share' },
+            'fuyao_index':        { title: '同花顺-a-share-index-mcp', desc: '同花顺指数/板块目录/成分股/历史K线, 端点: /mcp/a-share-index' },
+            'fuyao_meta':         { title: '同花顺-meta-mcp', desc: '跨宇宙全量 ticker 列表, 端点: /mcp/meta' },
+            'fuyao_fund':         { title: '同花顺-fund-mcp',   desc: '公募基金持仓/业绩/经理/财务, 端点: /mcp/fund' },
             'tushare':            { title: 'Tushare',    desc: '通用 API 透传' },
         };
         const ALL_KEY = '__all__';
