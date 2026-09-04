@@ -103,6 +103,9 @@ class GatewayServer:
             self.upstreams[name] = client
             logger.info(f"[{name}] {'Connected' if client.is_available else 'Failed'}")
 
+        # 初始化路由前先合并生成工具的 mapping（_load_all_tools 会写回顶层 config）
+        self._load_all_tools()
+
         # 初始化路由
         self.router = Router(
             upstreams=self.upstreams,
@@ -165,13 +168,14 @@ class GatewayServer:
     def _load_all_tools(self) -> list[dict]:
         """合并 config.upstreams.yaml 与 config/tools_tdx_tq_local.yaml 的 tools 列表。
 
-        生成 spec 自带 upstream_tool_mapping，validate_specs 会识别这种 self-routing
-        形态（见 registry.validate_specs 的 has_self_mapping 分支），无需手工注入。
+        生成 spec 自带 upstream_tool_mapping；为了 Router 能在运行时按 gateway_tool
+        查表，把每个生成 spec 的映射也写回顶层 upstream_tool_mapping。
         """
         from pathlib import Path as _P
         import yaml as _yaml
 
         tools = list(self.config.get("tools", []) or [])
+        top_mapping = self.config.setdefault("upstream_tool_mapping", {})
         base_dir = self.config_path.parent.resolve()
         for candidate in (
             base_dir / "tools_tdx_tq_local.yaml",
@@ -181,7 +185,12 @@ class GatewayServer:
             if candidate.exists():
                 with candidate.open(encoding="utf-8") as f:
                     gen_cfg = _yaml.safe_load(f) or {}
-                tools.extend(gen_cfg.get("tools", []) or [])
+                gen_tools = list(gen_cfg.get("tools", []) or [])
+                tools.extend(gen_tools)
+                for spec in gen_tools:
+                    rk = spec.get("routing")
+                    if rk and rk not in top_mapping:
+                        top_mapping[rk] = dict(spec.get("upstream_tool_mapping") or {})
                 break
         return tools
 
