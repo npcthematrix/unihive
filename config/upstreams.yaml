@@ -191,6 +191,7 @@ upstream_tool_mapping:
   fund_performance_returns:                   {fuyao_fund: get_fund_performance_returns}
   fund_holders_detail:                        {fuyao_fund: get_fund_holders_detail}
   fund_market_historical:                     {fuyao_fund: get_fund_market_historical}
+  fund_market_snapshot:                        {fuyao_fund: get_fund_market_snapshot}
   fund_companies_detail:                      {fuyao_fund: get_fund_companies_detail}
   fund_portfolio_industry_allocation:         {fuyao_fund: get_fund_portfolio_industry_allocation}
   fund_performance_indicators_historical:     {fuyao_fund: get_fund_performance_indicators_historical}
