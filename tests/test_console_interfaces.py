@@ -2,12 +2,12 @@
 from unittest.mock import patch
 
 
-def test_get_interfaces_returns_149_tools():
-    """Regression: /api/interfaces returns 149 tools (91 manual + 58 generated).
+def test_get_interfaces_returns_146_tools():
+    """Regression: /api/interfaces returns 146 tools (88 manual + 58 generated).
 
     History: 142 -> 147 (tokenwave_tdx exposure) -> 149 (rename
     tokenwave_get_financial_data + tokenwave_get_stock_info to avoid param-shape
-    conflict with TQ-Local codegen).
+    conflict with TQ-Local codegen) -> 146 (tushare upstream removed, 3 tools dropped).
     """
     import yaml
     config_path = "config/upstreams.yaml"
@@ -18,7 +18,7 @@ def test_get_interfaces_returns_149_tools():
         from src.console_server import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 149, f"Expected 149 tools, got {tool_count}"
+        assert tool_count == 146, f"Expected 146 tools, got {tool_count}"
 
 
 def test_merged_tool_specs_have_unique_names():
