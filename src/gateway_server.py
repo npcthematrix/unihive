@@ -22,6 +22,7 @@ from .router import Router
 from .upstream_client import UpstreamClient, UpstreamConfig, UpstreamStatus
 from .fuyao_client import FuyaoClient, FuyaoConfig
 from .http_jsonrpc_client import HttpJsonRpcClient, HttpJsonRpcConfig
+from .tokenwave_tdx_client import TokenWaveTdxClient, TokenWaveTdxConfig
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,13 @@ class GatewayServer:
                     max_retry=cfg.get("retry", {}).get("max_attempts", 3),
                 )
                 client = HttpJsonRpcClient(jsonrpc_cfg)
+            elif cfg.get("type") == "python":
+                # TokenWave TDX 客户端
+                tokenwave_cfg = TokenWaveTdxConfig(
+                    name=name,
+                    mode=cfg.get("mode", "auto"),
+                )
+                client = TokenWaveTdxClient(tokenwave_cfg)
             else:
                 # stdio MCP 客户端
                 upstream_cfg = UpstreamConfig(
