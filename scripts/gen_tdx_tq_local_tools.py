@@ -1,9 +1,9 @@
-"""从 ~/.claude/skills/tdx-tq-local/SKILL.md 生成 UniHive 工具定义。
+r"""从 ~/.claude/skills/tdx-tq-local/SKILL.md 生成 UniHive 工具定义。
 
 输出: config/tools_tdx_tq_local.yaml（顶层 tools: 列表）
 
 规则：
-- 解析 `#### \`method_name\`: <title>` 标题
+- 解析 `#### `method_name`: <title>` 标题
 - 抓取紧随的 markdown 参数表（列: 参数 | 必填 | 类型 | 说明）
 - 按方法名规则推断 dangerous: true
 - 缺表 method 仍写入（params=[]）
