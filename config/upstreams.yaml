@@ -419,6 +419,7 @@ cache:
   ttl:
     realtime_quote: 10
     minute_bar: 60
+    sector: 30                  # <-- ADD THIS LINE
     daily_bar: 300
     index_data: 60
     fundamentals: 3600
