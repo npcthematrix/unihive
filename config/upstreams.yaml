@@ -1,10 +1,13 @@
 # UniHive MCP Gateway 配置
 # 聚合多个金融数据 MCP Server
+#
+# Fuyao 接口参数说明：详见 docs/fuyao-api-params.md
+# AI 调用前请先查阅该文档，了解各参数的含义、枚举值和约束。
 
 upstreams:
   tdx_local:
-    enabled: true
-    description: "通达信-行情: 行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call), 39 个 gateway 工具"
+    enabled: false
+    description: "通达信-行情: 行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call), 39 个 gateway 工具 (已禁用，改用 mootdx2)"
     type: "npx"
     package: "tdx-mcp-server"
     command: ["npx", "-y", "tdx-mcp-server"]
@@ -20,6 +23,12 @@ upstreams:
       - index_data
       - etf_data
       - market_stats
+
+  mootdx2:
+    enabled: true
+    description: "MooTDX2 行情接口"
+    type: "mootdx2"
+    market: "std"
 
   tdx_tq_local:
     enabled: true
@@ -39,7 +48,7 @@ upstreams:
     description: "同花顺-a-share-mcp: A 股行情/财报/估值/特殊数据, 28 个 gateway 工具, 端点: /mcp/a-share"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share"
-    api_key: "${FUYAO_API_KEY}"
+    api_key: "${RHTHS_API_KEY}"
     timeout_seconds: 30
     retry:
       max_attempts: 3
@@ -61,7 +70,7 @@ upstreams:
     description: "同花顺-a-share-index-mcp: 指数/板块目录/成分股/历史K线, 7 个 gateway 工具, 端点: /mcp/a-share-index"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share-index"
-    api_key: "${FUYAO_API_KEY}"
+    api_key: "${RHTHS_API_KEY}"
     timeout_seconds: 30
     retry:
       max_attempts: 3
@@ -77,7 +86,7 @@ upstreams:
     description: "同花顺-meta-mcp: 跨市场 ticker 搜索/列表, 2 个 gateway 工具, 端点: /mcp/meta"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/meta"
-    api_key: "${FUYAO_API_KEY}"
+    api_key: "${RHTHS_API_KEY}"
     timeout_seconds: 30
     retry:
       max_attempts: 3
@@ -91,7 +100,7 @@ upstreams:
     description: "同花顺-fund-mcp: 公募基金持仓/业绩/经理/财务/历史, 30 个 gateway 工具, 端点: /mcp/fund"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/fund"
-    api_key: "${FUYAO_API_KEY}"
+    api_key: "${RHTHS_API_KEY}"
     timeout_seconds: 30
     retry:
       max_attempts: 3
@@ -129,39 +138,41 @@ upstreams:
 # router 会用本段的 keys 作为 chain
 upstream_tool_mapping:
   # TDX 直通
-  get_quote:                                  {tdx_local: get_quote}
-  get_kline:                                  {tdx_local: get_kline}
-  get_minute_data:                            {tdx_local: get_minute}
-  get_trade:                                  {tdx_local: get_trade}
-  tdx_get_stock_info:                         {tdx_local: get_stock_info}
-  get_code_list:                              {tdx_local: get_code_list}
-  get_batch_quote:                            {tdx_local: get_batch_quote}
-  get_kline_history:                          {tdx_local: get_kline_history}
-  get_kline_all:                              {tdx_local: get_kline_all}
-  get_kline_all_tdx:                          {tdx_local: get_kline_all_tdx}
-  get_kline_all_ths:                          {tdx_local: get_kline_all_ths}
-  get_index_kline:                            {tdx_local: get_index}
-  get_index_all:                              {tdx_local: get_index_all}
-  get_market_count:                           {tdx_local: get_market_count}
-  get_stock_codes:                            {tdx_local: get_stock_codes}
-  get_etf_codes:                              {tdx_local: get_etf_codes}
-  get_etf_list:                               {tdx_local: get_etf_list}
-  get_trade_history:                          {tdx_local: get_trade_history}
-  get_trade_history_full:                     {tdx_local: get_trade_history_full}
-  get_minute_trade_all:                       {tdx_local: get_minute_trade_all}
-  get_workday:                                {tdx_local: get_workday}
-  get_workday_range:                          {tdx_local: get_workday_range}
-  get_income:                                 {tdx_local: get_income}
-  create_task_kline:                          {tdx_local: create_task_kline}
-  create_task_trade:                          {tdx_local: create_task_trade}
-  get_task_list:                              {tdx_local: get_task_list}
-  get_task_detail:                            {tdx_local: get_task_detail}
-  cancel_task:                                {tdx_local: cancel_task}
-  tdx_call:                                   {tdx_local: tdx_call}
-  search_stock:                               {tdx_local: search_stock}
-  get_market_stats:                          {tdx_local: get_market_stats}
-  get_health:                                {tdx_local: get_health}
-  get_server_status:                         {tdx_local: get_server_status}
+  get_quote:                                  {mootdx2: get_quote}
+  get_kline:                                  {mootdx2: get_kline}
+  get_minute_data:                            {mootdx2: get_minute}
+  get_trade:                                  {mootdx2: get_trade}
+  tdx_get_stock_info:                         {mootdx2: get_stock_info}
+  get_code_list:                              {mootdx2: get_code_list}
+  get_batch_quote:                            {mootdx2: get_batch_quote}
+  get_kline_history:                          {mootdx2: get_kline_history}
+  get_kline_all:                              {mootdx2: get_kline_all}
+  get_kline_all_tdx:                          {mootdx2: get_kline_all_tdx}
+  get_kline_all_ths:                          {mootdx2: get_kline_all_ths}
+  get_index_kline:                            {mootdx2: get_index}
+  get_index_all:                              {mootdx2: get_index_all}
+  get_market_count:                           {mootdx2: get_market_count}
+  get_stock_codes:                            {mootdx2: get_stock_codes}
+  get_etf_codes:                              {mootdx2: get_etf_codes}
+  get_etf_list:                               {mootdx2: get_etf_list}
+  get_trade_history:                          {mootdx2: get_trade_history}
+  get_trade_history_full:                     {mootdx2: get_trade_history_full}
+  get_minute_trade_all:                       {mootdx2: get_minute_trade_all}
+  get_workday:                                {mootdx2: get_workday}
+  get_workday_range:                          {mootdx2: get_workday_range}
+  get_income:                                 {mootdx2: get_income}
+  create_task_kline:                          {mootdx2: create_task_kline}
+  create_task_trade:                          {mootdx2: create_task_trade}
+  get_task_list:                              {mootdx2: get_task_list}
+  get_task_detail:                            {mootdx2: get_task_detail}
+  cancel_task:                                {mootdx2: cancel_task}
+  tdx_call:                                   {mootdx2: tdx_call}
+  search_stock:
+    fuyao_meta: get_meta_tickers_search       # HTTP, 可缓存 (缓存策略见 gateway._is_fuyao_source)
+    tdx_local: search_stock                   # 本地兜底, 不缓存
+  get_market_stats:                          {mootdx2: get_market_stats}
+  get_health:                                {mootdx2: get_health}
+  get_server_status:                         {mootdx2: get_server_status}
 
   # TQ-Local (通达信本地 HTTP JSON-RPC, 端口 17709)
   # 工具与路由均由 config/tools_tdx_tq_local.yaml 自带 upstream_tool_mapping 提供,
@@ -228,183 +239,156 @@ upstream_tool_mapping:
   fund_portfolio_bond_report_dates:           {fuyao_fund: get_fund_portfolio_bond_report_dates}
   fund_portfolio_asset_allocation:            {fuyao_fund: get_fund_portfolio_asset_allocation}
 
-  # TokenWave TDX 工具
-  get_realtime_quote:                        {tokenwave_tdx: get_realtime_quote}
-  get_kline:                                  {tokenwave_tdx: get_kline}
-  get_minute_bar:                            {tokenwave_tdx: get_minute_bar}
-  tokenwave_get_financial_data:              {tokenwave_tdx: get_financial_data}
-  get_block_data:                            {tokenwave_tdx: get_block_data}
-  tokenwave_get_stock_info:                  {tokenwave_tdx: get_stock_info}
-  get_trade_dates:                           {tokenwave_tdx: get_trade_dates}
-  get_etf_list:                             {tokenwave_tdx: get_etf_list}
+  # MooTDX 工具 (moo 前缀避免与其他上游同名工具冲突)
+  moo_realtime_quote:
+    tokenwave_tdx: get_realtime_quote
+  moo_kline:
+    tokenwave_tdx: get_kline
+  moo_minute_bar:
+    tokenwave_tdx: get_minute_bar
+  moo_daily_bar:
+    tokenwave_tdx: get_daily_bar
+  moo_get_financial_data:
+    tokenwave_tdx: get_financial_data
+  moo_block_data:
+    tokenwave_tdx: get_block_data
+  moo_get_stock_info:
+    tokenwave_tdx: get_stock_info
+  moo_trade_dates:
+    tokenwave_tdx: get_trade_dates
+  moo_etf_list:
+    tokenwave_tdx: get_etf_list
 
 # 路由配置 (带 fallback 链的 gateway_tool)
 routing:
-  get_realtime_quote:
-    chain: ["tokenwave_tdx", "tdx_local", "fuyao_ashare"]
+  moo_realtime_quote:
+    chain: ["tokenwave_tdx"]
     description: "实时行情"
-  get_daily_bar:
-    chain: ["tokenwave_tdx", "tdx_local", "fuyao_ashare"]
+  moo_daily_bar:
+    chain: ["tokenwave_tdx"]
     description: "日K线行情"
-  get_minute_bar:
-    chain: ["tokenwave_tdx", "tdx_local"]
-    description: "分钟K线行情 (TDX)"
-  get_trade_detail:
-    chain: ["tdx_local"]
-    description: "逐笔成交明细"
-  get_index:
-    chain: ["tdx_local", "fuyao_index"]
-    description: "指数K线"
-  get_index_snapshot:
-    chain: ["fuyao_index"]
-    description: "指数快照"
-  get_index_history:
-    chain: ["fuyao_index"]
-    description: "指数历史"
-  get_etf:
-    chain: ["tdx_local", "fuyao_fund"]
-    description: "ETF行情"
-  get_fund_snapshot:
-    chain: ["fuyao_fund"]
-    description: "基金快照"
-  get_fund_nav:
-    chain: ["fuyao_fund"]
-    description: "基金净值"
-  get_fundamentals:
-    chain: ["fuyao_ashare"]
-    description: "基本面数据"
-  get_valuation:
-    chain: ["fuyao_ashare"]
-    description: "估值快照"
-  get_announcement:
-    chain: ["fuyao_ashare"]
-    description: "公告"
-  search_stock:
-    chain: ["tdx_local", "fuyao_meta"]
-    description: "股票搜索"
-  get_market_stats:
-    chain: ["tdx_local"]
-    description: "市场统计"
-  get_limit_up_pool:
-    chain: ["fuyao_ashare"]
-    description: "涨停池"
-  get_sector_flow:
-    chain: ["fuyao_ashare"]
-    description: "板块资金流"
+  moo_minute_bar:
+    chain: ["tokenwave_tdx"]
+    description: "分钟K线行情"
+  moo_kline:
+    chain: ["tokenwave_tdx"]
+    description: "K线"
 
 # 对外暴露的工具清单
 # 由 registry.py 解析后自动注册为 FastMCP tool
+# Fuyao 参数语义说明：详见 docs/fuyao-api-params.md
 tools:
   # === TDX 直通 (30) ===
-  - {name: get_quote, description: "TDX 实时行情", routing: get_quote, params: [{name: code, type: str, required: true, normalize: code}], cache_ttl_key: realtime_quote}
-  - {name: get_kline, description: "K线 (tokenwave_tdx 优先 + tdx_local 兜底, day/week/month/minute1/5/15/30/60)", routing: get_kline, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: daily_bar}
-  - {name: get_minute_data, description: "TDX 今日分时(240 根)", routing: get_minute_data, params: [{name: code, type: str, required: true, normalize: code}], cache_ttl_key: minute_bar}
-  - {name: get_trade, description: "TDX 逐笔成交", routing: get_trade, params: [{name: code, type: str, required: true, normalize: code}]}
-  - {name: tdx_get_stock_info, description: "TDX 单只股票综合信息 (行情服务; 交易终端的同名工具见 get_stock_info)", routing: tdx_get_stock_info, params: [{name: code, type: str, required: true, normalize: code}]}
-  - {name: get_code_list, description: "TDX 全量代码列表 (sh/sz/bj)", routing: get_code_list, params: [{name: exchange, type: str, required: false}], cache_ttl_key: ticker_list}
-  - {name: get_batch_quote, description: "TDX 批量行情", routing: get_batch_quote, params: [{name: codes, type: str, required: true}], cache_ttl_key: realtime_quote}
-  - {name: get_kline_history, description: "TDX 历史K线(指定区间)", routing: get_kline_history, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
-  - {name: get_kline_all, description: "TDX 全量K线(全历史)", routing: get_kline_all, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
-  - {name: get_kline_all_tdx, description: "TDX 全量K线 (TDX 源)", routing: get_kline_all_tdx, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
-  - {name: get_kline_all_ths, description: "TDX 全量K线 (同花顺源, 前复权)", routing: get_kline_all_ths, params: [{name: code, type: str, required: true, normalize: code}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
-  - {name: get_index_kline, description: "TDX 指数K线", routing: get_index_kline, params: [{name: code, type: str, required: true}, {name: type, type: str, required: false}], cache_ttl_key: index_data}
-  - {name: get_index_all, description: "TDX 全指K线(含成分股)", routing: get_index_all, params: [{name: code, type: str, required: true}, {name: type, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: historical}
-  - {name: get_market_count, description: "TDX 市场证券数量统计", routing: get_market_count, params: [], cache_ttl_key: market_stats}
-  - {name: get_stock_codes, description: "TDX 代码列表(分页)", routing: get_stock_codes, params: [{name: limit, type: int, required: false}, {name: prefix, type: bool, required: false}], cache_ttl_key: ticker_list}
-  - {name: get_etf_codes, description: "TDX ETF 代码列表", routing: get_etf_codes, params: [{name: limit, type: int, required: false}, {name: prefix, type: bool, required: false}], cache_ttl_key: etf_list}
-  - {name: get_etf_list, description: "ETF 列表 (tokenwave_tdx 优先 + tdx_local 兜底)", routing: get_etf_list, params: [{name: exchange, type: str, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: etf_list}
-  - {name: get_trade_history, description: "TDX 历史逐笔(分页)", routing: get_trade_history, params: [{name: code, type: str, required: true, normalize: code}, {name: date, type: str, required: false}, {name: start, type: int, required: false}, {name: count, type: int, required: false}]}
-  - {name: get_trade_history_full, description: "TDX 历史逐笔(截止日全量)", routing: get_trade_history_full, params: [{name: code, type: str, required: true, normalize: code}, {name: before, type: str, required: false}, {name: limit, type: int, required: false}]}
-  - {name: get_minute_trade_all, description: "TDX 全日分时成交汇总", routing: get_minute_trade_all, params: [{name: code, type: str, required: true, normalize: code}, {name: date, type: str, required: false}]}
-  - {name: get_workday, description: "TDX 交易日查询(基准日前N天)", routing: get_workday, params: [{name: date, type: str, required: false}, {name: count, type: int, required: false}], cache_ttl_key: workday}
-  - {name: get_workday_range, description: "TDX 交易日范围(起止)", routing: get_workday_range, params: [{name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: workday}
-  - {name: get_income, description: "TDX 盘后收益", routing: get_income, params: [{name: code, type: str, required: true, normalize: code}, {name: days, type: int, required: false}, {name: start_date, type: str, required: false}]}
-  - {name: create_task_kline, description: "TDX 创建K线后台拉取任务", routing: create_task_kline, params: [{name: codes, type: str, required: true}, {name: start_date, type: str, required: false}, {name: tables, type: str, required: false}, {name: limit, type: int, required: false}]}
-  - {name: create_task_trade, description: "TDX 创建成交后台拉取任务", routing: create_task_trade, params: [{name: code, type: str, required: true, normalize: code}, {name: start_year, type: int, required: false}, {name: end_year, type: int, required: false}]}
+  - {name: get_quote, description: "TDX 实时行情", routing: get_quote, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}]}
+  - {name: get_kline, description: "K线 (tokenwave_tdx only, day/week/month/minute1/5/15/30/60)", routing: get_kline, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型：day=日K / week=周K / month=月K / minute1=1分钟 / minute5=5分钟 / minute15=15分钟 / minute30=30分钟 / minute60=60分钟（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数（默认 100）"}]}
+  - {name: get_minute_data, description: "TDX 今日分时(240 根)", routing: get_minute_data, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}]}
+  - {name: get_trade, description: "TDX 逐笔成交", routing: get_trade, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}]}
+  - {name: tdx_get_stock_info, description: "TDX 单只股票综合信息 (行情服务; 交易终端的同名工具见 get_stock_info)", routing: tdx_get_stock_info, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}]}
+  - {name: get_code_list, description: "TDX 全量代码列表 (sh/sz/bj)", routing: get_code_list, params: [{name: exchange, type: str, required: false, enum: [sh, sz, bj], description: "交易所：sh=上海 / sz=深圳 / bj=北京（省略则返回全部）"}]}
+  - {name: get_batch_quote, description: "TDX 批量行情", routing: get_batch_quote, params: [{name: codes, type: str, required: true, description: "逗号分隔的股票代码，如 '600000,000001'"}]}
+  - {name: get_kline_history, description: "TDX 历史K线(指定区间)", routing: get_kline_history, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
+  - {name: get_kline_all, description: "TDX 全量K线(全历史)", routing: get_kline_all, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
+  - {name: get_kline_all_tdx, description: "TDX 全量K线 (TDX 源)", routing: get_kline_all_tdx, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
+  - {name: get_kline_all_ths, description: "TDX 全量K线 (同花顺源, 前复权)", routing: get_kline_all_ths, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
+  - {name: get_index_kline, description: "TDX 指数K线", routing: get_index_kline, params: [{name: code, type: str, required: true, description: "指数代码，如 '000001'（上证指数）或 '399001'（深证成指）"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}]}
+  - {name: get_index_all, description: "TDX 全指K线(含成分股)", routing: get_index_all, params: [{name: code, type: str, required: true, description: "指数代码"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
+  - {name: get_market_count, description: "TDX 市场证券数量统计", routing: get_market_count, params: []}
+  - {name: get_stock_codes, description: "TDX 代码列表(分页)", routing: get_stock_codes, params: [{name: limit, type: int, required: false, description: "返回数量"}, {name: prefix, type: bool, required: false, description: "是否带前缀"}]}
+  - {name: get_etf_codes, description: "TDX ETF 代码列表", routing: get_etf_codes, params: [{name: limit, type: int, required: false, description: "返回数量"}, {name: prefix, type: bool, required: false, description: "是否带前缀"}]}
+  - {name: get_etf_list, description: "ETF 列表 (tokenwave_tdx 优先 + tdx_local 兜底)", routing: get_etf_list, params: [{name: exchange, type: str, required: false, description: "交易所过滤"}, {name: limit, type: int, required: false, description: "返回数量"}]}
+  - {name: get_trade_history, description: "TDX 历史逐笔(分页)", routing: get_trade_history, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: date, type: str, required: false, description: "日期 YYYYMMDD"}, {name: start, type: int, required: false, description: "起始偏移"}, {name: count, type: int, required: false, description: "返回条数"}]}
+  - {name: get_trade_history_full, description: "TDX 历史逐笔(截止日全量)", routing: get_trade_history_full, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: before, type: str, required: false, description: "截止日期 YYYYMMDD"}, {name: limit, type: int, required: false, description: "返回条数"}]}
+  - {name: get_minute_trade_all, description: "TDX 全日分时成交汇总", routing: get_minute_trade_all, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: date, type: str, required: false, description: "日期 YYYYMMDD"}]}
+  - {name: get_workday, description: "TDX 交易日查询(基准日前N天)", routing: get_workday, params: [{name: date, type: str, required: false, description: "基准日期 YYYYMMDD"}, {name: count, type: int, required: false, description: "往前查N天"}]}
+  - {name: get_workday_range, description: "TDX 交易日范围(起止)", routing: get_workday_range, params: [{name: start, type: str, required: false, description: "起始日期 YYYYMMDD"}, {name: end, type: str, required: false, description: "结束日期 YYYYMMDD"}]}
+  - {name: get_income, description: "TDX 盘后收益", routing: get_income, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: days, type: int, required: false, description: "天数"}, {name: start_date, type: str, required: false, description: "起始日期 YYYYMMDD"}]}
+  - {name: create_task_kline, description: "TDX 创建K线后台拉取任务", routing: create_task_kline, params: [{name: codes, type: str, required: true, description: "逗号分隔的股票代码"}, {name: start_date, type: str, required: false, description: "起始日期 YYYYMMDD"}, {name: tables, type: str, required: false, description: "表名"}, {name: limit, type: int, required: false, description: "返回条数"}]}
+  - {name: create_task_trade, description: "TDX 创建成交后台拉取任务", routing: create_task_trade, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: start_year, type: int, required: false, description: "起始年份"}, {name: end_year, type: int, required: false, description: "结束年份"}]}
   - {name: get_task_list, description: "TDX 后台任务列表", routing: get_task_list, params: []}
-  - {name: get_task_detail, description: "TDX 后台任务详情", routing: get_task_detail, params: [{name: id, type: str, required: true}]}
-  - {name: cancel_task, description: "TDX 取消后台任务", routing: cancel_task, params: [{name: id, type: str, required: true}]}
-  - {name: tdx_call, description: "⚠️ DANGER: TDX 通用接口透传, 调用前必须经用户明确同意. 可执行任意 TDX API (含可能的写操作), 不可逆.", routing: tdx_call, params: [{name: path, type: str, required: true}, {name: method, type: str, required: false}, {name: query, type: str, required: false}, {name: body, type: str, required: false}, {name: raw, type: bool, required: false}], dangerous: true}
+  - {name: get_task_detail, description: "TDX 后台任务详情", routing: get_task_detail, params: [{name: id, type: str, required: true, description: "任务ID"}]}
+  - {name: cancel_task, description: "TDX 取消后台任务", routing: cancel_task, params: [{name: id, type: str, required: true, description: "任务ID"}]}
+  - {name: tdx_call, description: "⚠️ DANGER: TDX 通用接口透传, 调用前必须经用户明确同意. 可执行任意 TDX API (含可能的写操作), 不可逆.", routing: tdx_call, params: [{name: path, type: str, required: true, description: "API 路径"}, {name: method, type: str, required: false, description: "HTTP 方法"}, {name: query, type: str, required: false, description: "查询参数"}, {name: body, type: str, required: false, description: "请求体"}, {name: raw, type: bool, required: false, description: "返回原始响应"}], dangerous: true}
 
-  # === TokenWave TDX (8) ===
-  # 5 个新增入口 — get_financial_data 由 TQ-Local codegen 接管 (避免重名),
-  # 另 4 个完全没暴露 (get_block_data / get_trade_dates / get_daily_bar / 2 个 routing 死链
-  # get_realtime_quote / get_minute_bar — 之前只在 routing: 块里声明, 没有 tools: 入口,
-  # 所以从未通过 gateway 暴露)
-  - {name: get_realtime_quote, description: "实时行情 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_realtime_quote, params: [{name: stock_code, type: str, required: true, normalize: code}], cache_ttl_key: realtime_quote}
-  - {name: get_minute_bar, description: "分钟K线 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_minute_bar, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: frequency, type: str, required: false}], cache_ttl_key: minute_bar}
-  - {name: get_daily_bar, description: "日K线 (tokenwave_tdx local 优先 + tdx_local 兜底)", routing: get_daily_bar, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: frequency, type: str, required: false}], cache_ttl_key: daily_bar}
-  - {name: get_block_data, description: "板块/概念数据 (tokenwave_tdx, network only)", routing: get_block_data, params: [{name: block_type, type: str, required: true}], cache_ttl_key: sector}
-  - {name: get_trade_dates, description: "交易日历 (tokenwave_tdx, local 优先)", routing: get_trade_dates, params: [{name: start_date, type: str, required: true}, {name: end_date, type: str, required: true}], cache_ttl_key: workday}
-  # 以下两个原 get_financial_data / get_stock_info 因 TQ-Local codegen 拥有同名条目
-  # 且参数形状不同 (TQ-Local 用 stock_list/field_list, tokenwave 用 stock_code/count),
-  # 改名前缀以避免 routing 时 tokenwave 报 TypeError
-  - {name: tokenwave_get_financial_data, description: "tokenwave_tdx 财务数据 (单股 + count, 区别于 TQ-Local get_financial_data 的 stock_list 风格)", routing: tokenwave_get_financial_data, params: [{name: stock_code, type: str, required: true, normalize: code}, {name: report_type, type: str, required: false}, {name: count, type: int, required: false}], cache_ttl_key: fundamentals}
-  - {name: tokenwave_get_stock_info, description: "tokenwave_tdx 单只股票信息 (单参数, 区别于 TQ-Local get_stock_info 的 field_list 风格)", routing: tokenwave_get_stock_info, params: [{name: stock_code, type: str, required: true, normalize: code}]}
+  # === MooTDX (9) ===
+  - {name: moo_realtime_quote, description: "实时行情 (MooTDX)", routing: moo_realtime_quote, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码，支持 '600000' 或 'sh600000' 格式"}]}
+  - {name: moo_minute_bar, description: "分钟K线 (MooTDX)", routing: moo_minute_bar, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码"}, {name: frequency, type: str, required: false, enum: [1min, 5min, 15min, 30min, 60min], description: "分钟周期：1min/5min/15min/30min/60min（默认 5min）"}]}
+  - {name: moo_daily_bar, description: "日K线 (MooTDX)", routing: moo_daily_bar, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码"}, {name: frequency, type: str, required: false, enum: [daily, weekly, monthly], description: "日K周期：daily=日（默认）/ weekly=周 / monthly=月"}]}
+  - {name: moo_kline, description: "K线 (MooTDX, day/week/month/minute)", routing: moo_kline, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码"}, {name: frequency, type: str, required: false, enum: [daily, weekly, monthly, 5min, 15min, 30min, 60min], description: "K线周期：daily=日K, weekly=周K, monthly=月K, 5min/15min/30min/60min=分钟K（默认 daily）"}, {name: count, type: int, required: false, description: "返回K线根数（默认 100）"}]}
+  - {name: moo_block_data, description: "板块/概念数据 (MooTDX, 同花顺行业/概念/地域板块)", routing: moo_block_data, params: [{name: block_type, type: str, required: true, enum: [industry, concept, region], description: "板块类型：industry=行业板块（如'银行'/'白酒'），concept=概念板块（如'AI'/'新能源'），region=地域板块（如'上海'/'深圳'）"}]}
+  - {name: moo_trade_dates, description: "交易日历 (MooTDX)", routing: moo_trade_dates, params: [{name: start_date, type: str, required: true, description: "起始日期 YYYYMMDD（如 '20250101'）"}, {name: end_date, type: str, required: true, description: "结束日期 YYYYMMDD（如 '20251231'）"}]}
+  - {name: moo_etf_list, description: "ETF列表 (MooTDX, 当前 network 模式返回空)", routing: moo_etf_list, params: []}
+  - {name: moo_get_financial_data, description: "财务数据 (MooTDX, 单股+count)", routing: moo_get_financial_data, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码"}, {name: report_type, type: str, required: false, enum: [income, balance, cashflow], description: "报表类型：income=利润表（默认）/ balance=资产负债表 / cashflow=现金流量表"}, {name: count, type: int, required: false, description: "返回报表期数（默认 4）"}]}
+  - {name: moo_get_stock_info, description: "股票信息 (MooTDX, 单股票代码)", routing: moo_get_stock_info, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码（如 '600036'）"}]}
 
   # === TQ-Local (5) ===
   # TQ-Local 工具全部由 config/tools_tdx_tq_local.yaml (codegen) 提供, 参数以那里为准。
 
   # === Fuyao a-share (21) ===
-  - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: realtime_quote}
-  - {name: a_share_prices_historical, description: "A 股历史K线 (10年)", routing: a_share_prices_historical, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}, {name: adjust, type: str, required: false}], cache_ttl_key: historical}
-  - {name: a_share_corporate_actions_adjustment_factors, description: "A 股复权因子", routing: a_share_corporate_actions_adjustment_factors, params: [{name: thscode, type: str, required: true, normalize: code}], cache_ttl_key: historical}
-  - {name: a_share_financials_income_statements, description: "A 股利润表", routing: a_share_financials_income_statements, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: fundamentals}
-  - {name: a_share_financials_balance_sheets, description: "A 股资产负债表", routing: a_share_financials_balance_sheets, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: fundamentals}
-  - {name: a_share_financials_cash_flow_statements, description: "A 股现金流量表", routing: a_share_financials_cash_flow_statements, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: fundamentals}
-  - {name: a_share_financials_indicators, description: "A 股财务指标", routing: a_share_financials_indicators, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start, type: str, required: false}, {name: end, type: str, required: false}], cache_ttl_key: fundamentals}
-  - {name: a_share_valuations_snapshot, description: "A 股估值快照", routing: a_share_valuations_snapshot, params: [{name: thscodes, type: str, required: false}], cache_ttl_key: valuation}
-  - {name: a_share_calendar_trading_days, description: "A 股交易日历", routing: a_share_calendar_trading_days, params: [{name: date, type: str, required: false}], cache_ttl_key: workday}
-  - {name: a_share_special_data_limit_up_pool, description: "A 股涨停池", routing: a_share_special_data_limit_up_pool, params: [{name: date, type: str, required: false}, {name: page, type: int, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: special_data}
-  - {name: a_share_special_data_limit_down_pool, description: "A 股跌停池", routing: a_share_special_data_limit_down_pool, params: [{name: date, type: str, required: false}, {name: page, type: int, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: special_data}
-  - {name: a_share_special_data_limit_break_pool, description: "A 股炸板池", routing: a_share_special_data_limit_break_pool, params: [{name: date, type: str, required: false}, {name: page, type: int, required: false}, {name: limit, type: int, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，如 '600519.SH,000001.SZ'。省略则遍历全市场分页返回。"}, {name: limit, type: int, required: false, description: "分页大小，省略 thscodes 时生效（默认 100）"}, {name: offset, type: int, required: false, description: "分页偏移，省略 thscodes 时生效（默认 0）"}], cache_ttl_key: realtime_quote}
+  - {name: a_share_prices_historical, description: "A 股历史K线 (10年)", routing: a_share_prices_historical, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'，不支持逗号多标的"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}, {name: adjust, type: str, required: false, enum: [none, forward, backward], description: "复权方式：none=不复权 / forward=前复权（默认） / backward=后复权"}], cache_ttl_key: historical}
+  - {name: a_share_corporate_actions_adjustment_factors, description: "A 股复权因子", routing: a_share_corporate_actions_adjustment_factors, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'，不支持逗号多标的"}], cache_ttl_key: historical}
+  - {name: a_share_financials_income_statements, description: "A 股利润表", routing: a_share_financials_income_statements, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: period, type: str, required: true, enum: [annual, quarterly], description: "报告期类型：annual=仅年报（默认）/ quarterly=每个季度末"}, {name: limit, type: int, required: false, description: "最近 N 期，范围 [1,20]，与 start/end 互斥（默认 4）"}, {name: start, type: str, required: false, description: "起始毫秒时间戳，需与 end 同传，窗口不超过 10 年"}, {name: end, type: str, required: false, description: "结束毫秒时间戳，需 >= start"}], cache_ttl_key: fundamentals}
+  - {name: a_share_financials_balance_sheets, description: "A 股资产负债表", routing: a_share_financials_balance_sheets, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: period, type: str, required: true, enum: [annual, quarterly], description: "报告期类型：annual=仅年报（默认）/ quarterly=每个季度末"}, {name: limit, type: int, required: false, description: "最近 N 期，范围 [1,20]，与 start/end 互斥（默认 4）"}, {name: start, type: str, required: false, description: "起始毫秒时间戳，需与 end 同传"}, {name: end, type: str, required: false, description: "结束毫秒时间戳，需 >= start"}], cache_ttl_key: fundamentals}
+  - {name: a_share_financials_cash_flow_statements, description: "A 股现金流量表", routing: a_share_financials_cash_flow_statements, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: period, type: str, required: true, enum: [annual, quarterly], description: "报告期类型：annual=仅年报（默认）/ quarterly=每个季度末"}, {name: limit, type: int, required: false, description: "最近 N 期，范围 [1,20]，与 start/end 互斥（默认 4）"}, {name: start, type: str, required: false, description: "起始毫秒时间戳，需与 end 同传"}, {name: end, type: str, required: false, description: "结束毫秒时间戳，需 >= start"}], cache_ttl_key: fundamentals}
+  - {name: a_share_financials_indicators, description: "A 股财务指标", routing: a_share_financials_indicators, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: period, type: str, required: true, enum: [annual, quarterly], description: "报告期类型：annual=仅年报（默认）/ quarterly=每个季度末"}, {name: limit, type: int, required: false, description: "最近 N 期，范围 [1,20]，与 start/end 互斥（默认 4）"}, {name: start, type: str, required: false, description: "起始毫秒时间戳，需与 end 同传"}, {name: end, type: str, required: false, description: "结束毫秒时间戳，需 >= start"}], cache_ttl_key: fundamentals}
+  - {name: a_share_valuations_snapshot, description: "A 股估值快照", routing: a_share_valuations_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，如 '600519.SH,000001.SZ'"}], cache_ttl_key: valuation}
+  - {name: a_share_calendar_trading_days, description: "A 股交易日历", routing: a_share_calendar_trading_days, params: [{name: date, type: str, required: false, description: "目标日期，格式 yyyy-MM-dd，省略则返回当年全部交易日"}], cache_ttl_key: workday}
+  - {name: a_share_special_data_limit_up_pool, description: "A 股涨停池", routing: a_share_special_data_limit_up_pool, params: [{name: date, type: str, required: false, description: "交易日，格式 yyyy-MM-dd，省略默认当天"}, {name: page, type: int, required: false, description: "页码，从 1 开始（默认 1）"}, {name: size, type: int, required: false, description: "分页大小，范围 1~200（默认 50）"}, {name: sort_field, type: str, required: false, enum: [last_price, continue_day_cnt, seal_money, limit_up_time], description: "排序字段（默认 last_price）"}, {name: sort_dir, type: str, required: false, enum: [asc, desc], description: "排序方向：asc=升序 / desc=降序（默认 desc）"}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_limit_down_pool, description: "A 股跌停池", routing: a_share_special_data_limit_down_pool, params: [{name: date, type: str, required: false, description: "交易日，格式 yyyy-MM-dd，省略默认当天"}, {name: page, type: int, required: false, description: "页码，从 1 开始（默认 1）"}, {name: size, type: int, required: false, description: "分页大小，范围 1~200（默认 50）"}, {name: sort_field, type: str, required: false, enum: [last_limit_time, first_limit_time, last_price, price_change_ratio_pct, turnover_ratio_pct], description: "排序字段（默认 last_limit_time）"}, {name: sort_dir, type: str, required: false, enum: [asc, desc], description: "排序方向（默认 desc）"}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_limit_break_pool, description: "A 股炸板池", routing: a_share_special_data_limit_break_pool, params: [{name: date, type: str, required: false, description: "交易日，格式 yyyy-MM-dd，省略默认当天"}, {name: page, type: int, required: false, description: "页码，从 1 开始（默认 1）"}, {name: size, type: int, required: false, description: "分页大小，范围 1~200（默认 50）"}, {name: sort_field, type: str, required: false, enum: [price_change_ratio_pct, open_times, last_price, turnover_ratio_pct, turnover], description: "排序字段（默认 price_change_ratio_pct）"}, {name: sort_dir, type: str, required: false, enum: [asc, desc], description: "排序方向（默认 desc）"}], cache_ttl_key: special_data}
   - {name: a_share_special_data_limit_up_ladder, description: "A 股涨停天梯 (30日 6档)", routing: a_share_special_data_limit_up_ladder, params: [], cache_ttl_key: special_data}
-  - {name: a_share_special_data_anomaly_analysis_stock, description: "A 股异动原因分析", routing: a_share_special_data_anomaly_analysis_stock, params: [{name: thscodes, type: str, required: true}], cache_ttl_key: special_data}
-  - {name: a_share_special_data_skyrocket_list, description: "A 股飙升榜 (火箭榜)", routing: a_share_special_data_skyrocket_list, params: [{name: period, type: str, required: false}], cache_ttl_key: special_data}
-  - {name: a_share_special_data_hot_stock_list, description: "A 股热门股 (24h)", routing: a_share_special_data_hot_stock_list, params: [{name: period, type: str, required: false}], cache_ttl_key: special_data}
-  - {name: a_share_special_data_hot_stock_list_history, description: "A 股热门股历史", routing: a_share_special_data_hot_stock_list_history, params: [{name: date, type: str, required: true}], cache_ttl_key: special_data}
-  - {name: a_share_special_data_hot_stock_rank_trend, description: "A 股热门股排名趋势", routing: a_share_special_data_hot_stock_rank_trend, params: [{name: thscode, type: str, required: true, normalize: code}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: special_data}
-  - {name: a_share_special_data_dragon_tiger_list, description: "A 股龙虎榜", routing: a_share_special_data_dragon_tiger_list, params: [{name: board_type, type: str, required: false}, {name: date, type: str, required: false}], cache_ttl_key: special_data}
-  - {name: a_share_auction_snapshot, description: "A 股集合竞价快照", routing: a_share_auction_snapshot, params: [{name: thscodes, type: str, required: false}], cache_ttl_key: special_data}
-  - {name: a_share_auction_short_term_benchmark, description: "A 股短期竞价基准", routing: a_share_auction_short_term_benchmark, params: [{name: date, type: str, required: false}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_anomaly_analysis_stock, description: "A 股异动原因分析", routing: a_share_special_data_anomaly_analysis_stock, params: [{name: thscodes, type: str, required: true, description: "逗号分隔的 THS 代码列表，如 '600519.SH,000001.SZ'"}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_skyrocket_list, description: "A 股飙升榜 (火箭榜)", routing: a_share_special_data_skyrocket_list, params: [{name: period, type: str, required: false, enum: [day, hour], description: "榜单周期：day=日榜（默认）/ hour=小时榜"}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_hot_stock_list, description: "A 股热门股 (24h)", routing: a_share_special_data_hot_stock_list, params: [{name: period, type: str, required: false, enum: [day, hour], description: "榜单周期：day=24小时级（默认）/ hour=小时级"}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_hot_stock_list_history, description: "A 股热门股历史", routing: a_share_special_data_hot_stock_list_history, params: [{name: date, type: str, required: true, description: "目标日期，格式 yyyy-MM-dd，只支持一年内数据"}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_hot_stock_rank_trend, description: "A 股热门股排名趋势", routing: a_share_special_data_hot_stock_rank_trend, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd，需 >= start_date"}], cache_ttl_key: special_data}
+  - {name: a_share_special_data_dragon_tiger_list, description: "A 股龙虎榜", routing: a_share_special_data_dragon_tiger_list, params: [{name: board_type, type: str, required: false, enum: [all, org, hot_money], description: "榜单类型：all=全部（默认）/ org=机构榜 / hot_money=游资榜"}, {name: date, type: str, required: false, description: "目标日期，格式 yyyy-MM-dd，省略则默认最近可用交易日"}], cache_ttl_key: special_data}
+  - {name: a_share_auction_snapshot, description: "A 股集合竞价快照", routing: a_share_auction_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，省略则返回全市场"}], cache_ttl_key: special_data}
+  - {name: a_share_auction_short_term_benchmark, description: "A 股短期竞价基准", routing: a_share_auction_short_term_benchmark, params: [{name: date, type: str, required: false, description: "目标日期，格式 yyyy-MM-dd，省略默认当天"}], cache_ttl_key: special_data}
 
   # === Fuyao a-share-index (4) ===
-  - {name: a_share_index_catalog, description: "THS 指数/板块目录", routing: a_share_index_catalog, params: [{name: tag, type: str, required: false}], cache_ttl_key: ticker_list}
-  - {name: a_share_index_constituents, description: "指数/板块成分股", routing: a_share_index_constituents, params: [{name: thscode, type: str, required: true}], cache_ttl_key: ticker_list}
-  - {name: a_share_index_prices_snapshot, description: "指数行情快照", routing: a_share_index_prices_snapshot, params: [{name: thscodes, type: str, required: true}], cache_ttl_key: index_data}
-  - {name: a_share_index_prices_historical, description: "指数历史K线 (10年)", routing: a_share_index_prices_historical, params: [{name: thscode, type: str, required: true}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: historical}
+  - {name: a_share_index_catalog, description: "THS 指数/板块目录", routing: a_share_index_catalog, params: [{name: tag, type: str, required: false, enum: [cn_concept, region, tszs, industry], description: "板块标签：cn_concept=A 股概念（默认）/ region=区域指数 / tszs=特色指数 / industry=行业指数"}], cache_ttl_key: ticker_list}
+  - {name: a_share_index_constituents, description: "指数/板块成分股", routing: a_share_index_constituents, params: [{name: thscode, type: str, required: true, description: "指数 THS 代码，如 '886042.TI'（同花顺概念）或 '000300.SH'（沪深 300）"}], cache_ttl_key: ticker_list}
+  - {name: a_share_index_prices_snapshot, description: "指数行情快照", routing: a_share_index_prices_snapshot, params: [{name: thscodes, type: str, required: true, description: "逗号分隔的指数 THS 代码，如 '000001.SH,399001.SZ,886042.TI'"}], cache_ttl_key: index_data}
+  - {name: a_share_index_prices_historical, description: "指数历史K线 (10年)", routing: a_share_index_prices_historical, params: [{name: thscode, type: str, required: true, description: "指数 THS 代码，如 '000300.SH'"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}], cache_ttl_key: historical}
 
   # === Fuyao meta (1, 另一个 search_stock 手写) ===
-  - {name: meta_tickers_list, description: "【分页拉全量 ticker 列表】按 type (stock/fund/...) 与 exchange 过滤, 用于浏览全部可用标的. 模糊搜索请用 search_stock.", routing: meta_tickers_list, params: [{name: type, type: str, required: false}, {name: exchange, type: str, required: false}, {name: limit, type: int, required: false}, {name: offset, type: int, required: false}], cache_ttl_key: ticker_list}
+  - {name: meta_tickers_list, description: "【分页拉全量 ticker 列表】按 type 与 exchange 过滤，用于浏览全部可用标的。模糊搜索请用 search_stock。", routing: meta_tickers_list, params: [{name: type, type: str, required: false, enum: [a-share, a-share-index, fund-otc, fund-etf, fund-lof], description: "资产类型：a-share=A 股 / a-share-index=指数 / fund-otc=场外公募 / fund-etf=ETF / fund-lof=LOF，省略返回全部"}, {name: exchange, type: str, required: false, description: "交易所过滤：SH / SZ / BJ"}, {name: limit, type: int, required: false, description: "单页条数，最大 10000（默认 1000）"}, {name: offset, type: int, required: false, description: "分页偏移（默认 0）"}], cache_ttl_key: ticker_list}
 
   # === Fuyao fund (28) ===
-  - {name: fund_profile_detail, description: "基金基础资料", routing: fund_profile_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_portfolio_holdings, description: "基金持仓(最新)", routing: fund_portfolio_holdings, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
-  - {name: fund_performance_returns, description: "基金各期收益 (1M/3M/6M/1Y/3Y/5Y/成立来)", routing: fund_performance_returns, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_holders_detail, description: "基金持有人结构(合并/单类)", routing: fund_holders_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_market_historical, description: "ETF/LOF 历史行情", routing: fund_market_historical, params: [{name: thscode, type: str, required: true}, {name: interval, type: str, required: false}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: fund_history}
-  - {name: fund_companies_detail, description: "基金公司信息", routing: fund_companies_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_portfolio_industry_allocation, description: "基金行业配置", routing: fund_portfolio_industry_allocation, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
-  - {name: fund_performance_indicators_historical, description: "基金历史业绩指标", routing: fund_performance_indicators_historical, params: [{name: thscode, type: str, required: true}, {name: start_date, type: str, required: false}, {name: end_date, type: str, required: false}], cache_ttl_key: fund_history}
-  - {name: fund_performance_drawdowns, description: "基金回撤指标", routing: fund_performance_drawdowns, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_holders_top, description: "基金前十大持有人", routing: fund_holders_top, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_corporate_actions_dividends, description: "基金分红记录", routing: fund_corporate_actions_dividends, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_diagnostics_detail, description: "基金诊断", routing: fund_diagnostics_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_financials_indicators, description: "基金财务指标", routing: fund_financials_indicators, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_financials_income_statements, description: "基金利润表", routing: fund_financials_income_statements, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_financials_balance_sheets, description: "基金资产负债表", routing: fund_financials_balance_sheets, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_managers_investment_style, description: "基金经理投资风格", routing: fund_managers_investment_style, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_managers_performance, description: "基金经理业绩", routing: fund_managers_performance, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_managers_experience, description: "基金经理经验", routing: fund_managers_experience, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_managers_detail, description: "基金经理详情", routing: fund_managers_detail, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_data}
-  - {name: fund_news_article_list, description: "基金新闻", routing: fund_news_article_list, params: [{name: thscode, type: str, required: true}, {name: offset, type: int, required: false}, {name: limit, type: int, required: false}]}
+  - {name: fund_profile_detail, description: "基金基础资料", routing: fund_profile_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_portfolio_holdings, description: "基金持仓(最新)", routing: fund_portfolio_holdings, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings}
+  - {name: fund_performance_returns, description: "基金各期收益 (1M/3M/6M/1Y/3Y/5Y/成立来)", routing: fund_performance_returns, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_holders_detail, description: "基金持有人结构(合并/单类)", routing: fund_holders_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_market_historical, description: "ETF/LOF 历史行情", routing: fund_market_historical, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: interval, type: str, required: false, enum: [1d, 1w, 1M], description: "K 线周期：1d=日（默认）/ 1w=周 / 1M=月"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}], cache_ttl_key: fund_history}
+  - {name: fund_companies_detail, description: "基金公司信息", routing: fund_companies_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_portfolio_industry_allocation, description: "基金行业配置", routing: fund_portfolio_industry_allocation, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings}
+  - {name: fund_performance_indicators_historical, description: "基金历史业绩指标", routing: fund_performance_indicators_historical, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}], cache_ttl_key: fund_history}
+  - {name: fund_performance_drawdowns, description: "基金回撤指标", routing: fund_performance_drawdowns, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_holders_top, description: "基金前十大持有人", routing: fund_holders_top, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_corporate_actions_dividends, description: "基金分红记录", routing: fund_corporate_actions_dividends, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_diagnostics_detail, description: "基金诊断", routing: fund_diagnostics_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_financials_indicators, description: "基金财务指标", routing: fund_financials_indicators, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_financials_income_statements, description: "基金利润表", routing: fund_financials_income_statements, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_financials_balance_sheets, description: "基金资产负债表", routing: fund_financials_balance_sheets, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_managers_investment_style, description: "基金经理投资风格", routing: fund_managers_investment_style, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_managers_performance, description: "基金经理业绩", routing: fund_managers_performance, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_managers_experience, description: "基金经理经验", routing: fund_managers_experience, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_managers_detail, description: "基金经理详情", routing: fund_managers_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data}
+  - {name: fund_news_article_list, description: "基金新闻", routing: fund_news_article_list, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: offset, type: int, required: false, description: "分页偏移"}, {name: limit, type: int, required: false, description: "返回条数"}]}
   - {name: fund_offerings_list, description: "基金募集列表", routing: fund_offerings_list, params: [], cache_ttl_key: fund_data}
-  - {name: fund_portfolio_stock_history, description: "基金股票持仓历史", routing: fund_portfolio_stock_history, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
-  - {name: fund_portfolio_stock_report_dates, description: "基金股票持仓报告日", routing: fund_portfolio_stock_report_dates, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
-  - {name: fund_portfolio_bond_history, description: "基金债券持仓历史", routing: fund_portfolio_bond_history, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
-  - {name: fund_portfolio_bond_report_dates, description: "基金债券持仓报告日", routing: fund_portfolio_bond_report_dates, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
-  - {name: fund_portfolio_asset_allocation, description: "基金资产配置", routing: fund_portfolio_asset_allocation, params: [{name: thscode, type: str, required: true}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_stock_history, description: "基金股票持仓历史", routing: fund_portfolio_stock_history, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_stock_report_dates, description: "基金股票持仓报告日", routing: fund_portfolio_stock_report_dates, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_bond_history, description: "基金债券持仓历史", routing: fund_portfolio_bond_history, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_bond_report_dates, description: "基金债券持仓报告日", routing: fund_portfolio_bond_report_dates, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings}
+  - {name: fund_portfolio_asset_allocation, description: "基金资产配置", routing: fund_portfolio_asset_allocation, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings}
 
+
+# Gateway 配置
+gateway:
+  host: "0.0.0.0"
+  port: 18080
+  mcp_path: "/mcp"
 
 # 全局开关
 disable_dangerous: false
@@ -417,14 +401,9 @@ cache:
 
   ttl:
     realtime_quote: 10
-    minute_bar: 60
-    sector: 30                  # <-- ADD THIS LINE
-    daily_bar: 300
     index_data: 60
     fundamentals: 3600
-    announcement: 1800
     fund_data: 300
-    market_stats: 30
     search: 300
     special_data: 60
     valuation: 300
@@ -432,7 +411,6 @@ cache:
     fund_history: 3600
     ticker_list: 3600
     workday: 86400
-    etf_list: 3600
     historical: 3600
 
 # 日志配置
