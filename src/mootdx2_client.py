@@ -81,6 +81,7 @@ class MooTDX2Client:
         """工具路由"""
         method_map = {
             "get_quote": self.get_quote,
+            "get_kline": self.get_kline,
         }
 
         method = method_map.get(tool_name)
@@ -99,4 +100,28 @@ class MooTDX2Client:
             return ToolResult(success=False, error="No data")
         except Exception as e:
             logger.error(f"get_quote failed: {e}")
+            return ToolResult(success=False, error=str(e))
+
+    def _get_kline_sync(self, code: str, type: str = "day", limit: int = 100):
+        """同步获取K线"""
+        q = self._get_quotes()
+        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+        freq = FREQ_MAP.get(type, 9)
+        df = q.bars(symbol=sym, frequency=freq, offset=limit)
+        if df is not None and not df.empty:
+            if limit and limit > 0:
+                df = df.tail(limit)
+            return df.to_dict(orient="records")
+        return None
+
+    async def get_kline(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """获取K线"""
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._get_kline_sync, code, type, limit)
+            if data:
+                return ToolResult(success=True, data=data, source="mootdx2")
+            return ToolResult(success=False, error="No data")
+        except Exception as e:
+            logger.error(f"get_kline failed: {e}")
             return ToolResult(success=False, error=str(e))
