@@ -2,7 +2,7 @@
 # DO NOT EDIT — re-run scripts/gen_tdx_quant_tools.py
 tools:
 - name: get_market_data
-  description: '```python'
+  description: 根据股票列表获取历史 K 线数据。
   routing: get_market_data
   upstream_tool_mapping:
     tdx_quant: get_market_data
@@ -47,7 +47,7 @@ tools:
     type: bool
     description: 是否向前填充缺失数据，默认 `True`
 - name: get_market_snapshot
-  description: '```python'
+  description: 获取指定股票的最新行情快照数据。
   routing: get_market_snapshot
   upstream_tool_mapping:
     tdx_quant: get_market_snapshot
@@ -55,7 +55,7 @@ tools:
   dangerous: false
   params: []
 - name: get_stock_info
-  description: '```python'
+  description: 获取股票基础信息
   routing: get_stock_info
   upstream_tool_mapping:
     tdx_quant: get_stock_info
@@ -63,7 +63,7 @@ tools:
   dangerous: false
   params: []
 - name: get_relation
-  description: '```python'
+  description: 获取指定股票所属的全部板块信息。
   routing: get_relation
   upstream_tool_mapping:
     tdx_quant: get_relation
@@ -71,7 +71,7 @@ tools:
   dangerous: false
   params: []
 - name: get_divid_factors
-  description: '```python'
+  description: 获取分红配送数据
   routing: get_divid_factors
   upstream_tool_mapping:
     tdx_quant: get_divid_factors
@@ -79,7 +79,7 @@ tools:
   dangerous: false
   params: []
 - name: get_more_info
-  description: '```python'
+  description: 获取股票更多扩展信息，包含涨幅系列、主力净额、L2数据、封单、PE/PB/市值等上百个字段。`field_list` 为空返回所有字段。
   routing: get_more_info
   upstream_tool_mapping:
     tdx_quant: get_more_info
@@ -87,7 +87,7 @@ tools:
   dangerous: false
   params: []
 - name: get_gb_info
-  description: '```python'
+  description: 获取股本信息
   routing: get_gb_info
   upstream_tool_mapping:
     tdx_quant: get_gb_info
@@ -95,7 +95,7 @@ tools:
   dangerous: false
   params: []
 - name: get_kzz_info
-  description: '```python'
+  description: 获取可转债信息
   routing: get_kzz_info
   upstream_tool_mapping:
     tdx_quant: get_kzz_info
@@ -103,7 +103,7 @@ tools:
   dangerous: false
   params: []
 - name: get_ipo_info
-  description: '```python'
+  description: 获取新股申购信息
   routing: get_ipo_info
   upstream_tool_mapping:
     tdx_quant: get_ipo_info
@@ -111,7 +111,7 @@ tools:
   dangerous: false
   params: []
 - name: get_trackzs_etf_info
-  description: '```python'
+  description: 获取跟踪某一指数的全部ETF基金信息。
   routing: get_trackzs_etf_info
   upstream_tool_mapping:
     tdx_quant: get_trackzs_etf_info
@@ -119,7 +119,7 @@ tools:
   dangerous: false
   params: []
 - name: get_financial_data
-  description: '```python'
+  description: 获取财务报表数据（字段 FN1~FN584），需要客户端下载专业财务数据包。
   routing: get_financial_data
   upstream_tool_mapping:
     tdx_quant: get_financial_data
@@ -127,7 +127,7 @@ tools:
   dangerous: false
   params: []
 - name: get_financial_data_by_date
-  description: '```python'
+  description: 按年度/季度获取财务数据
   routing: get_financial_data_by_date
   upstream_tool_mapping:
     tdx_quant: get_financial_data_by_date
@@ -135,7 +135,7 @@ tools:
   dangerous: false
   params: []
 - name: get_gpjy_value
-  description: '```python'
+  description: 获取股票市场交易数据（字段 GP1~GP46），包含：股东人数、龙虎榜、融资融券、大宗交易、陆股通、涨停数据等。
   routing: get_gpjy_value
   upstream_tool_mapping:
     tdx_quant: get_gpjy_value
@@ -143,7 +143,7 @@ tools:
   dangerous: false
   params: []
 - name: get_gpjy_value_by_date
-  description: '```python'
+  description: 按日期获取股票交易数据
   routing: get_gpjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_gpjy_value_by_date
@@ -151,7 +151,7 @@ tools:
   dangerous: false
   params: []
 - name: get_bkjy_value
-  description: '```python'
+  description: 获取板块级别市场交易数据（字段 BK5~BK19），包含：PE/PB/PS/PC、市值、涨跌停数、融资融券等。
   routing: get_bkjy_value
   upstream_tool_mapping:
     tdx_quant: get_bkjy_value
@@ -159,7 +159,7 @@ tools:
   dangerous: false
   params: []
 - name: get_bkjy_value_by_date
-  description: '```python'
+  description: 按日期获取板块交易数据
   routing: get_bkjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_bkjy_value_by_date
@@ -167,7 +167,7 @@ tools:
   dangerous: false
   params: []
 - name: get_scjy_value
-  description: '```python'
+  description: 获取市场整体宏观交易数据（字段 SC01~SC42），包含：融资融券、陆股通、涨停、打板资金、ETF规模、新开户等。无需传 `stock_list`。
   routing: get_scjy_value
   upstream_tool_mapping:
     tdx_quant: get_scjy_value
@@ -175,7 +175,7 @@ tools:
   dangerous: false
   params: []
 - name: get_scjy_value_by_date
-  description: '```python'
+  description: 按日期获取市场交易数据
   routing: get_scjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_scjy_value_by_date
@@ -183,7 +183,7 @@ tools:
   dangerous: false
   params: []
 - name: get_gp_one_data
-  description: '```python'
+  description: 获取股票单个数据字段（字段 GO1~GO47，不按时间序列，返回当前值），包含：发行价、一致预期EPS、解禁日、机构持股、业绩预告等。
   routing: get_gp_one_data
   upstream_tool_mapping:
     tdx_quant: get_gp_one_data
@@ -191,7 +191,7 @@ tools:
   dangerous: false
   params: []
 - name: get_stock_list
-  description: '```python'
+  description: 获取指定市场/分类的股票列表。
   routing: get_stock_list
   upstream_tool_mapping:
     tdx_quant: get_stock_list
@@ -199,7 +199,7 @@ tools:
   dangerous: false
   params: []
 - name: get_sector_list
-  description: '```python'
+  description: 获取 A 股全部板块代码列表（相当于 `get_stock_list('10')`）。
   routing: get_sector_list
   upstream_tool_mapping:
     tdx_quant: get_sector_list
@@ -207,7 +207,7 @@ tools:
   dangerous: false
   params: []
 - name: get_stock_list_in_sector
-  description: '```python'
+  description: 获取板块内股票列表
   routing: get_stock_list_in_sector
   upstream_tool_mapping:
     tdx_quant: get_stock_list_in_sector
@@ -215,7 +215,7 @@ tools:
   dangerous: false
   params: []
 - name: get_user_sector
-  description: '```python'
+  description: 获取通达信客户端中用户设置的自选股板块列表。
   routing: get_user_sector
   upstream_tool_mapping:
     tdx_quant: get_user_sector
@@ -223,7 +223,7 @@ tools:
   dangerous: false
   params: []
 - name: create_sector
-  description: '```python'
+  description: 创建板块
   routing: create_sector
   upstream_tool_mapping:
     tdx_quant: create_sector
@@ -231,7 +231,7 @@ tools:
   dangerous: true
   params: []
 - name: delete_sector
-  description: '```python'
+  description: 删除板块
   routing: delete_sector
   upstream_tool_mapping:
     tdx_quant: delete_sector
@@ -239,7 +239,7 @@ tools:
   dangerous: true
   params: []
 - name: rename_sector
-  description: '```python'
+  description: 重命名板块
   routing: rename_sector
   upstream_tool_mapping:
     tdx_quant: rename_sector
@@ -247,7 +247,7 @@ tools:
   dangerous: true
   params: []
 - name: clear_sector
-  description: '```python'
+  description: 清空板块内所有成分股（不删除板块本身）。
   routing: clear_sector
   upstream_tool_mapping:
     tdx_quant: clear_sector
@@ -255,7 +255,7 @@ tools:
   dangerous: true
   params: []
 - name: refresh_cache
-  description: '```python'
+  description: 刷新快照行情和K线缓存。首次调用 `get_market_snapshot` 或 `get_market_data` 时系统会自动刷新，无需手动调用。
   routing: refresh_cache
   upstream_tool_mapping:
     tdx_quant: refresh_cache
@@ -263,7 +263,7 @@ tools:
   dangerous: true
   params: []
 - name: refresh_kline
-  description: '```python'
+  description: 刷新历史K线缓存
   routing: refresh_kline
   upstream_tool_mapping:
     tdx_quant: refresh_kline
@@ -271,7 +271,7 @@ tools:
   dangerous: true
   params: []
 - name: subscribe_hq
-  description: '```python'
+  description: 订阅指定股票的实时行情更新，有行情变化时自动触发回调函数。**最多订阅 100 只。**
   routing: subscribe_hq
   upstream_tool_mapping:
     tdx_quant: subscribe_hq
@@ -279,7 +279,7 @@ tools:
   dangerous: false
   params: []
 - name: unsubscribe_hq
-  description: '```python'
+  description: 取消订阅
   routing: unsubscribe_hq
   upstream_tool_mapping:
     tdx_quant: unsubscribe_hq
@@ -287,7 +287,7 @@ tools:
   dangerous: false
   params: []
 - name: get_subscribe_hq_stock_list
-  description: '```python'
+  description: 下载通达信特定文件数据（十大股东、ETF申赎数据、舆情、综合信息等）。
   routing: get_subscribe_hq_stock_list
   upstream_tool_mapping:
     tdx_quant: get_subscribe_hq_stock_list
@@ -295,7 +295,7 @@ tools:
   dangerous: false
   params: []
 - name: send_message
-  description: '```python'
+  description: 将字符串消息发送到通达信客户端 TQ 策略管理界面显示。用 `|` 分行。
   routing: send_message
   upstream_tool_mapping:
     tdx_quant: send_message
@@ -303,7 +303,7 @@ tools:
   dangerous: true
   params: []
 - name: send_file
-  description: '```python'
+  description: 发送 txt/pdf/html 文件到通达信客户端展示。文件须放在 `./PYPlugins/file/` 目录。
   routing: send_file
   upstream_tool_mapping:
     tdx_quant: send_file
@@ -311,7 +311,7 @@ tools:
   dangerous: true
   params: []
 - name: send_warn
-  description: '```python'
+  description: 发送预警信号到通达信客户端 TQ 策略信号界面。
   routing: send_warn
   upstream_tool_mapping:
     tdx_quant: send_warn
@@ -319,7 +319,7 @@ tools:
   dangerous: true
   params: []
 - name: send_bt_data
-  description: '```python'
+  description: 输出回测数据到通达信客户端显示，配合 `SIGNALS_TQ` 公式在K线图上展示。
   routing: send_bt_data
   upstream_tool_mapping:
     tdx_quant: send_bt_data
@@ -327,7 +327,7 @@ tools:
   dangerous: true
   params: []
 - name: send_user_block
-  description: '```python'
+  description: 发送股票到自定义板块
   routing: send_user_block
   upstream_tool_mapping:
     tdx_quant: send_user_block
@@ -335,7 +335,7 @@ tools:
   dangerous: true
   params: []
 - name: exec_to_tdx
-  description: '```python'
+  description: 让通达信客户端根据传入的 URL 或功能串执行指定操作。
   routing: exec_to_tdx
   upstream_tool_mapping:
     tdx_quant: exec_to_tdx
@@ -343,7 +343,7 @@ tools:
   dangerous: true
   params: []
 - name: print_to_tdx
-  description: '```python'
+  description: 将多组 DataFrame 数据导出到通达信客户端 TQ 策略数据浏览中展示。
   routing: print_to_tdx
   upstream_tool_mapping:
     tdx_quant: print_to_tdx
@@ -351,7 +351,7 @@ tools:
   dangerous: true
   params: []
 - name: get_trading_dates
-  description: '```python'
+  description: 获取指定市场在时间范围内的纯交易日列表。**需要先在客户端下载上证指数盘后数据。**
   routing: get_trading_dates
   upstream_tool_mapping:
     tdx_quant: get_trading_dates
@@ -359,7 +359,7 @@ tools:
   dangerous: false
   params: []
 - name: formula_format_data
-  description: '```python'
+  description: 将 `get_market_data` 获取的K线数据格式化为通达信公式接口可识别的格式。
   routing: formula_format_data
   upstream_tool_mapping:
     tdx_quant: formula_format_data
@@ -367,7 +367,7 @@ tools:
   dangerous: true
   params: []
 - name: formula_set_data
-  description: '```python'
+  description: 在调用公式前设置公式所需的K线数据（须先用 `formula_format_data` 格式化）。
   routing: formula_set_data
   upstream_tool_mapping:
     tdx_quant: formula_set_data
@@ -375,7 +375,7 @@ tools:
   dangerous: true
   params: []
 - name: formula_set_data_info
-  description: '```python'
+  description: 向公式设置数据信息
   routing: formula_set_data_info
   upstream_tool_mapping:
     tdx_quant: formula_set_data_info
@@ -383,7 +383,7 @@ tools:
   dangerous: true
   params: []
 - name: formula_zb
-  description: '```python'
+  description: 调用指标公式
   routing: formula_zb
   upstream_tool_mapping:
     tdx_quant: formula_zb
@@ -391,7 +391,7 @@ tools:
   dangerous: true
   params: []
 - name: formula_xg
-  description: '```python'
+  description: 调用选股公式
   routing: formula_xg
   upstream_tool_mapping:
     tdx_quant: formula_xg
@@ -399,7 +399,7 @@ tools:
   dangerous: true
   params: []
 - name: formula_exp
-  description: '```python'
+  description: 调用表达式公式
   routing: formula_exp
   upstream_tool_mapping:
     tdx_quant: formula_exp
@@ -407,7 +407,7 @@ tools:
   dangerous: true
   params: []
 - name: formula_get_data
-  description: '```python'
+  description: 在调用公式后，获取当前设置的公式数据结果。
   routing: formula_get_data
   upstream_tool_mapping:
     tdx_quant: formula_get_data
@@ -415,7 +415,7 @@ tools:
   dangerous: true
   params: []
 - name: formula_process_mul_zb
-  description: '```python'
+  description: 对多只股票批量调用通达信指标公式，参数含义同 `formula_process_mul_xg`，额外支持 `xsflag` 精度控制。
   routing: formula_process_mul_zb
   upstream_tool_mapping:
     tdx_quant: formula_process_mul_zb
@@ -469,7 +469,7 @@ tools:
     type: int
     description: 复权类型数值
 - name: stock_account
-  description: '```python'
+  description: 获取资金账户句柄
   routing: stock_account
   upstream_tool_mapping:
     tdx_quant: stock_account
@@ -477,7 +477,7 @@ tools:
   dangerous: false
   params: []
 - name: query_stock_orders
-  description: '```python'
+  description: 查询委托信息
   routing: query_stock_orders
   upstream_tool_mapping:
     tdx_quant: query_stock_orders
@@ -485,7 +485,7 @@ tools:
   dangerous: false
   params: []
 - name: query_stock_positions
-  description: '```python'
+  description: 查询持仓信息
   routing: query_stock_positions
   upstream_tool_mapping:
     tdx_quant: query_stock_positions
@@ -493,7 +493,7 @@ tools:
   dangerous: false
   params: []
 - name: order_stock
-  description: '```python'
+  description: 下单
   routing: order_stock
   upstream_tool_mapping:
     tdx_quant: order_stock
@@ -501,7 +501,7 @@ tools:
   dangerous: true
   params: []
 - name: cancel_order_stock
-  description: '```python'
+  description: 根据委托编号撤单。
   routing: cancel_order_stock
   upstream_tool_mapping:
     tdx_quant: cancel_order_stock
@@ -509,7 +509,7 @@ tools:
   dangerous: true
   params: []
 - name: query_stock_asset
-  description: '```python'
+  description: 查询指定账户的总资产、余额和持仓市值。
   routing: query_stock_asset
   upstream_tool_mapping:
     tdx_quant: query_stock_asset

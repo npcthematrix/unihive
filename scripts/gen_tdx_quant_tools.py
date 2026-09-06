@@ -102,7 +102,7 @@ def infer_cache_ttl_key(name: str) -> str | None:
 # ---------- 解析 ----------
 
 _METHOD_HEADING = re.compile(
-    r"^###\s+\d+\.\d+\s+.+?`([A-Za-z_][A-Za-z0-9_]*)`\s*$",
+    r"^###\s+\d+\.\d+\s+(?P<title>[^`\n]+?)`(?P<name>[A-Za-z_][A-Za-z0-9_]*)`\s*$",
     re.MULTILINE,
 )
 _PARAM_ROW = re.compile(
@@ -110,23 +110,29 @@ _PARAM_ROW = re.compile(
     re.MULTILINE,
 )
 _METHOD_HEADING_ALT = re.compile(
-    r"^####\s+[^`\n]*`([A-Za-z_][A-Za-z0-9_]*)`\s*$",
+    r"^####\s+(?P<title>[^`\n]*?)`(?P<name>[A-Za-z_][A-Za-z0-9_]*)`\s*$",
     re.MULTILINE,
 )
 
 
-def _all_method_headings(text: str) -> list[tuple[str, int, int, int]]:
-    """返回 [(method_name, heading_start, heading_end, section_end), ...]。"""
-    matches: list[tuple[int, str, int]] = []
+def _all_method_headings(text: str) -> list[tuple[str, str, int, int, int]]:
+    """返回 [(method_name, heading_title, heading_start, heading_end, section_end), ...]。"""
+    matches: list[tuple[int, str, str, int]] = []
     for m in _METHOD_HEADING.finditer(text):
-        matches.append((m.start(), m.group(1), m.end()))
+        matches.append((m.start(), m.group("name"), m.group("title").strip()))
     for m in _METHOD_HEADING_ALT.finditer(text):
-        matches.append((m.start(), m.group(1), m.end()))
+        matches.append((m.start(), m.group("name"), m.group("title").strip()))
     matches.sort(key=lambda x: x[0])
-    result: list[tuple[str, int, int, int]] = []
-    for i, (start, name, end) in enumerate(matches):
+    result: list[tuple[str, str, int, int, int]] = []
+    for i, (start, name, title) in enumerate(matches):
+        heading_end = matches[i + 1][0] if i + 1 < len(matches) else len(text)
         section_end = matches[i + 1][0] if i + 1 < len(matches) else len(text)
-        result.append((name, start, end, section_end))
+        # heading_end = end of THIS heading line; section_end = start of NEXT heading
+        # We need end of heading line — find first newline after start
+        nl = text.find("\n", start)
+        if nl == -1:
+            nl = len(text)
+        result.append((name, title, start, nl, section_end))
     return result
 
 
@@ -137,19 +143,34 @@ def parse_skill_md(text: str) -> list[dict]:
     if not headings:
         return methods
 
-    for name, _heading_start, heading_end, section_end in headings:
+    for name, heading_title, _heading_start, heading_end, section_end in headings:
         section = text[heading_end:section_end]
 
-        description = name
+        description = heading_title or name
+        in_code_fence = False
         for line in section.splitlines():
             stripped = line.strip()
             if not stripped:
+                continue
+            if stripped.startswith("```"):
+                in_code_fence = not in_code_fence
+                continue
+            if in_code_fence:
                 continue
             if stripped.startswith("|"):
                 break
             if stripped.startswith("#"):
                 continue
             if stripped.startswith("**"):
+                continue
+            # Skip bullet-list lines (markdown list items starting with -, *, +)
+            if stripped[:2] in ("- ", "* ", "+ "):
+                continue
+            # Skip blockquote lines
+            if stripped.startswith(">"):
+                continue
+            # Skip horizontal rules (---, ***, ___)
+            if stripped in ("---", "***", "___"):
                 continue
             description = stripped.rstrip("：:")
             break

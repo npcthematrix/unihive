@@ -18,6 +18,14 @@ SAMPLE_SKILL = """# TdxQuant Skill Sample
 
 ### 2.1 获取K线行情 `get_market_data`
 
+```python
+tq.get_market_data(
+    field_list: List[str] = [],
+    stock_list: List[str] = [],
+    period: str = ''
+) -> Dict
+```
+
 获取 K 线和历史行情数据。
 
 **参数说明：**
@@ -36,6 +44,12 @@ SAMPLE_SKILL = """# TdxQuant Skill Sample
 | Close | str | 收盘价 |
 
 ### 2.2 获取实时行情快照 `get_market_snapshot`
+
+```python
+tq.get_market_snapshot(stock_code: str, field_list: List = []) -> Dict
+```
+
+获取指定股票的最新行情快照数据。
 
 **参数说明：**
 
@@ -74,6 +88,57 @@ def test_parse_skill_md_extracts_methods():
     assert "get_market_snapshot" in names
     assert "create_sector" in names
     assert "order_stock" in names
+
+
+def test_parse_skill_md_skips_code_fence_in_description():
+    """Code fence lines must not leak into description. SKILL.md puts
+    a ```python signature block right after the heading; description is
+    the plain-text line AFTER the closing fence."""
+    methods = parse_skill_md(SAMPLE_SKILL)
+    gmd = next(m for m in methods if m["name"] == "get_market_data")
+    assert gmd["description"] == "获取 K 线和历史行情数据。", (
+        f"expected description after code fence, got: {gmd['description']!r}"
+    )
+    gms = next(m for m in methods if m["name"] == "get_market_snapshot")
+    assert gms["description"] == "获取指定股票的最新行情快照数据。", (
+        f"expected description after code fence, got: {gms['description']!r}"
+    )
+
+
+def test_parse_skill_md_falls_back_to_heading_title_when_no_body():
+    """When a method has no plain-text description line (just code fence +
+    bullet list), description falls back to the heading title (e.g.
+    '### 2.6 获取分红配送数据 `get_divid_factors`' → '获取分红配送数据')."""
+    skill = """# Sample
+
+### 2.6 获取分红配送数据 `get_divid_factors`
+
+```python
+tq.get_divid_factors(stock_code: str) -> pd.DataFrame
+```
+
+**返回 DataFrame 列：**
+- `Type`：类型；`Bonus`：每10股分红
+
+---
+
+### 2.7 下一步 `next_method`
+
+```python
+tq.next_method() -> None
+```
+
+下一步描述。
+
+"""
+    methods = parse_skill_md(skill)
+    gdf = next(m for m in methods if m["name"] == "get_divid_factors")
+    # Must skip the --- horizontal rule AND the bullet list; fall back to heading title
+    assert gdf["description"] == "获取分红配送数据", (
+        f"expected heading-title fallback, got: {gdf['description']!r}"
+    )
+    nm = next(m for m in methods if m["name"] == "next_method")
+    assert nm["description"] == "下一步描述。"
 
 
 def test_parse_skill_md_extracts_params():
