@@ -1597,6 +1597,122 @@ class MooTDX2Client:
             logger.error(f"indicator_atr failed: {e}")
             return self._error_result(e, f"indicator_atr({code})")
 
+    # ========== 市场异动（主力监控精灵） ==========
+    def _stock_unusual_sync(self, event_type: str = "all") -> list:
+        """同步获取市场异动数据"""
+        import pandas as pd
+
+        q = self._get_quotes()
+
+        # Get concept blocks
+        blocks_df = q.block(block_type="concept")
+        if blocks_df is None or blocks_df.empty:
+            return []
+
+        # Collect stock codes from blocks (limited to avoid too many requests)
+        all_codes = set()
+        for _, row in blocks_df.head(50).iterrows():
+            block_name = str(row.get("name", ""))
+            # Use stock_count as hint — we need actual stock codes
+            # Since q.block() returns code_list in newer mootdx2, check for it
+            if "code_list" in row and pd.notna(row["code_list"]):
+                codes = str(row["code_list"]).split(",")
+                for c in codes:
+                    c = c.strip()
+                    if c:
+                        all_codes.add(c)
+
+        stock_list = list(all_codes)[:500]
+        if not stock_list:
+            return []
+
+        # Batch quote
+        results = []
+        for i in range(0, len(stock_list), MAX_LIMIT_BATCH_QUOTE):
+            chunk = stock_list[i:i + MAX_LIMIT_BATCH_QUOTE]
+            prefixed = []
+            for c in chunk:
+                if str(c).startswith(("60", "68")):
+                    prefixed.append(f"sh{c}")
+                elif str(c).startswith(("00", "30")):
+                    prefixed.append(f"sz{c}")
+                elif str(c).startswith(("8", "4")):
+                    prefixed.append(f"bj{c}")
+                else:
+                    prefixed.append(f"sz{c}")
+            stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in prefixed]
+            batch_df = q.quotes(symbols=stripped)
+            if batch_df is not None and len(batch_df) > 0:
+                results.extend(batch_df.to_dict(orient="records"))
+
+        if not results:
+            return []
+
+        df = pd.DataFrame(results)
+        if df.empty:
+            return []
+
+        # Filter by event type
+        if event_type == "涨":
+            df = df[df["pct_chg"] > 0]
+        elif event_type == "跌":
+            df = df[df["pct_chg"] < 0]
+        elif event_type == "放量":
+            df = df[df["vol"] > df["vol"].quantile(0.75)] if "vol" in df.columns else df
+        elif event_type == "缩量":
+            df = df[df["vol"] < df["vol"].quantile(0.25)] if "vol" in df.columns else df
+        elif event_type == "炸板":
+            df = df[(df["pct_chg"] > 0) & (df["pct_chg"] < 9)]
+        elif event_type == "天地板":
+            df = df[(df["pct_chg"] <= -9.5) | (df["pct_chg"] >= 9.5)]
+        else:  # all
+            df = df[(df["pct_chg"].abs() >= 5) | (df["pct_chg"] >= 9.5) | (df["pct_chg"] <= -9.5)]
+
+        # Build result with event label
+        result = []
+        for _, row in df.head(100).iterrows():
+            sym = str(row.get("symbol", ""))
+            if sym.startswith("sh"):
+                mkt, code = "sh", sym.replace("sh", "")
+            elif sym.startswith("sz"):
+                mkt, code = "sz", sym.replace("sz", "")
+            elif sym.startswith("bj"):
+                mkt, code = "bj", sym.replace("bj", "")
+            else:
+                mkt, code = "sz", sym
+            pct = float(row.get("pct_chg", 0))
+            if pct >= 9.9:
+                event = "涨停"
+            elif pct <= -9.9:
+                event = "跌停"
+            elif pct > 5:
+                event = "放量上涨"
+            elif pct < -5:
+                event = "放量下跌"
+            elif pct > 0:
+                event = "上涨"
+            else:
+                event = "下跌"
+            result.append({
+                "code": code,
+                "market": mkt,
+                "time": "",
+                "event": event,
+                "change_pct": pct,
+            })
+        return result
+
+    async def stock_unusual(self, event_type: str = "all") -> ToolResult:
+        """获取市场异动数据（主力监控精灵）"""
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._stock_unusual_sync, event_type)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"stock_unusual failed: {e}")
+            return self._error_result(e, "stock_unusual")
+
     # ========== KDJ 指标 ==========
     def _indicator_kdj_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
         """同步计算 KDJ 指标"""

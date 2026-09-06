@@ -176,3 +176,62 @@ class TestMooTDX2Client:
         for v in result["atr"]:
             if v is not None:
                 assert v > 0
+
+    def test_get_index_overview_returns_six_indices(self):
+        """Test get_index_overview returns 6 major indices"""
+        import pandas as pd
+        from src.mootdx2_client import MooTDX2Client, MooTDX2Config
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        # Mock _get_quotes to return DataFrame with 6 index rows
+        mock_df = pd.DataFrame([
+            {"symbol": "000001", "close": 3100.0, "pct_chg": 0.5},
+            {"symbol": "399001", "close": 10000.0, "pct_chg": -0.3},
+            {"symbol": "399006", "close": 2000.0, "pct_chg": 1.2},
+            {"symbol": "000688", "close": 900.0, "pct_chg": 0.8},
+            {"symbol": "889999", "close": 1000.0, "pct_chg": -0.1},
+            {"symbol": "000300", "close": 3800.0, "pct_chg": 0.2},
+        ])
+        mock_quotes = type('MockQuotes', (), {'quotes': lambda self, symbols: mock_df})()
+        with mock.patch.object(client, '_get_quotes', return_value=mock_quotes):
+            result = client._index_overview_sync()
+        assert len(result) == 6
+        assert result[0]["code"] == "000001"
+        assert result[0]["name"] == "上证指数"
+        assert result[0]["market"] == "sh"
+        assert result[0]["close"] == 3100.0
+        assert result[0]["change_pct"] == 0.5
+        assert result[1]["code"] == "399001"
+        assert result[1]["name"] == "深证成指"
+        assert result[1]["market"] == "sz"
+        assert result[5]["code"] == "000300"
+        assert result[5]["name"] == "沪深300"
+        assert result[5]["market"] == "sh"
+
+    def test_indicator_ma(self):
+        """Test indicator_ma returns ma5, ma10, ma20, ma60, dates"""
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        dates = [(datetime(2024, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+        close_prices = [10.0 + i * 0.1 + (i % 5) * 0.2 for i in range(60)]
+        mock_kline = [
+            {"date": d, "open": p - 0.1, "high": p + 0.3, "low": p - 0.2, "close": p, "vol": 1000000}
+            for d, p in zip(dates, close_prices)
+        ]
+        with mock.patch.object(client, '_get_kline_sync', return_value=mock_kline):
+            result = client._indicator_ma_sync("600000", "day", 60)
+        assert "ma5" in result
+        assert "ma10" in result
+        assert "ma20" in result
+        assert "ma60" in result
+        assert "dates" in result
+        assert len(result["ma5"]) == len(result["dates"])
+        # First 4 values of ma5 should be None (need 5 data points)
+        assert result["ma5"][0] is None
+        assert result["ma5"][1] is None
+        assert result["ma5"][2] is None
+        assert result["ma5"][3] is None
+        assert result["ma5"][4] is not None  # 5th value is first computed
+        # ma60 needs 60 data points
+        assert all(v is None for v in result["ma60"][:59])
+        assert result["ma60"][59] is not None
