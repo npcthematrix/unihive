@@ -1385,3 +1385,52 @@ class MooTDX2Client:
         except Exception as e:
             logger.error(f"indicator_boll failed: {e}")
             return self._error_result(e, f"indicator_boll({code})")
+
+    # ========== 指数平滑移动平均线 EMA ==========
+    def _indicator_ema_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
+        """同步计算 EMA 指数平滑移动平均线"""
+        import pandas as pd
+
+        kline = self._get_kline_sync(code, type, limit)
+        if not kline:
+            return {}
+        df = pd.DataFrame(kline)
+        if "close" not in df.columns or df.empty:
+            return {}
+        closes = df["close"].astype(float).tolist()
+        dates = df["date"].tolist() if "date" in df.columns else ["" for _ in closes]
+
+        def ema(data, n):
+            result = [None] * (n - 1)
+            result.append(round(data[n - 1], 3))
+            k = 2 / (n + 1)
+            for i in range(n, len(data)):
+                val = round(data[i] * k + result[-1] * (1 - k), 3)
+                result.append(val)
+            return result
+
+        return {
+            "ema12": ema(closes, 12),
+            "ema26": ema(closes, 26),
+            "dates": dates,
+        }
+
+    async def indicator_ema(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """计算 EMA 指数平滑移动平均线
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数，默认100
+
+        Returns:
+            包含 ema12, ema26, dates 的字典
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._indicator_ema_sync, code, type, limit)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"indicator_ema failed: {e}")
+            return self._error_result(e, f"indicator_ema({code})")

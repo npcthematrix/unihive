@@ -107,3 +107,22 @@ class TestMooTDX2Client:
             for v in result[rsi_name]:
                 if v is not None:
                     assert 0 <= v <= 100, f"{rsi_name} value {v} out of range"
+
+    def test_indicator_boll(self):
+        """Test indicator_boll returns boll_upper, boll_mid, boll_lower, dates"""
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        dates = [(datetime(2024, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+        close_prices = [10.0 + i * 0.1 for i in range(60)]
+        mock_kline = [{"date": d, "open": p - 0.1, "high": p + 0.3, "low": p - 0.2, "close": p, "vol": 1000000}
+                      for d, p in zip(dates, close_prices)]
+        with mock.patch.object(client, '_get_kline_sync', return_value=mock_kline):
+            result = client._indicator_boll_sync("600000", "day", 60)
+        assert "boll_upper" in result
+        assert "boll_mid" in result
+        assert "boll_lower" in result
+        assert "dates" in result
+        # Verify upper > mid > lower for computed values
+        for i in range(20, len(result["boll_upper"])):
+            if result["boll_upper"][i] is not None:
+                assert result["boll_upper"][i] > result["boll_mid"][i] > result["boll_lower"][i]
