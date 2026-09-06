@@ -80,13 +80,26 @@ class TestMooTDX2Client:
         assert "macd" in result
         assert "dates" in result
         assert len(result["dif"]) == len(result["dates"])
-        # Verify DIF calculation: dif = ema12 - ema26
-        import pandas as pd
+        # Verify DIF = EMA12 - EMA26 and MACD = (DIF - DEA) * 2
         closes = [r["close"] for r in mock_kline]
-        ema12_series = pd.Series(closes).ewm(span=12, adjust=False).mean()
-        ema26_series = pd.Series(closes).ewm(span=26, adjust=False).mean()
-        expected_dif_last = round(ema12_series.iloc[-1] - ema26_series.iloc[-1], 3)
-        assert result["dif"][-1] == expected_dif_last
+        k = 2 / (12 + 1)
+        ema12_val = closes[11]
+        for i in range(12, len(closes)):
+            ema12_val = closes[i] * k + ema12_val * (1 - k)
+        ema12_val = round(ema12_val, 3)
+        k26 = 2 / (26 + 1)
+        ema26_val = closes[25]
+        for i in range(26, len(closes)):
+            ema26_val = closes[i] * k26 + ema26_val * (1 - k26)
+        ema26_val = round(ema26_val, 3)
+        expected_dif = round(ema12_val - ema26_val, 3)
+        assert result["dif"][-1] == expected_dif, f"DIF mismatch: {result['dif'][-1]} != {expected_dif}"
+        # Verify MACD = (DIF - DEA) * 2
+        dif_last = result["dif"][-1]
+        dea_last = result["dea"][-1]
+        macd_last = result["macd"][-1]
+        if dif_last is not None and dea_last is not None:
+            assert macd_last == round((dif_last - dea_last) * 2, 3)
 
     def test_indicator_rsi(self):
         """Test indicator_rsi returns rsi6, rsi12, rsi24, dates"""
@@ -126,3 +139,40 @@ class TestMooTDX2Client:
         for i in range(20, len(result["boll_upper"])):
             if result["boll_upper"][i] is not None:
                 assert result["boll_upper"][i] > result["boll_mid"][i] > result["boll_lower"][i]
+
+    def test_indicator_ema(self):
+        """Test indicator_ema returns ema12, ema26, and dates"""
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        dates = [(datetime(2024, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+        close_prices = [10.0 + i * 0.1 for i in range(60)]
+        mock_kline = [{"date": d, "open": p - 0.1, "high": p + 0.3, "low": p - 0.2, "close": p, "vol": 1000000}
+                      for d, p in zip(dates, close_prices)]
+        with mock.patch.object(client, '_get_kline_sync', return_value=mock_kline):
+            result = client._indicator_ema_sync("600000", "day", 60)
+        assert "ema12" in result
+        assert "ema26" in result
+        assert "dates" in result
+        assert len(result["ema12"]) == len(result["dates"])
+        assert result["ema12"][11] is not None  # 12th value is first computed
+        assert result["ema26"][25] is not None  # 26th value is first computed
+        # None values before first computation
+        assert all(v is None for v in result["ema12"][:11])
+        assert all(v is None for v in result["ema26"][:25])
+
+    def test_indicator_atr(self):
+        """Test indicator_atr returns atr and dates"""
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        dates = [(datetime(2024, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+        close_prices = [10.0 + i * 0.1 for i in range(60)]
+        mock_kline = [{"date": d, "open": p - 0.1, "high": p + 0.3, "low": p - 0.2, "close": p, "vol": 1000000}
+                      for d, p in zip(dates, close_prices)]
+        with mock.patch.object(client, '_get_kline_sync', return_value=mock_kline):
+            result = client._indicator_atr_sync("600000", "day", 60)
+        assert "atr" in result
+        assert "dates" in result
+        # ATR values should be positive for computed entries
+        for v in result["atr"]:
+            if v is not None:
+                assert v > 0

@@ -851,6 +851,63 @@ class MooTDX2Client:
             logger.error(f"get_blocks_for_stock failed: {e}")
             return self._error_result(e, f"get_blocks_for_stock({stock_code})")
 
+    # ========== 指数概览 ==========
+    def _index_overview_sync(self) -> list:
+        """同步获取主要指数概览（6个指数）"""
+        INDEX_CODES = [
+            ("000001", "上证指数", "sh"),
+            ("399001", "深证成指", "sz"),
+            ("399006", "创业板", "sz"),
+            ("000688", "科创50", "sh"),
+            ("889999", "北证50", "bj"),
+            ("000300", "沪深300", "sh"),
+        ]
+        q = self._get_quotes()
+        # Build code list with market prefixes
+        code_list = []
+        for c, n, m in INDEX_CODES:
+            if m == "sh":
+                code_list.append(f"sh{c}")
+            elif m == "sz":
+                code_list.append(f"sz{c}")
+            else:
+                code_list.append(f"bj{c}")
+        # Strip prefixes for quotes API
+        stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in code_list]
+        df = q.quotes(symbols=stripped)
+        if df is None or len(df) == 0:
+            return []
+        records = df.to_dict(orient="records")
+        # Match back by position (order is preserved)
+        result = []
+        for i, rec in enumerate(records):
+            if i >= len(INDEX_CODES):
+                break
+            code, name, market = INDEX_CODES[i]
+            close = float(rec.get("close", 0))
+            pct_chg = float(rec.get("pct_chg", 0))
+            result.append({
+                "code": code,
+                "name": name,
+                "market": market,
+                "close": close,
+                "change_pct": pct_chg,
+            })
+        return result
+
+    async def get_index_overview(self) -> ToolResult:
+        """获取主要指数概览（6个指数：上证、深证、创业板、科创50、北证50、沪深300）"""
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._index_overview_sync)
+            if not data:
+                return self._no_data_result("指数数据获取失败")
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"get_index_overview failed: {e}")
+            return self._error_result(e, "get_index_overview")
+
     # ========== F10 基础数据 ==========
     def _get_f10_sync(self, symbol: str, name: str = ""):
         """同步F10基础数据"""
@@ -1434,3 +1491,57 @@ class MooTDX2Client:
         except Exception as e:
             logger.error(f"indicator_ema failed: {e}")
             return self._error_result(e, f"indicator_ema({code})")
+
+    # ========== ATR 指标 ==========
+    def _indicator_atr_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
+        """同步计算ATR指标"""
+        import pandas as pd
+        kline = self._get_kline_sync(code, type, limit)
+        if not kline:
+            return {}
+        df = pd.DataFrame(kline)
+        if df.empty or "close" not in df.columns:
+            return {}
+        highs = df["high"].astype(float).tolist() if "high" in df.columns else df["close"].astype(float).tolist()
+        lows = df["low"].astype(float).tolist() if "low" in df.columns else df["close"].astype(float).tolist()
+        closes = df["close"].astype(float).tolist()
+        dates = df["date"].tolist() if "date" in df.columns else ["" for _ in closes]
+
+        n = 14
+        trs = []
+        for i in range(len(closes)):
+            if i == 0:
+                trs.append(highs[0] - lows[0])
+            else:
+                hl = highs[i] - lows[i]
+                hpc = abs(highs[i] - closes[i - 1])
+                lpc = abs(lows[i] - closes[i - 1])
+                trs.append(max(hl, hpc, lpc))
+
+        atr = []
+        for i in range(len(trs)):
+            if i < n - 1:
+                atr.append(None)
+            elif i == n - 1:
+                atr.append(round(sum(trs[:n]) / n, 3))
+            else:
+                atr.append(round((atr[-1] * (n - 1) + trs[i]) / n, 3))
+
+        return {"atr": atr, "dates": dates}
+
+    async def indicator_atr(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """计算ATR指标（平均真实波幅）
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数，默认100，最大1000
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._indicator_atr_sync, code, type, limit)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"indicator_atr failed: {e}")
+            return self._error_result(e, f"indicator_atr({code})")
