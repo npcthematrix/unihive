@@ -392,7 +392,7 @@ class GatewayServer:
 
         async def _mcp_tools_api(req: Request):
             raw = await self.mcp.list_tools()
-            # 构建 routing_key → source 映射（优先从 upstream_tool_mapping 查，fallback 到前缀猜测）
+            # 构建 routing_key → source 映射（从 upstream_tool_mapping 查，查不到返回 unknown）
             source_map = _ca._build_source_map()
             tools_out = []
             for ft in raw:
@@ -410,7 +410,7 @@ class GatewayServer:
                     if enum_vals:
                         p["enum"] = enum_vals
                     params.append(p)
-                source = source_map.get(name) if name in source_map else _ca.derive_source_from_name(name)
+                source = source_map.get(name, "unknown")
                 tools_out.append({"name": name, "description": d.get("description") or "", "source": source, "params": params})
             body = json.dumps({"timestamp": int(time.time()), "tools": tools_out}, indent=2, ensure_ascii=False)
             return Response(body, media_type="application/json")

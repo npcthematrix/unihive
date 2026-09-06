@@ -386,23 +386,6 @@ _mcp_tools_cache: TTLCache = TTLCache(maxsize=1, ttl=30.0)
 _MCP_TOOLS_TIMEOUT = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)
 
 
-def derive_source_from_name(name: str) -> str:
-    """从工具名推导来源标签。供 gateway_server 和 console_api 共用。"""
-    if name.startswith("moo_"):
-        return "tokenwave_tdx"
-    if name.startswith("a_share_index_"):
-        return "fuyao_index"
-    if name.startswith("fund_"):
-        return "fuyao_fund"
-    if name.startswith("a_share_"):
-        return "fuyao_ashare"
-    if name.startswith("meta_"):
-        return "fuyao_meta"
-    if name.startswith("tdx_"):
-        return "tdx_tq_local"
-    return "tdx_local"
-
-
 def _build_source_map() -> dict[str, str]:
     """从 load_all_tools 填充后的 config 构建 routing_key → upstream 的映射。"""
     config = load_config()
@@ -444,7 +427,7 @@ def get_mcp_tools_list() -> dict:
     result: dict = data.get("result", {})
     raw_tools: list = result.get("tools", [])
 
-    # 从 upstream_tool_mapping 查真实来源（前缀猜测仅作 fallback）
+    # 从 upstream_tool_mapping 查真实来源，查不到返回 unknown（配置必须完整）
     source_map = _build_source_map()
 
     tools_out = []
@@ -471,9 +454,7 @@ def get_mcp_tools_list() -> dict:
             params.append(p)
 
         # 优先从 mapping 查真实来源，fallback 到前缀猜测
-        source = source_map.get(name) if name in source_map else None
-        if not source:
-            source = derive_source_from_name(name)
+        source = source_map.get(name, "unknown")
 
         tools_out.append({
             "name": name,
