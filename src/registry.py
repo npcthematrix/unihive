@@ -17,6 +17,7 @@ _TYPE_MAP: dict[str, type] = {
     "int": int,
     "float": float,
     "bool": bool,
+    "List[str]": list,
 }
 
 _DEFAULT_MAP: dict[str, Any] = {
