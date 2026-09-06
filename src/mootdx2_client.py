@@ -4,6 +4,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .upstream_client import ToolResult, UpstreamStatus
