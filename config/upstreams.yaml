@@ -12,18 +12,28 @@ upstreams:
     market: "std"
     tdxdir: ""  # 通达信本地路径，空则自动探索
 
-  tdx_tq_local:
+  tdx_quant:
     enabled: true
-    description: "通达信-交易终端: 行情/自选/交易/公式系统, 含 17 个高风险工具 (write ops), 58 个 gateway 工具 (TQ-Local codegen)"
-    type: "http_jsonrpc"
-    base_url: "http://127.0.0.1:17709"
-    timeout_seconds: 10
-    retry:
-      max_attempts: 2
+    description: "通达信-量化终端 (TdxQuant): 进程内直调 tqcenter.py，含 60+ 工具（行情/板块/交易日/财务/公式/交易/预警）"
+    type: "tdx_quant"
+    market: "std"
+    tdx_root: "D:/new_tdx_mock"
+    strategy_id: "unihive_gateway"
+    health_check_interval_sec: 60
+    call_timeout_sec: 10
+    reconnect_threshold: 3
+    unavailable_threshold: 10
     capabilities:
-      - user_block
+      - market_data
+      - market_snapshot
+      - stock_info
+      - sector
       - watchlist
-      - conditional_stock
+      - trading_calendar
+      - financials
+      - formula
+      - trading
+      - subscribe
 
   fuyao_ashare:
     enabled: true
@@ -101,7 +111,7 @@ upstreams:
 # router 会用本段的 keys 作为 chain
 upstream_tool_mapping:
   # MooTDX2 工具已移至 config/tools_mootdx2.yaml（自带 upstream_tool_mapping）
-  # TQ-Local 工具移至 config/tools_tdx_tq_local.yaml（自带 upstream_tool_mapping）
+  # TdxQuant 工具移至 config/tools_tdx_quant.yaml（自带 upstream_tool_mapping）
   # Fuyao a-share
   a_share_prices_snapshot:                    {fuyao_ashare: get_a_share_prices_snapshot}
   a_share_prices_historical:                  {fuyao_ashare: get_a_share_prices_historical}
