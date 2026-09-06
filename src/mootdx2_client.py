@@ -1711,6 +1711,94 @@ class MooTDX2Client:
             })
         return result
 
+    def _stock_top_board_sync(self, sort_by: str = "change_pct", direction: str = "desc", limit: int = 50, market: str = "all") -> list:
+        """同步获取市场排行榜"""
+        import pandas as pd
+
+        VALID_SORT = {"change_pct", "amplitude", "turnover", "volume_ratio", "amount"}
+        VALID_MARKET = {"all", "sh", "sz", "bj"}
+        if sort_by not in VALID_SORT:
+            sort_by = "change_pct"
+        if market not in VALID_MARKET:
+            market = "all"
+        limit = min(limit, 200)
+
+        q = self._get_quotes()
+        all_quotes = []
+
+        for exchange in ["sz", "sh"]:
+            df_stock = q.stock(exchange=exchange)
+            if df_stock is None or df_stock.empty:
+                continue
+            codes = df_stock["code"].tolist()
+            prefixed = []
+            for c in codes:
+                cs = str(c)
+                if cs.startswith(("60", "68")):
+                    prefixed.append(f"sh{cs}")
+                elif cs.startswith(("00", "30")):
+                    prefixed.append(f"sz{cs}")
+                elif cs.startswith(("8", "4")):
+                    prefixed.append(f"bj{cs}")
+                else:
+                    prefixed.append(f"sz{cs}")
+            for i in range(0, len(prefixed), MAX_LIMIT_BATCH_QUOTE):
+                chunk = prefixed[i:i + MAX_LIMIT_BATCH_QUOTE]
+                stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in chunk]
+                batch_df = q.quotes(symbols=stripped)
+                if batch_df is not None and len(batch_df) > 0:
+                    all_quotes.extend(batch_df.to_dict(orient="records"))
+
+        if not all_quotes:
+            return []
+
+        df_quotes = pd.DataFrame(all_quotes)
+        if df_quotes.empty:
+            return []
+
+        if market != "all":
+            df_quotes = df_quotes[df_quotes["symbol"].str.startswith(market)]
+
+        sort_col = sort_by if sort_by in df_quotes.columns else "pct_chg"
+        if sort_col not in df_quotes.columns:
+            sort_col = "pct_chg"
+        ascending = direction == "asc"
+        df_quotes = df_quotes.sort_values(sort_col, ascending=ascending).head(limit)
+
+        result = []
+        for _, row in df_quotes.iterrows():
+            sym = str(row.get("symbol", ""))
+            if sym.startswith("sh"):
+                mkt, code = "sh", sym.replace("sh", "")
+            elif sym.startswith("sz"):
+                mkt, code = "sz", sym.replace("sz", "")
+            elif sym.startswith("bj"):
+                mkt, code = "bj", sym.replace("bj", "")
+            else:
+                mkt, code = "sz", sym
+            result.append({
+                "code": code,
+                "market": mkt,
+                "close": float(row.get("close", 0)),
+                "change_pct": float(row.get("pct_chg", 0)),
+                "volume": float(row.get("vol", 0)),
+                "amount": float(row.get("amount", 0)),
+                "turnover": float(row.get("turnover", 0)),
+                "volume_ratio": float(row.get("volume_ratio", 0)),
+            })
+        return result
+
+    async def stock_top_board(self, sort_by: str = "change_pct", direction: str = "desc", limit: int = 50, market: str = "all") -> ToolResult:
+        """获取市场排行榜"""
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._stock_top_board_sync, sort_by, direction, limit, market)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"stock_top_board failed: {e}")
+            return self._error_result(e, "stock_top_board")
+
     async def stock_unusual(self, event_type: str = "all") -> ToolResult:
         """获取市场异动数据（主力监控精灵）"""
         self._metrics["total_requests"] += 1
