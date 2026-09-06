@@ -1596,3 +1596,62 @@ class MooTDX2Client:
         except Exception as e:
             logger.error(f"indicator_atr failed: {e}")
             return self._error_result(e, f"indicator_atr({code})")
+
+    # ========== KDJ 指标 ==========
+    def _indicator_kdj_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
+        """同步计算 KDJ 指标"""
+        import pandas as pd
+        kline = self._get_kline_sync(code, type, limit)
+        if not kline:
+            return {}
+        df = pd.DataFrame(kline)
+        if df.empty or "close" not in df.columns:
+            return {}
+        closes = df["close"].astype(float).tolist()
+        highs = df["high"].astype(float).tolist() if "high" in df.columns else closes
+        lows = df["low"].astype(float).tolist() if "low" in df.columns else closes
+        dates = df["date"].tolist() if "date" in df.columns else ["" for _ in closes]
+
+        n = 9
+        kdj = {"k": [], "d": [], "j": []}
+        k_val, d_val = 50.0, 50.0
+        for i in range(len(closes)):
+            if i < n - 1:
+                kdj["k"].append(None)
+                kdj["d"].append(None)
+                kdj["j"].append(None)
+            else:
+                ll = min(lows[i-n+1:i+1])
+                hh = max(highs[i-n+1:i+1])
+                c = closes[i]
+                if hh == ll:
+                    rsv = 50.0
+                else:
+                    rsv = (c - ll) / (hh - ll) * 100
+                k_val = k_val * 2/3 + rsv * 1/3
+                d_val = d_val * 2/3 + k_val * 1/3
+                j_val = 3 * k_val - 2 * d_val
+                kdj["k"].append(round(k_val, 3))
+                kdj["d"].append(round(d_val, 3))
+                kdj["j"].append(round(j_val, 3))
+        kdj["dates"] = dates
+        return kdj
+
+    async def indicator_kdj(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """计算 KDJ 指标
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数，默认100
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._indicator_kdj_sync, code, type, limit)
+            if not data:
+                return self._no_data_result()
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"indicator_kdj failed: {e}")
+            return self._error_result(e, f"indicator_kdj({code})")
