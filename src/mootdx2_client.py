@@ -269,6 +269,7 @@ class MooTDX2Client:
             "get_stock_info": self.get_stock_info,
             "get_stocks_in_block": self.get_stocks_in_block,
             "get_blocks_for_stock": self.get_blocks_for_stock,
+            "stock_unusual": self.stock_unusual,
         }
 
         method = method_map.get(tool_name)
@@ -1150,3 +1151,106 @@ class MooTDX2Client:
         except Exception as e:
             logger.error(f"get_stock_info failed: {e}")
             return self._error_result(e, f"get_stock_info({market}{code})")
+
+    # ========== 成交量移动平均线 ==========
+    def _indicator_vol_ma_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
+        """同步成交量移动平均线"""
+        import pandas as pd
+
+        kline = self._get_kline_sync(code, type, limit)
+        if not kline:
+            return {}
+        df = pd.DataFrame(kline)
+        if df.empty or "vol" not in df.columns:
+            return {}
+        vols = df["vol"].astype(float).tolist()
+        dates = df["date"].tolist() if "date" in df.columns else ["" for _ in vols]
+
+        def sma(data, n):
+            result = []
+            for i in range(len(data)):
+                if i < n - 1:
+                    result.append(None)
+                else:
+                    result.append(round(sum(data[i - n + 1:i + 1]) / n, 3))
+            return result
+
+        return {
+            "vol_ma5": sma(vols, 5),
+            "vol_ma10": sma(vols, 10),
+            "dates": dates,
+        }
+
+    async def indicator_vol_ma(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """成交量移动平均线（VOL_MA5 和 VOL_MA10）
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数，默认100
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._indicator_vol_ma_sync, code, type, limit)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"indicator_vol_ma failed: {e}")
+            return self._error_result(e, f"indicator_vol_ma({code})")
+
+    # ========== MACD 指标 ==========
+    def _indicator_macd_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
+        """同步计算 MACD 指标"""
+        import pandas as pd
+        kline = self._get_kline_sync(code, type, limit)
+        if not kline:
+            return {}
+        df = pd.DataFrame(kline)
+        if "close" not in df.columns or df.empty:
+            return {}
+        closes = df["close"].astype(float).tolist()
+        dates = df["date"].tolist() if "date" in df.columns else ["" for _ in closes]
+
+        def ema(data, n):
+            result = [None] * (n - 1)
+            result.append(round(data[n - 1], 3))
+            k = 2 / (n + 1)
+            for i in range(n, len(data)):
+                val = round(data[i] * k + result[-1] * (1 - k), 3)
+                result.append(val)
+            return result
+
+        ema12 = ema(closes, 12)
+        ema26 = ema(closes, 26)
+        dif = [round(e12 - e26, 3) if e12 is not None and e26 is not None else None
+               for e12, e26 in zip(ema12, ema26)]
+        dea = ema([d if d is not None else 0 for d in dif], 9)
+        macd = [round((d - s) * 2, 3) if d is not None and s is not None else None
+                for d, s in zip(dif, dea)]
+
+        return {
+            "dif": dif,
+            "dea": dea,
+            "macd": macd,
+            "dates": dates,
+        }
+
+    async def indicator_macd(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """计算 MACD 指标
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数，默认100，最大1000
+
+        Returns:
+            包含 DIF, DEA, MACD 柱状图的数据
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._indicator_macd_sync, code, type, limit)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"indicator_macd failed: {e}")
+            return self._error_result(e, f"indicator_macd({code})")
