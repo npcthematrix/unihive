@@ -269,8 +269,17 @@ class MooTDX2Client:
             "get_stock_info": self.get_stock_info,
             "get_stocks_in_block": self.get_stocks_in_block,
             "get_blocks_for_stock": self.get_blocks_for_stock,
+            "get_index_overview": self.get_index_overview,
+            "stock_top_board": self.stock_top_board,
             "stock_unusual": self.stock_unusual,
+            "indicator_ma": self.indicator_ma,
+            "indicator_ema": self.indicator_ema,
+            "indicator_macd": self.indicator_macd,
+            "indicator_rsi": self.indicator_rsi,
+            "indicator_kdj": self.indicator_kdj,
             "indicator_boll": self.indicator_boll,
+            "indicator_atr": self.indicator_atr,
+            "indicator_vol_ma": self.indicator_vol_ma,
         }
 
         method = method_map.get(tool_name)
