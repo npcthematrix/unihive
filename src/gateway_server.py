@@ -31,9 +31,10 @@ from .registry import register_tools_from_config, validate_specs
 from .router import Router
 from .upstream_client import UpstreamClient, UpstreamConfig
 from .fuyao_client import FuyaoClient, FuyaoConfig
-from .http_jsonrpc_client import HttpJsonRpcClient, HttpJsonRpcConfig
 from .tokenwave_tdx_client import TokenWaveTdxClient, TokenWaveTdxConfig
 from .mootdx2_client import MooTDX2Client, MooTDX2Config
+from .tdx_quant_client import TdxQuantClient
+from .tdx_quant_config import TdxQuantConfig, TdxQuantSettings
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class GatewayServer:
         # 与 console_api 共用同一份 config，避免双轨不一致
         from . import console_api as _ca
         _ca.set_config(self.config)
-        self.upstreams: dict[str, UpstreamClient | FuyaoClient | HttpJsonRpcClient | TokenWaveTdxClient | MooTDX2Client] = {}
+        self.upstreams: dict[str, UpstreamClient | FuyaoClient | TokenWaveTdxClient | MooTDX2Client | TdxQuantClient] = {}
         self.cache: Cache | None = None
         self.router: Router | None = None
         self.mcp: FastMCP | None = None
@@ -126,15 +127,22 @@ class GatewayServer:
                         max_retry=cfg.get("retry", {}).get("max_attempts", 3),
                     )
                     client = FuyaoClient(fuyao_cfg)
-                elif cfg.get("type") == "http_jsonrpc":
-                    # 通用 HTTP JSON-RPC 客户端（如 TQ-Local 通达信本地服务）
-                    jsonrpc_cfg = HttpJsonRpcConfig(
-                        name=name,
-                        base_url=cfg["base_url"].rstrip("/") + "/",
-                        timeout_seconds=cfg.get("timeout_seconds", 10),
-                        max_retry=cfg.get("retry", {}).get("max_attempts", 3),
+                elif cfg.get("type") == "tdx_quant":
+                    # TdxQuant 进程内客户端
+                    tdx_quant_settings = TdxQuantSettings(
+                        tdx_root=cfg.get("tdx_root", ""),
+                        strategy_id=cfg.get("strategy_id", ""),
+                        health_check_interval_sec=cfg.get("health_check_interval_sec", 60),
+                        call_timeout_sec=cfg.get("call_timeout_sec", 10),
+                        reconnect_threshold=cfg.get("reconnect_threshold", 3),
+                        unavailable_threshold=cfg.get("unavailable_threshold", 10),
                     )
-                    client = HttpJsonRpcClient(jsonrpc_cfg)
+                    tdx_quant_cfg = TdxQuantConfig(
+                        name=name,
+                        market=cfg.get("market", "std"),
+                        settings=tdx_quant_settings,
+                    )
+                    client = TdxQuantClient(tdx_quant_cfg)
                 elif cfg.get("type") == "python":
                     # TokenWave TDX 客户端
                     tokenwave_cfg = TokenWaveTdxConfig(
