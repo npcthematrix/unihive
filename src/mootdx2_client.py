@@ -352,6 +352,57 @@ class MooTDX2Client:
             logger.error(f"get_kline failed: {e}")
             return self._error_result(e, f"get_kline({code})")
 
+    # ========== 移动平均线 ==========
+    def _indicator_ma_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
+        """同步计算移动平均线"""
+        import pandas as pd
+
+        kline = self._get_kline_sync(code, type, limit)
+        if not kline:
+            return {}
+        df = pd.DataFrame(kline)
+        if "close" not in df.columns or df.empty:
+            return {}
+        closes = df["close"].astype(float).tolist()
+        dates = df["date"].tolist() if "date" in df.columns else ["" for _ in closes]
+
+        def sma(data, n):
+            result = []
+            for i in range(len(data)):
+                if i < n - 1:
+                    result.append(None)
+                else:
+                    result.append(round(sum(data[i - n + 1:i + 1]) / n, 3))
+            return result
+
+        return {
+            "ma5": sma(closes, 5),
+            "ma10": sma(closes, 10),
+            "ma20": sma(closes, 20),
+            "ma60": sma(closes, 60),
+            "dates": dates,
+        }
+
+    async def indicator_ma(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """计算移动平均线
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数，默认100
+
+        Returns:
+            包含 MA5/MA10/MA20/MA60 的移动平均线数据
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._indicator_ma_sync, code, type, limit)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"indicator_ma failed: {e}")
+            return self._error_result(e, f"indicator_ma({code})")
+
     # ========== 批量行情 ==========
     def _get_batch_quote_sync(self, codes: str):
         """同步批量行情"""

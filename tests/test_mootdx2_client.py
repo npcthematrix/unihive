@@ -85,12 +85,12 @@ class TestMooTDX2Client:
         k = 2 / (12 + 1)
         ema12_val = closes[11]
         for i in range(12, len(closes)):
-            ema12_val = closes[i] * k + ema12_val * (1 - k)
+            ema12_val = round(closes[i] * k + ema12_val * (1 - k), 3)
         ema12_val = round(ema12_val, 3)
         k26 = 2 / (26 + 1)
         ema26_val = closes[25]
         for i in range(26, len(closes)):
-            ema26_val = closes[i] * k26 + ema26_val * (1 - k26)
+            ema26_val = round(closes[i] * k26 + ema26_val * (1 - k26), 3)
         ema26_val = round(ema26_val, 3)
         expected_dif = round(ema12_val - ema26_val, 3)
         assert result["dif"][-1] == expected_dif, f"DIF mismatch: {result['dif'][-1]} != {expected_dif}"
