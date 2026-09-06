@@ -236,6 +236,36 @@ class TestMooTDX2Client:
         assert all(v is None for v in result["ma60"][:59])
         assert result["ma60"][59] is not None
 
+    def test_stock_unusual_filters_by_event_type(self):
+        """Test stock_unusual filters stocks by event_type"""
+        import pandas as pd
+        from src.mootdx2_client import MooTDX2Client, MooTDX2Config
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        mock_block_df = pd.DataFrame([{"name": "沪股通", "code_list": "600000,600016,600036"}])
+        mock_quote_df = pd.DataFrame([
+            {"symbol": "600000", "close": 10.5, "pct_chg": 9.9, "vol": 1000000},
+            {"symbol": "600016", "close": 8.0, "pct_chg": -9.5, "vol": 800000},
+            {"symbol": "600036", "close": 35.0, "pct_chg": 3.0, "vol": 500000},
+        ])
+        mock_q = type('MockQ', (), {
+            'block': lambda self, block_type: mock_block_df,
+            'quotes': lambda self, symbols: mock_quote_df,
+        })()
+        with mock.patch.object(client, '_get_quotes', return_value=mock_q):
+            result = client._stock_unusual_sync(event_type="all")
+        assert len(result) >= 2  # 600000 and 600016 are unusual (pct_chg >= 5 or >= 9.5)
+        # Test 涨 filter
+        with mock.patch.object(client, '_get_quotes', return_value=mock_q):
+            result_涨 = client._stock_unusual_sync(event_type="涨")
+        assert all(r["change_pct"] > 0 for r in result_涨)
+        # Verify event labels are assigned correctly
+        for r in result:
+            if r["change_pct"] >= 9.9:
+                assert r["event"] == "涨停", f"Expected 涨停 but got {r['event']} for {r['code']}"
+            elif r["change_pct"] <= -9.9:
+                assert r["event"] == "跌停"
+
     def test_indicator_kdj(self):
         """Test indicator_kdj returns k, d, j, dates and J = 3K - 2D"""
         config = MooTDX2Config(name="test", market="std")
