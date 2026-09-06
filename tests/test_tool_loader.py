@@ -24,11 +24,12 @@ def test_load_all_tools_manual_only(tmp_path, monkeypatch):
     assert [t["name"] for t in tools] == ["manual_tool"]
 
 
-def test_load_all_tools_merges_generated_file(tmp_path):
+def test_load_all_tools_merges_generated_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     from src.tool_loader import load_all_tools
     cfg = tmp_path / "upstreams.yaml"
     cfg.write_text("upstreams: {}\ntools:\n  - name: m\n", encoding="utf-8")
-    gen = tmp_path / "tools_tdx_tq_local.yaml"
+    gen = tmp_path / "tools_tdx_quant.yaml"
     gen.write_text("tools:\n  - name: g\n", encoding="utf-8")
     config = {"upstreams": {}, "tools": [{"name": "m"}], "upstream_tool_mapping": {}}
     tools = load_all_tools(cfg, config)
@@ -36,18 +37,19 @@ def test_load_all_tools_merges_generated_file(tmp_path):
     assert names == {"m", "g"}
 
 
-def test_load_all_tools_generated_writes_mapping_to_top_level(tmp_path):
+def test_load_all_tools_generated_writes_mapping_to_top_level(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     from src.tool_loader import load_all_tools
     cfg = tmp_path / "upstreams.yaml"
     cfg.write_text("upstreams: {}\ntools: []", encoding="utf-8")
-    gen = tmp_path / "tools_tdx_tq_local.yaml"
+    gen = tmp_path / "tools_tdx_quant.yaml"
     gen.write_text(
-        "tools:\n  - name: g\n    routing: g_route\n    upstream_tool_mapping:\n        tdx_tq_local: g_upstream\n",
+        "tools:\n  - name: g\n    routing: g_route\n    upstream_tool_mapping:\n        tdx_quant: g_upstream\n",
         encoding="utf-8",
     )
     config = {"upstreams": {}, "tools": [], "upstream_tool_mapping": {}}
     load_all_tools(cfg, config)
-    assert config["upstream_tool_mapping"]["g_route"] == {"tdx_tq_local": "g_upstream"}
+    assert config["upstream_tool_mapping"]["g_route"] == {"tdx_quant": "g_upstream"}
 
 
 def test_load_all_tools_missing_generated_is_noop(tmp_path, monkeypatch):
@@ -61,11 +63,12 @@ def test_load_all_tools_missing_generated_is_noop(tmp_path, monkeypatch):
     assert [t["name"] for t in tools] == ["m"]
 
 
-def test_load_all_tools_duplicate_name_generated_wins(tmp_path):
+def test_load_all_tools_duplicate_name_generated_wins(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     from src.tool_loader import load_all_tools
     cfg = tmp_path / "upstreams.yaml"
     cfg.write_text("upstreams: {}\ntools:\n  - name: dup\n    description: manual\n", encoding="utf-8")
-    gen = tmp_path / "tools_tdx_tq_local.yaml"
+    gen = tmp_path / "tools_tdx_quant.yaml"
     gen.write_text("tools:\n  - name: dup\n    description: generated\n", encoding="utf-8")
     config = {"upstreams": {}, "tools": [{"name": "dup", "description": "manual"}], "upstream_tool_mapping": {}}
     tools = load_all_tools(cfg, config)
@@ -73,14 +76,15 @@ def test_load_all_tools_duplicate_name_generated_wins(tmp_path):
     assert by_name["dup"]["description"] == "generated"
 
 
-def test_load_all_tools_searches_subdir_config(tmp_path):
-    """If config_path is `config/upstreams.yaml`, generated file at `config/tools_tdx_tq_local.yaml` is also found."""
+def test_load_all_tools_searches_subdir_config(tmp_path, monkeypatch):
+    """If config_path is `config/upstreams.yaml`, generated file at `config/tools_tdx_quant.yaml` is also found."""
+    monkeypatch.chdir(tmp_path)
     from src.tool_loader import load_all_tools
     cfg_dir = tmp_path / "config"
     cfg_dir.mkdir()
     cfg = cfg_dir / "upstreams.yaml"
     cfg.write_text("upstreams: {}\ntools: []", encoding="utf-8")
-    gen = cfg_dir / "tools_tdx_tq_local.yaml"
+    gen = cfg_dir / "tools_tdx_quant.yaml"
     gen.write_text("tools:\n  - name: g\n", encoding="utf-8")
     config = {"upstreams": {}, "tools": [], "upstream_tool_mapping": {}}
     tools = load_all_tools(cfg, config)

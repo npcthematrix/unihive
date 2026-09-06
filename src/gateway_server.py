@@ -73,7 +73,7 @@ class GatewayServer:
         self._running = False
         # initialize() 幂等位 + stop() 取消 health loop 的事件。
         # 之前 initialize 在 start/serve_http 都调一次, 部分 client (stdio UpstreamClient
-        # 有保护, Fuyao/HttpJsonRpc 没) 重入会状态混乱。health loop 的 asyncio.sleep(30)
+        # 有保护, Fuyao 没) 重入会状态混乱。health loop 的 asyncio.sleep(30)
         # 也不响应 stop, 要等下一次 tick, 期间可能再调 cache.cleanup_expired。
         self._initialized = False
         self._shutdown_event = asyncio.Event()
@@ -302,7 +302,7 @@ class GatewayServer:
         # 特殊工具：手写（带特殊逻辑或网关内部）
         self._register_status_tools()
 
-        # 通用工具：合并手工 tools 与生成的 tools_tdx_tq_local.yaml
+        # 通用工具：合并手工 tools 与生成的 tools_tdx_quant.yaml
         if specs is None:
             specs = self._load_all_tools()
         if specs:

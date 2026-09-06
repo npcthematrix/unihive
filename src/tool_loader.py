@@ -5,12 +5,12 @@ from pathlib import Path
 
 import yaml
 
-_GENERATED_FILENAMES = ["tools_tdx_tq_local.yaml", "tools_mootdx2.yaml"]
+_GENERATED_FILENAMES = ["tools_tdx_quant.yaml", "tools_mootdx2.yaml"]
 
 
 def load_all_tools(config_path: Path, config: dict) -> list[dict]:
     """Merge ``config[upstreams.yaml].tools`` with the generated tools file
-    (``tools_tdx_tq_local.yaml`` looked up next to ``config_path`` or in
+    (``tools_tdx_quant.yaml`` looked up next to ``config_path`` or in
     ``./config/``). For every generated spec, copy its inline
     ``upstream_tool_mapping`` into ``config[upstream_tool_mapping]`` so
     downstream consumers can look up the source by routing key.

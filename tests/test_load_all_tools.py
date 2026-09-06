@@ -29,14 +29,14 @@ tools:
 """, encoding="utf-8")
 
     # 临时生成文件：含 1 个生成的 tool
-    gen = tmp_path / "tools_tdx_tq_local.yaml"
+    gen = tmp_path / "tools_tdx_quant.yaml"
     gen.write_text("""
 tools:
   - name: generated_tool
     description: from codegen
     routing: generated_tool
     upstream_tool_mapping:
-      tdx_tq_local: generated_tool
+      tdx_quant: generated_tool
 """, encoding="utf-8")
 
     # 把 cwd 切到 tmp_path，使 _load_all_tools 用相对路径能找到 gen
