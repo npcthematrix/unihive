@@ -138,6 +138,9 @@ def validate_config(config: dict) -> list[str]:
             pass  # TokenWave TDX client, no extra fields required
         elif cfg.get("type") == "mootdx2":
             pass  # MooTDX2 client, no extra fields required
+        elif cfg.get("type") == "tdx_quant":
+            if not cfg.get("tdx_root"):
+                errors.append(f"upstream {name!r} type=tdx_quant missing 'tdx_root'")
         elif cfg.get("type") == "npx":
             if not cfg.get("command") and not cfg.get("package"):
                 errors.append(f"upstream {name!r} type=npx missing 'command' or 'package'")

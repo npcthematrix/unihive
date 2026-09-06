@@ -137,6 +137,20 @@ class TestValidateConfig:
         })
         assert any("base_url" in e for e in errors)
 
+    def test_tdx_quant_validates_tdx_root(self):
+        """tdx_quant 必须有 tdx_root。"""
+        errors = validate_config({
+            "upstreams": {"x": {"enabled": True, "type": "tdx_quant"}}
+        })
+        assert any("tdx_root" in e for e in errors)
+
+    def test_tdx_quant_passes_with_tdx_root(self):
+        """tdx_quant 配齐 tdx_root 后无错。"""
+        errors = validate_config({
+            "upstreams": {"x": {"enabled": True, "type": "tdx_quant", "tdx_root": "D:/tdx"}}
+        })
+        assert errors == []
+
     def test_python_type_passes_without_extras(self):
         """tokenwave_tdx 的 type=python 不需要 base_url/api_key/command 等额外字段。"""
         errors = validate_config({
