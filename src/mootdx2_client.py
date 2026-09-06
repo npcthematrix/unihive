@@ -267,6 +267,8 @@ class MooTDX2Client:
             "get_k_data": self.get_k_data,
             "search_stock": self.search_stock,
             "get_stock_info": self.get_stock_info,
+            "get_stocks_in_block": self.get_stocks_in_block,
+            "get_blocks_for_stock": self.get_blocks_for_stock,
         }
 
         method = method_map.get(tool_name)
