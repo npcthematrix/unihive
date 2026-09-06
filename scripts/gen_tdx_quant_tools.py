@@ -109,6 +109,135 @@ _PARAM_ROW = re.compile(
     r"^\|\s*(?P<name>[^|]+?)\s*\|\s*(?P<req>[^|]+?)\s*\|\s*(?P<type>[^|]+?)\s*\|\s*(?P<desc>[^|]+?)\s*\|\s*$",
     re.MULTILINE,
 )
+# Match `tq.method_name(...)` inside a ```python block; signature can span lines.
+_PYTHON_SIG_RE = re.compile(
+    r"```python\s*\n(?P<sig>tq\.[A-Za-z_][A-Za-z0-9_]*\([\s\S]*?\))\s*(?:->\s*[^\n]+)?\s*\n```",
+    re.MULTILINE,
+)
+# Match a single param line inside the parens:
+#   - `name: type` (required)
+#   - `name: type = default` (optional)
+#   - `name` (required, no type annotation — fallback "Any")
+#   - `name = default` (optional, no type annotation — infer from default)
+# Type may contain brackets (List[str], Optional[str]) — match up to `=` or `,` or end-of-line.
+_PARAM_LINE_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:\s*:\s*(?P<type>[^=,#\n]+?))?"
+    r"(?:\s*=\s*(?P<default>[^,\n#]+?))?\s*,?\s*$",
+    re.MULTILINE,
+)
+# Bullet-list param description: `- `name`：desc` or `- `name`: desc`
+_PARAM_BULLET_RE = re.compile(
+    r"^[-*+]\s+`(?P<name>[A-Za-z_][A-Za-z0-9_]*)`\s*[：:]\s*(?P<desc>.+?)\s*$",
+    re.MULTILINE,
+)
+
+
+def _extract_python_signature_params(section: str) -> list[dict]:
+    """Parse `tq.method(...)` from the ```python block in `section`.
+
+    Returns [{"name", "required", "type", "description"}, ...] preserving signature order.
+    Description left empty — enriched later from bullet list or table.
+    """
+    sig_match = _PYTHON_SIG_RE.search(section)
+    if not sig_match:
+        return []
+    sig = sig_match.group("sig")
+    # Strip the leading `tq.method_name(` and trailing `)`
+    paren_start = sig.find("(")
+    paren_end = sig.rfind(")")
+    if paren_start == -1 or paren_end == -1 or paren_end <= paren_start:
+        return []
+    args_block = sig[paren_start + 1:paren_end]
+    if not args_block.strip():
+        return []
+
+    params: list[dict] = []
+    # Split args by comma at top level (not inside brackets like List[str])
+    depth = 0
+    current = []
+    for ch in args_block:
+        if ch == "[" or ch == "(" or ch == "{":
+            depth += 1
+            current.append(ch)
+        elif ch == "]" or ch == ")" or ch == "}":
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            params.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        params.append("".join(current))
+
+    out: list[dict] = []
+    for raw in params:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Strip trailing comments
+        if "#" in line:
+            line = line.split("#", 1)[0].strip()
+        m = _PARAM_LINE_RE.match(line)
+        if not m:
+            continue
+        pname = m.group("name")
+        ptype_raw = m.group("type")
+        has_default = m.group("default") is not None
+        default_val = m.group("default").strip() if has_default else None
+
+        if ptype_raw is None or not ptype_raw.strip():
+            # No type annotation — infer from default value
+            if has_default:
+                ptype = _infer_type_from_default(default_val)
+            else:
+                ptype = "Any"
+        else:
+            ptype = re.sub(r"\s+", "", ptype_raw.strip())
+
+        out.append({
+            "name": pname,
+            "required": not has_default,
+            "type": ptype,
+            "description": "",
+        })
+    return out
+
+
+def _infer_type_from_default(default_val: str) -> str:
+    """Best-effort type inference for params without annotation."""
+    v = default_val.strip()
+    if v.startswith(("[", "list(")):
+        return "List"
+    if v.startswith(("{", "dict(")):
+        return "Dict"
+    if v.startswith(("'", '"')):
+        return "str"
+    if v.lower() in ("true", "false"):
+        return "bool"
+    if v.lower() in ("none", "null"):
+        return "Optional"
+    try:
+        int(v)
+        return "int"
+    except ValueError:
+        pass
+    try:
+        float(v)
+        return "float"
+    except ValueError:
+        pass
+    return "Any"
+
+
+def _extract_bullet_descriptions(section: str) -> dict[str, str]:
+    """Parse `- `param_name`：desc` bullet items into {param_name: desc}."""
+    out: dict[str, str] = {}
+    for m in _PARAM_BULLET_RE.finditer(section):
+        out[m.group("name")] = m.group("desc").strip()
+    return out
+
 _METHOD_HEADING_ALT = re.compile(
     r"^####\s+(?P<title>[^`\n]*?)`(?P<name>[A-Za-z_][A-Za-z0-9_]*)`\s*$",
     re.MULTILINE,
@@ -200,6 +329,17 @@ def parse_skill_md(text: str) -> list[dict]:
                 "type": cells["type"].strip(),
                 "description": cells["desc"].strip(),
             })
+
+        # Fallback: no params table → parse Python signature in the ```python block
+        if not params:
+            params = _extract_python_signature_params(section)
+
+        # Enrich empty descriptions from bullet list (`- `name`：desc`)
+        if any(not p["description"] for p in params):
+            bullet_map = _extract_bullet_descriptions(section)
+            for p in params:
+                if not p["description"] and p["name"] in bullet_map:
+                    p["description"] = bullet_map[p["name"]]
 
         methods.append({
             "name": name,

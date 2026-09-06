@@ -105,6 +105,94 @@ def test_parse_skill_md_skips_code_fence_in_description():
     )
 
 
+def test_parse_skill_md_extracts_params_from_python_signature():
+    """When a method has no `| 参数 | 必填 | 类型 | 说明 |` table but
+    does have a ```python signature, params must be parsed from the
+    signature. SKILL.md only includes a params table for ~20% of methods;
+    the rest are defined only by their Python signature."""
+    skill = """# Sample
+
+### 2.3 获取股票基础信息 `get_stock_info`
+
+```python
+tq.get_stock_info(
+    stock_code: str,
+    field_list: List = []
+) -> Dict
+```
+
+获取股票基础信息。
+
+"""
+    methods = parse_skill_md(skill)
+    g = next(m for m in methods if m["name"] == "get_stock_info")
+    pnames = [p["name"] for p in g["params"]]
+    assert pnames == ["stock_code", "field_list"], f"got {pnames}"
+    stock_code = g["params"][0]
+    assert stock_code["required"] is True, "stock_code has no default → required"
+    assert stock_code["type"] == "str"
+    field_list = g["params"][1]
+    assert field_list["required"] is False, "field_list has default [] → optional"
+    assert field_list["type"] == "List"
+
+
+def test_parse_skill_md_handles_untyped_params():
+    """Some SKILL.md methods omit type annotations (`df_list,` instead of
+    `df_list: List`). The codegen must still extract name + required
+    and infer a reasonable type."""
+    skill = """# Sample
+
+### 7.7 导出数据到通达信界面 `print_to_tdx`
+
+```python
+tq.print_to_tdx(
+    df_list,
+    sp_name="",
+    jsn_filenames=None,
+    vertical=None,
+    count=0,
+    flag=True
+) -> None
+```
+
+导出 DataFrame 列表到通达信。
+"""
+    methods = parse_skill_md(skill)
+    g = next(m for m in methods if m["name"] == "print_to_tdx")
+    by_name = {p["name"]: p for p in g["params"]}
+    assert by_name["df_list"]["required"] is True
+    assert by_name["df_list"]["type"] == "Any"
+    assert by_name["sp_name"]["required"] is False
+    assert by_name["sp_name"]["type"] == "str"
+    assert by_name["jsn_filenames"]["type"] == "Optional"
+    assert by_name["count"]["type"] == "int"
+    assert by_name["flag"]["type"] == "bool"
+
+
+def test_parse_skill_md_enriches_param_desc_from_bullet_list():
+    """When the signature gives name+type but no description, and the section
+    contains `- `name`：desc` bullets, descriptions are filled from the bullets."""
+    skill = """# Sample
+
+#### 创建板块 `create_sector`
+
+```python
+tq.create_sector(block_code: str = '', block_name: str = '')
+```
+
+- `block_code`：板块简称（不能为空）
+- `block_name`：板块显示名称（不能为空）
+
+"""
+    methods = parse_skill_md(skill)
+    g = next(m for m in methods if m["name"] == "create_sector")
+    by_name = {p["name"]: p for p in g["params"]}
+    assert by_name["block_code"]["description"] == "板块简称（不能为空）", (
+        f"got: {by_name['block_code']['description']!r}"
+    )
+    assert by_name["block_name"]["description"] == "板块显示名称（不能为空）"
+
+
 def test_parse_skill_md_falls_back_to_heading_title_when_no_body():
     """When a method has no plain-text description line (just code fence +
     bullet list), description falls back to the heading title (e.g.
