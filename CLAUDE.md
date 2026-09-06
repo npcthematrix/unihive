@@ -72,16 +72,17 @@ pip install -e .
 
 | 接口 | 描述 | 数据源 |
 |------|------|--------|
-| get_realtime_quote | 股票实时行情 | TDX, RHTHS |
-| get_daily_bar | 日K线 | TDX, RHTHS |
-| get_minute_bar | 分钟K线 | TDX |
-| get_index | 指数K线 | TDX, RHTHS |
-| get_fundamentals | 基本面数据 | RHTHS |
-| search_stock | 股票搜索 | TDX, RHTHS |
-| get_market_stats | 市场统计 | TDX |
-| get_etf | ETF数据 | TDX, RHTHS |
-| get_fund_nav | 基金净值 | RHTHS |
-| get_announcement | 公告数据 | RHTHS |
+| moo_realtime_quote | 股票实时行情 | MooTDX |
+| moo_daily_bar | 日K线 | MooTDX |
+| moo_minute_bar | 分钟K线 | MooTDX |
+| moo_kline | K线 (day/week/month/minute) | MooTDX |
+| moo_block_data | 板块/概念数据 | MooTDX |
+| moo_trade_dates | 交易日历 | MooTDX |
+| moo_etf_list | ETF列表 | MooTDX |
+| moo_get_financial_data | 财务数据 | MooTDX |
+| moo_get_stock_info | 股票信息 | MooTDX |
+
+> 注: 148 个 MCP 接口全部通过管理控制台 http://127.0.0.1:18080 的 "MCP APIs" 标签页查看
 
 ## 技术栈
 

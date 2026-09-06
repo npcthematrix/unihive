@@ -115,6 +115,78 @@ class TestBuildToolFunction:
         asyncio.run(fn(symbol="sh600519", start_date=""))
         assert server.calls[0][1] == {"symbol": "sh600519"}
 
+    def test_normalize_date_dash_to_compact(self):
+        server = _FakeServer()
+        spec = {
+            "name": "k",
+            "description": "d",
+            "routing": "k",
+            "params": [
+                {"name": "stock_code", "type": "str", "required": True},
+                {"name": "start_time", "type": "str", "required": False},
+                {"name": "end_time", "type": "str", "required": False},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(
+            stock_code="600000.SH",
+            start_time="2026-09-01",
+            end_time="2026/09/05",
+        ))
+        assert server.calls[0][1] == {
+            "stock_code": "600000.SH",
+            "start_time": "20260901",
+            "end_time": "20260905",
+        }
+
+    def test_normalize_date_idempotent_compact(self):
+        server = _FakeServer()
+        spec = {
+            "name": "k",
+            "description": "d",
+            "routing": "k",
+            "params": [
+                {"name": "start_date", "type": "str", "required": False},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(start_date="20260905"))
+        assert server.calls[0][1] == {"start_date": "20260905"}
+
+    def test_normalize_csv_string_to_list(self):
+        server = _FakeServer()
+        spec = {
+            "name": "m",
+            "description": "d",
+            "routing": "m",
+            "params": [
+                {"name": "stock_list", "type": "str", "required": True},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(stock_list="600000.SH,000001.SZ, 688318.SH "))
+        assert server.calls[0][1] == {
+            "stock_list": ["600000.SH", "000001.SZ", "688318.SH"],
+        }
+
+    def test_normalize_csv_single_value(self):
+        server = _FakeServer()
+        spec = {
+            "name": "m",
+            "description": "d",
+            "routing": "m",
+            "params": [
+                {"name": "stock_list", "type": "str", "required": True},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(stock_list="600000.SH"))
+        assert server.calls[0][1] == {"stock_list": ["600000.SH"]}
+
     def test_dangerous_logs_warning(self, caplog):
         server = _FakeServer()
         spec = {

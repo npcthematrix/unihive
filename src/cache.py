@@ -40,6 +40,9 @@ class Cache:
         self._hits = 0
         self._misses = 0
         self._dirty_events = 0
+        # Single-flight: 同一 key 并发 miss 时只触发一次 factory。
+        # 详见 get_or_set。
+        self._in_flight: dict[str, asyncio.Future] = {}
 
     @property
     def hits(self) -> int:
@@ -53,29 +56,52 @@ class Cache:
         total = self._hits + self._misses
         return self._hits / total if total > 0 else None
 
-    def _persist_stats(self):
+    async def _persist_stats_async(self):
+        """异步刷 stats 到 disk, 不阻塞 event loop.
+        文件 I/O 用 asyncio.to_thread 放后台线程."""
         try:
-            from pathlib import Path
-            Path(self.STATS_FILE).parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.STATS_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"hits": self._hits, "misses": self._misses}, f)
-            Path(tmp).replace(self.STATS_FILE)
-            self._dirty_events = 0
+            await asyncio.to_thread(self._persist_stats_sync)
         except Exception as e:
             logger.warning(f"Failed to persist cache stats: {e}")
 
-    def _record_hit(self):
+    def _persist_stats_sync(self):
+        # 同步版, 给 to_thread 调度或非 loop 上下文兜底
+        from pathlib import Path
+        Path(self.STATS_FILE).parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.STATS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"hits": self._hits, "misses": self._misses}, f)
+        Path(tmp).replace(self.STATS_FILE)
+        self._dirty_events = 0
+
+    def _maybe_persist_stats(self):
+        """在事件循环里调度一次异步刷 stats；无 loop 时降级为同步。
+
+        热路径(record_hit/record_miss)是同步方法:
+        - 在 gateway 事件循环里 → create_task 把文件 I/O 丢后台线程,
+          不阻塞下一个请求处理。
+        - 在脚本/测试上下文(没运行 loop)→ 直接同步刷, 避免丢 stats。
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._persist_stats_sync()
+            return
+        loop.create_task(self._persist_stats_async())
+
+    def record_hit(self):
+        """记一次缓存命中。gateway 热路径直接调用。"""
         self._hits += 1
         self._dirty_events += 1
         if self._dirty_events >= self.STATS_FLUSH_INTERVAL:
-            self._persist_stats()
+            self._maybe_persist_stats()
 
-    def _record_miss(self):
+    def record_miss(self):
+        """记一次缓存未命中。gateway 热路径直接调用。"""
         self._misses += 1
         self._dirty_events += 1
         if self._dirty_events >= self.STATS_FLUSH_INTERVAL:
-            self._persist_stats()
+            self._maybe_persist_stats()
 
     async def initialize(self):
         """异步初始化数据库连接"""
@@ -107,6 +133,10 @@ class Cache:
                 await session.execute(text("""
                     CREATE INDEX IF NOT EXISTS idx_expires_at ON cache(expires_at)
                 """))
+                # WAL 模式: 解决 console (同步 sqlite3) 与 gateway (aiosqlite)
+                # 同时读写同一 cache.db 时的 "database is locked" 问题。
+                await session.execute(text("PRAGMA journal_mode=WAL"))
+                await session.execute(text("PRAGMA synchronous=NORMAL"))
                 await session.commit()
 
             self._initialized = True
@@ -123,17 +153,54 @@ class Cache:
     ) -> tuple[Any, bool]:
         """命中返回 (value, True)；未命中调 factory() 算结果并缓存，返回 (value, False)。
 
-        factory 应是 async callable，无参，返回要缓存的值。失败不缓存。
+        factory 应是 async callable，无参，返回要缓存的值。失败（None）不缓存。
+
+        Single-flight：同一 key 并发 miss 只触发一次 factory，其余 waiter 复用同一结果。
         """
+        if not self.enabled:
+            value = await factory()
+            return value, False
+
         cached = await self.get(key)
         if cached is not None:
-            self._record_hit()
+            self.record_hit()
             return cached, True
 
-        self._record_miss()
-        value = await factory()
-        if value is not None:
-            await self.set(key, value, ttl=ttl)
+        # 未命中：若已有 in-flight 计算，复用它（避免 thundering herd）。
+        existing = self._in_flight.get(key)
+        if existing is not None and not existing.done():
+            value = await existing
+            return value, False
+
+        # 本次 miss 记账只对发起者记录；waiter 不重复记。
+        self.record_miss()
+
+        future = asyncio.get_running_loop().create_future()
+        self._in_flight[key] = future
+
+        async def _runner():
+            try:
+                value = await factory()
+                if value is not None:
+                    # 缓存层故障不应让上游成功响应"看起来失败"。
+                    # 下次同 key 请求会再次 miss + factory，业务可恢复。
+                    try:
+                        await self.set(key, value, ttl=ttl)
+                    except Exception as e:
+                        logger.warning(f"cache.set failed for {key}: {e}")
+                future.set_result(value)
+                return value
+            except BaseException as exc:
+                future.set_exception(exc)
+                raise
+            finally:
+                # 先 set_result/set_exception 再 pop，waiter 才能在 in-flight
+                # 仍登记期间正确走到 await 分支。
+                self._in_flight.pop(key, None)
+
+        asyncio.create_task(_runner())
+
+        value = await future
         return value, False
 
     async def get(self, key: str) -> Any | None:
@@ -220,7 +287,13 @@ class Cache:
                 return False
 
     async def cleanup_expired(self) -> int:
-        """清理过期缓存，返回删除的条目数"""
+        """清理过期 + LRU 驱逐，返回删除的条目数。
+
+        两阶段：
+        1. 先删 expires_at < now 的过期项。
+        2. 若清理后仍超 max_entries，按 created_at 删最旧的，
+           直到 count <= max_entries * 0.9（10% 缓冲避免反复触发）。
+        """
         if not self.enabled:
             return 0
 
@@ -235,10 +308,38 @@ class Cache:
                         {"now": time.time()}
                     )
                     await session.commit()
-                    deleted = result.rowcount
-                    if deleted > 0:
-                        logger.info(f"Cleaned up {deleted} expired cache entries")
-                    return deleted
+                    deleted_total = result.rowcount or 0
+
+                    count_row = await session.execute(
+                        text("SELECT COUNT(*) FROM cache")
+                    )
+                    count = count_row.scalar() or 0
+
+                    max_entries = self.config.max_entries
+                    if count > max_entries:
+                        target = int(max_entries * 0.9)
+                        evict_n = count - target
+                        evict_result = await session.execute(
+                            text("""
+                                DELETE FROM cache WHERE key IN (
+                                    SELECT key FROM cache
+                                    ORDER BY created_at ASC
+                                    LIMIT :n
+                                )
+                            """),
+                            {"n": evict_n},
+                        )
+                        await session.commit()
+                        evict_count = evict_result.rowcount or 0
+                        deleted_total += evict_count
+                        logger.warning(
+                            f"Cache over max_entries ({count} > {max_entries}); "
+                            f"LRU evicted {evict_count} oldest entries"
+                        )
+
+                    if deleted_total > 0:
+                        logger.info(f"Cleaned up {deleted_total} cache entries")
+                    return deleted_total
 
             except Exception as e:
                 logger.error(f"Cache cleanup error: {e}")
@@ -264,7 +365,8 @@ class Cache:
     async def close(self):
         """关闭数据库连接"""
         if self._dirty_events > 0:
-            self._persist_stats()
+            # 关闭前必须把未刷的 stats 落盘；这里是 await 安全的 (close 本身是 async)。
+            await self._persist_stats_async()
         if self._engine:
             await self._engine.dispose()
             self._engine = None

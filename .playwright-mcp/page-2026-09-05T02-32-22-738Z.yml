@@ -1,0 +1,142 @@
+- generic [ref=f1e2]:
+  - banner [ref=f1e3]:
+    - heading "UniHive Console" [level=1] [ref=f1e4]
+  - tablist "功能面板" [ref=f1e5]:
+    - tab "上游状态" [ref=f1e6] [cursor=pointer]
+    - tab "MCP APIs" [ref=f1e7] [cursor=pointer]
+    - tab "配置信息" [active] [selected] [ref=f1e8] [cursor=pointer]
+    - tab "接入指南" [ref=f1e9] [cursor=pointer]
+  - generic [ref=f1e1551]:
+    - generic [ref=f1e1552]:
+      - heading "配置信息 · 7 上游 · 90 工具" [level=2] [ref=f1e1553]:
+        - text: 配置信息
+        - generic [ref=f1e1554]: · 7 上游 · 90 工具
+      - generic [ref=f1e1555]:
+        - generic [ref=f1e1556]: 已刷新 10:31:19
+        - button "↻ 立即刷新" [ref=f1e1557] [cursor=pointer]
+        - button "复制 JSON" [ref=f1e1558] [cursor=pointer]
+    - generic [ref=f1e1559]:
+      - button "上游 7" [ref=f1e1560] [cursor=pointer]:
+        - text: 上游
+        - generic [ref=f1e1561]: "7"
+      - button "工具映射 95" [ref=f1e1562] [cursor=pointer]:
+        - text: 工具映射
+        - generic [ref=f1e1563]: "95"
+      - button "工具规格 90" [ref=f1e1564] [cursor=pointer]:
+        - text: 工具规格
+        - generic [ref=f1e1565]: "90"
+      - button "缓存" [ref=f1e1566] [cursor=pointer]
+      - button "全局" [ref=f1e1567] [cursor=pointer]
+    - generic [ref=f1e1569]:
+      - generic [ref=f1e1571] [cursor=pointer]:
+        - generic [ref=f1e1572]: ▾
+        - text: 7 个上游
+        - generic [ref=f1e1573]: — type / enabled / endpoint / 能力
+      - table [ref=f1e1575]:
+        - rowgroup [ref=f1e1576]:
+          - row [ref=f1e1577]:
+            - columnheader "名称" [ref=f1e1578]
+            - columnheader "类型" [ref=f1e1579]
+            - columnheader "状态" [ref=f1e1580]
+            - columnheader "Endpoint" [ref=f1e1581]
+            - columnheader "超时(s)" [ref=f1e1582]
+            - columnheader "API Key" [ref=f1e1583]
+            - columnheader "能力" [ref=f1e1584]
+        - rowgroup [ref=f1e1585]:
+          - row [ref=f1e1586]:
+            - cell "tdx_local" [ref=f1e1587]
+            - cell "npx" [ref=f1e1588]
+            - cell "启用" [ref=f1e1590]
+            - cell "-" [ref=f1e1592]
+            - cell "30" [ref=f1e1593]
+            - cell "-" [ref=f1e1594]
+            - cell "realtime_quote kline minute_bar trade_detail index_data etf_data market_stats" [ref=f1e1595]:
+              - generic [ref=f1e1596]: realtime_quote
+              - generic [ref=f1e1597]: kline
+              - generic [ref=f1e1598]: minute_bar
+              - generic [ref=f1e1599]: trade_detail
+              - generic [ref=f1e1600]: index_data
+              - generic [ref=f1e1601]: etf_data
+              - generic [ref=f1e1602]: market_stats
+          - row [ref=f1e1603]:
+            - cell "tdx_tq_local" [ref=f1e1604]
+            - cell "http_jsonrpc" [ref=f1e1605]
+            - cell "启用" [ref=f1e1607]
+            - cell "http://127.0.0.1:17709" [ref=f1e1609]
+            - cell "10" [ref=f1e1610]
+            - cell "-" [ref=f1e1611]
+            - cell "user_block watchlist conditional_stock" [ref=f1e1612]:
+              - generic [ref=f1e1613]: user_block
+              - generic [ref=f1e1614]: watchlist
+              - generic [ref=f1e1615]: conditional_stock
+          - row [ref=f1e1616]:
+            - cell "fuyao_ashare" [ref=f1e1617]
+            - cell "http" [ref=f1e1618]
+            - cell "启用" [ref=f1e1620]
+            - cell "https://fuyao.aicubes.cn/mcp/a-share" [ref=f1e1622]
+            - cell "30" [ref=f1e1623]
+            - cell "sk***aK" [ref=f1e1624]
+            - cell "a_share_snapshot a_share_history corporate_actions financials_income financials_balance_sheet financials_cash_flow financials_indicators valuation_snapshot calendar special_data" [ref=f1e1625]:
+              - generic [ref=f1e1626]: a_share_snapshot
+              - generic [ref=f1e1627]: a_share_history
+              - generic [ref=f1e1628]: corporate_actions
+              - generic [ref=f1e1629]: financials_income
+              - generic [ref=f1e1630]: financials_balance_sheet
+              - generic [ref=f1e1631]: financials_cash_flow
+              - generic [ref=f1e1632]: financials_indicators
+              - generic [ref=f1e1633]: valuation_snapshot
+              - generic [ref=f1e1634]: calendar
+              - generic [ref=f1e1635]: special_data
+          - row [ref=f1e1636]:
+            - cell "fuyao_index" [ref=f1e1637]
+            - cell "http" [ref=f1e1638]
+            - cell "启用" [ref=f1e1640]
+            - cell "https://fuyao.aicubes.cn/mcp/a-share-index" [ref=f1e1642]
+            - cell "30" [ref=f1e1643]
+            - cell "sk***aK" [ref=f1e1644]
+            - cell "index_catalog index_constituents index_snapshot index_history" [ref=f1e1645]:
+              - generic [ref=f1e1646]: index_catalog
+              - generic [ref=f1e1647]: index_constituents
+              - generic [ref=f1e1648]: index_snapshot
+              - generic [ref=f1e1649]: index_history
+          - row [ref=f1e1650]:
+            - cell "fuyao_meta" [ref=f1e1651]
+            - cell "http" [ref=f1e1652]
+            - cell "启用" [ref=f1e1654]
+            - cell "https://fuyao.aicubes.cn/mcp/meta" [ref=f1e1656]
+            - cell "30" [ref=f1e1657]
+            - cell "sk***aK" [ref=f1e1658]
+            - cell "ticker_search ticker_list" [ref=f1e1659]:
+              - generic [ref=f1e1660]: ticker_search
+              - generic [ref=f1e1661]: ticker_list
+          - row [ref=f1e1662]:
+            - cell "fuyao_fund" [ref=f1e1663]
+            - cell "http" [ref=f1e1664]
+            - cell "启用" [ref=f1e1666]
+            - cell "https://fuyao.aicubes.cn/mcp/fund" [ref=f1e1668]
+            - cell "30" [ref=f1e1669]
+            - cell "sk***aK" [ref=f1e1670]
+            - cell "fund_profile fund_holdings fund_nav fund_returns fund_holders fund_snapshot fund_history" [ref=f1e1671]:
+              - generic [ref=f1e1672]: fund_profile
+              - generic [ref=f1e1673]: fund_holdings
+              - generic [ref=f1e1674]: fund_nav
+              - generic [ref=f1e1675]: fund_returns
+              - generic [ref=f1e1676]: fund_holders
+              - generic [ref=f1e1677]: fund_snapshot
+              - generic [ref=f1e1678]: fund_history
+          - row [ref=f1e1679]:
+            - cell "tokenwave_tdx" [ref=f1e1680]
+            - cell "python" [ref=f1e1681]
+            - cell "启用" [ref=f1e1683]
+            - cell "-" [ref=f1e1685]
+            - cell "30" [ref=f1e1686]
+            - cell "-" [ref=f1e1687]
+            - cell "realtime_quote kline minute_bar financial_data block_data stock_info trade_dates etf_list" [ref=f1e1688]:
+              - generic [ref=f1e1689]: realtime_quote
+              - generic [ref=f1e1690]: kline
+              - generic [ref=f1e1691]: minute_bar
+              - generic [ref=f1e1692]: financial_data
+              - generic [ref=f1e1693]: block_data
+              - generic [ref=f1e1694]: stock_info
+              - generic [ref=f1e1695]: trade_dates
+              - generic [ref=f1e1696]: etf_list

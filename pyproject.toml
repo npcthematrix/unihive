@@ -5,7 +5,6 @@ description = "UniHive MCP 网关 - 聚合多个金融数据 MCP Server"
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=2.1.0,<3.0",
-    "fastapi>=0.110,<1.0",
     "fastmcp>=4.0.0,<5.0",
     "sqlalchemy>=2.0.0,<3.0",
     "aiosqlite>=0.19.0,<1.0",

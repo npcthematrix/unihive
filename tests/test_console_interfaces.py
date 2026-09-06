@@ -2,23 +2,24 @@
 from unittest.mock import patch
 
 
-def test_get_interfaces_returns_146_tools():
-    """Regression: /api/interfaces returns 146 tools (88 manual + 58 generated).
+def test_get_interfaces_returns_148_tools():
+    """Regression: /api/interfaces returns 148 tools (90 manual + 58 generated).
 
     History: 142 -> 147 (tokenwave_tdx exposure) -> 149 (rename
     tokenwave_get_financial_data + tokenwave_get_stock_info to avoid param-shape
-    conflict with TQ-Local codegen) -> 146 (tushare upstream removed, 3 tools dropped).
+    conflict with TQ-Local codegen) -> 146 (tushare upstream removed, 3 tools dropped)
+    -> 148 (moo_ prefix on 9 tokenwave tools; moo_daily_bar split from get_kline).
     """
     import yaml
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_server.load_config", return_value=full_config):
-        from src.console_server import get_interfaces
+    with patch("src.console_api.load_config", return_value=full_config):
+        from src.console_api import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 146, f"Expected 146 tools, got {tool_count}"
+        assert tool_count == 148, f"Expected 148 tools, got {tool_count}"
 
 
 def test_merged_tool_specs_have_unique_names():
@@ -49,8 +50,8 @@ def test_get_interfaces_enriches_with_generated_tools():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_server.load_config", return_value=full_config):
-        from src.console_server import get_interfaces
+    with patch("src.console_api.load_config", return_value=full_config):
+        from src.console_api import get_interfaces
         result = get_interfaces()
         tool_names = {t["name"] for t in result["tools"]}
         # These are some tools from the generated file
@@ -64,8 +65,8 @@ def test_get_interfaces_includes_cache_ttl_seconds():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_server.load_config", return_value=full_config):
-        from src.console_server import get_interfaces
+    with patch("src.console_api.load_config", return_value=full_config):
+        from src.console_api import get_interfaces
         result = get_interfaces()
         # Find a tool with cache_ttl_key configured
         tools_with_ttl = [t for t in result["tools"] if t.get("cache_ttl_key")]
@@ -84,8 +85,8 @@ def test_get_interfaces_includes_routing():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_server.load_config", return_value=full_config):
-        from src.console_server import get_interfaces
+    with patch("src.console_api.load_config", return_value=full_config):
+        from src.console_api import get_interfaces
         result = get_interfaces()
         # Generated tools have routing keys
         tools_with_routing = [t for t in result["tools"] if t.get("routing")]
@@ -98,14 +99,14 @@ def test_get_interfaces_includes_chain():
     """Contract: response includes chain field (router-walk order, not priority sort)."""
     import yaml
     from unittest.mock import patch
-    from src.console_server import get_interfaces
+    from src.console_api import get_interfaces
 
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_server.load_config", return_value=full_config):
-        from src.console_server import get_interfaces
+    with patch("src.console_api.load_config", return_value=full_config):
+        from src.console_api import get_interfaces
         result = get_interfaces()
 
     tools_with_chain = [t for t in result["tools"] if t.get("chain")]
@@ -120,43 +121,43 @@ def test_get_interfaces_includes_chain():
 
 
 def test_get_interfaces_chain_matches_router_for_short_chain_tools():
-    """Regression: get_minute_bar must show exactly 2 sources (the YAML chain),
+    """Regression: moo_minute_bar must show exactly 1 source (the YAML chain),
     NOT the full upstream list (which was the derive_fallback_chain bug).
 
     Pre-fix: get_minute_bar chain showed [tokenwave_tdx, tdx_local, tdx_tq_local,
     fuyao_ashare, fuyao_index, fuyao_meta, fuyao_fund] — a lie, since the router
-    only walks the first 2.
+    only walks the first 2. After moo_ rename, moo_minute_bar's chain is just
+    [tokenwave_tdx] (the other MooTDX tools have no fallback).
     """
     import yaml
     from unittest.mock import patch
-    from src.console_server import get_interfaces
+    from src.console_api import get_interfaces
 
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_server.load_config", return_value=full_config):
+    with patch("src.console_api.load_config", return_value=full_config):
         result = get_interfaces()
 
     by_name = {t["name"]: t for t in result["tools"]}
 
-    # get_minute_bar: YAML chain is [tokenwave_tdx, tdx_local]
-    minute_bar = by_name.get("get_minute_bar")
-    assert minute_bar is not None, "get_minute_bar not exposed"
-    assert minute_bar["chain"] == ["tokenwave_tdx", "tdx_local"], (
-        f"get_minute_bar chain mismatch: {minute_bar['chain']}"
+    # moo_minute_bar: routing 段声明 chain = [tokenwave_tdx]
+    minute_bar = by_name.get("moo_minute_bar")
+    assert minute_bar is not None, "moo_minute_bar not exposed"
+    assert minute_bar["chain"] == ["tokenwave_tdx"], (
+        f"moo_minute_bar chain mismatch: {minute_bar['chain']}"
     )
-    # Specifically: no fuyao_* entries (those upstreams don't implement get_minute_bar)
     fuyao_in_chain = [u for u in minute_bar["chain"] if u.startswith("fuyao_")]
     assert fuyao_in_chain == [], (
-        f"get_minute_bar chain leaked non-implementing upstreams: {fuyao_in_chain}"
+        f"moo_minute_bar chain leaked non-implementing upstreams: {fuyao_in_chain}"
     )
 
-    # get_realtime_quote: YAML chain is [tokenwave_tdx, tdx_local, fuyao_ashare]
-    rtq = by_name.get("get_realtime_quote")
-    assert rtq is not None, "get_realtime_quote not exposed"
-    assert rtq["chain"] == ["tokenwave_tdx", "tdx_local", "fuyao_ashare"], (
-        f"get_realtime_quote chain mismatch: {rtq['chain']}"
+    # moo_realtime_quote: routing 段声明 chain = [tokenwave_tdx]
+    rtq = by_name.get("moo_realtime_quote")
+    assert rtq is not None, "moo_realtime_quote not exposed"
+    assert rtq["chain"] == ["tokenwave_tdx"], (
+        f"moo_realtime_quote chain mismatch: {rtq['chain']}"
     )
 
 
@@ -167,8 +168,8 @@ def test_get_interfaces_includes_full_params():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_server.load_config", return_value=full_config):
-        from src.console_server import get_interfaces
+    with patch("src.console_api.load_config", return_value=full_config):
+        from src.console_api import get_interfaces
         result = get_interfaces()
         # Find a tool with params
         tools_with_params = [t for t in result["tools"] if t.get("params")]
@@ -190,7 +191,7 @@ def test_get_upstreams_includes_description():
     """
     import yaml
     from unittest.mock import patch
-    from src.console_server import get_upstream_status
+    from src.console_api import get_upstream_status
 
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
@@ -212,7 +213,7 @@ def test_get_upstreams_includes_description():
             "last_error": None,
         }
 
-    with patch("src.console_server._probe_upstream", side_effect=fake_probe):
+    with patch("src.console_api._probe_upstream", side_effect=fake_probe):
         result = get_upstream_status()
 
     for name, info in result.get("upstreams", {}).items():

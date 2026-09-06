@@ -88,6 +88,8 @@ class TokenWaveTdxClient:
 
     async def get_realtime_quote(self, stock_code: str) -> ToolResult:
         """获取实时行情: local 优先，network 兜底"""
+        local_err = None
+        network_err = None
         # 1. 尝试 local
         if self._local_client and self._local_client.is_available():
             try:
@@ -95,6 +97,7 @@ class TokenWaveTdxClient:
                 if data:
                     return ToolResult(success=True, data=data, source="local")
             except Exception as e:
+                local_err = str(e)
                 logger.warning(f"Local quote failed: {e}")
 
         # 2. 兜底 network
@@ -104,9 +107,13 @@ class TokenWaveTdxClient:
                 if data:
                     return ToolResult(success=True, data=data, source="network")
             except Exception as e:
+                network_err = str(e)
                 logger.error(f"Network quote failed: {e}")
 
-        return ToolResult(success=False, error="无可用数据源")
+        return ToolResult(
+            success=False,
+            error=f"无可用数据源 (local_err={local_err} network_err={network_err})",
+        )
 
     async def get_kline(
         self,
@@ -117,6 +124,8 @@ class TokenWaveTdxClient:
         count: int = 100,
     ) -> ToolResult:
         """获取K线数据: local 优先，network 兜底"""
+        local_err = None
+        network_err = None
         # 1. 尝试 local
         if self._local_client and self._local_client.is_available():
             try:
@@ -131,6 +140,7 @@ class TokenWaveTdxClient:
                         data = data.to_dict(orient='records')
                     return ToolResult(success=True, data=data, source="local")
             except Exception as e:
+                local_err = str(e)
                 logger.warning(f"Local kline failed: {e}")
 
         # 2. 兜底 network
@@ -146,9 +156,13 @@ class TokenWaveTdxClient:
                         data = data.to_dict(orient='records')
                     return ToolResult(success=True, data=data, source="network")
             except Exception as e:
+                network_err = str(e)
                 logger.error(f"Network kline failed: {e}")
 
-        return ToolResult(success=False, error="无可用数据源")
+        return ToolResult(
+            success=False,
+            error=f"无可用数据源 (local_err={local_err} network_err={network_err})",
+        )
 
     async def get_minute_bar(
         self,
@@ -156,6 +170,8 @@ class TokenWaveTdxClient:
         frequency: str = "5min",
     ) -> ToolResult:
         """获取分钟K线: local 优先，network 兜底"""
+        local_err = None
+        network_err = None
         # 1. 尝试 local
         if self._local_client and self._local_client.is_available():
             try:
@@ -165,6 +181,7 @@ class TokenWaveTdxClient:
                         data = data.to_dict(orient='records')
                     return ToolResult(success=True, data=data, source="local")
             except Exception as e:
+                local_err = str(e)
                 logger.warning(f"Local minute failed: {e}")
 
         # 2. 兜底 network
@@ -176,9 +193,13 @@ class TokenWaveTdxClient:
                         data = data.to_dict(orient='records')
                     return ToolResult(success=True, data=data, source="network")
             except Exception as e:
+                network_err = str(e)
                 logger.error(f"Network minute failed: {e}")
 
-        return ToolResult(success=False, error="无可用数据源")
+        return ToolResult(
+            success=False,
+            error=f"无可用数据源 (local_err={local_err} network_err={network_err})",
+        )
 
     async def get_daily_bar(
         self,
@@ -200,6 +221,8 @@ class TokenWaveTdxClient:
         count: int = 4,
     ) -> ToolResult:
         """获取财务数据: network only (本地无财务数据)"""
+        local_err = None
+        network_err = None
         if self._network_client and self._network_client.is_available():
             try:
                 data = self._network_client.get_financial_data(
@@ -212,12 +235,18 @@ class TokenWaveTdxClient:
                         data = data.to_dict(orient='records')
                     return ToolResult(success=True, data=data, source="network")
             except Exception as e:
+                network_err = str(e)
                 logger.error(f"Network financial failed: {e}")
 
-        return ToolResult(success=False, error="无可用数据源")
+        return ToolResult(
+            success=False,
+            error=f"无可用数据源 (local_err={local_err} network_err={network_err})",
+        )
 
     async def get_block_data(self, block_type: str) -> ToolResult:
         """获取板块数据: network only (本地无板块数据)"""
+        local_err = None
+        network_err = None
         if self._network_client and self._network_client.is_available():
             try:
                 data = self._network_client.get_block_data(block_type)
@@ -226,21 +255,31 @@ class TokenWaveTdxClient:
                         data = data.to_dict(orient='records')
                     return ToolResult(success=True, data=data, source="network")
             except Exception as e:
+                network_err = str(e)
                 logger.error(f"Network block failed: {e}")
 
-        return ToolResult(success=False, error="无可用数据源")
+        return ToolResult(
+            success=False,
+            error=f"无可用数据源 (local_err={local_err} network_err={network_err})",
+        )
 
     async def get_stock_info(self, stock_code: str) -> ToolResult:
         """获取股票信息: network only"""
+        local_err = None
+        network_err = None
         if self._network_client and self._network_client.is_available():
             try:
                 data = self._network_client.get_stock_info(stock_code)
                 if data:
                     return ToolResult(success=True, data=data, source="network")
             except Exception as e:
+                network_err = str(e)
                 logger.error(f"Network stock info failed: {e}")
 
-        return ToolResult(success=False, error="无可用数据源")
+        return ToolResult(
+            success=False,
+            error=f"无可用数据源 (local_err={local_err} network_err={network_err})",
+        )
 
     async def get_trade_dates(
         self,
@@ -248,6 +287,8 @@ class TokenWaveTdxClient:
         end_date: str,
     ) -> ToolResult:
         """获取交易日历: network only"""
+        local_err = None
+        network_err = None
         if self._network_client and self._network_client.is_available():
             try:
                 data = self._network_client.get_trade_dates(start_date, end_date)
@@ -256,12 +297,18 @@ class TokenWaveTdxClient:
                         data = data.to_dict(orient='records')
                     return ToolResult(success=True, data=data, source="network")
             except Exception as e:
+                network_err = str(e)
                 logger.error(f"Network trade dates failed: {e}")
 
-        return ToolResult(success=False, error="无可用数据源")
+        return ToolResult(
+            success=False,
+            error=f"无可用数据源 (local_err={local_err} network_err={network_err})",
+        )
 
     async def get_etf_list(self) -> ToolResult:
         """获取ETF列表: network only"""
+        local_err = None
+        network_err = None
         if self._network_client and self._network_client.is_available():
             try:
                 data = self._network_client.get_etf_list()
@@ -270,9 +317,13 @@ class TokenWaveTdxClient:
                         data = data.to_dict(orient='records')
                     return ToolResult(success=True, data=data, source="network")
             except Exception as e:
+                network_err = str(e)
                 logger.error(f"Network ETF list failed: {e}")
 
-        return ToolResult(success=False, error="无可用数据源")
+        return ToolResult(
+            success=False,
+            error=f"无可用数据源 (local_err={local_err} network_err={network_err})",
+        )
 
 
 class LocalClient:
@@ -429,9 +480,9 @@ class NetworkClient:
         self._quotes_cls = quotes.Quotes
 
     def _get_quotes(self):
-        """获取或创建 Quotes 实例"""
+        """获取或创建 StdQuotes 实例（mootdx 新 API: Quotes.factory() 拿 StdQuotes）"""
         if self._quotes is None:
-            self._quotes = self._quotes_cls()
+            self._quotes = self._quotes_cls.factory()
         return self._quotes
 
     def is_available(self) -> bool:
@@ -458,9 +509,10 @@ class NetworkClient:
             dict: 实时行情数据
         """
         q = self._get_quotes()
+        # mootdx quotes(symbol=...) 要纯数字代码, 不带 sh/sz 前缀
+        sym = stock_code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
         try:
-            # mootdx quotes API
-            df = q.quotes(symbol=stock_code)
+            df = q.quotes(symbol=sym)
             if df is not None and not df.empty:
                 latest = df.iloc[-1]
                 return {
@@ -512,7 +564,8 @@ class NetworkClient:
         freq = freq_map.get(frequency, 9)
 
         try:
-            df = q.daily(symbol=stock_code)
+            sym = stock_code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+            df = q.bars(symbol=sym, frequency=freq, offset=count or 800)
             if df is not None and not df.empty:
                 if count and count > 0:
                     df = df.tail(count)

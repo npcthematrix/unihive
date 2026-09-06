@@ -43,6 +43,7 @@ class ToolResult:
     success: bool
     data: Any = None
     error: str | None = None
+    error_detail: dict | None = None  # 详细错误信息 {"error_type": "...", "message": "...", "recoverable": true/false}
     source: str | None = None
     duration_ms: int = 0
 

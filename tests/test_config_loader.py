@@ -129,3 +129,64 @@ class TestValidateConfig:
             }}
         })
         assert errors == []
+
+    def test_http_jsonrpc_validates_base_url(self):
+        """http_jsonrpc 必须有 base_url, 之前漏了这个分支。"""
+        errors = validate_config({
+            "upstreams": {"x": {"enabled": True, "type": "http_jsonrpc"}}
+        })
+        assert any("base_url" in e for e in errors)
+
+    def test_python_type_passes_without_extras(self):
+        """tokenwave_tdx 的 type=python 不需要 base_url/api_key/command 等额外字段。"""
+        errors = validate_config({
+            "upstreams": {"x": {"enabled": True, "type": "python", "mode": "auto"}}
+        })
+        assert errors == []
+
+
+class TestMissingDedup:
+    """同一 env var 出现 N 次时, missing 列表只记一次, 并按字典序返回。"""
+
+    def test_same_var_repeated_is_deduped(self, monkeypatch):
+        monkeypatch.delenv("MISS_X", raising=False)
+        cfg = {"a": "${MISS_X}", "b": "${MISS_X}", "c": {"d": "${MISS_X}"}}
+        _, missing = resolve_env_vars(cfg, strict=False)
+        assert missing == ["MISS_X"]
+
+    def test_multiple_missing_vars_sorted(self, monkeypatch):
+        monkeypatch.delenv("MISS_A", raising=False)
+        monkeypatch.delenv("MISS_Z", raising=False)
+        monkeypatch.delenv("MISS_M", raising=False)
+        cfg = {"z": "${MISS_Z}", "a": "${MISS_A}", "m": "${MISS_M}"}
+        _, missing = resolve_env_vars(cfg, strict=False)
+        assert missing == ["MISS_A", "MISS_M", "MISS_Z"]
+
+
+class TestDotenvLoadedOnce:
+    """_load_dotenv 只在第一次 load_config 时调用, 避免每次都 IO .env。"""
+
+    def test_dotenv_called_only_once_across_multiple_loads(self, tmp_path, monkeypatch):
+        import src.config_loader as cl
+        monkeypatch.setattr(cl, "_DOTENV_LOADED", False)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=bar\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        # _load_dotenv 是 config_loader 模块内 from-import 后的别名, 替换它即可
+        call_count = {"n": 0}
+
+        def counting_load():
+            call_count["n"] += 1
+
+        monkeypatch.setattr(cl, "_load_dotenv", counting_load, raising=False)
+
+        cfg_file = tmp_path / "cfg.yaml"
+        cfg_file.write_text("k: ${FOO}\n", encoding="utf-8")
+
+        cl.load_config(cfg_file, strict_env=False)
+        cl.load_config(cfg_file, strict_env=False)
+        cl.load_config(cfg_file, strict_env=False)
+
+        assert call_count["n"] == 1, f"dotenv 应只 load 一次, 实际 {call_count['n']}"

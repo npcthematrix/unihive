@@ -3,7 +3,10 @@
 """
 import inspect
 import logging
-from typing import Any, Callable
+import re
+from typing import Annotated, Any, Callable, Literal
+
+from pydantic import Field
 
 from .normalizer import Normalizer
 
@@ -23,15 +26,41 @@ _DEFAULT_MAP: dict[str, Any] = {
     "bool": False,
 }
 
+# 日期参数名: 统一归一为 YYYYMMDD (TQ-Local strict; 其他上游也用同格式)
+_DATE_PARAM_NAMES = frozenset({"start_time", "end_time", "start_date", "end_date"})
+
+# 字符串但语义上应该是数组的参数: 逗号分隔转列表 (Pydantic 不接受 List[str] 时)
+_LIST_PARAM_NAMES = frozenset({"stock_list", "field_list"})
+
+
+def _annotation_for(p: dict) -> Any:
+    """根据 spec 构造类型注解。
+
+    - 有 enum → Literal[*values]，FastMCP 会把它转成 JSON Schema enum
+    - 有 description → Annotated[X, Field(description=...)]，Pydantic FastMCP 会提取
+    """
+    base = _TYPE_MAP.get(p.get("type", "str"), str)
+    enum_values = p.get("enum")
+    description = p.get("description")
+    if enum_values:
+        base = Literal[tuple(enum_values)]  # type: ignore[valid-type]
+    if description:
+        return Annotated[base, Field(description=description)]
+    return base
+
 
 def _build_parameter(p: dict) -> inspect.Parameter:
     name = p["name"]
-    ann = _TYPE_MAP.get(p.get("type", "str"), str)
+    ann = _annotation_for(p)
     if p.get("required", True):
         return inspect.Parameter(
             name, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=ann
         )
-    default = _DEFAULT_MAP.get(p.get("type", "str"), None)
+    # optional + 有 enum 时 default=None，避免 default="invalid_value" 被静默吃掉
+    if p.get("enum"):
+        default = None
+    else:
+        default = _DEFAULT_MAP.get(p.get("type", "str"), None)
     return inspect.Parameter(
         name, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=ann, default=default
     )
@@ -48,8 +77,48 @@ def _normalize_param(name: str, value: Any, spec: dict) -> Any:
     if p is None:
         return value
     if p.get("normalize") == "code" and isinstance(value, str):
-        return Normalizer.normalize_code(value)
+        value = Normalizer.normalize_code(value)
+    if not isinstance(value, str):
+        return value
+    # 日期归一: YYYY-MM-DD / YYYY/MM/DD / YYYYMMDD → YYYYMMDD
+    if name in _DATE_PARAM_NAMES:
+        digits = re.sub(r"\D", "", value)
+        if len(digits) == 8:
+            return digits
+    # CSV 列表: "600000.SH,000001.SZ" → ["600000.SH", "000001.SZ"]
+    if name in _LIST_PARAM_NAMES:
+        parts = [s.strip() for s in value.split(",") if s.strip()]
+        if parts:
+            return parts
     return value
+
+
+def _validate_and_normalize(name: str, param_specs: list[dict], kwargs: dict) -> dict:
+    """校验 + 标准化参数。空值按缺失处理，必填缺失/枚举越界抛 ValueError。
+
+    Raises:
+        ValueError: 必填缺失、传了空字符串、enum 越界
+    """
+    normalized: dict = {}
+    for p in param_specs:
+        v = kwargs.get(p["name"])
+        v = _normalize_param(p["name"], v, param_specs)
+        # 空值 → 按缺失处理
+        if v is None or v == "":
+            if p.get("required", True):
+                raise ValueError(
+                    f"{name}: required parameter {p['name']!r} is missing or empty"
+                )
+            continue
+        # enum 校验
+        enum_values = p.get("enum")
+        if enum_values and v not in enum_values:
+            raise ValueError(
+                f"{name}: invalid value for {p['name']!r}: {v!r}, "
+                f"expected one of {enum_values}"
+            )
+        normalized[p["name"]] = v
+    return normalized
 
 
 def build_tool_function(spec: dict, server: Any) -> Callable:
@@ -69,13 +138,7 @@ def build_tool_function(spec: dict, server: Any) -> Callable:
     sig = build_signature(param_specs)
 
     async def _runtime(**kwargs) -> dict:
-        normalized: dict = {}
-        for p in param_specs:
-            v = kwargs.get(p["name"])
-            v = _normalize_param(p["name"], v, param_specs)
-            if v is None or v == "":
-                continue
-            normalized[p["name"]] = v
+        normalized = _validate_and_normalize(name, param_specs, kwargs)
         if dangerous:
             logger.warning("DANGEROUS call: %s args=%s", name, normalized)
         return await server._execute_cached(
@@ -83,8 +146,10 @@ def build_tool_function(spec: dict, server: Any) -> Callable:
         )
 
     _runtime.__signature__ = sig
+    # annotations 跟随 signature（保留 Literal/Annotated/Field 信息），
+    # 否则 FastMCP 看到的就是裸 str，丢失 enum/description
     _runtime.__annotations__ = {
-        p["name"]: _TYPE_MAP.get(p.get("type", "str"), str) for p in param_specs
+        p["name"]: _annotation_for(p) for p in param_specs
     }
     _runtime.__annotations__["return"] = dict
     _runtime.__name__ = name

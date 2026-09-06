@@ -18,6 +18,10 @@ Get-Content $EnvPath | ForEach-Object {
     $kv = $line -split "=", 2
     if ($kv.Length -ne 2) { return }
     $name = $kv[0].Trim()
+    # 支持 bash 风格 "export FOO=bar" — 复制 .env.example 时常带前缀
+    if ($name.StartsWith("export ")) {
+        $name = $name.Substring(7).Trim()
+    }
     $val = $kv[1].Trim().Trim('"').Trim("'")
     if ($name -match '^[A-Za-z_][A-Za-z0-9_]*$') {
         Set-Item -Path "Env:\$name" -Value $val

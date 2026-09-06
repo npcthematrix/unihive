@@ -44,7 +44,7 @@ tools:
     # 同时把 cfg 也复制成相对路径名
     (tmp_path / "upstreams.yaml").write_text(cfg.read_text(encoding="utf-8"), encoding="utf-8")
 
-    server = GatewayServer(config_path="upstreams.yaml", strict_env=False)
+    server = GatewayServer(config_path="upstreams.yaml", strict_env=False, strict_validation=False)
     # 触发配置加载
     server.config = server.config  # 已加载；无需重做
     tools = server._load_all_tools()

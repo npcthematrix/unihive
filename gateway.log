@@ -1,0 +1,201 @@
+2026-09-05 12:27:06,530 [WARNING] __main__: Config validation: upstream 'tokenwave_tdx' unknown type: 'python'
+2026-09-05 12:27:06,530 [INFO] __main__: FastMCP patched: tools/list response will use indent=2
+2026-09-05 12:27:06,531 [INFO] __main__: Initializing UniHive Gateway Server...
+2026-09-05 12:27:06,558 [INFO] src.cache: Cache initialized at logs/cache.db
+2026-09-05 12:27:07,082 [INFO] src.upstream_client: [tdx_local] Started successfully
+2026-09-05 12:27:07,082 [INFO] __main__: [tdx_local] Connected
+2026-09-05 12:27:07,471 [INFO] src.http_jsonrpc_client: [tdx_tq_local] Configured for http://127.0.0.1:17709/
+2026-09-05 12:27:07,471 [INFO] __main__: [tdx_tq_local] Connected
+2026-09-05 12:27:07,678 [INFO] src.fuyao_client: [fuyao_ashare] Configured for https://fuyao.aicubes.cn/mcp/a-share
+2026-09-05 12:27:07,678 [INFO] __main__: [fuyao_ashare] Connected
+2026-09-05 12:27:07,905 [INFO] src.fuyao_client: [fuyao_index] Configured for https://fuyao.aicubes.cn/mcp/a-share-index
+2026-09-05 12:27:07,905 [INFO] __main__: [fuyao_index] Connected
+2026-09-05 12:27:08,123 [INFO] src.fuyao_client: [fuyao_meta] Configured for https://fuyao.aicubes.cn/mcp/meta
+2026-09-05 12:27:08,123 [INFO] __main__: [fuyao_meta] Connected
+2026-09-05 12:27:08,395 [INFO] src.fuyao_client: [fuyao_fund] Configured for https://fuyao.aicubes.cn/mcp/fund
+2026-09-05 12:27:08,395 [INFO] __main__: [fuyao_fund] Connected
+2026-09-05 12:27:08,931 [INFO] __main__: [tokenwave_tdx] Connected
+2026-09-05 12:27:09,270 [INFO] __main__: Registered 148 tools from config (dangerous=True)
+2026-09-05 12:27:09,270 [INFO] __main__: Gateway initialized with 7 upstreams
+INFO:     Started server process [7108]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:18080 (Press CTRL+C to quit)
+2026-09-05 12:27:11,495 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:27:11,496 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582431411,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:27:11,578 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:27:11,579 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582431496,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:27:11,679 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:27:11,751 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:27:11,752 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582431679,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+INFO:     127.0.0.1:61059 - "POST /mcp HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:61523 - "POST /mcp HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:59100 - "POST /mcp HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:59100 - "POST /mcp/ HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59101 - "POST /mcp/ HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:59102 - "GET /mcp/ HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:62581 - "GET / HTTP/1.1" 200 OK
+2026-09-05 12:27:44,076 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:27:44,077 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582463779,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:27:44,355 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:27:44,356 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582464077,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:27:44,631 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:27:44,918 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:27:44,919 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582464631,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:28:17,227 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:28:17,228 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582496959,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:28:17,496 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:28:17,497 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582497228,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:28:17,778 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:28:18,039 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:28:18,041 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582497785,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:28:50,143 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:28:50,144 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582530073,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:28:50,226 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:28:50,226 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582530144,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:28:50,320 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:28:50,396 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:28:50,396 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582530320,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:29:22,575 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:29:22,576 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582562437,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:29:22,660 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:29:22,661 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582562576,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:29:22,749 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:29:22,819 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:29:22,820 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582562750,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:29:55,057 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:29:55,058 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582594848,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:29:55,143 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:29:55,144 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582595058,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:29:55,230 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:29:55,312 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:29:55,312 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582595230,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:30:27,417 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:30:27,417 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582627341,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:30:27,489 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:30:27,489 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582627418,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:30:27,571 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:30:27,651 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:30:27,651 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582627571,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:30:59,764 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:30:59,765 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582659688,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:30:59,845 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:30:59,845 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582659765,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:30:59,926 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:31:00,027 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:31:00,027 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582659927,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:31:32,153 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:31:32,153 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582692061,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:31:32,241 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:31:32,242 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582692154,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:31:32,317 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:31:32,400 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:31:32,401 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582692318,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:32:04,543 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:32:04,544 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582724435,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:32:04,641 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:32:04,642 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582724544,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:32:04,714 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:32:04,817 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:32:04,818 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582724715,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:32:36,951 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:32:36,952 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582756851,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:32:37,054 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:32:37,055 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582756952,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:32:37,220 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:32:37,323 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:32:37,324 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582757221,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:33:09,461 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:33:09,461 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582789356,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:33:09,533 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:33:09,534 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582789461,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:33:09,612 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:33:09,688 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:33:09,689 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582789613,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+INFO:     127.0.0.1:59891 - "POST /mcp HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:59894 - "POST /mcp HTTP/1.1" 307 Temporary Redirect
+2026-09-05 12:33:41,857 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:33:41,859 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582821721,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:33:41,937 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:33:41,938 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582821859,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:33:42,017 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:33:42,115 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:33:42,116 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582822018,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+INFO:     127.0.0.1:61056 - "POST /mcp HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:64587 - "POST /mcp HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:64587 - "POST /mcp/ HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64588 - "GET /api/mcp-tools-list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64589 - "POST /mcp/ HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64590 - "POST /mcp/ HTTP/1.1" 404 Not Found
+2026-09-05 12:34:14,244 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:34:14,245 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582854144,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:34:14,354 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:34:14,355 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582854245,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:34:14,452 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:34:14,630 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:34:14,630 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582854453,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+INFO:     127.0.0.1:58735 - "GET /health HTTP/1.1" 200 OK
+2026-09-05 12:34:46,739 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:34:46,740 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582886660,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+2026-09-05 12:34:46,845 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:34:46,846 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582886740,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:34:46,970 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:34:47,052 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:34:47,053 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582886971,"error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002},"jsonrpc":"2.0"}
+
+INFO:     127.0.0.1:65144 - "POST /mcp/ HTTP/1.1" 404 Not Found
+2026-09-05 12:35:19,223 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share "HTTP/1.1 403 Forbidden"
+2026-09-05 12:35:19,223 [ERROR] src.fuyao_client: [fuyao_ashare] HTTP 403: {"id":1788582919089,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+2026-09-05 12:35:19,300 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/a-share-index "HTTP/1.1 403 Forbidden"
+2026-09-05 12:35:19,301 [ERROR] src.fuyao_client: [fuyao_index] HTTP 403: {"id":1788582919223,"jsonrpc":"2.0","error":{"message":"Tool not allowed: get_meta_tickers_search","code":-32002}}
+
+2026-09-05 12:35:19,377 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/meta "HTTP/1.1 200 OK"
+2026-09-05 12:35:19,460 [INFO] httpx: HTTP Request: POST https://fuyao.aicubes.cn/mcp/fund "HTTP/1.1 403 Forbidden"
+2026-09-05 12:35:19,461 [ERROR] src.fuyao_client: [fuyao_fund] HTTP 403: {"id":1788582919378,"error":{"code":-32002,"message":"Tool not allowed: get_meta_tickers_search"},"jsonrpc":"2.0"}
+
+INFO:     127.0.0.1:53222 - "POST /mcp/ HTTP/1.1" 404 Not Found

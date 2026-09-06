@@ -5,30 +5,12 @@
 # AI 调用前请先查阅该文档，了解各参数的含义、枚举值和约束。
 
 upstreams:
-  tdx_local:
-    enabled: false
-    description: "通达信-行情: 行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call), 39 个 gateway 工具 (已禁用，改用 mootdx2)"
-    type: "npx"
-    package: "tdx-mcp-server"
-    command: ["npx", "-y", "tdx-mcp-server"]
-    timeout_seconds: 30
-    retry:
-      max_attempts: 3
-      backoff_base: 2
-    capabilities:
-      - realtime_quote
-      - kline
-      - minute_bar
-      - trade_detail
-      - index_data
-      - etf_data
-      - market_stats
-
   mootdx2:
     enabled: true
     description: "MooTDX2 行情接口"
     type: "mootdx2"
     market: "std"
+    tdxdir: ""  # 通达信本地路径，空则自动探索
 
   tdx_tq_local:
     enabled: true
@@ -114,70 +96,12 @@ upstreams:
       - fund_snapshot
       - fund_history
 
-  tokenwave_tdx:
-    enabled: true
-    description: "通达信-MooTDX: 基于 mootdx 的行情/K线/财务/板块/日历, 9 个 gateway 接口 (含 2 个 tokenwave_ 前缀命名避开 TQ-Local 冲突), local 优先 + network 兜底"
-    type: "python"
-    mode: "auto"
-    timeout_seconds: 30
-    retry:
-      max_attempts: 3
-      backoff_base: 2
-    capabilities:
-      - realtime_quote
-      - kline
-      - minute_bar
-      - financial_data
-      - block_data
-      - stock_info
-      - trade_dates
-      - etf_list
-
 # 上游 tool 映射 (gateway_tool -> {upstream_name: upstream_tool_name})
 # 是 routing 链之外的另一种声明方式：当某 gateway_tool 没有 routing chain，
 # router 会用本段的 keys 作为 chain
 upstream_tool_mapping:
-  # TDX 直通
-  get_quote:                                  {mootdx2: get_quote}
-  get_kline:                                  {mootdx2: get_kline}
-  get_minute_data:                            {mootdx2: get_minute}
-  get_trade:                                  {mootdx2: get_trade}
-  tdx_get_stock_info:                         {mootdx2: get_stock_info}
-  get_code_list:                              {mootdx2: get_code_list}
-  get_batch_quote:                            {mootdx2: get_batch_quote}
-  get_kline_history:                          {mootdx2: get_kline_history}
-  get_kline_all:                              {mootdx2: get_kline_all}
-  get_kline_all_tdx:                          {mootdx2: get_kline_all_tdx}
-  get_kline_all_ths:                          {mootdx2: get_kline_all_ths}
-  get_index_kline:                            {mootdx2: get_index}
-  get_index_all:                              {mootdx2: get_index_all}
-  get_market_count:                           {mootdx2: get_market_count}
-  get_stock_codes:                            {mootdx2: get_stock_codes}
-  get_etf_codes:                              {mootdx2: get_etf_codes}
-  get_etf_list:                               {mootdx2: get_etf_list}
-  get_trade_history:                          {mootdx2: get_trade_history}
-  get_trade_history_full:                     {mootdx2: get_trade_history_full}
-  get_minute_trade_all:                       {mootdx2: get_minute_trade_all}
-  get_workday:                                {mootdx2: get_workday}
-  get_workday_range:                          {mootdx2: get_workday_range}
-  get_income:                                 {mootdx2: get_income}
-  create_task_kline:                          {mootdx2: create_task_kline}
-  create_task_trade:                          {mootdx2: create_task_trade}
-  get_task_list:                              {mootdx2: get_task_list}
-  get_task_detail:                            {mootdx2: get_task_detail}
-  cancel_task:                                {mootdx2: cancel_task}
-  tdx_call:                                   {mootdx2: tdx_call}
-  search_stock:
-    fuyao_meta: get_meta_tickers_search       # HTTP, 可缓存 (缓存策略见 gateway._is_fuyao_source)
-    tdx_local: search_stock                   # 本地兜底, 不缓存
-  get_market_stats:                          {mootdx2: get_market_stats}
-  get_health:                                {mootdx2: get_health}
-  get_server_status:                         {mootdx2: get_server_status}
-
-  # TQ-Local (通达信本地 HTTP JSON-RPC, 端口 17709)
-  # 工具与路由均由 config/tools_tdx_tq_local.yaml 自带 upstream_tool_mapping 提供,
-  # 这里不再重复声明, 避免与 codegen 产物重名互相覆盖。
-
+  # MooTDX2 工具已移至 config/tools_mootdx2.yaml（自带 upstream_tool_mapping）
+  # TQ-Local 工具移至 config/tools_tdx_tq_local.yaml（自带 upstream_tool_mapping）
   # Fuyao a-share
   a_share_prices_snapshot:                    {fuyao_ashare: get_a_share_prices_snapshot}
   a_share_prices_historical:                  {fuyao_ashare: get_a_share_prices_historical}
@@ -239,90 +163,14 @@ upstream_tool_mapping:
   fund_portfolio_bond_report_dates:           {fuyao_fund: get_fund_portfolio_bond_report_dates}
   fund_portfolio_asset_allocation:            {fuyao_fund: get_fund_portfolio_asset_allocation}
 
-  # MooTDX 工具 (moo 前缀避免与其他上游同名工具冲突)
-  moo_realtime_quote:
-    tokenwave_tdx: get_realtime_quote
-  moo_kline:
-    tokenwave_tdx: get_kline
-  moo_minute_bar:
-    tokenwave_tdx: get_minute_bar
-  moo_daily_bar:
-    tokenwave_tdx: get_daily_bar
-  moo_get_financial_data:
-    tokenwave_tdx: get_financial_data
-  moo_block_data:
-    tokenwave_tdx: get_block_data
-  moo_get_stock_info:
-    tokenwave_tdx: get_stock_info
-  moo_trade_dates:
-    tokenwave_tdx: get_trade_dates
-  moo_etf_list:
-    tokenwave_tdx: get_etf_list
-
 # 路由配置 (带 fallback 链的 gateway_tool)
-routing:
-  moo_realtime_quote:
-    chain: ["tokenwave_tdx"]
-    description: "实时行情"
-  moo_daily_bar:
-    chain: ["tokenwave_tdx"]
-    description: "日K线行情"
-  moo_minute_bar:
-    chain: ["tokenwave_tdx"]
-    description: "分钟K线行情"
-  moo_kline:
-    chain: ["tokenwave_tdx"]
-    description: "K线"
+routing: {}
 
 # 对外暴露的工具清单
 # 由 registry.py 解析后自动注册为 FastMCP tool
+# MooTDX2 工具已移至 config/tools_mootdx2.yaml
 # Fuyao 参数语义说明：详见 docs/fuyao-api-params.md
 tools:
-  # === TDX 直通 (30) ===
-  - {name: get_quote, description: "TDX 实时行情", routing: get_quote, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}]}
-  - {name: get_kline, description: "K线 (tokenwave_tdx only, day/week/month/minute1/5/15/30/60)", routing: get_kline, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型：day=日K / week=周K / month=月K / minute1=1分钟 / minute5=5分钟 / minute15=15分钟 / minute30=30分钟 / minute60=60分钟（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数（默认 100）"}]}
-  - {name: get_minute_data, description: "TDX 今日分时(240 根)", routing: get_minute_data, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}]}
-  - {name: get_trade, description: "TDX 逐笔成交", routing: get_trade, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}]}
-  - {name: tdx_get_stock_info, description: "TDX 单只股票综合信息 (行情服务; 交易终端的同名工具见 get_stock_info)", routing: tdx_get_stock_info, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}]}
-  - {name: get_code_list, description: "TDX 全量代码列表 (sh/sz/bj)", routing: get_code_list, params: [{name: exchange, type: str, required: false, enum: [sh, sz, bj], description: "交易所：sh=上海 / sz=深圳 / bj=北京（省略则返回全部）"}]}
-  - {name: get_batch_quote, description: "TDX 批量行情", routing: get_batch_quote, params: [{name: codes, type: str, required: true, description: "逗号分隔的股票代码，如 '600000,000001'"}]}
-  - {name: get_kline_history, description: "TDX 历史K线(指定区间)", routing: get_kline_history, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
-  - {name: get_kline_all, description: "TDX 全量K线(全历史)", routing: get_kline_all, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
-  - {name: get_kline_all_tdx, description: "TDX 全量K线 (TDX 源)", routing: get_kline_all_tdx, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
-  - {name: get_kline_all_ths, description: "TDX 全量K线 (同花顺源, 前复权)", routing: get_kline_all_ths, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码，如 '600000' 或 'sh600000'"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
-  - {name: get_index_kline, description: "TDX 指数K线", routing: get_index_kline, params: [{name: code, type: str, required: true, description: "指数代码，如 '000001'（上证指数）或 '399001'（深证成指）"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}]}
-  - {name: get_index_all, description: "TDX 全指K线(含成分股)", routing: get_index_all, params: [{name: code, type: str, required: true, description: "指数代码"}, {name: type, type: str, required: false, enum: [day, week, month, minute1, minute5, minute15, minute30, minute60], description: "K线类型（默认 day）"}, {name: limit, type: int, required: false, description: "返回根数"}]}
-  - {name: get_market_count, description: "TDX 市场证券数量统计", routing: get_market_count, params: []}
-  - {name: get_stock_codes, description: "TDX 代码列表(分页)", routing: get_stock_codes, params: [{name: limit, type: int, required: false, description: "返回数量"}, {name: prefix, type: bool, required: false, description: "是否带前缀"}]}
-  - {name: get_etf_codes, description: "TDX ETF 代码列表", routing: get_etf_codes, params: [{name: limit, type: int, required: false, description: "返回数量"}, {name: prefix, type: bool, required: false, description: "是否带前缀"}]}
-  - {name: get_etf_list, description: "ETF 列表 (tokenwave_tdx 优先 + tdx_local 兜底)", routing: get_etf_list, params: [{name: exchange, type: str, required: false, description: "交易所过滤"}, {name: limit, type: int, required: false, description: "返回数量"}]}
-  - {name: get_trade_history, description: "TDX 历史逐笔(分页)", routing: get_trade_history, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: date, type: str, required: false, description: "日期 YYYYMMDD"}, {name: start, type: int, required: false, description: "起始偏移"}, {name: count, type: int, required: false, description: "返回条数"}]}
-  - {name: get_trade_history_full, description: "TDX 历史逐笔(截止日全量)", routing: get_trade_history_full, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: before, type: str, required: false, description: "截止日期 YYYYMMDD"}, {name: limit, type: int, required: false, description: "返回条数"}]}
-  - {name: get_minute_trade_all, description: "TDX 全日分时成交汇总", routing: get_minute_trade_all, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: date, type: str, required: false, description: "日期 YYYYMMDD"}]}
-  - {name: get_workday, description: "TDX 交易日查询(基准日前N天)", routing: get_workday, params: [{name: date, type: str, required: false, description: "基准日期 YYYYMMDD"}, {name: count, type: int, required: false, description: "往前查N天"}]}
-  - {name: get_workday_range, description: "TDX 交易日范围(起止)", routing: get_workday_range, params: [{name: start, type: str, required: false, description: "起始日期 YYYYMMDD"}, {name: end, type: str, required: false, description: "结束日期 YYYYMMDD"}]}
-  - {name: get_income, description: "TDX 盘后收益", routing: get_income, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: days, type: int, required: false, description: "天数"}, {name: start_date, type: str, required: false, description: "起始日期 YYYYMMDD"}]}
-  - {name: create_task_kline, description: "TDX 创建K线后台拉取任务", routing: create_task_kline, params: [{name: codes, type: str, required: true, description: "逗号分隔的股票代码"}, {name: start_date, type: str, required: false, description: "起始日期 YYYYMMDD"}, {name: tables, type: str, required: false, description: "表名"}, {name: limit, type: int, required: false, description: "返回条数"}]}
-  - {name: create_task_trade, description: "TDX 创建成交后台拉取任务", routing: create_task_trade, params: [{name: code, type: str, required: true, normalize: code, description: "股票代码"}, {name: start_year, type: int, required: false, description: "起始年份"}, {name: end_year, type: int, required: false, description: "结束年份"}]}
-  - {name: get_task_list, description: "TDX 后台任务列表", routing: get_task_list, params: []}
-  - {name: get_task_detail, description: "TDX 后台任务详情", routing: get_task_detail, params: [{name: id, type: str, required: true, description: "任务ID"}]}
-  - {name: cancel_task, description: "TDX 取消后台任务", routing: cancel_task, params: [{name: id, type: str, required: true, description: "任务ID"}]}
-  - {name: tdx_call, description: "⚠️ DANGER: TDX 通用接口透传, 调用前必须经用户明确同意. 可执行任意 TDX API (含可能的写操作), 不可逆.", routing: tdx_call, params: [{name: path, type: str, required: true, description: "API 路径"}, {name: method, type: str, required: false, description: "HTTP 方法"}, {name: query, type: str, required: false, description: "查询参数"}, {name: body, type: str, required: false, description: "请求体"}, {name: raw, type: bool, required: false, description: "返回原始响应"}], dangerous: true}
-
-  # === MooTDX (9) ===
-  - {name: moo_realtime_quote, description: "实时行情 (MooTDX)", routing: moo_realtime_quote, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码，支持 '600000' 或 'sh600000' 格式"}]}
-  - {name: moo_minute_bar, description: "分钟K线 (MooTDX)", routing: moo_minute_bar, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码"}, {name: frequency, type: str, required: false, enum: [1min, 5min, 15min, 30min, 60min], description: "分钟周期：1min/5min/15min/30min/60min（默认 5min）"}]}
-  - {name: moo_daily_bar, description: "日K线 (MooTDX)", routing: moo_daily_bar, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码"}, {name: frequency, type: str, required: false, enum: [daily, weekly, monthly], description: "日K周期：daily=日（默认）/ weekly=周 / monthly=月"}]}
-  - {name: moo_kline, description: "K线 (MooTDX, day/week/month/minute)", routing: moo_kline, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码"}, {name: frequency, type: str, required: false, enum: [daily, weekly, monthly, 5min, 15min, 30min, 60min], description: "K线周期：daily=日K, weekly=周K, monthly=月K, 5min/15min/30min/60min=分钟K（默认 daily）"}, {name: count, type: int, required: false, description: "返回K线根数（默认 100）"}]}
-  - {name: moo_block_data, description: "板块/概念数据 (MooTDX, 同花顺行业/概念/地域板块)", routing: moo_block_data, params: [{name: block_type, type: str, required: true, enum: [industry, concept, region], description: "板块类型：industry=行业板块（如'银行'/'白酒'），concept=概念板块（如'AI'/'新能源'），region=地域板块（如'上海'/'深圳'）"}]}
-  - {name: moo_trade_dates, description: "交易日历 (MooTDX)", routing: moo_trade_dates, params: [{name: start_date, type: str, required: true, description: "起始日期 YYYYMMDD（如 '20250101'）"}, {name: end_date, type: str, required: true, description: "结束日期 YYYYMMDD（如 '20251231'）"}]}
-  - {name: moo_etf_list, description: "ETF列表 (MooTDX, 当前 network 模式返回空)", routing: moo_etf_list, params: []}
-  - {name: moo_get_financial_data, description: "财务数据 (MooTDX, 单股+count)", routing: moo_get_financial_data, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码"}, {name: report_type, type: str, required: false, enum: [income, balance, cashflow], description: "报表类型：income=利润表（默认）/ balance=资产负债表 / cashflow=现金流量表"}, {name: count, type: int, required: false, description: "返回报表期数（默认 4）"}]}
-  - {name: moo_get_stock_info, description: "股票信息 (MooTDX, 单股票代码)", routing: moo_get_stock_info, params: [{name: stock_code, type: str, required: true, normalize: code, description: "股票代码（如 '600036'）"}]}
-
-  # === TQ-Local (5) ===
-  # TQ-Local 工具全部由 config/tools_tdx_tq_local.yaml (codegen) 提供, 参数以那里为准。
-
   # === Fuyao a-share (21) ===
   - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，如 '600519.SH,000001.SZ'。省略则遍历全市场分页返回。"}, {name: limit, type: int, required: false, description: "分页大小，省略 thscodes 时生效（默认 100）"}, {name: offset, type: int, required: false, description: "分页偏移，省略 thscodes 时生效（默认 0）"}], cache_ttl_key: realtime_quote}
   - {name: a_share_prices_historical, description: "A 股历史K线 (10年)", routing: a_share_prices_historical, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'，不支持逗号多标的"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}, {name: adjust, type: str, required: false, enum: [none, forward, backward], description: "复权方式：none=不复权 / forward=前复权（默认） / backward=后复权"}], cache_ttl_key: historical}

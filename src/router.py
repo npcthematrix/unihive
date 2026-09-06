@@ -1,14 +1,18 @@
 """
 路由层 - 基于 Phase 0 探测结果路由请求到上游
 """
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .upstream_client import ToolResult, UpstreamClient
-from .fuyao_client import FuyaoClient
-from .http_jsonrpc_client import HttpJsonRpcClient
+
+if TYPE_CHECKING:
+    from .fuyao_client import FuyaoClient
+    from .http_jsonrpc_client import HttpJsonRpcClient
 
 logger = logging.getLogger(__name__)
 

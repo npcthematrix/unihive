@@ -2,7 +2,7 @@
 # DO NOT EDIT — re-run scripts/gen_tdx_tq_local_tools.py
 tools:
 - name: get_market_data
-  description: get_market_data
+  description: K线/分钟线/历史行情
   routing: get_market_data
   upstream_tool_mapping:
     tdx_tq_local: get_market_data
@@ -12,29 +12,57 @@ tools:
   - name: field_list
     required: false
     type: List[str]
+    description: 需返回的字段列表；空列表返回所有字段
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: period
     required: true
     type: str
+    description: K线周期，如 `1m`, `5m`, `15m`, `30m`, `60m`, `1d`, `1w`, `1mon`, `1q`,
+      `1hy`, `1y`
+    enum:
+    - 15m
+    - 1d
+    - 1hy
+    - 1m
+    - 1mon
+    - 1q
+    - 1w
+    - 1y
+    - 30m
+    - 5m
+    - 60m
   - name: start_time
     required: false
     type: str
+    description: 开始时间，常用 `YYYYMMDD` 或 `YYYY-MM-DD`
   - name: end_time
     required: false
     type: str
+    description: 结束时间；未传则默认当前时间
   - name: count
     required: false
     type: int
+    description: '`count>0`：取截止 `end_time` 最近 n 条；`count<=0`：使用 `start_time/end_time`
+      区间'
   - name: dividend_type
     required: false
     type: str
+    description: 复权类型：`none` 不复权、`front`/`qfq` 前复权、`back`/`hfq` 后复权
+    enum:
+    - back
+    - front
+    - hfq
+    - none
+    - qfq
   - name: fill_data
     required: false
     type: bool
+    description: 是否向前填充缺失数据，默认 `True`
 - name: get_market_snapshot
-  description: get_market_snapshot
+  description: 实时行情快照
   routing: get_market_snapshot
   upstream_tool_mapping:
     tdx_tq_local: get_market_snapshot
@@ -44,11 +72,13 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 单只证券代码
   - name: field_list
     required: false
     type: List[str]
+    description: 指定返回字段；空列表返回所有可用字段
 - name: get_stock_info
-  description: "TQ 交易终端单只股票信息 (行情服务的同类工具见 tdx_get_stock_info)"
+  description: 证券基础信息
   routing: get_stock_info
   upstream_tool_mapping:
     tdx_tq_local: get_stock_info
@@ -58,11 +88,13 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 单只证券代码
   - name: field_list
     required: false
     type: List[str]
+    description: 指定返回字段；空列表返回全部基础信息
 - name: get_match_stkinfo
-  description: get_match_stkinfo
+  description: 按名称/拼音/代码模糊查证券
   routing: get_match_stkinfo
   upstream_tool_mapping:
     tdx_tq_local: get_match_stkinfo
@@ -72,8 +104,9 @@ tools:
   - name: key_word
     required: true
     type: str
+    description: 查询关键字；用户输入股票名时把股票名填入此参数
 - name: get_stock_list
-  description: get_stock_list
+  description: 获取系统证券列表
   routing: get_stock_list
   upstream_tool_mapping:
     tdx_tq_local: get_stock_list
@@ -83,11 +116,18 @@ tools:
   - name: market
     required: false
     type: str
+    description: 市场或系统分类；常用 `5` 获取全部 A 股
+    enum:
+    - '5'
   - name: list_type
     required: false
     type: int
+    description: '`0` 只返回代码；`1` 返回代码和名称'
+    enum:
+    - '0'
+    - '1'
 - name: get_sector_list
-  description: get_sector_list
+  description: 获取板块列表
   routing: get_sector_list
   upstream_tool_mapping:
     tdx_tq_local: get_sector_list
@@ -97,8 +137,9 @@ tools:
   - name: list_type
     required: false
     type: int
+    description: 板块分类类型
 - name: get_user_sector
-  description: "TQ 列出全部用户自定义板块（含 ZXG/TJG）"
+  description: 获取用户自定义板块
   routing: get_user_sector
   upstream_tool_mapping:
     tdx_tq_local: get_user_sector
@@ -106,7 +147,7 @@ tools:
   dangerous: false
   params: []
 - name: get_stock_list_in_sector
-  description: "TQ 读板块成分股（自选股 ZXG / 临时条件股 TJG 需 block_type=1）"
+  description: 获取板块成分股
   routing: get_stock_list_in_sector
   upstream_tool_mapping:
     tdx_tq_local: get_stock_list_in_sector
@@ -116,14 +157,22 @@ tools:
   - name: block_code
     required: true
     type: str
+    description: 板块代码或板块名称
   - name: block_type
     required: false
     type: int
+    description: 板块类型，默认 `0`
+    enum:
+    - '0'
   - name: list_type
     required: false
     type: int
+    description: '`0` 返回代码；`1` 返回代码和名称'
+    enum:
+    - '0'
+    - '1'
 - name: get_trading_calendar
-  description: get_trading_calendar
+  description: 获取交易日历
   routing: get_trading_calendar
   upstream_tool_mapping:
     tdx_tq_local: get_trading_calendar
@@ -133,14 +182,17 @@ tools:
   - name: market
     required: true
     type: str
+    description: 市场代码
   - name: start_time
     required: true
     type: str
+    description: 开始日期
   - name: end_time
     required: true
     type: str
+    description: 结束日期
 - name: get_trading_dates
-  description: get_trading_dates
+  description: 获取交易日期
   routing: get_trading_dates
   upstream_tool_mapping:
     tdx_tq_local: get_trading_dates
@@ -150,17 +202,21 @@ tools:
   - name: market
     required: true
     type: str
+    description: 市场代码
   - name: start_time
     required: true
     type: str
+    description: 开始日期
   - name: end_time
     required: true
     type: str
+    description: 结束日期
   - name: count
     required: false
     type: int
+    description: 返回数量
 - name: get_relation
-  description: get_relation
+  description: 获取证券所属板块/关联品种
   routing: get_relation
   upstream_tool_mapping:
     tdx_tq_local: get_relation
@@ -170,8 +226,9 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 证券代码
 - name: get_pricevol
-  description: get_pricevol
+  description: 获取价量分布/量价数据
   routing: get_pricevol
   upstream_tool_mapping:
     tdx_tq_local: get_pricevol
@@ -181,8 +238,9 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
 - name: get_divid_factors
-  description: get_divid_factors
+  description: 获取除权除息数据
   routing: get_divid_factors
   upstream_tool_mapping:
     tdx_tq_local: get_divid_factors
@@ -192,14 +250,17 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 股票代码
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
 - name: get_more_info
-  description: get_more_info
+  description: 获取更多证券信息
   routing: get_more_info
   upstream_tool_mapping:
     tdx_tq_local: get_more_info
@@ -209,11 +270,13 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 证券代码
   - name: field_list
     required: false
     type: List[str]
+    description: 指定返回字段
 - name: get_gb_info
-  description: get_gb_info
+  description: 获取股本信息
   routing: get_gb_info
   upstream_tool_mapping:
     tdx_tq_local: get_gb_info
@@ -223,14 +286,17 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 股票代码
   - name: date_list
     required: true
     type: List[str]
+    description: 日期列表，通常为 `YYYYMMDD`，按从小到大排序
   - name: count
     required: true
     type: int
+    description: 需要获取的日期数量
 - name: get_gb_info_by_date
-  description: get_gb_info_by_date
+  description: 按日期区间取股本信息
   routing: get_gb_info_by_date
   upstream_tool_mapping:
     tdx_tq_local: get_gb_info_by_date
@@ -240,14 +306,17 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 股票代码
   - name: start_date
     required: true
     type: str
+    description: 开始日期
   - name: end_date
     required: true
     type: str
+    description: 结束日期
 - name: get_kzz_info
-  description: get_kzz_info
+  description: 获取可转债信息
   routing: get_kzz_info
   upstream_tool_mapping:
     tdx_tq_local: get_kzz_info
@@ -257,11 +326,13 @@ tools:
   - name: stock_code
     required: false
     type: str
+    description: 可转债或正股代码；空表示按底层默认范围返回
   - name: field_list
     required: false
     type: List[str]
+    description: 指定返回字段
 - name: get_ipo_info
-  description: get_ipo_info
+  description: 获取新股/新债申购信息
   routing: get_ipo_info
   upstream_tool_mapping:
     tdx_tq_local: get_ipo_info
@@ -271,11 +342,20 @@ tools:
   - name: ipo_type
     required: false
     type: int
+    description: '`0` 新股申购；`1` 新发债；`2` 两者都返回'
+    enum:
+    - '0'
+    - '1'
+    - '2'
   - name: ipo_date
     required: false
     type: int
+    description: '`0` 只返回今天；`1` 今天及以后'
+    enum:
+    - '0'
+    - '1'
 - name: get_trackzs_etf_info
-  description: get_trackzs_etf_info
+  description: 获取跟踪指数 ETF 信息
   routing: get_trackzs_etf_info
   upstream_tool_mapping:
     tdx_tq_local: get_trackzs_etf_info
@@ -285,8 +365,11 @@ tools:
   - name: zs_code
     required: true
     type: str
+    description: 指数代码，如 `000300.CSI`
+    enum:
+    - 000300.CSI
 - name: refresh_cache
-  description: "⚠️ DANGER: TQ 刷新本地数据缓存, 清空并重建. 不可逆."
+  description: 刷新行情缓存
   routing: refresh_cache
   upstream_tool_mapping:
     tdx_tq_local: refresh_cache
@@ -296,11 +379,13 @@ tools:
   - name: market
     required: false
     type: str
+    description: 市场范围，默认 `AG`
   - name: force
     required: false
     type: bool
+    description: 是否强制刷新；`False` 时可能因间隔不足跳过
 - name: refresh_kline
-  description: "⚠️ DANGER: TQ 刷新本地 K 线数据. 不可逆."
+  description: 刷新 K 线缓存
   routing: refresh_kline
   upstream_tool_mapping:
     tdx_tq_local: refresh_kline
@@ -310,11 +395,13 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 需要刷新的股票代码列表,一次最多一百条
   - name: period
     required: true
     type: str
+    description: K 线周期，1d为日线、1m为一分钟线、5m为五分钟线，只支持这三种，其它周期的数据均由这三种数据生成
 - name: download_file
-  description: "⚠️ DANGER: TQ 从服务器下载文件到本地, 覆盖已有同名文件."
+  description: 下载/拉取文件类数据
   routing: download_file
   upstream_tool_mapping:
     tdx_tq_local: download_file
@@ -324,14 +411,20 @@ tools:
   - name: stock_code
     required: false
     type: str
+    description: down_type=1 时为 A 股代码; down_type=2 时为 ETF 代码; down_type=3,4 时无效
   - name: down_time
     required: false
     type: str
+    description: down_type=1 时为年份 (`YYYY`); down_type=2 时为日期 (`YYYYMMDD`); down_type=3,4
+      时无效
   - name: down_type
     required: false
     type: int
+    description: 下载类型，默认 `1`
+    enum:
+    - '1'
 - name: send_message
-  description: "⚠️ DANGER: TQ 发送消息到 TQ 终端, 用户会立即看到."
+  description: 向通达信发送文本消息
   routing: send_message
   upstream_tool_mapping:
     tdx_tq_local: send_message
@@ -341,8 +434,9 @@ tools:
   - name: msg_str
     required: true
     type: str
+    description: 消息文本
 - name: send_file
-  description: "⚠️ DANGER: TQ 发送文件到 TQ 终端."
+  description: 向通达信发送文件
   routing: send_file
   upstream_tool_mapping:
     tdx_tq_local: send_file
@@ -352,8 +446,9 @@ tools:
   - name: file_path
     required: true
     type: str
+    description: 本机文件路径
 - name: send_warn
-  description: "⚠️ DANGER: TQ 弹出警告消息到 TQ 终端, 不可撤销."
+  description: 发送预警数据
   routing: send_warn
   upstream_tool_mapping:
     tdx_tq_local: send_warn
@@ -363,32 +458,41 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: time_list
     required: true
     type: List[str]
+    description: 时间列表
   - name: price_list
     required: true
     type: List[str]
+    description: 价格列表
   - name: close_list
     required: false
     type: List[str]
+    description: 收盘价列表
   - name: volum_list
     required: false
     type: List[str]
+    description: 成交量列表，沿用 tqcenter 参数名
   - name: bs_flag_list
     required: false
     type: List[str]
+    description: 买卖标志列表
   - name: warn_type_list
     required: false
     type: List[str]
+    description: 预警类型列表
   - name: reason_list
     required: false
     type: List[str]
+    description: 预警原因列表
   - name: count
     required: true
     type: int
+    description: 记录数量
 - name: send_bt_data
-  description: "⚠️ DANGER: TQ 发送回测数据到 TQ 终端."
+  description: 发送回测数据
   routing: send_bt_data
   upstream_tool_mapping:
     tdx_tq_local: send_bt_data
@@ -398,17 +502,21 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 股票代码
   - name: time_list
     required: true
     type: List[str]
+    description: 时间列表
   - name: data_list
     required: true
     type: List[List[str]]
+    description: 回测数据二维列表
   - name: count
     required: true
     type: int
+    description: 记录数量
 - name: send_user_block
-  description: "⚠️ DANGER: TQ 向板块追加股票 (修改用户本地板块数据), 需用户明确确认."
+  description: 写入/发送用户板块
   routing: send_user_block
   upstream_tool_mapping:
     tdx_tq_local: send_user_block
@@ -418,14 +526,17 @@ tools:
   - name: block_code
     required: true
     type: str
+    description: 用户板块代码/简称
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: show
     required: false
     type: bool
+    description: 是否在通达信中显示
 - name: exec_to_tdx
-  description: "⚠️ DANGER: TQ 调用 TDX 函数 (任意代码执行), 不可逆."
+  description: 调用通达信 URL/命令
   routing: exec_to_tdx
   upstream_tool_mapping:
     tdx_tq_local: exec_to_tdx
@@ -435,8 +546,9 @@ tools:
   - name: url
     required: true
     type: str
+    description: 通达信可识别的 URL 或命令字符串
 - name: create_sector
-  description: "⚠️ DANGER: TQ 新建自定义板块 (创建本地数据), 需用户明确确认."
+  description: 创建自定义板块
   routing: create_sector
   upstream_tool_mapping:
     tdx_tq_local: create_sector
@@ -446,11 +558,13 @@ tools:
   - name: block_code
     required: true
     type: str
+    description: 板块简称
   - name: block_name
     required: true
     type: str
+    description: 板块显示名称
 - name: delete_sector
-  description: "⚠️ DANGER: TQ 删除自定义板块 (不可逆 — 删除本地数据), 需用户明确确认."
+  description: 删除自定义板块
   routing: delete_sector
   upstream_tool_mapping:
     tdx_tq_local: delete_sector
@@ -460,8 +574,9 @@ tools:
   - name: block_code
     required: true
     type: str
+    description: 板块简称
 - name: rename_sector
-  description: "⚠️ DANGER: TQ 重命名自定义板块, 修改本地数据. 不可逆."
+  description: 重命名自定义板块
   routing: rename_sector
   upstream_tool_mapping:
     tdx_tq_local: rename_sector
@@ -471,11 +586,13 @@ tools:
   - name: block_code
     required: true
     type: str
+    description: 板块简称
   - name: block_name
     required: true
     type: str
+    description: 新板块显示名称
 - name: clear_sector
-  description: "⚠️ DANGER: TQ 清空自定义板块内全部股票, 不可逆."
+  description: 清空自定义板块
   routing: clear_sector
   upstream_tool_mapping:
     tdx_tq_local: clear_sector
@@ -485,8 +602,9 @@ tools:
   - name: block_code
     required: true
     type: str
+    description: 板块简称
 - name: get_financial_data
-  description: get_financial_data
+  description: 获取专业财务序列数据
   routing: get_financial_data
   upstream_tool_mapping:
     tdx_tq_local: get_financial_data
@@ -496,20 +614,25 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: field_list
     required: true
     type: List[str]
+    description: 专业财务字段列表
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
   - name: report_type
     required: false
     type: str
+    description: '`announce_time`, `tag_time`'
 - name: get_financial_data_by_date
-  description: get_financial_data_by_date
+  description: 按年度/季度获取财务数据
   routing: get_financial_data_by_date
   upstream_tool_mapping:
     tdx_tq_local: get_financial_data_by_date
@@ -519,17 +642,29 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: field_list
     required: true
     type: List[str]
+    description: 专业财务字段列表
   - name: year
     required: false
     type: int
+    description: 年份；`0` 表示最新
+    enum:
+    - '0'
   - name: mmdd
     required: false
     type: int
+    description: 报告期月日，如 `331`, `630`, `930`, `1231`; `0` 表示最新
+    enum:
+    - '0'
+    - '1231'
+    - '331'
+    - '630'
+    - '930'
 - name: get_gpjy_value
-  description: get_gpjy_value
+  description: 获取股票交易类专业序列数据
   routing: get_gpjy_value
   upstream_tool_mapping:
     tdx_tq_local: get_gpjy_value
@@ -539,17 +674,21 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: field_list
     required: true
     type: List[str]
+    description: 专业数据字段列表
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
 - name: get_gpjy_value_by_date
-  description: get_gpjy_value_by_date
+  description: 按日期获取股票交易类专业数据
   routing: get_gpjy_value_by_date
   upstream_tool_mapping:
     tdx_tq_local: get_gpjy_value_by_date
@@ -559,17 +698,25 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: field_list
     required: true
     type: List[str]
+    description: 专业数据字段列表
   - name: year
     required: false
     type: int
+    description: 年份；`0` 表示最新
+    enum:
+    - '0'
   - name: mmdd
     required: false
     type: int
+    description: 月日；`0` 表示最新
+    enum:
+    - '0'
 - name: get_bkjy_value
-  description: get_bkjy_value
+  description: 获取板块交易类专业序列数据
   routing: get_bkjy_value
   upstream_tool_mapping:
     tdx_tq_local: get_bkjy_value
@@ -579,17 +726,21 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 板块代码列表
   - name: field_list
     required: true
     type: List[str]
+    description: 专业数据字段列表
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
 - name: get_bkjy_value_by_date
-  description: get_bkjy_value_by_date
+  description: 按日期获取板块交易类专业数据
   routing: get_bkjy_value_by_date
   upstream_tool_mapping:
     tdx_tq_local: get_bkjy_value_by_date
@@ -599,17 +750,25 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 板块代码列表
   - name: field_list
     required: true
     type: List[str]
+    description: 专业数据字段列表
   - name: year
     required: false
     type: int
+    description: 年份；`0` 表示最新
+    enum:
+    - '0'
   - name: mmdd
     required: false
     type: int
+    description: 月日；`0` 表示最新
+    enum:
+    - '0'
 - name: get_scjy_value
-  description: get_scjy_value
+  description: 获取市场交易类专业序列数据
   routing: get_scjy_value
   upstream_tool_mapping:
     tdx_tq_local: get_scjy_value
@@ -619,14 +778,17 @@ tools:
   - name: field_list
     required: true
     type: List[str]
+    description: 市场专业数据字段列表
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
 - name: get_scjy_value_by_date
-  description: get_scjy_value_by_date
+  description: 按日期获取市场交易类专业数据
   routing: get_scjy_value_by_date
   upstream_tool_mapping:
     tdx_tq_local: get_scjy_value_by_date
@@ -636,14 +798,21 @@ tools:
   - name: field_list
     required: true
     type: List[str]
+    description: 市场专业数据字段列表
   - name: year
     required: false
     type: int
+    description: 年份；`0` 表示最新
+    enum:
+    - '0'
   - name: mmdd
     required: false
     type: int
+    description: 月日；`0` 表示最新
+    enum:
+    - '0'
 - name: get_gp_one_data
-  description: get_gp_one_data
+  description: 获取单股/多股一次性专业数据
   routing: get_gp_one_data
   upstream_tool_mapping:
     tdx_tq_local: get_gp_one_data
@@ -653,11 +822,13 @@ tools:
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: field_list
     required: true
     type: List[str]
+    description: 专业数据字段列表
 - name: formula_set_data
-  description: "⚠️ DANGER: TQ 写入公式数据, 修改本地公式存储. 不可逆."
+  description: 设置公式计算用行情数据
   routing: formula_set_data
   upstream_tool_mapping:
     tdx_tq_local: formula_set_data
@@ -667,20 +838,27 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 股票代码
   - name: stock_period
     required: false
     type: str
+    description: 周期，默认 `1d`
+    enum:
+    - 1d
   - name: stock_data
     required: true
     type: List
+    description: 公式输入行情数据
   - name: count
     required: false
     type: int
+    description: 数据条数
   - name: dividend_type
     required: false
     type: int
+    description: 复权类型数值
 - name: formula_set_data_info
-  description: "⚠️ DANGER: TQ 写入公式元数据, 修改本地存储. 不可逆."
+  description: 设置公式计算数据范围
   routing: formula_set_data_info
   upstream_tool_mapping:
     tdx_tq_local: formula_set_data_info
@@ -690,23 +868,31 @@ tools:
   - name: stock_code
     required: true
     type: str
+    description: 股票代码
   - name: stock_period
     required: false
     type: str
+    description: 周期，默认 `1d`
+    enum:
+    - 1d
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
   - name: count
     required: false
     type: int
+    description: 数据条数
   - name: dividend_type
     required: false
     type: int
+    description: 复权类型数值
 - name: formula_get_data
-  description: formula_get_data
+  description: 获取当前公式输入数据
   routing: formula_get_data
   upstream_tool_mapping:
     tdx_tq_local: formula_get_data
@@ -714,7 +900,7 @@ tools:
   dangerous: false
   params: []
 - name: formula_zb
-  description: formula_zb
+  description: 指标公式计算
   routing: formula_zb
   upstream_tool_mapping:
     tdx_tq_local: formula_zb
@@ -724,14 +910,17 @@ tools:
   - name: formula_name
     required: true
     type: str
+    description: 指标公式名称
   - name: formula_arg
     required: false
     type: str
+    description: 公式参数字符串
   - name: xsflag
     required: false
     type: int
+    description: 小数位控制
 - name: formula_xg
-  description: formula_xg
+  description: 选股公式计算
   routing: formula_xg
   upstream_tool_mapping:
     tdx_tq_local: formula_xg
@@ -741,14 +930,17 @@ tools:
   - name: formula_name
     required: true
     type: str
+    description: 选股公式名称
   - name: formula_arg
     required: false
     type: str
+    description: 公式参数字符串
   - name: xsflag
     required: false
     type: int
+    description: 小数位控制
 - name: formula_exp
-  description: formula_exp
+  description: 专家公式计算
   routing: formula_exp
   upstream_tool_mapping:
     tdx_tq_local: formula_exp
@@ -758,14 +950,17 @@ tools:
   - name: formula_name
     required: true
     type: str
+    description: 专家公式名称
   - name: formula_arg
     required: false
     type: str
+    description: 公式参数字符串
   - name: xsflag
     required: false
     type: int
+    description: 小数位控制
 - name: formula_process_mul_xg
-  description: formula_process_mul_xg
+  description: 批量选股公式
   routing: formula_process_mul_xg
   upstream_tool_mapping:
     tdx_tq_local: formula_process_mul_xg
@@ -775,35 +970,47 @@ tools:
   - name: formula_name
     required: true
     type: str
+    description: 选股公式名称
   - name: formula_arg
     required: false
     type: str
+    description: 公式参数字符串
   - name: return_count
     required: false
     type: int
+    description: 每只股票返回结果数量
   - name: return_date
     required: false
     type: bool
+    description: 是否返回日期
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: stock_period
     required: false
     type: str
+    description: 周期，默认 `1d`
+    enum:
+    - 1d
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
   - name: count
     required: false
     type: int
+    description: 行情数据条数
   - name: dividend_type
     required: false
     type: int
+    description: 复权类型数值
 - name: formula_process_mul_zb
-  description: formula_process_mul_zb
+  description: 批量指标公式
   routing: formula_process_mul_zb
   upstream_tool_mapping:
     tdx_tq_local: formula_process_mul_zb
@@ -813,38 +1020,51 @@ tools:
   - name: formula_name
     required: true
     type: str
+    description: 指标公式名称
   - name: formula_arg
     required: false
     type: str
+    description: 公式参数字符串
   - name: return_count
     required: false
     type: int
+    description: 每只股票返回结果数量
   - name: return_date
     required: false
     type: bool
+    description: 是否返回日期
   - name: xsflag
     required: false
     type: int
+    description: 小数位控制
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: stock_period
     required: false
     type: str
+    description: 周期，默认 `1d`
+    enum:
+    - 1d
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
   - name: count
     required: false
     type: int
+    description: 行情数据条数
   - name: dividend_type
     required: false
     type: int
+    description: 复权类型数值
 - name: formula_process_mul_exp
-  description: formula_process_mul_exp
+  description: 批量专家公式
   routing: formula_process_mul_exp
   upstream_tool_mapping:
     tdx_tq_local: formula_process_mul_exp
@@ -854,38 +1074,51 @@ tools:
   - name: formula_name
     required: true
     type: str
+    description: 专家公式名称
   - name: formula_arg
     required: false
     type: str
+    description: 公式参数字符串
   - name: return_count
     required: false
     type: int
+    description: 每只股票返回结果数量
   - name: return_date
     required: false
     type: bool
+    description: 是否返回日期
   - name: xsflag
     required: false
     type: int
+    description: 小数位控制
   - name: stock_list
     required: true
     type: List[str]
+    description: 股票代码列表
   - name: stock_period
     required: false
     type: str
+    description: 周期，默认 `1d`
+    enum:
+    - 1d
   - name: start_time
     required: false
     type: str
+    description: 开始日期
   - name: end_time
     required: false
     type: str
+    description: 结束日期
   - name: count
     required: false
     type: int
+    description: 行情数据条数
   - name: dividend_type
     required: false
     type: int
+    description: 复权类型数值
 - name: formula_get_all
-  description: formula_get_all
+  description: 获取公式列表
   routing: formula_get_all
   upstream_tool_mapping:
     tdx_tq_local: formula_get_all
@@ -895,8 +1128,13 @@ tools:
   - name: formula_type
     required: false
     type: int
+    description: '`0` 技术指标公式`1` 条件选股公式`2` 专家系统公式'
+    enum:
+    - '0'
+    - '1'
+    - '2'
 - name: formula_get_info
-  description: formula_get_info
+  description: 获取公式详情
   routing: formula_get_info
   upstream_tool_mapping:
     tdx_tq_local: formula_get_info
@@ -906,11 +1144,17 @@ tools:
   - name: formula_type
     required: false
     type: int
+    description: '`0` 指标；`1` 选股；`2` 专家'
+    enum:
+    - '0'
+    - '1'
+    - '2'
   - name: formula_code
     required: true
     type: str
+    description: 公式代码
 - name: stock_account
-  description: stock_account
+  description: 获取交易账户句柄
   routing: stock_account
   upstream_tool_mapping:
     tdx_tq_local: stock_account
@@ -920,11 +1164,15 @@ tools:
   - name: account
     required: true
     type: str
+    description: 资金账号
   - name: account_type
     required: false
     type: str
+    description: 账号类型，默认 `stock`
+    enum:
+    - stock
 - name: query_stock_asset
-  description: query_stock_asset
+  description: 查询资产
   routing: query_stock_asset
   upstream_tool_mapping:
     tdx_tq_local: query_stock_asset
@@ -934,8 +1182,11 @@ tools:
   - name: account_id
     required: true
     type: int
+    description: 账户句柄；未指定账号时默认 `0`
+    enum:
+    - '0'
 - name: query_stock_orders
-  description: query_stock_orders
+  description: 查询委托
   routing: query_stock_orders
   upstream_tool_mapping:
     tdx_tq_local: query_stock_orders
@@ -945,14 +1196,19 @@ tools:
   - name: account_id
     required: true
     type: int
+    description: 账户句柄；未指定账号时默认 `0`
+    enum:
+    - '0'
   - name: stock_code
     required: false
     type: str
+    description: 股票代码；空表示不按股票过滤
   - name: cancelable_only
     required: false
     type: bool
+    description: 是否仅查询可撤委托
 - name: query_stock_positions
-  description: query_stock_positions
+  description: 查询持仓
   routing: query_stock_positions
   upstream_tool_mapping:
     tdx_tq_local: query_stock_positions
@@ -962,8 +1218,11 @@ tools:
   - name: account_id
     required: true
     type: int
+    description: 账户句柄；未指定账号时默认 `0`
+    enum:
+    - '0'
 - name: order_stock
-  description: "⚠️ DANGER: TQ 下单买入/卖出股票, 真实资金变动, 不可撤销."
+  description: 下单
   routing: order_stock
   upstream_tool_mapping:
     tdx_tq_local: order_stock
@@ -973,26 +1232,47 @@ tools:
   - name: account_id
     required: true
     type: int
+    description: 账户句柄；未指定账号时默认 `0`
+    enum:
+    - '0'
   - name: stock_code
     required: true
     type: str
+    description: 股票代码
   - name: order_type
     required: true
     type: int
+    description: '`0` 买入；`1` 卖出'
+    enum:
+    - '0'
+    - '1'
   - name: order_volume
     required: true
     type: int
+    description: 委托数量
   - name: price_type
     required: true
     type: int
+    description: '`0` 自填价；`1` 市价；`2` 涨停/笼子上限；`3` 跌停/笼子下限'
+    enum:
+    - '0'
+    - '1'
+    - '2'
+    - '3'
   - name: price
     required: false
     type: float
+    description: 委托价格；市价可传 `0`
+    enum:
+    - '0'
   - name: notify
     required: false
     type: int
+    description: 是否通知，默认 `0`
+    enum:
+    - '0'
 - name: cancel_order_stock
-  description: "⚠️ DANGER: TQ 撤销未成交委托, 修改订单状态."
+  description: 撤单
   routing: cancel_order_stock
   upstream_tool_mapping:
     tdx_tq_local: cancel_order_stock
@@ -1002,9 +1282,14 @@ tools:
   - name: account_id
     required: true
     type: int
+    description: 账户句柄；未指定账号时默认 `0`
+    enum:
+    - '0'
   - name: stock_code
     required: true
     type: str
+    description: 股票代码
   - name: order_id
     required: true
     type: str
+    description: 委托编号

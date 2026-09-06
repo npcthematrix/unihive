@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+    <link rel="icon" href="data:,">
     <title>UniHive Console</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -22,21 +24,20 @@
             --degraded: #f59e0b;
             --disabled: #9ca3af;
             --primary-soft: #e7f1ff;
+            --chrome-height: 220px; /* 状态/缓存/MCP APIs 表格 max-height 用的占位常量 */
         }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 20px; }
         .container { max-width: 1200px; margin: 0 auto; }
         header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
         h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.01em; }
-        .refresh-info { font-size: 0.875rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; }
-        .refresh-info button { padding: 4px 12px; border: 1px solid var(--border); background: var(--card-bg); border-radius: 4px; cursor: pointer; font-size: 0.875rem; }
-        .refresh-info button:hover { background: var(--bg); }
-        .tabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--card-bg); padding: 4px; border-radius: 8px; overflow-x: auto; scrollbar-width: thin; }
+        .tabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--card-bg); padding: 4px; border-radius: 8px; overflow-x: auto; scrollbar-width: thin; position: sticky; top: 0; z-index: 10; }
         .tab { padding: 8px 16px; border: none; background: transparent; cursor: pointer; border-radius: 6px; font-size: 0.875rem; color: var(--text-secondary); transition: all 0.2s; white-space: nowrap; flex-shrink: 0; }
         .tab:hover { background: var(--bg); }
         .tab.active { background: var(--primary); color: white; }
         .card { background: var(--card-bg); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; }
         .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
         .card h2 .timestamp { font-weight: normal; font-size: 0.75rem; color: var(--text-secondary); }
+        .card h2 small.sub { font-weight: normal; color: var(--text-secondary); font-size: 0.75rem; margin-left: 6px; }
         .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
         .status-online { background: var(--online); }
         .status-offline { background: var(--offline); }
@@ -88,6 +89,8 @@
         .cfg-section-header { padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; background: var(--bg); border-bottom: 1px solid var(--border); }
         .cfg-section-header:hover { background: #f1f5f9; }
         .cfg-section-title { font-size: 0.9rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .cfg-section-title.light { color: var(--text-secondary); }
+        .cfg-section-title.mono { font-family: 'SF Mono', Monaco, Menlo, monospace; font-size: 0.85rem; }
         .cfg-section-toggle { color: var(--text-secondary); font-size: 0.85rem; transition: transform 150ms ease; display: inline-block; }
         .cfg-section.collapsed .cfg-section-toggle { transform: rotate(-90deg); }
         .cfg-section.collapsed .cfg-section-body { display: none; }
@@ -106,9 +109,12 @@
         .cfg-table .chain-pill { background: var(--bg); border: 1px solid var(--border); padding: 1px 8px; border-radius: 4px; font-size: 0.7rem; font-family: monospace; }
         .cfg-table .chain-pill.primary { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); font-weight: 500; }
         .cfg-mask { color: var(--text-secondary); font-style: italic; cursor: help; border-bottom: 1px dotted var(--text-secondary); }
-        .cfg-switch { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 500; white-space: nowrap; cursor: default; border: 1px solid transparent; }
+        .cfg-switch { position: relative; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 22px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; white-space: nowrap; cursor: default; border: 1px solid transparent; }
+        .cfg-switch::before { content: ''; position: absolute; left: 6px; width: 14px; height: 8px; border-radius: 4px; transition: background 0.2s; }
         .cfg-switch.on { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+        .cfg-switch.on::before { background: #22c55e; }
         .cfg-switch.off { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+        .cfg-switch.off::before { background: #ef4444; }
         .cfg-kv-grid { display: grid; grid-template-columns: 180px 1fr; gap: 8px 16px; font-size: 0.85rem; }
         .cfg-kv-grid .k { color: var(--text-secondary); font-weight: 500; }
         .cfg-kv-grid .v { font-family: monospace; color: var(--text); }
@@ -122,7 +128,7 @@
         .ifs-layout { display: grid; grid-template-columns: 220px 1fr; gap: 0; min-height: 500px; }
         .ifs-sidebar { position: sticky; top: 0; max-height: calc(100vh - 120px); overflow-y: auto; border-right: 1px solid var(--border); padding-right: 8px; }
         .ifs-search-wrap { position: relative; margin-bottom: 8px; }
-        .ifs-search { width: 100%; padding: 8px 28px 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; background: var(--card-bg); color: var(--text); }
+        .ifs-search { width: 100%; padding: 8px 28px 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--card-bg); color: var(--text); }
         .ifs-search:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
         .ifs-search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; border: 0; background: var(--bg); color: var(--text-secondary); border-radius: 50%; cursor: pointer; font-size: 0.9rem; line-height: 1; display: none; align-items: center; justify-content: center; }
         .ifs-search-clear:hover { background: var(--border); color: var(--text); }
@@ -152,7 +158,7 @@
         .ifs-content-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
         .ifs-content-header h3 { font-size: 0.95rem; font-weight: 600; }
         .ifs-content-meta { font-size: 0.8rem; color: var(--text-secondary); }
-        .ifs-table-wrap { flex: 1; overflow: auto; max-height: calc(100vh - 220px); border: 1px solid var(--border); border-radius: 6px; }
+        .ifs-table-wrap { flex: 1; overflow: auto; max-height: calc(100vh - var(--chrome-height)); border: 1px solid var(--border); border-radius: 6px; }
         .ifs-table { width: 100%; border-collapse: collapse; animation: ifsFadeIn 100ms ease; }
         .ifs-table thead { background: var(--bg); position: sticky; top: 0; z-index: 2; box-shadow: 0 1px 0 var(--border); }
         .ifs-table th { padding: 8px 12px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); border-bottom: 1px solid var(--border); text-align: left; background: var(--bg); }
@@ -164,13 +170,14 @@
         .ifs-table .tool-params { font-family: monospace; font-size: 0.72rem; color: var(--text-secondary); margin-top: 4px; }
         .ifs-table .tool-params .params-more { color: var(--primary); font-style: italic; cursor: default; }
         .ifs-table .tool-meta-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
-        .ifs-table .row-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 100ms ease; }
+        .ifs-table .row-actions { display: flex; gap: 4px; opacity: 0.5; transition: opacity 100ms ease; }
         .ifs-table tr:hover .row-actions { opacity: 1; }
-        .row-action-btn { background: transparent; border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.7rem; color: var(--text-secondary); font-family: inherit; }
+        @media (hover: none) { .ifs-table .row-actions { opacity: 1; } }
+        .row-action-btn { background: transparent; border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.78rem; color: var(--text-secondary); font-family: inherit; }
         .row-action-btn:hover { background: var(--bg); color: var(--primary); border-color: var(--primary); }
         .row-action-btn.copied { background: var(--success); color: white; border-color: var(--success); }
         .ifs-detail-row td { background: #f8fafc; padding: 12px 16px; }
-        .ifs-detail-grid { display: grid; grid-template-columns: 100px 1fr; gap: 6px 12px; font-size: 0.8rem; }
+        .ifs-detail-grid { display: grid; grid-template-columns: minmax(72px, max-content) 1fr; gap: 6px 12px; font-size: 0.8rem; }
         .ifs-detail-key { color: var(--text-secondary); font-weight: 500; }
         .ifs-detail-val { color: var(--text); font-family: monospace; }
         .ifs-section-title { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; margin: 16px 0 8px 0; letter-spacing: 0.5px; }
@@ -222,7 +229,10 @@
         .chip.active .chip-count { background: rgba(255,255,255,0.2); color: white; }
 
         /* ===== Upstream table ===== */
-        .status-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: 12px 16px; background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+        .status-summary { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; padding: 12px 16px; background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+        @media (max-width: 1024px) { .status-summary { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 900px) { .status-summary { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 480px) { .status-summary { grid-template-columns: repeat(2, 1fr); } }
         .status-summary-item { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 8px; border-radius: 6px; transition: background 150ms ease; }
         .status-summary-item:hover { background: rgba(0,0,0,0.03); }
         .status-summary-num { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
@@ -251,17 +261,19 @@
         .status-badge.b-degraded  { background: #fffbeb; color: #b45309; }
         .status-badge.b-offline   { background: #fef2f2; color: #b91c1c; }
         .status-badge.b-configured { background: #f1f5f9; color: #475569; }
-        .status-badge.b-disabled  { background: #f5f3ff; color: #6b7280; opacity: 0.7; }
+        .status-badge.b-disabled  { background: #f3f4f6; color: var(--disabled); opacity: 0.85; }
         .type-pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 500; background: var(--bg); color: var(--text-secondary); border: 1px solid var(--border); }
         .latency-cell { display: inline-flex; align-items: center; gap: 4px; }
         .latency-cell.good { color: var(--success); }
         .latency-cell.slow { color: var(--warning); }
         .latency-cell.bad  { color: var(--danger); }
         .latency-cell.dim  { color: var(--text-secondary); opacity: 0.5; }
-        .err-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: #fef2f2; color: var(--danger); font-size: 0.7rem; cursor: help; font-weight: 700; }
+        .err-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: #fef2f2; color: var(--danger); font-size: 0.7rem; cursor: pointer; font-weight: 700; border: 0; padding: 0; }
+        .err-icon.copied { background: var(--success); color: white; }
 
         /* ===== Cache ===== */
-        .cache-grid { display: grid; grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(110px, 1fr)); gap: 12px; }
+        .cache-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+        .cache-hitrate-card { grid-column: span 2; }
         @media (max-width: 900px) { .cache-grid { grid-template-columns: 1fr 1fr; } .cache-hitrate-card { grid-column: 1 / -1; } .ifs-table td.col-source, .ifs-table th.col-source { display: none; } .ifs-table th:first-child, .ifs-table td:first-child { width: 35% !important; } }
         .cache-hitrate-card { background: linear-gradient(135deg, #f0f9ff 0%, #ecfeff 100%); border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
         .cache-hitrate-head { display: flex; justify-content: space-between; align-items: baseline; }
@@ -272,6 +284,11 @@
         .cache-hitrate-meta strong { color: #0c4a6e; font-variant-numeric: tabular-nums; }
         .cache-hitrate-meta .hint { margin-left: auto; opacity: 0.7; }
         .cache-mini-stat { background: var(--bg); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+        .cache-enabled-text { display: inline-flex; align-items: center; gap: 4px; }
+        .cache-enabled-badge.on .status-dot { background: var(--success); }
+        .cache-enabled-badge.off .status-dot { background: var(--danger); }
+        .cache-enabled-badge.on .cache-enabled-text::after { content: '已启用'; color: var(--success); }
+        .cache-enabled-badge.off .cache-enabled-text::after { content: '未启用'; color: var(--danger); }
         .mini-label { font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
         .mini-value { font-size: 1.1rem; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
         .mini-value.success { color: var(--success); }
@@ -286,6 +303,7 @@
         @media (max-width: 768px) {
             .ifs-layout { grid-template-columns: 1fr; }
             .ifs-sidebar { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); padding-right: 0; padding-bottom: 8px; overflow-x: auto; overflow-y: visible; }
+            .ifs-filter-toggles { flex-direction: row; flex-wrap: wrap; }
             .ifs-nav { flex-direction: row; gap: 4px; }
             .ifs-nav-item { white-space: nowrap; border-left: none; border-bottom: 3px solid transparent; }
             .ifs-nav-item.active { border-bottom-color: var(--primary); }
@@ -335,8 +353,8 @@
             color: var(--text);
             scroll-margin-top: 80px;
         }
-        .onboarding-content p, .onboarding-content ul { line-height: 1.7; margin: 8px 0; }
-        .onboarding-content ul { padding-left: 22px; }
+        .onboarding-content p, .onboarding-content ul { line-height: 1.7; margin: 8px 0; color: var(--text); }
+        .onboarding-content ul { padding-left: 22px; margin: 8px 0 8px 24px; }
         .onboarding-content li { margin: 4px 0; }
         .badge-recommend { display: inline-block; padding: 2px 8px; background: var(--primary-soft); color: var(--primary); border-radius: 4px; font-size: 0.72rem; font-weight: 600; margin-left: 8px; vertical-align: middle; }
         .badge-optional { display: inline-block; padding: 2px 8px; background: #f1f5f9; color: var(--text-secondary); border-radius: 4px; font-size: 0.72rem; font-weight: 500; margin-left: 8px; vertical-align: middle; }
@@ -351,15 +369,6 @@
         .onboarding-section-meta { background: #f8fafc; border-left: 3px solid var(--primary); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 0.85rem; }
         .code-block { position: relative; }
         .code-block .copy-btn { z-index: 5; }
-        .onboarding-content p {
-            margin: 8px 0;
-            color: var(--text);
-        }
-        .onboarding-content ul {
-            margin: 8px 0 8px 24px;
-            color: var(--text);
-        }
-        .onboarding-content li { margin: 4px 0; }
 
         .code-block {
             position: relative;
@@ -406,43 +415,6 @@
         }
         .code-block .copy-btn:focus { opacity: 1; outline: 2px solid var(--primary); outline-offset: 1px; }
 
-        .interface-card {
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            margin-bottom: 8px;
-            background: var(--card-bg);
-            overflow: hidden;
-        }
-        .interface-card > summary {
-            padding: 12px 16px;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            list-style: none;
-            user-select: none;
-        }
-        .interface-card > summary::-webkit-details-marker { display: none; }
-        .interface-card > summary::before {
-            content: '▶';
-            color: var(--text-secondary);
-            font-size: 0.65rem;
-            transition: transform 0.2s;
-            flex-shrink: 0;
-        }
-        .interface-card[open] > summary::before { transform: rotate(90deg); }
-        .interface-card > summary:hover { background: var(--bg); }
-        .interface-card .interface-body {
-            padding: 0 16px 16px;
-            border-top: 1px solid var(--border);
-        }
-        .interface-card .interface-body .description {
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-            margin: 12px 0;
-        }
-
         .loading-state {
             text-align: center;
             padding: 24px;
@@ -455,6 +427,54 @@
             text-decoration: underline;
             margin-left: 8px;
         }
+        :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+        button:focus-visible { outline-offset: 2px; }
+
+        /* ===== Dark mode ===== */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0f172a;
+                --card-bg: #1e293b;
+                --text: #f1f5f9;
+                --text-secondary: #94a3b8;
+                --border: #334155;
+                --primary: #60a5fa;
+                --primary-soft: #1e3a5f;
+                --online: #4ade80;
+                --offline: #f87171;
+                --degraded: #fbbf24;
+                --disabled: #6b7280;
+                --success: #4ade80;
+                --warning: #fbbf24;
+                --danger: #f87171;
+            }
+            body { background: var(--bg); color: var(--text); }
+        }
+
+        /* ===== Print ===== */
+        @media print {
+            .tabs, .card-toolbar button, .ifs-sidebar, .cfg-banner, .cfg-cache-banner,
+            .ifs-copy-all, .cfg-search-wrap, .cfg-section-toggle, .cfg-env-row,
+            .status-summary { display: none !important; }
+            .panel { display: block !important; }
+            /* ===== 工具清单来源切换 ===== */
+        .inv-source-toggles { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; padding: 0 4px; }
+        .inv-raw-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; cursor: pointer; padding: 4px 8px; border-radius: 4px; color: var(--text-secondary); border: 1px solid var(--border); transition: all 120ms; }
+        .inv-raw-toggle:hover { background: var(--bg); color: var(--text); }
+        .inv-raw-toggle input { cursor: pointer; }
+        .inv-raw-toggle.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
+        .inv-src-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; cursor: pointer; padding: 3px 6px; border-radius: 4px; color: var(--text-secondary); transition: background 120ms; }
+        .inv-src-toggle:hover { background: var(--bg); color: var(--text); }
+        .inv-src-toggle input { display: none; }
+        .inv-src-toggle.active { background: var(--primary-soft); color: var(--primary); }
+        .inv-src-toggle .toggle-count { margin-left: auto; font-family: monospace; font-size: 0.72rem; opacity: 0.7; }
+
+        @media (max-width: 600px) {
+        .card { box-shadow: none; border: 1px solid #ccc; }
+            .cfg-detail-row { display: table-row !important; }
+            .cfg-section.collapsed .cfg-section-body { display: block !important; }
+            body { padding: 0; }
+        }
     </style>
 </head>
 <body>
@@ -462,21 +482,22 @@
         <header>
             <h1>UniHive Console</h1>
         </header>
-        <div class="tabs">
-            <button class="tab active" data-panel="status">上游状态</button>
-            <button class="tab" data-panel="interfaces">MCP APIs</button>
-            <button class="tab" data-panel="config">配置信息</button>
-            <button class="tab" data-panel="onboarding">接入指南</button>
+        <div class="tabs" role="tablist" aria-label="功能面板">
+            <button class="tab" data-panel="status" role="tab" aria-selected="false" aria-controls="status">上游状态</button>
+            <button class="tab active" data-panel="interfaces" role="tab" aria-selected="true" aria-controls="interfaces">MCP APIs</button>
+            <button class="tab" data-panel="tool-inventory" role="tab" aria-selected="false" aria-controls="tool-inventory">工具清单</button>
+            <button class="tab" data-panel="config" role="tab" aria-selected="false" aria-controls="config">配置信息</button>
+            <button class="tab" data-panel="onboarding" role="tab" aria-selected="false" aria-controls="onboarding">接入指南</button>
         </div>
-        <div id="status" class="panel active">
+        <div id="status" class="panel">
             <div class="card">
                 <div class="card-toolbar">
                     <h2>上游服务状态</h2>
                     <div class="toolbar-actions">
-                        <span class="last-refresh" id="last-refresh">从未刷新</span>
+                        <span class="last-refresh" id="last-refresh" aria-live="polite">从未刷新</span>
                         <button class="btn-secondary" id="refresh-now" title="立即刷新全部上游">↻ 立即刷新</button>
                         <label class="auto-toggle" title="每 10 秒自动刷新">
-                            <input type="checkbox" id="auto-refresh" checked />
+                            <input type="checkbox" id="auto-refresh" />
                             <span>自动刷新</span>
                         </label>
                     </div>
@@ -497,11 +518,11 @@
                 <table class="ups-table">
                     <thead>
                         <tr>
-                            <th class="sortable" data-sort="name">上游 <span class="sort-arrow"></span></th>
-                            <th>类型</th>
-                            <th class="sortable" data-sort="status">状态 <span class="sort-arrow"></span></th>
-                            <th class="sortable num" data-sort="latency">延迟 <span class="sort-arrow"></span></th>
-                            <th>错误</th>
+                            <th scope="col" class="sortable" data-sort="name">上游 <span class="sort-arrow"></span></th>
+                            <th scope="col">类型</th>
+                            <th scope="col" class="sortable" data-sort="status">状态 <span class="sort-arrow"></span></th>
+                            <th scope="col" class="sortable num" data-sort="latency">延迟 <span class="sort-arrow"></span></th>
+                            <th scope="col">错误</th>
                         </tr>
                     </thead>
                     <tbody id="upstreams-body">
@@ -512,7 +533,7 @@
 
             <div class="card">
                 <div class="card-toolbar">
-                    <h2>缓存 <small style="font-weight:normal;color:var(--text-secondary);font-size:0.75rem;margin-left:6px">(运行时统计)</small></h2>
+                    <h2>缓存 <small class="sub">(运行时统计)</small></h2>
                     <div class="toolbar-actions">
                         <span class="timestamp" id="cache-timestamp"></span>
                         <button class="btn-secondary" id="cache-reload" title="立即刷新缓存统计">↻ 立即刷新</button>
@@ -531,14 +552,14 @@
                             <span class="hint" id="cache-hitrate-hint">网关启动后累计</span>
                         </div>
                     </div>
-                    <div class="cache-mini-stat"><div class="mini-label">状态</div><div class="mini-value" id="cache-enabled">-</div></div>
+                    <div class="cache-mini-stat"><div class="mini-label">状态</div><div class="mini-value" id="cache-enabled"><span class="status-dot"></span><span class="cache-enabled-text">-</span></div></div>
                     <div class="cache-mini-stat"><div class="mini-label">活跃条目</div><div class="mini-value" id="cache-live">-</div><div class="mini-hint">未过期</div></div>
                     <div class="cache-mini-stat"><div class="mini-label">总条目</div><div class="mini-value" id="cache-entries">-</div></div>
                     <div class="cache-mini-stat"><div class="mini-label">数据库</div><div class="mini-value" id="cache-size">-</div></div>
                 </div>
             </div>
         </div>
-        <div id="interfaces" class="panel">
+        <div id="interfaces" class="panel active">
             <div class="card">
                 <div class="card-toolbar">
                     <h2>MCP APIs <span class="timestamp" id="interfaces-timestamp"></span></h2>
@@ -551,7 +572,7 @@
                     <aside class="ifs-sidebar">
                         <label class="visually-hidden" for="ifs-search">搜索工具</label>
                         <div class="ifs-search-wrap" id="ifs-search-wrap">
-                            <input id="ifs-search" class="ifs-search" type="text" placeholder="搜索工具... (按 / 聚焦)" autocomplete="off" style="font-size:0.8rem" />
+                            <input id="ifs-search" class="ifs-search" type="text" placeholder="搜索工具... (按 / 聚焦)" autocomplete="off" />
                             <button class="ifs-search-clear" id="ifs-search-clear" type="button" title="清空">×</button>
                         </div>
                         <div class="ifs-filter-toggles" id="ifs-toggles">
@@ -567,12 +588,24 @@
                 </div>
             </div>
         </div>
+        <div id="tool-inventory" class="panel">
+            <div class="card">
+                <div class="card-toolbar">
+                    <h2>工具清单 <span class="timestamp" id="inventory-timestamp"></span></h2>
+                    <div class="toolbar-actions">
+                        <span class="ifs-meta" id="inv-total-meta"></span>
+                    </div>
+                </div>
+                <div id="inv-content">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+        </div>
         <div id="config" class="panel">
-            <div class="cfg-banner"><span class="cfg-banner-icon">⚠️</span><span>此面板展示从 <code>config/upstreams.yaml</code> 加载的运行时配置。<strong>修改后需重启网关</strong>才能生效,本页不会自动重载文件。</span></div>
             <div class="card-toolbar">
                 <h2>配置信息 <span class="cfg-section-meta" id="config-meta"></span></h2>
                 <div class="toolbar-actions">
-                    <span class="last-refresh" id="config-last-refresh">从未刷新</span>
+                    <span class="last-refresh" id="config-last-refresh" aria-live="polite">从未刷新</span>
                     <button class="btn-secondary" id="config-reload" title="从 YAML 重新读取">↻ 立即刷新</button>
                     <button class="btn-secondary" id="config-copy-all" title="复制当前运行时视图为 JSON（api_key 已脱敏）">复制 JSON</button>
                 </div>
@@ -762,26 +795,56 @@ print(match.data)</pre>
                     </ul>
 
                     <h4>5.4 反馈渠道</h4>
-                    <p>遇到问题请提交 Issue 到 <a href="https://github.com/unihive/unihive" target="_blank" rel="noopener">github.com/unihive/unihive</a><!-- TODO: 替换为实际仓库 URL -->,并附上控制台截图与接口返回内容。点击 <strong>"MCP APIs"</strong> → 对应 tool 行 → <code>复制</code> 按钮即可拿到完整 tool 名与参数。</p>
+                    <p>遇到问题请提交 Issue 到 <a href="https://github.com/unihive/unihive" target="_blank" rel="noopener">github.com/unihive/unihive</a>,并附上控制台截图与接口返回内容。点击 <strong>"MCP APIs"</strong> → 对应 tool 行 → <code>复制</code> 按钮即可拿到完整 tool 名与参数。</p>
 
                 </div>
             </div>
         </div>
     </div>
     <script>
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-                tab.classList.add('active');
-                document.getElementById(tab.dataset.panel).classList.add('active');
-                if (tab.dataset.panel === 'onboarding') {
-                    const list = document.getElementById('interfaces-summary');
-                    if (list && (list.children.length === 0 || list.querySelector('.loading-state'))) {
-                        loadOnboarding();
-                    }
+        const STALE_THRESHOLD_SEC = 30;
+        const CFG_TABLE_COLSPANS = { upstreams: 7, mapping: 2, tools: 5, cache: 3 };
+        let updateClockTimer = null;
+        function startUpdateClock() {
+            if (updateClockTimer) return;
+            updateClockTimer = setInterval(updateLastRefresh, 1000);
+        }
+        function stopUpdateClock() {
+            if (updateClockTimer) { clearInterval(updateClockTimer); updateClockTimer = null; }
+        }
+        function activatePanel(panelId) {
+            document.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            const tab = document.querySelector(`.tab[data-panel="${panelId}"]`);
+            if (!tab) return;
+            tab.classList.add('active');
+            tab.setAttribute('aria-selected', 'true');
+            document.getElementById(panelId).classList.add('active');
+            if (panelId === 'status') {
+                const age = Math.floor(Date.now() / 1000) - (lastStatusFetch || 0);
+                if (age > STALE_THRESHOLD_SEC) loadStatus(false);
+                startUpdateClock();
+            } else {
+                stopUpdateClock();
+            }
+            if (panelId === 'onboarding') {
+                const list = document.getElementById('interfaces-summary');
+                if (list && (list.children.length === 0 || list.querySelector('.loading-state'))) {
+                    loadOnboarding();
                 }
-            });
+            }
+            if (panelId === 'tool-inventory') {
+                if (invTools.length === 0) loadInventory();
+            }
+        }
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => activatePanel(tab.dataset.panel));
+        });
+        window.addEventListener('hashchange', () => {
+            const g = readHashGroup();
+            if (g !== activeGroup && document.getElementById('interfaces').classList.contains('active')) {
+                setActiveGroup(g);
+            }
         });
         function formatTime(ts) {
             if (!ts) return '-';
@@ -840,10 +903,11 @@ print(match.data)</pre>
         const UPSTREAM_DISPLAY_NAME = {
             'tdx_local':          '通达信-行情',
             'tdx_tq_local':       '通达信-交易终端',
-            'fuyao_ashare':       '同花顺-a-share-mcp',
-            'fuyao_index':        '同花顺-a-share-index-mcp',
-            'fuyao_meta':         '同花顺-meta-mcp',
-            'fuyao_fund':         '同花顺-fund-mcp',
+            'mootdx2':           'MooTDX2',
+            'fuyao_ashare':       '同花顺-a-share',
+            'fuyao_index':        '同花顺-a-share-index',
+            'fuyao_meta':         '同花顺-meta',
+            'fuyao_fund':         '同花顺-fund',
         };
         function renderUpstreamsTable() {
             const tbody = document.getElementById('upstreams-body');
@@ -870,14 +934,14 @@ print(match.data)</pre>
                 if (u.latency_ms == null) {
                     latHtml = '<span class="latency-cell dim" title="未探测 - 上游未在线或未发起请求">未探测</span>';
                 } else if (u.latency_ms === 0) {
-                    latHtml = '<span class="latency-cell good">0<span style="opacity:.6">ms</span></span>';
+                    latHtml = '<span class="latency-cell dim" title="可能为缓存命中或本地解析">0<span style="opacity:.6">ms</span></span>';
                 } else {
                     let cls = 'good';
                     if (u.latency_ms > 1000) cls = 'slow';
                     if (u.latency_ms > 3000) cls = 'bad';
                     latHtml = `<span class="latency-cell ${cls}">${u.latency_ms}<span style="opacity:.6">ms</span></span>`;
                 }
-                const errHtml = u.last_error ? `<span class="err-icon" title="${escapeHtml(u.last_error)}">!</span>` : '<span style="color:var(--text-secondary);opacity:.3">—</span>';
+                const errHtml = u.last_error ? `<button type="button" class="err-icon" data-error="${escapeHtml(u.last_error)}" title="${escapeHtml(u.last_error)} (点击复制)">!</button>` : '<span style="color:var(--text-secondary);opacity:.3">—</span>';
                 return `<tr>
                     <td><span class="ups-name">${UPSTREAM_DISPLAY_NAME[u._name] || escapeHtml(u._name)}</span></td>
                     <td><span class="type-pill">${escapeHtml(tp)}</span></td>
@@ -900,8 +964,8 @@ print(match.data)</pre>
             const hintEl = document.getElementById('cache-hitrate-hint');
             document.getElementById('cache-timestamp').textContent = cache && cache.timestamp ? formatTime(cache.timestamp) : '-';
             if (!cache || !cache.enabled) {
-                enabledEl.textContent = '未启用';
-                enabledEl.className = 'mini-value danger';
+                enabledEl.className = 'mini-value off';
+                enabledEl.querySelector('.cache-enabled-text').textContent = '—';
                 liveEl.textContent = '-';
                 entriesEl.textContent = '-';
                 sizeEl.textContent = '-';
@@ -912,8 +976,8 @@ print(match.data)</pre>
                 hintEl.textContent = cache && cache.error ? cache.error : '缓存数据库未创建';
                 return;
             }
-            enabledEl.textContent = '已启用';
-            enabledEl.className = 'mini-value success';
+            enabledEl.className = 'mini-value on';
+            enabledEl.querySelector('.cache-enabled-text').textContent = '—';
             liveEl.textContent = cache.live_entries != null ? cache.live_entries : '-';
             entriesEl.textContent = cache.entries != null ? cache.entries : '-';
             sizeEl.textContent = (cache.db_size_mb || 0).toFixed(2) + ' MB';
@@ -925,7 +989,7 @@ print(match.data)</pre>
             if (total > 0 && cache.hit_rate != null) {
                 const pct = cache.hit_rate * 100;
                 hitrateEl.textContent = pct.toFixed(1) + '%';
-                const color = pct > 50 ? '#10b981' : pct > 20 ? '#f59e0b' : '#ef4444';
+                const color = pct > 70 ? '#10b981' : pct > 40 ? '#f59e0b' : '#ef4444';
                 hitrateBar.innerHTML = `<div class="cache-hitrate-fill" style="width:${pct}%;background:${color}"></div>`;
                 hintEl.textContent = `共 ${total} 次请求`;
             } else {
@@ -948,7 +1012,10 @@ print(match.data)</pre>
             const el = document.getElementById('last-refresh');
             if (!lastStatusFetch) { el.textContent = '从未刷新'; return; }
             const sec = Math.max(0, Math.floor((Date.now() / 1000) - lastStatusFetch));
-            el.textContent = sec < 5 ? '刚刚刷新' : `${sec} 秒前刷新`;
+            if (sec < 5) el.textContent = '刚刚刷新';
+            else if (sec < 60) el.textContent = `${sec} 秒前刷新`;
+            else if (sec < 3600) el.textContent = `${Math.floor(sec / 60)} 分钟前刷新`;
+            else el.textContent = `${Math.floor(sec / 3600)} 小时前刷新`;
         }
 
         async function loadStatus(showLoading) {
@@ -1000,20 +1067,26 @@ print(match.data)</pre>
         function stopAutoRefresh() {
             if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
         }
-        const GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'tokenwave_tdx', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
+        const GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'mootdx2', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
         const GROUP_META = {
-            'tdx_local':          { title: '通达信-行情', desc: '行情/K线/分时/ETF/指数, 含 1 个高风险工具 (tdx_call)' },
-            'tdx_tq_local':        { title: '通达信-交易终端', desc: '行情/自选/交易/公式系统, 含 17 个高风险工具 (write ops)' },
-            'tokenwave_tdx':      { title: '通达信-MooTDX', desc: '基于 mootdx 的行情/K线/财务/板块/日历, 9 个 gateway 接口 (含 2 个 tokenwave_ 前缀命名避开 TQ-Local 冲突), local 优先 + network 兜底' },
-            'fuyao_ashare':       { title: '同花顺-a-share-mcp', desc: 'A 股行情/财报/估值/特殊数据, 端点: /mcp/a-share' },
-            'fuyao_index':        { title: '同花顺-a-share-index-mcp', desc: '同花顺指数/板块目录/成分股/历史K线, 端点: /mcp/a-share-index' },
-            'fuyao_meta':         { title: '同花顺-meta-mcp', desc: '跨宇宙全量 ticker 列表, 端点: /mcp/meta' },
-            'fuyao_fund':         { title: '同花顺-fund-mcp',   desc: '公募基金持仓/业绩/经理/财务, 端点: /mcp/fund' },
+            'tdx_local':          { title: '通达信-行情', desc: '行情/K线/分时/ETF/指数' },
+            'tdx_tq_local':       { title: '通达信-交易终端', desc: '行情/自选/交易/公式系统 (TQ-Local codegen)' },
+            'mootdx2':            { title: 'MooTDX2', desc: '基于 mootdx2 的行情/K线/财务/板块/日历' },
+            'fuyao_ashare':       { title: '同花顺-a-share', desc: 'A 股行情/财报/估值/特殊数据, 端点 /mcp/a-share' },
+            'fuyao_index':        { title: '同花顺-a-share-index', desc: '指数/板块目录/成分股/历史K线, 端点 /mcp/a-share-index' },
+            'fuyao_meta':         { title: '同花顺-meta', desc: '跨市场 ticker 搜索/列表, 端点 /mcp/meta' },
+            'fuyao_fund':         { title: '同花顺-fund', desc: '公募基金持仓/业绩/经理/财务/历史, 端点 /mcp/fund' },
         };
         const ALL_KEY = '__all__';
         let allTools = [];
         let activeGroup = ALL_KEY;
         let searchQuery = '';
+        let dynamicGroupOrder = []; // 动态从工具数据生成
+
+        function getGroupOrder() {
+            // 优先使用动态生成的顺序，否则使用硬编码顺序作为后备
+            return dynamicGroupOrder.length > 0 ? dynamicGroupOrder : GROUP_ORDER;
+        }
         let toggles = { dangerous: false, cache: false, noparam: false };
         let upstreamDotStatus = {};
 
@@ -1022,7 +1095,7 @@ print(match.data)</pre>
         }
         function primarySource(src) {
             if (!src) return '';
-            if (GROUP_ORDER.includes(src)) return src;
+            if (getGroupOrder().includes(src)) return src;
             return src;
         }
         function highlight(text, q) {
@@ -1085,7 +1158,7 @@ print(match.data)</pre>
             const buckets = bucketByGroup(filtered);
             const allBuckets = bucketByGroup(allTools);
             const allCount = filtered.length;
-            const groups = [ALL_KEY, ...GROUP_ORDER];
+            const groups = [ALL_KEY, ...getGroupOrder()];
             root.innerHTML = groups.map(key => {
                 const total = key === ALL_KEY ? allTools.length : (allBuckets.get(key) || []).length;
                 const matched = key === ALL_KEY ? allCount : (buckets.get(key) || []).length;
@@ -1151,7 +1224,7 @@ print(match.data)</pre>
         }
         function buildDetailBody(t) {
             const parts = [];
-            if (t.dangerous) parts.push('<div class="ifs-danger-banner">⚠️ 高风险工具:可透传任意路径到上游,需谨慎授权</div>');
+            if (t.dangerous) parts.push(`<div class="ifs-danger-banner">⚠️ 高风险工具 (${escapeHtml(t.source || '未指定上游')}): 可透传任意路径, 需谨慎授权</div>`);
 
             // Cache section
             if (t.cache_ttl_key) {
@@ -1229,12 +1302,12 @@ print(match.data)</pre>
                 if ((buckets.get(activeGroup) || []).length > 0) return;
             }
             const buckets = bucketByGroup(filteredAll());
-            const firstWithMatch = GROUP_ORDER.find(k => (buckets.get(k) || []).length > 0);
+            const firstWithMatch = getGroupOrder().find(k => (buckets.get(k) || []).length > 0);
             activeGroup = firstWithMatch || ALL_KEY;
         }
         function readHashGroup() {
             const m = window.location.href.match(/#tools=([^&#]+)/);
-            if (m && (m[1] === ALL_KEY || GROUP_ORDER.includes(m[1]))) return m[1];
+            if (m && (m[1] === ALL_KEY || getGroupOrder().includes(m[1]))) return m[1];
             return ALL_KEY;
         }
         async function loadInterfaces() {
@@ -1242,6 +1315,14 @@ print(match.data)</pre>
                 const data = await fetchJSON('/api/interfaces');
                 document.getElementById('interfaces-timestamp').textContent = formatTime(data.timestamp);
                 allTools = data.tools || [];
+                // 动态生成分组顺序：从工具数据中提取唯一 source
+                const sources = [...new Set(allTools.map(t => t.source).filter(s => s))];
+                // 保持硬编码顺序作为优先级，未知 source 放最后
+                const knownOrder = GROUP_ORDER;
+                dynamicGroupOrder = [
+                    ...knownOrder.filter(k => sources.includes(k)),
+                    ...sources.filter(s => !knownOrder.includes(s))
+                ];
                 activeGroup = readHashGroup();
                 renderToggleCounts();
                 renderAll();
@@ -1282,22 +1363,27 @@ print(match.data)</pre>
             document.getElementById('cfg-count-upstreams').textContent = entries.length;
             if (entries.length === 0) { root.innerHTML = '<div class="loading">暂无上游配置</div>'; return; }
             const rows = entries.map(([name, cfg]) => {
-                const enabled = cfg.enabled ? '<span class="cfg-switch on">● 启用</span>' : '<span class="cfg-switch off">○ 停用</span>';
+                const enabled = cfg.enabled ? '<span class="cfg-switch on">启用</span>' : '<span class="cfg-switch off">停用</span>';
                 const caps = (cfg.capabilities || []);
                 const capHtml = caps.length ? caps.map(c => `<span class="cfg-cap">${escapeHtml(c)}</span>`).join('') : '<span style="color:var(--text-secondary)">-</span>';
                 const apiKeyHtml = cfg.api_key
-                    ? `<span class="cfg-mask" title="已脱敏显示 — 原始值在 YAML 中">${escapeHtml(cfg.api_key)}</span>`
+                    ? `<span class="cfg-mask" title="服务端已脱敏 (前 2 + *** + 后 2 字符) — 原始值在 .env 中">${escapeHtml(cfg.api_key)}</span>`
                     : '<span style="color:var(--text-secondary)">-</span>';
                 const envEntries = cfg.env ? Object.entries(cfg.env) : [];
                 const envRowsHtml = envEntries.length
-                    ? envEntries.map(([k, v]) => `<tr><td class="tool-name">${escapeHtml(k)}</td><td>${/TOKEN|KEY|SECRET/i.test(k) ? `<span class="cfg-mask" title="已脱敏">${escapeHtml(String(v))}</span>` : escapeHtml(String(v))}</td></tr>`).join('')
+                    ? envEntries.map(([k, v]) => {
+                        const strVal = String(v);
+                        const looksMasked = strVal.includes('***');
+                        const tt = looksMasked ? '服务端已脱敏 (前 2 + *** + 后 2 字符)' : '';
+                        return `<tr><td class="tool-name">${escapeHtml(k)}</td><td>${tt ? `<span class="cfg-mask" title="${tt}">${escapeHtml(strVal)}</span>` : escapeHtml(strVal)}</td></tr>`;
+                      }).join('')
                     : '';
                 const envRowHtml = envEntries.length ? `
                     <tr class="cfg-env-row" data-env-for="${escapeHtml(name)}">
-                        <td colspan="7">
+                        <td colspan="${CFG_TABLE_COLSPANS.upstreams}">
                             <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:6px">环境变量 (env)</div>
                             <table class="cfg-table" style="background:var(--card-bg);border:1px solid var(--border);border-radius:4px">
-                                <thead><tr><th style="width:30%">变量</th><th>值</th></tr></thead>
+                                <thead><tr><th scope="col" style="width:30%">变量</th><th scope="col">值</th></tr></thead>
                                 <tbody>${envRowsHtml}</tbody>
                             </table>
                             ${cfg.retry ? `<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:8px">retry: ${escapeHtml(JSON.stringify(cfg.retry))}</div>` : ''}
@@ -1317,12 +1403,12 @@ print(match.data)</pre>
             root.innerHTML = `
                 <div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> ${entries.length} 个上游 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— type / enabled / endpoint / 能力</span></span>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> ${entries.length} 个上游 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— type / enabled / endpoint / 能力</span></span>
                     </div>
                     <div class="cfg-section-body">
                         <table class="cfg-table">
                             <thead>
-                                <tr><th style="width:13%">名称</th><th style="width:7%">类型</th><th style="width:9%">状态</th><th style="width:30%">Endpoint</th><th class="num" style="width:7%">超时(s)</th><th style="width:14%">API Key</th><th>能力</th></tr>
+                                <tr><th scope="col" style="width:13%">名称</th><th scope="col" style="width:7%">类型</th><th scope="col" style="width:9%">状态</th><th scope="col" style="width:30%">Endpoint</th><th scope="col" class="num" style="width:7%">超时(s)</th><th scope="col" style="width:14%">API Key</th><th scope="col">能力</th></tr>
                             </thead>
                             <tbody>${rows}</tbody>
                         </table>
@@ -1340,7 +1426,7 @@ print(match.data)</pre>
             if (entries.length === 0) { root.innerHTML = '<div class="loading">暂无工具映射</div>'; return; }
             const allRowsHtml = entries.map(([toolName, chain]) => {
                 const items = Object.entries(chain || {});
-                if (items.length === 0) return `<tr data-search="${escapeHtml(toolName.toLowerCase())}"><td><span class="tool-name">${escapeHtml(toolName)}</span></td><td colspan="2" style="color:var(--text-secondary)">无上游映射</td></tr>`;
+                if (items.length === 0) return `<tr data-search="${escapeHtml(toolName.toLowerCase())}"><td><span class="tool-name">${escapeHtml(toolName)}</span></td><td colspan="${CFG_TABLE_COLSPANS.mapping}" style="color:var(--text-secondary)">无上游映射</td></tr>`;
                 const pills = items.map(([upstream, toolCall], idx) =>
                     `<span class="chain-pill${idx === 0 ? ' primary' : ''}" title="${escapeHtml(upstream)} :: ${escapeHtml(toolCall)}">${escapeHtml(upstream)} <span style="opacity:0.6">::</span> ${escapeHtml(toolCall)}</span>`
                 ).join('<span style="color:var(--text-secondary);margin:0 2px">→</span>');
@@ -1350,15 +1436,16 @@ print(match.data)</pre>
             root.innerHTML = `
                 <div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> ${entries.length} 条工具映射 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 路由键 → 上游 + 上游 tool 名</span></span>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> ${entries.length} 条工具映射 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 路由键 → 上游 + 上游 tool 名</span></span>
                     </div>
                     <div class="cfg-section-body">
                         <div class="cfg-search-wrap" style="margin-bottom:10px">
+                            <label class="visually-hidden" for="cfg-search-mapping">筛选工具映射</label>
                             <input type="text" class="cfg-search" id="cfg-search-mapping" placeholder="按路由键 / 上游 / 上游 tool 筛选…" />
                             <button type="button" class="cfg-search-clear" id="cfg-search-mapping-clear" title="清空">×</button>
                         </div>
                         <table class="cfg-table">
-                            <thead><tr><th style="width:30%">路由键</th><th>调用链 (上游 → 上游 tool)</th></tr></thead>
+                            <thead><tr><th scope="col" style="width:30%">路由键</th><th scope="col">调用链 (上游 → 上游 tool)</th></tr></thead>
                             <tbody id="cfg-mapping-tbody">${allRowsHtml}</tbody>
                         </table>
                         <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:6px" id="cfg-mapping-count"></div>
@@ -1378,7 +1465,6 @@ print(match.data)</pre>
                     if (match) shown++;
                 });
                 countEl.textContent = q ? `显示 ${shown} / ${rows.length}` : '';
-                document.getElementById('cfg-search-mapping-wrap')?.classList.toggle('has-value', !!q);
                 search.parentElement.classList.toggle('has-value', !!q);
             };
             search.addEventListener('input', applyFilter);
@@ -1409,7 +1495,7 @@ print(match.data)</pre>
                 const searchKey = `${t.name} ${desc} ${(t.params||[]).map(p => p && p.name || p).join(' ')} ${t.cache_ttl_key || ''}`.toLowerCase();
                 const detailHtml = desc.length > 80 ? `
                     <tr class="cfg-detail-row" data-detail-for="${escapeHtml(t.name)}" style="display:none">
-                        <td colspan="5">${escapeHtml(desc)}</td>
+                        <td colspan="${CFG_TABLE_COLSPANS.tools}">${escapeHtml(desc)}</td>
                     </tr>` : '';
                 return `
                     <tr class="${expandable.trim()}" data-tool="${escapeHtml(t.name)}" data-search="${escapeHtml(searchKey)}">
@@ -1423,15 +1509,16 @@ print(match.data)</pre>
             root.innerHTML = `
                 <div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> ${tools.length} 个工具规格 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 名称 / 描述 / 缓存键 / 参数 / 危险标记 · 点行展开完整描述</span></span>
+                        <span class="cfg-section-title mono"><span class="cfg-section-toggle">▾</span> ${tools.length} 个工具规格 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 名称 / 描述 / 缓存键 / 参数 / 危险标记 · 点行展开完整描述</span></span>
                     </div>
                     <div class="cfg-section-body">
                         <div class="cfg-search-wrap" style="margin-bottom:10px">
+                            <label class="visually-hidden" for="cfg-search-tools">筛选工具规格</label>
                             <input type="text" class="cfg-search" id="cfg-search-tools" placeholder="按名称 / 描述 / 参数筛选…" />
                             <button type="button" class="cfg-search-clear" id="cfg-search-tools-clear" title="清空">×</button>
                         </div>
                         <table class="cfg-table">
-                            <thead><tr><th style="width:20%">名称</th><th>描述</th><th style="width:11%">缓存键</th><th style="width:24%">参数 <span style="text-transform:none; color:var(--text-secondary); font-weight:400"><span style="color:#b91c1c">*</span>必填 · <span style="color:var(--text-secondary)">·</span>可选</span></th><th style="width:8%">危险</th></tr></thead>
+                            <thead><tr><th scope="col" style="width:20%">名称</th><th scope="col">描述</th><th scope="col" style="width:11%">缓存键</th><th scope="col" style="width:24%">参数 <span style="text-transform:none; color:var(--text-secondary); font-weight:400"><span style="color:#b91c1c">*</span>必填 · <span style="color:var(--text-secondary)">·</span>可选</span></th><th scope="col" style="width:8%">危险</th></tr></thead>
                             <tbody id="cfg-tools-tbody">${allRowsHtml}</tbody>
                         </table>
                         <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:6px" id="cfg-tools-count"></div>
@@ -1473,12 +1560,12 @@ print(match.data)</pre>
         function renderCfgCache(data) {
             const root = document.getElementById('cfg-panel-cache');
             const cache = data.cache || {};
-            const enabled = cache.enabled ? '<span class="cfg-switch on">● 启用</span>' : '<span class="cfg-switch off">○ 停用</span>';
+            const enabled = cache.enabled ? '<span class="cfg-switch on">启用</span>' : '<span class="cfg-switch off">停用</span>';
             const ttl = cache.ttl || {};
             const ttlEntries = Object.entries(ttl).sort((a, b) => Number(a[1]) - Number(b[1]));
             const ttlRows = ttlEntries.map(([k, v]) =>
                 `<tr><td><span class="tool-name">${escapeHtml(k)}</span></td><td class="num">${v}</td><td>${humanizeDuration(v)}</td></tr>`
-            ).join('') || '<tr><td colspan="3" style="color:var(--text-secondary)">无 TTL 配置</td></tr>';
+            ).join('') || `<tr><td colspan="${CFG_TABLE_COLSPANS.cache}" style="color:var(--text-secondary)">无 TTL 配置</td></tr>`;
             const kvHtml = `
                 <div class="cfg-kv-grid">
                     <div class="k">启用</div><div class="v">${enabled}</div>
@@ -1488,17 +1575,17 @@ print(match.data)</pre>
             root.innerHTML = '<div class="cfg-cache-banner">⚠️ 此处显示的是 <code>config/upstreams.yaml</code> 里的 <code>cache.ttl</code> 配置，与"上游状态"标签页里的运行时缓存（hits/命中率）是不同的概念。<strong>修改后需重启网关</strong>才会生效。</div>'
                 + `<div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> 缓存基本配置</span>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> 缓存基本配置</span>
                     </div>
                     <div class="cfg-section-body">${kvHtml}</div>
                 </div>
                 <div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> ${ttlEntries.length} 条 TTL 配置 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 按 TTL 升序排列</span></span>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> ${ttlEntries.length} 条 TTL 配置 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 按 TTL 升序排列</span></span>
                     </div>
                     <div class="cfg-section-body">
                         <table class="cfg-table">
-                            <thead><tr><th>键</th><th class="num">秒</th><th>人类可读</th></tr></thead>
+                            <thead><tr><th scope="col">键</th><th scope="col" class="num">秒</th><th scope="col">人类可读</th></tr></thead>
                             <tbody>${ttlRows}</tbody>
                         </table>
                     </div>
@@ -1513,8 +1600,8 @@ print(match.data)</pre>
             const sr = data.strict_registry;
             const logging = data.logging || {};
             const sw = (label, val, hint) => val
-                ? `<span class="cfg-switch on" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">● ${escapeHtml(label)}</span>`
-                : `<span class="cfg-switch off" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">○ ${escapeHtml(label)}</span>`;
+                ? `<span class="cfg-switch on" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">${escapeHtml(label)}</span>`
+                : `<span class="cfg-switch off" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">${escapeHtml(label)}</span>`;
             const loggingKv = Object.entries(logging).map(([k, v]) => {
                 const display = typeof v === 'object' && v
                     ? Object.entries(v).map(([k2, v2]) => `${escapeHtml(k2)}=${escapeHtml(String(v2))}`).join(', ')
@@ -1524,7 +1611,7 @@ print(match.data)</pre>
             root.innerHTML = `
                 <div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> 全局开关</span>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> 全局开关</span>
                     </div>
                     <div class="cfg-section-body">
                         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
@@ -1535,7 +1622,7 @@ print(match.data)</pre>
                 </div>
                 <div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title"><span class="cfg-section-toggle">▾</span> Logging <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 日志配置</span></span>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> Logging <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 日志配置</span></span>
                     </div>
                     <div class="cfg-section-body">
                         <div class="cfg-kv-grid">${loggingKv}</div>
@@ -1590,9 +1677,192 @@ print(match.data)</pre>
             if (!_cfgCache) { showToast('尚未加载配置'); return; }
             await copyText(JSON.stringify(_cfgCache, null, 2), e.currentTarget);
         });
+
+        /* ===== 工具清单 (tool-inventory) ===== */
+        const INV_ALL_KEY = '__all__';
+        const INV_GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'mootdx2', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
+        const INV_GROUP_META = {
+            tdx_local:       { title: '通达信-行情' },
+            tdx_tq_local:    { title: '通达信-交易终端' },
+            mootdx2:        { title: 'MooTDX2' },
+            fuyao_ashare:    { title: '同花顺-a-share' },
+            fuyao_index:     { title: '同花顺-指数' },
+            fuyao_meta:      { title: '同花顺-meta' },
+            fuyao_fund:      { title: '同花顺-fund' },
+        };
+        let invTools = [];
+        let invActiveGroup = INV_ALL_KEY;
+        let invQuery = '';
+        let invSourceFilter = new Set();
+        let invDangerousOnly = false;
+        let invRawData = null;
+
+        async function loadInventory() {
+            try {
+                const data = await fetchJSON('/api/mcp-tools-list');
+                document.getElementById('inventory-timestamp').textContent = formatTime(data.timestamp);
+                if (data.error) {
+                    document.getElementById('inv-content').innerHTML = `<div class="loading">调用失败：${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                invTools = data.tools || [];
+                invRawData = data;
+                renderInvToggles();
+                renderInvAll();
+            } catch (e) {
+                console.error('Load inventory error:', e);
+                document.getElementById('inv-content').innerHTML = '<div class="loading">加载失败，请刷新重试</div>';
+            }
+        }
+
+        function renderInvToggles() {
+            const root = document.getElementById('inv-toggles');
+            if (!root) return;
+            const counts = {};
+            for (const t of invTools) {
+                counts[t.source] = (counts[t.source] || 0) + 1;
+            }
+            const groups = [INV_ALL_KEY, ...INV_GROUP_ORDER];
+            root.innerHTML = groups.map(key => {
+                if (key === INV_ALL_KEY) return '';
+                const meta = INV_GROUP_META[key] || { title: key };
+                const count = counts[key] || 0;
+                if (!count) return '';
+                const checked = invSourceFilter.has(key) ? ' checked' : '';
+                return `<label class="inv-src-toggle${checked ? ' active' : ''}"><input type="checkbox"${checked} data-source="${escapeHtml(key)}" /> <span>${escapeHtml(meta.title)}</span> <span class="toggle-count">${count}</span></label>`;
+            }).join('');
+        }
+
+        function invFiltered() {
+            let out = invTools;
+            if (invQuery) {
+                const q = invQuery.toLowerCase();
+                out = out.filter(t =>
+                    (t.name || '').toLowerCase().includes(q) ||
+                    (t.description || '').toLowerCase().includes(q)
+                );
+            }
+            if (invSourceFilter.size > 0) {
+                out = out.filter(t => invSourceFilter.has(t.source));
+            }
+            if (invDangerousOnly) {
+                out = out.filter(t => t.dangerous);
+            }
+            return out;
+        }
+
+        function renderInvNav() {
+            const root = document.getElementById('inv-nav');
+            if (!root) return;
+            const filtered = invFiltered();
+            const buckets = new Map();
+            for (const t of filtered) {
+                if (!buckets.has(t.source)) buckets.set(t.source, []);
+                buckets.get(t.source).push(t);
+            }
+            const allFiltered = filtered;
+            const groups = [INV_ALL_KEY, ...INV_GROUP_ORDER];
+            root.innerHTML = groups.map(key => {
+                const total = key === INV_ALL_KEY ? invTools.length : invTools.filter(t => t.source === key).length;
+                const matched = key === INV_ALL_KEY ? allFiltered.length : (buckets.get(key) || []).length;
+                if (total === 0) return '';
+                const meta = key === INV_ALL_KEY ? { title: '全部' } : (INV_GROUP_META[key] || { title: key });
+                const countText = (invQuery || invSourceFilter.size > 0) && total ? `${matched}/${total}` : `${total}`;
+                const isActive = key === invActiveGroup;
+                const isDisabled = matched === 0;
+                return `<button type="button" class="ifs-nav-item${isActive ? ' active' : ''}" data-group="${escapeHtml(key)}"${isActive ? ' aria-current="true"' : ''}${isDisabled ? ' disabled' : ''}><span class="label">${escapeHtml(meta.title)}</span><span class="count">${countText}</span></button>`;
+            }).join('');
+        }
+
+        function renderInvContent() {
+            const root = document.getElementById('inv-content');
+            if (!root) return;
+            if (invRawData) {
+                const json = JSON.stringify(invRawData, null, 2);
+                root.innerHTML = `<div class="json-block"><pre><code>${escapeHtml(json)}</code></pre></div>`;
+                return;
+            }
+            const buckets = new Map();
+            for (const t of filtered) {
+                if (!buckets.has(t.source)) buckets.set(t.source, []);
+                buckets.get(t.source).push(t);
+            }
+            const tools = invActiveGroup === INV_ALL_KEY ? filtered : (buckets.get(invActiveGroup) || []);
+            if (tools.length === 0) {
+                root.innerHTML = `<div class="ifs-empty"><div class="ifs-empty-icon">🔍</div><div class="ifs-empty-text">无匹配工具</div><button type="button" class="ifs-empty-action" onclick="invClearSearch()">清空搜索</button></div>`;
+                return;
+            }
+            const meta = invActiveGroup === INV_ALL_KEY
+                ? { title: '全部' }
+                : { title: (INV_GROUP_META[invActiveGroup] || { title: invActiveGroup }).title };
+            const metaEl = document.getElementById('inv-total-meta');
+            if (metaEl) metaEl.textContent = `${meta.title} · ${tools.length} 个工具`;
+            window._invFilteredNames = tools.map(t => t.name);
+            const headerHtml = invActiveGroup === INV_ALL_KEY
+                ? '<th style="width:26%">名称</th><th>描述</th><th style="width:80px">操作</th>'
+                : '<th style="width:26%">名称</th><th>描述</th><th style="width:12%">来源</th><th style="width:80px">操作</th>';
+            const rows = tools.map((t, i) => {
+                const params = t.params || [];
+                const hasEnum = params.some(p => p.enum);
+                const paramCount = params.length;
+                const badges = [];
+                if (hasEnum) badges.push('<span class="badge badge-cache" title="部分参数有枚举值">enum</span>');
+                const paramNames = params.map(p => p.name || '');
+                const moreCount = paramNames.length > 3 ? paramNames.length - 3 : 0;
+                const paramsDisplay = moreCount > 0
+                    ? highlight(paramNames.slice(0, 3).join(', '), invQuery) + ` <span class="params-more">+${moreCount} more</span>`
+                    : (paramNames.length > 0 ? highlight(paramNames.join(', '), invQuery) : '');
+                const sourceCell = invActiveGroup === INV_ALL_KEY
+                    ? ''
+                    : `<td><button type="button" class="chain chain-link" data-source="${escapeHtml(t.source || '')}">${escapeHtml(t.source || '-')} →</button></td>`;
+                const detailBody = buildInvDetailBody(t);
+                return `<tr data-tool="${escapeHtml(t.name)}"><td><span class="tool-name">${highlight(t.name, invQuery)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td><td><div class="tool-desc">${highlight(t.description || '-', invQuery)}</div>${paramsDisplay ? `<div class="tool-params">${paramsDisplay}</div>` : ''}</td>${sourceCell}<td><div class="row-actions"><button class="row-action-btn copy-name" data-name="${escapeHtml(t.name)}">复制</button><button class="row-action-btn toggle-detail" data-idx="${i}">详情</button></div></td></tr>${detailBody ? `<tr class="ifs-detail-row" data-detail-for="${escapeHtml(t.name)}" style="display:none"><td colspan="${invActiveGroup === INV_ALL_KEY ? 3 : 4}">${detailBody}</td></tr>` : ''}`;
+            }).join('');
+            root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)}</h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><div class="ifs-table-wrap"><table class="ifs-table"><caption style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden">${escapeHtml(meta.title)} 工具清单</caption><thead><tr>${headerHtml}</tr></thead><tbody>${rows}</tbody></table></div>`;
+        }
+
+        function buildInvDetailBody(t) {
+            const parts = [];
+            const params = t.params || [];
+            if (!params.length) {
+                parts.push('<div style="color:var(--text-secondary);font-size:0.85rem">无参数</div>');
+                return parts.join('');
+            }
+            parts.push('<div class="ifs-section-title">参数</div>');
+            const paramsHtml = params.map(p => {
+                let typeStr = p.type || 'any';
+                if (p.enum) typeStr += ` · ${p.enum.map(v => `\`${v}\``).join(', ')}`;
+                const reqStr = p.required ? '<span class="badge" style="background:#dbeafe;color:#1e40af;font-size:0.7rem">required</span>' : '<span class="badge" style="background:#f3f4f6;color:#6b7280;font-size:0.7rem">optional</span>';
+                return `<div class="ifs-param-item"><code>${escapeHtml(p.name)}</code> <span class="ifs-param-type">${typeStr}</span>${reqStr}${p.description ? `<div class="ifs-param-desc">${escapeHtml(p.description)}</div>` : ''}</div>`;
+            }).join('');
+            parts.push(`<div class="ifs-params-list">${paramsHtml}</div>`);
+            return parts.join('');
+        }
+
+        function renderInvAll() { renderInvNav(); renderInvContent(); }
+
+        function invClearSearch() {
+            invQuery = '';
+            const el = document.getElementById('inv-search');
+            if (el) el.value = '';
+            document.getElementById('inv-search-wrap').classList.remove('has-value');
+            renderInvAll();
+        }
+
+        function setInvGroup(key) {
+            invActiveGroup = key;
+            renderInvAll();
+        }
+
+        document.getElementById('inv-content').addEventListener('click', (e) => {
+            const copyBtn = e.target.closest('.copy-name');
+            if (copyBtn) { copyText(copyBtn.dataset.name, copyBtn); return; }
+        });
+
         function refreshAll() {
             loadStatus();
             loadInterfaces();
+            loadInventory();
             loadConfig();
         }
         document.getElementById('ifs-search').addEventListener('input', (e) => {
@@ -1621,18 +1891,17 @@ print(match.data)</pre>
                     tr.style.display = show ? '' : 'none';
                     detailBtn.textContent = show ? '收起' : '详情';
                 }
+                return;
+            }
+            const srcBtn = e.target.closest('.chain-link');
+            if (srcBtn && srcBtn.dataset.source) {
+                setActiveGroup(srcBtn.dataset.source);
             }
         });
         document.getElementById('ifs-copy-all').addEventListener('click', (e) => {
             const names = window._currentFilteredToolNames || [];
             if (!names.length) { showToast('暂无可复制的工具'); return; }
             copyText(names.join('\n'), e.currentTarget);
-        });
-        document.getElementById('ifs-content').addEventListener('click', (e) => {
-            const srcBtn = e.target.closest('.chain-link');
-            if (srcBtn && srcBtn.dataset.source) {
-                setActiveGroup(srcBtn.dataset.source);
-            }
         });
         document.getElementById('ifs-nav').addEventListener('click', (e) => {
             const btn = e.target.closest('.ifs-nav-item');
@@ -1680,10 +1949,14 @@ print(match.data)</pre>
         });
         document.querySelector('.ups-table').addEventListener('click', (e) => {
             const th = e.target.closest('th.sortable');
-            if (th) setStatusSort(th.dataset.sort);
+            if (th) { setStatusSort(th.dataset.sort); return; }
+            const errBtn = e.target.closest('.err-icon');
+            if (errBtn) copyText(errBtn.dataset.error, errBtn);
         });
-        setInterval(updateLastRefresh, 1000);
-        startAutoRefresh();
+        if (document.getElementById('auto-refresh').checked) startAutoRefresh();
+        // 默认 tab 不一定是 status, 不无条件跑 setInterval
+        const initialActivePanel = document.querySelector('.panel.active')?.id;
+        if (initialActivePanel === 'status') startUpdateClock();
         refreshAll();
         async function loadOnboarding() {
             const container = document.getElementById('interfaces-summary');
@@ -1713,7 +1986,7 @@ print(match.data)</pre>
                     const k = primarySource(t.source) || '其他';
                     counts.set(k, (counts.get(k) || 0) + 1);
                 }
-                const groups = [ALL_KEY, ...GROUP_ORDER].filter(k => k === ALL_KEY || counts.has(k));
+                const groups = [ALL_KEY, ...getGroupOrder()].filter(k => k === ALL_KEY || counts.has(k));
                 container.innerHTML = groups.map(key => {
                     const meta = key === ALL_KEY ? { title: '全部接口', desc: '一次性查看所有上游的 tool' } : (GROUP_META[key] || { title: key, desc: '' });
                     const count = key === ALL_KEY ? tools.length : (counts.get(key) || 0);
@@ -1730,10 +2003,16 @@ print(match.data)</pre>
             const tab = document.querySelector(`.tab[data-panel="${panelId}"]`);
             if (!tab) return;
             tab.click();
-            if (groupKey && typeof setActiveGroup === 'function') {
-                // 等 interfaces 渲染完成后再切分组（避免初次加载时找不到 .ifs-nav-item）
-                setTimeout(() => setActiveGroup(groupKey), 50);
-            }
+            if (!groupKey) return;
+            // 等对应 .ifs-nav-item 渲染出来再切分组（首次加载时 loadInterfaces 是异步的）
+            const tryApply = (tries = 60) => {
+                if (document.querySelector(`.ifs-nav-item[data-group="${CSS.escape(groupKey)}"]`)) {
+                    setActiveGroup(groupKey);
+                } else if (tries > 0) {
+                    setTimeout(() => tryApply(tries - 1), 50);
+                }
+            };
+            tryApply();
         }
         document.getElementById('onboarding').addEventListener('click', (e) => {
             const jumpBtn = e.target.closest('[data-jump-panel]');
@@ -1771,6 +2050,11 @@ print(match.data)</pre>
 
             sections.forEach(s => observer.observe(s));
         })();
+
+        window.addEventListener('beforeunload', () => {
+            stopAutoRefresh();
+            stopUpdateClock();
+        });
     </script>
 </body>
 </html>

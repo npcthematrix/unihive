@@ -1,0 +1,240 @@
+"""Tests for gateway_server startup-logic review fixes (HIGH 1+2+3, MED 4+5).
+
+- HIGH #1: initialize() concurrent calls only run init once (asyncio.Lock)
+- HIGH #2: upstreams: null in YAML doesn't crash initialize()
+- HIGH #3: --config CLI flag is accepted and plumbed through
+- MED  #4: upstream start() blocking > timeout raises + cleanup runs
+- MED  #5: console_api imports deduped (single import path)
+"""
+from __future__ import annotations
+
+import asyncio
+import sys
+
+import pytest
+
+
+# ========== HIGH #1: initialize() concurrent safety ==========
+
+class TestInitializeConcurrent:
+    """两次 await initialize() 必须串行化, cache / upstream 只能 init 一次."""
+
+    async def test_concurrent_initialize_calls_only_init_cache_once(self, tmp_path):
+        """两个并发 initialize 调用, 内部 _do_initialize 只应跑一次."""
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {},
+            "routing": {},
+            "upstream_tool_mapping": {},
+        }
+        server.config_path = tmp_path / "upstreams.yaml"
+        server.config_path.write_text("upstreams: {}\n", encoding="utf-8")
+        server.upstreams = {}
+        server._initialized = False
+        server._shutdown_event = asyncio.Event()
+        server._running = False
+        server._init_lock = asyncio.Lock()
+        server._upstream_start_timeout = 30.0
+
+        do_init_calls = {"n": 0}
+        real_do_init = server._do_initialize
+
+        async def counting_do_init():
+            do_init_calls["n"] += 1
+            # 慢一点, 让第二个 await initialize() 有机会挤进来
+            await asyncio.sleep(0.05)
+            await real_do_init()
+
+        server._do_initialize = counting_do_init  # type: ignore[assignment]
+
+        # 同步发起两个 initialize
+        await asyncio.gather(server.initialize(), server.initialize())
+
+        assert do_init_calls["n"] == 1, (
+            f"_do_initialize 跑了 {do_init_calls['n']} 次, 并发场景下应只跑 1 次"
+        )
+        assert server._initialized is True
+
+
+# ========== HIGH #2: upstreams: null YAML safety ==========
+
+class TestNullUpstreams:
+    async def test_initialize_handles_null_upstreams(self, tmp_path):
+        """YAML 里 `upstreams: null` 不能让 initialize() 抛 AttributeError."""
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": None,  # YAML `upstreams: null` 还原
+            "routing": {},
+            "upstream_tool_mapping": {},
+        }
+        server.config_path = tmp_path / "upstreams.yaml"
+        server.config_path.write_text("upstreams: null\n", encoding="utf-8")
+        server.upstreams = {}
+        server._initialized = False
+        server._shutdown_event = asyncio.Event()
+        server._running = False
+        server._init_lock = asyncio.Lock()
+        server._upstream_start_timeout = 30.0
+
+        # 不应抛 AttributeError: 'NoneType' object has no attribute 'items'
+        await server.initialize()
+        assert server._initialized is True
+        assert server.upstreams == {}
+
+
+# ========== MED #4: per-upstream start timeout ==========
+
+class TestUpstreamStartTimeout:
+    async def test_upstream_start_timeout_raises_and_cleans_up(self, tmp_path):
+        """某个 upstream 的 start() 卡死, 超过 _upstream_start_timeout 必须抛,
+        已启动的 upstream 必须被 stop (cleanup)。"""
+        from src.gateway_server import GatewayServer, FuyaoClient
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {
+                "good": {"enabled": True, "type": "http", "base_url": "http://x", "api_key": "k"},
+                "bad": {"enabled": True, "type": "http", "base_url": "http://x", "api_key": "k"},
+            },
+            "routing": {},
+            "upstream_tool_mapping": {},
+        }
+        server.config_path = tmp_path / "upstreams.yaml"
+        server.config_path.write_text("upstreams: {}\n", encoding="utf-8")
+        server.upstreams = {}
+        server._initialized = False
+        server._shutdown_event = asyncio.Event()
+        server._running = False
+        server._init_lock = asyncio.Lock()
+        server._upstream_start_timeout = 0.2
+
+        stop_calls: list[str] = []
+
+        class FakeClient:
+            def __init__(self, name: str):
+                self.name = name
+                self.is_available = True
+                self.status = type("S", (), {"value": "connected"})()
+
+            async def start(self):
+                if self.name == "bad":
+                    await asyncio.sleep(10)
+
+            async def stop(self):
+                stop_calls.append(self.name)
+
+        # 拦截 FuyaoClient 构造, 让 good/bad 都返回 FakeClient
+        original_fuyao = FuyaoClient
+        def fake_fuyao(cfg):
+            return FakeClient(cfg.name)
+        GatewayServer.__bases__  # touch to avoid import warning
+
+        # 直接 patch gateway_server 模块内的 FuyaoClient 引用
+        import src.gateway_server as gs
+        gs.FuyaoClient = fake_fuyao  # type: ignore[assignment]
+
+        try:
+            with pytest.raises(RuntimeError, match="upstream start.*timed out"):
+                await server.initialize()
+        finally:
+            gs.FuyaoClient = original_fuyao  # type: ignore[assignment]
+
+        # cleanup: init 失败时 _do_initialize 的 BaseException handler 应 stop 已成功的 client
+        assert "good" in stop_calls, (
+            f"init 失败时已成功的 client 必须被 stop, stop_calls={stop_calls}"
+        )
+        assert server.cache is None
+        assert server.upstreams == {}
+
+
+# ========== HIGH #3: --config CLI flag ==========
+
+class TestConfigCLI:
+    def test_config_flag_accepted_by_argparser(self):
+        """`--config PATH` 必须被 argparse 接受并出现在 Namespace.config 里."""
+        from src.gateway_server import _build_arg_parser
+
+        parser = _build_arg_parser()
+        args = parser.parse_args(["--config", "/tmp/custom-upstreams.yaml"])
+        assert args.config == "/tmp/custom-upstreams.yaml"
+
+    def test_config_flag_optional_defaults_none(self):
+        """不传 --config 时, args.config 必须为 None (让默认值生效)."""
+        from src.gateway_server import _build_arg_parser
+
+        parser = _build_arg_parser()
+        args = parser.parse_args([])
+        assert args.config is None
+
+    def test_async_main_accepts_config_path(self, tmp_path):
+        """async_main 必须能把 config_path 传给 GatewayServer — 通过 monkeypatch 验证."""
+        cfg_file = tmp_path / "upstreams.yaml"
+        cfg_file.write_text(
+            "upstreams:\n  good:\n    enabled: true\n    type: http\n"
+            "    base_url: http://x\n    api_key: k\n",
+            encoding="utf-8",
+        )
+
+        from src import gateway_server as gs
+
+        seen: dict[str, str] = {}
+
+        original_init = gs.GatewayServer.__init__
+
+        def spy_init(self, config_path="config/upstreams.yaml", **kwargs):
+            seen["path"] = config_path
+            return original_init(self, config_path=config_path, **kwargs)
+
+        gs.GatewayServer.__init__ = spy_init  # type: ignore[assignment]
+
+        try:
+            # 喂 sys.argv 让 argparse 拿到 --config
+            argv_backup = sys.argv
+            sys.argv = ["prog", "--transport", "http", "--config", str(cfg_file)]
+            try:
+                # http transport 起 uvicorn 会一直跑, 用 timeout 卡住再取消
+                # 这里只验证 main() 把 config_path 传进去了
+                import threading
+                # 跑 main 在另一个线程, 1s 后强制退出
+                def run_main():
+                    try:
+                        gs.main()
+                    except SystemExit:
+                        pass
+                t = threading.Thread(target=run_main, daemon=True)
+                t.start()
+                t.join(timeout=1.5)
+            finally:
+                sys.argv = argv_backup
+
+            assert seen.get("path") == str(cfg_file), (
+                f"GatewayServer 应收到自定义 config 路径, 实际: {seen}"
+            )
+        finally:
+            gs.GatewayServer.__init__ = original_init  # type: ignore[assignment]
+
+
+# ========== MED #5: console_api imports deduped ==========
+
+class TestConsoleApiImportsDeduped:
+    def test_serve_http_has_single_console_api_import(self):
+        """serve_http 里只应出现一次 `from . import console_api` 形式导入."""
+        import inspect
+        from src.gateway_server import GatewayServer
+
+        src = inspect.getsource(GatewayServer.serve_http)
+        # `from . import console_api` 或 `from .console_api import` 应各最多一次
+        from_relative = src.count("from . import console_api")
+        direct_relative = src.count("from .console_api import")
+        assert from_relative + direct_relative <= 1, (
+            f"serve_http 里 console_api 导入重复: "
+            f"`from . import console_api`={from_relative}, "
+            f"`from .console_api import`={direct_relative}"
+        )

@@ -55,7 +55,7 @@ def infer_dangerous(name: str) -> bool:
 # ---------- 解析 ----------
 
 
-_METHOD_HEADING = re.compile(r"^####\s+`([A-Za-z_][A-Za-z0-9_]*)`\s*:", re.MULTILINE)
+_METHOD_HEADING = re.compile(r"^####\s+`([A-Za-z_][A-Za-z0-9_]*)`\s*:\s*(.+)", re.MULTILINE)
 _PARAM_ROW = re.compile(
     r"^\|\s*(?P<name>[^|]+?)\s*\|\s*(?P<req>[^|]+?)\s*\|\s*(?P<type>[^|]+?)\s*\|\s*(?P<desc>[^|]+?)\s*\|\s*$",
     re.MULTILINE,
@@ -71,13 +71,14 @@ def parse_skill_md(text: str) -> list[dict]:
 
     for i, m in enumerate(matches):
         name = m.group(1)
+        title = m.group(2).strip() if m.lastindex >= 2 else ""
         section_start = m.end()
         section_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         section = text[section_start:section_end]
 
-        # description: 跳过紧跟 heading 的 inline title 行和 markdown 粗体小标题,
-        # 取第一个真正的段落文字
-        description = ""
+        # description: 先从 heading title 提取，再从正文第一个段落补充
+        # heading title 格式: #### `method`: <title>
+        description = title
         skipped_title = False
         for line in section.splitlines():
             stripped = line.strip()
@@ -150,21 +151,67 @@ def parse_skill_md(text: str) -> list[dict]:
 # ---------- 构造 spec ----------
 
 
+def extract_enum_from_description(desc: str) -> list[str] | None:
+    """从说明文字中提取 `` 内联代码值作为 enum 候选。
+
+    匹配模式：
+      - `val1`, `val2`  (逗号分隔)
+      - `val1`/`val2`   (斜杠同义值，如 front/qfq)
+
+    过滤规则（避免误提取）：
+      - 跳过含有空格的值（描述性片段，不是单值）
+      - 跳过含有比较运算符的值（如 `count<=0`）
+      - 跳过 snake_case 字段名（如 `start_time`、`end_time`）
+      - 跳过以大写开头的值（如 `True`、`False`）
+    """
+    if "`" not in desc:
+        return None
+    atoms = re.findall(r"`([^`]+)`", desc)
+    if not atoms:
+        return None
+    values: set[str] = set()
+    for atom in atoms:
+        if " " in atom:
+            continue
+        if re.search(r"[<>=!&|]", atom):
+            continue
+        # 过滤 snake_case 字段名（包含下划线的多单词标识符）
+        if "_" in atom and atom.replace("_", "").islower():
+            continue
+        # 过滤 Python/JS 常量（大写开头）
+        if atom[0].isupper():
+            continue
+        for v in atom.split("/"):
+            v = v.strip()
+            if v and v not in ("Y", "N", "Yes", "No", "y", "n"):
+                values.add(v)
+    return sorted(values) if values else None
+
+
 def build_tool_specs(methods: list[dict]) -> list[dict]:
     specs: list[dict] = []
     for m in methods:
         name = m["name"]
+        params_out: list[dict] = []
+        for p in m["params"]:
+            param: dict = {
+                "name": p["name"],
+                "required": p["required"],
+                "type": p["type"],
+                "description": p["description"],
+            }
+            enum_vals = extract_enum_from_description(p["description"])
+            if enum_vals:
+                param["enum"] = enum_vals
+            params_out.append(param)
         specs.append({
             "name": name,
-            "description": m["description"] or name,
+            "description": m["description"] or "",
             "routing": name,
             "upstream_tool_mapping": {"tdx_tq_local": name},
             "cache_ttl_key": None,
             "dangerous": infer_dangerous(name),
-            "params": [
-                {"name": p["name"], "required": p["required"], "type": p["type"]}
-                for p in m["params"]
-            ],
+            "params": params_out,
         })
     return specs
 

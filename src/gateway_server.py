@@ -76,6 +76,9 @@ class GatewayServer:
         # 也不响应 stop, 要等下一次 tick, 期间可能再调 cache.cleanup_expired。
         self._initialized = False
         self._shutdown_event = asyncio.Event()
+        # 在途请求计数 + 优雅关闭
+        self._active_requests = 0
+        self._requests_lock = asyncio.Lock()
         # initialize() 并发保护: 两次 await initialize() 必须串行化,
         # 否则 cache / upstream 会被重复初始化 (HIGH #1)。
         self._init_lock = asyncio.Lock()
@@ -249,7 +252,14 @@ class GatewayServer:
             # miss：无论后续 FUYAO gate 是否通过，都算一次 miss
             self.cache.record_miss()
 
-        result = await self.router.route(route_key, params)
+        # 在途请求计数
+        async with self._requests_lock:
+            self._active_requests += 1
+        try:
+            result = await self.router.route(route_key, params)
+        finally:
+            async with self._requests_lock:
+                self._active_requests -= 1
         # hops 是请求级诊断信息，留在响应里随返回消费者；
         # 进缓存的副本中我们设 []，避免历史 hops 被复用。
         logger.debug(
@@ -282,7 +292,6 @@ class GatewayServer:
 
     def _register_tools(self, specs: list[dict] | None = None):
         # 特殊工具：手写（带特殊逻辑或网关内部）
-        self._register_search_stock()
         self._register_status_tools()
 
         # 通用工具：合并手工 tools 与生成的 tools_tdx_tq_local.yaml
@@ -383,6 +392,8 @@ class GatewayServer:
 
         async def _mcp_tools_api(req: Request):
             raw = await self.mcp.list_tools()
+            # 构建 routing_key → source 映射（优先从 upstream_tool_mapping 查，fallback 到前缀猜测）
+            source_map = _ca._build_source_map()
             tools_out = []
             for ft in raw:
                 d = ft.model_dump()
@@ -399,7 +410,8 @@ class GatewayServer:
                     if enum_vals:
                         p["enum"] = enum_vals
                     params.append(p)
-                tools_out.append({"name": name, "description": d.get("description") or "", "source": _ca.derive_source_from_name(name), "params": params})
+                source = source_map.get(name) if name in source_map else _ca.derive_source_from_name(name)
+                tools_out.append({"name": name, "description": d.get("description") or "", "source": source, "params": params})
             body = json.dumps({"timestamp": int(time.time()), "tools": tools_out}, indent=2, ensure_ascii=False)
             return Response(body, media_type="application/json")
 
@@ -477,8 +489,26 @@ class GatewayServer:
                 continue
 
     async def stop(self):
+        """优雅关闭：等待在途请求完成后关闭连接池"""
         self._running = False
         self._shutdown_event.set()  # 唤醒 health loop，立即退出而不是等下次 tick
+
+        # 等待在途请求完成（最多 10 秒）
+        wait_start = time.time()
+        max_wait = 10.0
+        while True:
+            async with self._requests_lock:
+                active = self._active_requests
+            if active == 0:
+                logger.info("All in-flight requests completed, proceeding with shutdown")
+                break
+            if time.time() - wait_start > max_wait:
+                logger.warning(f"Timeout waiting for {active} in-flight requests, force-exit")
+                break
+            logger.info(f"Waiting for {active} in-flight requests to complete...")
+            await asyncio.sleep(0.5)
+
+        # 关闭所有上游客户端
         for name, client in self.upstreams.items():
             try:
                 await asyncio.wait_for(client.stop(), timeout=5.0)
@@ -486,12 +516,16 @@ class GatewayServer:
                 logger.warning(f"[{name}] stop() timed out after 5s, force-exit")
             except Exception as e:
                 logger.warning(f"[{name}] stop() raised: {e}")
+
+        # 关闭缓存
         if self.cache:
             try:
                 await asyncio.wait_for(self.cache.close(), timeout=2.0)
             except asyncio.TimeoutError:
                 logger.warning("cache close() timed out after 2s")
             self.cache = None
+
+        logger.info("Gateway shutdown complete")
 
 
 async def async_main(transport: str = "stdio", host: str | None = None, port: int | None = None, config_path: str | None = None):

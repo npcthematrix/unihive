@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sys; print\\('\\\\n'.join\\(sys.path\\)\\)\")",
+      "Bash(python -c \"import mootdx; print\\(mootdx.__file__\\)\")",
+      "Bash(python -c \"import mootdx; print\\(dir\\(mootdx\\)\\)\")",
+      "Skill(superpowers:brainstorming)",
+      "Skill(superpowers:writing-plans)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(kill %1)",
+      "Bash(wait %1)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(echo \"Gateway PID: $!\")",
+      "Bash(echo \"PID: $!\")",
+      "Bash(tasklist //FI \"IMAGENAME eq python.exe\")",
+      "Bash(taskkill //F //PID 20528)",
+      "Skill(brainstorming)",
+      "Bash(pwsh -Command \"Get-NetTCPConnection -LocalPort 18080 -ErrorAction SilentlyContinue | Select-Object LocalPort,State\")",
+      "Bash(powershell -File scripts/start_gateway.ps1)",
+      "Bash(powershell *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Skill(writing-plans)"
+    ]
+  }
+}

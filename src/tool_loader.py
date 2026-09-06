@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-_GENERATED_FILENAME = "tools_tdx_tq_local.yaml"
+_GENERATED_FILENAMES = ["tools_tdx_tq_local.yaml", "tools_mootdx2.yaml"]
 
 
 def load_all_tools(config_path: Path, config: dict) -> list[dict]:
@@ -20,21 +20,22 @@ def load_all_tools(config_path: Path, config: dict) -> list[dict]:
     tools: list[dict] = list(config.get("tools", []) or [])
     top_mapping = config.setdefault("upstream_tool_mapping", {})
     base_dir = config_path.parent.resolve()
-    for candidate in (
-        base_dir / _GENERATED_FILENAME,
-        base_dir / "config" / _GENERATED_FILENAME,
-        Path("config") / _GENERATED_FILENAME,
-    ):
-        if candidate.exists():
-            with candidate.open(encoding="utf-8") as f:
-                gen_cfg = yaml.safe_load(f) or {}
-            gen_tools = list(gen_cfg.get("tools", []) or [])
-            tools.extend(gen_tools)
-            for spec in gen_tools:
-                rk = spec.get("routing")
-                if rk and rk not in top_mapping:
-                    top_mapping[rk] = dict(spec.get("upstream_tool_mapping") or {})
-            break
+    for filename in _GENERATED_FILENAMES:
+        for candidate in (
+            base_dir / filename,
+            base_dir / "config" / filename,
+            Path("config") / filename,
+        ):
+            if candidate.exists():
+                with candidate.open(encoding="utf-8") as f:
+                    gen_cfg = yaml.safe_load(f) or {}
+                gen_tools = list(gen_cfg.get("tools", []) or [])
+                tools.extend(gen_tools)
+                for spec in gen_tools:
+                    rk = spec.get("routing")
+                    if rk and rk not in top_mapping:
+                        top_mapping[rk] = dict(spec.get("upstream_tool_mapping") or {})
+                break
     return tools
 
 
