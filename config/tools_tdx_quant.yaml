@@ -1,0 +1,518 @@
+# Auto-generated from skills/SKILL.md
+# DO NOT EDIT — re-run scripts/gen_tdx_quant_tools.py
+tools:
+- name: get_market_data
+  description: '```python'
+  routing: get_market_data
+  upstream_tool_mapping:
+    tdx_quant: get_market_data
+  cache_ttl_key: historical
+  dangerous: false
+  params:
+  - name: field_list
+    required: false
+    type: List[str]
+    description: 需返回的字段列表；空列表返回所有字段
+  - name: stock_list
+    required: true
+    type: List[str]
+    description: 股票代码列表
+  - name: period
+    required: true
+    type: str
+    description: K线周期
+  - name: start_time
+    required: false
+    type: str
+    description: 开始时间
+  - name: end_time
+    required: false
+    type: str
+    description: 结束时间；未传则默认当前时间
+  - name: count
+    required: false
+    type: int
+    description: '`count>0`：取截止 end_time 最近 n 条；`count<=0`：使用 start_time/end_time
+      区间'
+  - name: dividend_type
+    required: false
+    type: str
+    description: 复权类型：`'none'`（不复权）、`'front'`（前复权）、`'back'`（后复权）
+    enum:
+    - '''back'''
+    - '''front'''
+    - '''none'''
+  - name: fill_data
+    required: false
+    type: bool
+    description: 是否向前填充缺失数据，默认 `True`
+- name: get_market_snapshot
+  description: '```python'
+  routing: get_market_snapshot
+  upstream_tool_mapping:
+    tdx_quant: get_market_snapshot
+  cache_ttl_key: realtime_quote
+  dangerous: false
+  params: []
+- name: get_stock_info
+  description: '```python'
+  routing: get_stock_info
+  upstream_tool_mapping:
+    tdx_quant: get_stock_info
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_relation
+  description: '```python'
+  routing: get_relation
+  upstream_tool_mapping:
+    tdx_quant: get_relation
+  cache_ttl_key: ticker_list
+  dangerous: false
+  params: []
+- name: get_divid_factors
+  description: '```python'
+  routing: get_divid_factors
+  upstream_tool_mapping:
+    tdx_quant: get_divid_factors
+  cache_ttl_key: historical
+  dangerous: false
+  params: []
+- name: get_more_info
+  description: '```python'
+  routing: get_more_info
+  upstream_tool_mapping:
+    tdx_quant: get_more_info
+  cache_ttl_key: realtime_quote
+  dangerous: false
+  params: []
+- name: get_gb_info
+  description: '```python'
+  routing: get_gb_info
+  upstream_tool_mapping:
+    tdx_quant: get_gb_info
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_kzz_info
+  description: '```python'
+  routing: get_kzz_info
+  upstream_tool_mapping:
+    tdx_quant: get_kzz_info
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_ipo_info
+  description: '```python'
+  routing: get_ipo_info
+  upstream_tool_mapping:
+    tdx_quant: get_ipo_info
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_trackzs_etf_info
+  description: '```python'
+  routing: get_trackzs_etf_info
+  upstream_tool_mapping:
+    tdx_quant: get_trackzs_etf_info
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_financial_data
+  description: '```python'
+  routing: get_financial_data
+  upstream_tool_mapping:
+    tdx_quant: get_financial_data
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_financial_data_by_date
+  description: '```python'
+  routing: get_financial_data_by_date
+  upstream_tool_mapping:
+    tdx_quant: get_financial_data_by_date
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_gpjy_value
+  description: '```python'
+  routing: get_gpjy_value
+  upstream_tool_mapping:
+    tdx_quant: get_gpjy_value
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_gpjy_value_by_date
+  description: '```python'
+  routing: get_gpjy_value_by_date
+  upstream_tool_mapping:
+    tdx_quant: get_gpjy_value_by_date
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_bkjy_value
+  description: '```python'
+  routing: get_bkjy_value
+  upstream_tool_mapping:
+    tdx_quant: get_bkjy_value
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_bkjy_value_by_date
+  description: '```python'
+  routing: get_bkjy_value_by_date
+  upstream_tool_mapping:
+    tdx_quant: get_bkjy_value_by_date
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_scjy_value
+  description: '```python'
+  routing: get_scjy_value
+  upstream_tool_mapping:
+    tdx_quant: get_scjy_value
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_scjy_value_by_date
+  description: '```python'
+  routing: get_scjy_value_by_date
+  upstream_tool_mapping:
+    tdx_quant: get_scjy_value_by_date
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params: []
+- name: get_gp_one_data
+  description: '```python'
+  routing: get_gp_one_data
+  upstream_tool_mapping:
+    tdx_quant: get_gp_one_data
+  cache_ttl_key: realtime_quote
+  dangerous: false
+  params: []
+- name: get_stock_list
+  description: '```python'
+  routing: get_stock_list
+  upstream_tool_mapping:
+    tdx_quant: get_stock_list
+  cache_ttl_key: ticker_list
+  dangerous: false
+  params: []
+- name: get_sector_list
+  description: '```python'
+  routing: get_sector_list
+  upstream_tool_mapping:
+    tdx_quant: get_sector_list
+  cache_ttl_key: ticker_list
+  dangerous: false
+  params: []
+- name: get_stock_list_in_sector
+  description: '```python'
+  routing: get_stock_list_in_sector
+  upstream_tool_mapping:
+    tdx_quant: get_stock_list_in_sector
+  cache_ttl_key: ticker_list
+  dangerous: false
+  params: []
+- name: get_user_sector
+  description: '```python'
+  routing: get_user_sector
+  upstream_tool_mapping:
+    tdx_quant: get_user_sector
+  cache_ttl_key: ticker_list
+  dangerous: false
+  params: []
+- name: create_sector
+  description: '```python'
+  routing: create_sector
+  upstream_tool_mapping:
+    tdx_quant: create_sector
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: delete_sector
+  description: '```python'
+  routing: delete_sector
+  upstream_tool_mapping:
+    tdx_quant: delete_sector
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: rename_sector
+  description: '```python'
+  routing: rename_sector
+  upstream_tool_mapping:
+    tdx_quant: rename_sector
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: clear_sector
+  description: '```python'
+  routing: clear_sector
+  upstream_tool_mapping:
+    tdx_quant: clear_sector
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: refresh_cache
+  description: '```python'
+  routing: refresh_cache
+  upstream_tool_mapping:
+    tdx_quant: refresh_cache
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: refresh_kline
+  description: '```python'
+  routing: refresh_kline
+  upstream_tool_mapping:
+    tdx_quant: refresh_kline
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: subscribe_hq
+  description: '```python'
+  routing: subscribe_hq
+  upstream_tool_mapping:
+    tdx_quant: subscribe_hq
+  cache_ttl_key: null
+  dangerous: false
+  params: []
+- name: unsubscribe_hq
+  description: '```python'
+  routing: unsubscribe_hq
+  upstream_tool_mapping:
+    tdx_quant: unsubscribe_hq
+  cache_ttl_key: null
+  dangerous: false
+  params: []
+- name: get_subscribe_hq_stock_list
+  description: '```python'
+  routing: get_subscribe_hq_stock_list
+  upstream_tool_mapping:
+    tdx_quant: get_subscribe_hq_stock_list
+  cache_ttl_key: null
+  dangerous: false
+  params: []
+- name: send_message
+  description: '```python'
+  routing: send_message
+  upstream_tool_mapping:
+    tdx_quant: send_message
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: send_file
+  description: '```python'
+  routing: send_file
+  upstream_tool_mapping:
+    tdx_quant: send_file
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: send_warn
+  description: '```python'
+  routing: send_warn
+  upstream_tool_mapping:
+    tdx_quant: send_warn
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: send_bt_data
+  description: '```python'
+  routing: send_bt_data
+  upstream_tool_mapping:
+    tdx_quant: send_bt_data
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: send_user_block
+  description: '```python'
+  routing: send_user_block
+  upstream_tool_mapping:
+    tdx_quant: send_user_block
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: exec_to_tdx
+  description: '```python'
+  routing: exec_to_tdx
+  upstream_tool_mapping:
+    tdx_quant: exec_to_tdx
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: print_to_tdx
+  description: '```python'
+  routing: print_to_tdx
+  upstream_tool_mapping:
+    tdx_quant: print_to_tdx
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: get_trading_dates
+  description: '```python'
+  routing: get_trading_dates
+  upstream_tool_mapping:
+    tdx_quant: get_trading_dates
+  cache_ttl_key: workday
+  dangerous: false
+  params: []
+- name: formula_format_data
+  description: '```python'
+  routing: formula_format_data
+  upstream_tool_mapping:
+    tdx_quant: formula_format_data
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: formula_set_data
+  description: '```python'
+  routing: formula_set_data
+  upstream_tool_mapping:
+    tdx_quant: formula_set_data
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: formula_set_data_info
+  description: '```python'
+  routing: formula_set_data_info
+  upstream_tool_mapping:
+    tdx_quant: formula_set_data_info
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: formula_zb
+  description: '```python'
+  routing: formula_zb
+  upstream_tool_mapping:
+    tdx_quant: formula_zb
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: formula_xg
+  description: '```python'
+  routing: formula_xg
+  upstream_tool_mapping:
+    tdx_quant: formula_xg
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: formula_exp
+  description: '```python'
+  routing: formula_exp
+  upstream_tool_mapping:
+    tdx_quant: formula_exp
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: formula_get_data
+  description: '```python'
+  routing: formula_get_data
+  upstream_tool_mapping:
+    tdx_quant: formula_get_data
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: formula_process_mul_zb
+  description: '```python'
+  routing: formula_process_mul_zb
+  upstream_tool_mapping:
+    tdx_quant: formula_process_mul_zb
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: formula_name
+    required: true
+    type: str
+    description: 专家公式名称
+  - name: formula_arg
+    required: false
+    type: str
+    description: 公式参数字符串
+  - name: return_count
+    required: false
+    type: int
+    description: 每只股票返回结果数量
+  - name: return_date
+    required: false
+    type: bool
+    description: 是否返回日期
+  - name: xsflag
+    required: false
+    type: int
+    description: 小数位控制
+  - name: stock_list
+    required: true
+    type: List[str]
+    description: 股票代码列表
+  - name: stock_period
+    required: false
+    type: str
+    description: 周期，默认 `1d`
+    enum:
+    - 1d
+  - name: start_time
+    required: false
+    type: str
+    description: 开始日期
+  - name: end_time
+    required: false
+    type: str
+    description: 结束日期
+  - name: count
+    required: false
+    type: int
+    description: 行情数据条数
+  - name: dividend_type
+    required: false
+    type: int
+    description: 复权类型数值
+- name: stock_account
+  description: '```python'
+  routing: stock_account
+  upstream_tool_mapping:
+    tdx_quant: stock_account
+  cache_ttl_key: null
+  dangerous: false
+  params: []
+- name: query_stock_orders
+  description: '```python'
+  routing: query_stock_orders
+  upstream_tool_mapping:
+    tdx_quant: query_stock_orders
+  cache_ttl_key: null
+  dangerous: false
+  params: []
+- name: query_stock_positions
+  description: '```python'
+  routing: query_stock_positions
+  upstream_tool_mapping:
+    tdx_quant: query_stock_positions
+  cache_ttl_key: null
+  dangerous: false
+  params: []
+- name: order_stock
+  description: '```python'
+  routing: order_stock
+  upstream_tool_mapping:
+    tdx_quant: order_stock
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: cancel_order_stock
+  description: '```python'
+  routing: cancel_order_stock
+  upstream_tool_mapping:
+    tdx_quant: cancel_order_stock
+  cache_ttl_key: null
+  dangerous: true
+  params: []
+- name: query_stock_asset
+  description: '```python'
+  routing: query_stock_asset
+  upstream_tool_mapping:
+    tdx_quant: query_stock_asset
+  cache_ttl_key: null
+  dangerous: false
+  params: []
