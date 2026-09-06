@@ -270,6 +270,7 @@ class MooTDX2Client:
             "get_stocks_in_block": self.get_stocks_in_block,
             "get_blocks_for_stock": self.get_blocks_for_stock,
             "stock_unusual": self.stock_unusual,
+            "indicator_boll": self.indicator_boll,
         }
 
         method = method_map.get(tool_name)
@@ -1254,3 +1255,133 @@ class MooTDX2Client:
         except Exception as e:
             logger.error(f"indicator_macd failed: {e}")
             return self._error_result(e, f"indicator_macd({code})")
+
+    # ========== RSI 指标 ==========
+    def _indicator_rsi_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
+        """同步计算 RSI 指标"""
+        import pandas as pd
+
+        kline = self._get_kline_sync(code, type, limit)
+        if not kline:
+            return {}
+        df = pd.DataFrame(kline)
+        if "close" not in df.columns or df.empty:
+            return {}
+        closes = df["close"].astype(float).tolist()
+        dates = df["date"].tolist() if "date" in df.columns else ["" for _ in closes]
+
+        def calc_rsi(data, n):
+            if len(data) < n + 1:
+                return [None] * len(data)
+            changes = [0.0] + [round(data[i] - data[i - 1], 3) for i in range(1, len(data))]
+            gains = [max(c, 0) for c in changes]
+            losses = [-min(c, 0) for c in changes]
+            avg_gain = sum(gains[1 : n + 1]) / n
+            avg_loss = sum(losses[1 : n + 1]) / n
+            rsis = [None] * n
+            if avg_loss == 0:
+                rsis.append(100.0)
+            else:
+                rsis.append(round(100 - 100 / (1 + avg_gain / avg_loss), 3))
+            for i in range(n + 1, len(changes)):
+                avg_gain = (avg_gain * (n - 1) + gains[i]) / n
+                avg_loss = (avg_loss * (n - 1) + losses[i]) / n
+                if avg_loss == 0:
+                    rsis.append(100.0)
+                else:
+                    rsis.append(round(100 - 100 / (1 + avg_gain / avg_loss), 3))
+            return rsis
+
+        return {
+            "rsi6": calc_rsi(closes, 6),
+            "rsi12": calc_rsi(closes, 12),
+            "rsi24": calc_rsi(closes, 24),
+            "dates": dates,
+        }
+
+    async def indicator_rsi(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """计算 RSI 指标
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数，默认100
+
+        Returns:
+            ToolResult: 包含 rsi6, rsi12, rsi24, dates
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._indicator_rsi_sync, code, type, limit)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"indicator_rsi failed: {e}")
+            return self._error_result(e, f"indicator_rsi({code})")
+
+    # ========== BOLL 布林带指标 ==========
+    def _indicator_boll_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
+        """同步计算BOLL布林带指标
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数
+
+        Returns:
+            dict: 包含 boll_upper, boll_mid, boll_lower, dates
+        """
+        import math
+        kline = self._get_kline_sync(code, type, limit)
+        if not kline:
+            return {}
+
+        try:
+            import pandas as pd
+            df = pd.DataFrame(kline)
+            if "close" not in df.columns or df.empty:
+                return {}
+            closes = df["close"].astype(float).tolist()
+            dates = df["date"].tolist() if "date" in df.columns else ["" for _ in closes]
+        except Exception:
+            closes = [float(r.get("close", 0)) for r in kline]
+            dates = [str(r.get("date", "")) for r in kline]
+
+        n, k = 20, 2
+        result = {"boll_upper": [], "boll_mid": [], "boll_lower": [], "dates": dates}
+
+        for i in range(len(closes)):
+            if i < n - 1:
+                result["boll_upper"].append(None)
+                result["boll_mid"].append(None)
+                result["boll_lower"].append(None)
+            else:
+                segment = closes[i - n + 1:i + 1]
+                ma = sum(segment) / n
+                variance = sum((x - ma) ** 2 for x in segment) / n
+                std = math.sqrt(variance)
+                result["boll_mid"].append(round(ma, 3))
+                result["boll_upper"].append(round(ma + k * std, 3))
+                result["boll_lower"].append(round(ma - k * std, 3))
+
+        return result
+
+    async def indicator_boll(self, code: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """计算BOLL布林带指标
+
+        Args:
+            code: 股票代码
+            type: K线类型 (day/week/month/minute1/5/15/30/60)
+            limit: 返回条数
+
+        Returns:
+            ToolResult: 包含 boll_upper, boll_mid, boll_lower, dates
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._indicator_boll_sync, code, type, limit)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except Exception as e:
+            logger.error(f"indicator_boll failed: {e}")
+            return self._error_result(e, f"indicator_boll({code})")

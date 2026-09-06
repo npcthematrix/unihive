@@ -64,3 +64,46 @@ class TestMooTDX2Client:
         for v in result["vol_ma10"]:
             if v is not None:
                 assert v > 0
+
+    def test_indicator_macd(self):
+        """Test indicator_macd returns dif, dea, macd, dates"""
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        dates = [(datetime(2024, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+        close_prices = [10.0 + i * 0.1 for i in range(60)]
+        mock_kline = [{"date": d, "open": p - 0.1, "high": p + 0.3, "low": p - 0.2, "close": p, "vol": 1000000}
+                      for d, p in zip(dates, close_prices)]
+        with mock.patch.object(client, '_get_kline_sync', return_value=mock_kline):
+            result = client._indicator_macd_sync("600000", "day", 60)
+        assert "dif" in result
+        assert "dea" in result
+        assert "macd" in result
+        assert "dates" in result
+        assert len(result["dif"]) == len(result["dates"])
+        # Verify DIF calculation: dif = ema12 - ema26
+        import pandas as pd
+        closes = [r["close"] for r in mock_kline]
+        ema12_series = pd.Series(closes).ewm(span=12, adjust=False).mean()
+        ema26_series = pd.Series(closes).ewm(span=26, adjust=False).mean()
+        expected_dif_last = round(ema12_series.iloc[-1] - ema26_series.iloc[-1], 3)
+        assert result["dif"][-1] == expected_dif_last
+
+    def test_indicator_rsi(self):
+        """Test indicator_rsi returns rsi6, rsi12, rsi24, dates"""
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        dates = [(datetime(2024, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+        close_prices = [10.0 + i * 0.1 for i in range(60)]
+        mock_kline = [{"date": d, "open": p - 0.1, "high": p + 0.3, "low": p - 0.2, "close": p, "vol": 1000000}
+                      for d, p in zip(dates, close_prices)]
+        with mock.patch.object(client, '_get_kline_sync', return_value=mock_kline):
+            result = client._indicator_rsi_sync("600000", "day", 60)
+        assert "rsi6" in result
+        assert "rsi12" in result
+        assert "rsi24" in result
+        assert "dates" in result
+        # RSI values should be between 0 and 100
+        for rsi_name in ["rsi6", "rsi12", "rsi24"]:
+            for v in result[rsi_name]:
+                if v is not None:
+                    assert 0 <= v <= 100, f"{rsi_name} value {v} out of range"
