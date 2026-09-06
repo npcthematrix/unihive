@@ -235,3 +235,23 @@ class TestMooTDX2Client:
         # ma60 needs 60 data points
         assert all(v is None for v in result["ma60"][:59])
         assert result["ma60"][59] is not None
+
+    def test_indicator_kdj(self):
+        """Test indicator_kdj returns k, d, j, dates and J = 3K - 2D"""
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        dates = [(datetime(2024, 1, 1) + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(60)]
+        mock_kline = [{"date": d, "open": 10.0 + i * 0.1 - 0.05, "high": 10.0 + i * 0.1 + 0.3,
+                       "low": 10.0 + i * 0.1 - 0.2, "close": 10.0 + i * 0.1, "vol": 1000000}
+                      for i, d in zip(range(60), dates)]
+        with mock.patch.object(client, '_get_kline_sync', return_value=mock_kline):
+            result = client._indicator_kdj_sync("600000", "day", 60)
+        assert "k" in result
+        assert "d" in result
+        assert "j" in result
+        assert "dates" in result
+        # Verify J = 3K - 2D for computed values
+        for i in range(9, len(result["k"])):
+            if result["k"][i] is not None:
+                expected_j = 3 * result["k"][i] - 2 * result["d"][i]
+                assert abs(result["j"][i] - expected_j) < 0.01
