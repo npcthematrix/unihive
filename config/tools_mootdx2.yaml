@@ -5,6 +5,7 @@ tools:
   # ===== 在线接口 (24) =====
   - name: get_quote
     description: |
+      【· 在线】
       【实时行情】获取单只股票的最新五档行情数据。
 
       【使用场景】
@@ -40,6 +41,7 @@ tools:
 
   - name: get_kline
     description: |
+      【· 在线】
       【K线数据】获取股票/指数的 K 线数据（日/周/月/分钟级别）。
 
       【使用场景】
@@ -84,6 +86,7 @@ tools:
 
   - name: get_batch_quote
     description: |
+      【· 在线】
       【批量行情】批量获取多只股票的实时行情。
 
       【使用场景】
@@ -113,6 +116,7 @@ tools:
 
   - name: get_minute_data
     description: |
+      【· 在线】
       【今日分时】获取单只股票今日的分时数据（240 根）。
 
       【使用场景】
@@ -142,6 +146,7 @@ tools:
 
   - name: get_trade
     description: |
+      【· 在线】
       【逐笔成交】获取股票今日的逐笔成交明细。
 
       【使用场景】
@@ -172,6 +177,7 @@ tools:
 
   - name: get_trade_history
     description: |
+      【· 在线】
       【历史逐笔】获取股票指定日期的历史逐笔成交（分页）。
 
       【使用场景】
@@ -217,6 +223,7 @@ tools:
 
   - name: get_trade_history_full
     description: |
+      【· 在线】
       【历史逐笔（全量）】获取股票截止日期的历史逐笔成交（不限制条数）。
 
       【使用场景】
@@ -256,6 +263,7 @@ tools:
 
   - name: get_minute_trade_all
     description: |
+      【· 在线】
       【分时成交汇总】获取股票全日分时成交汇总数据。
 
       【使用场景】
@@ -291,6 +299,7 @@ tools:
 
   - name: get_index_kline
     description: |
+      【· 在线】
       【指数K线】获取指数的 K 线数据。
 
       【使用场景】
@@ -329,6 +338,7 @@ tools:
 
   - name: get_index_bars
     description: |
+      【· 在线】
       【指数K线（指定起止）】获取指数 K 线数据（指定起始位置和偏移量）。
 
       【使用场景】
@@ -373,6 +383,7 @@ tools:
 
   - name: get_index_all
     description: |
+      【· 在线】
       【全指K线（含成分股）】获取全指 K 线及成分股信息。
 
       【使用场景】
@@ -412,6 +423,7 @@ tools:
 
   - name: get_code_list
     description: |
+      【· 在线】
       【全量代码列表】获取指定交易所的全部证券代码列表。
 
       【使用场景】
@@ -444,6 +456,7 @@ tools:
 
   - name: get_stock_codes
     description: |
+      【· 在线】
       【股票代码列表】获取股票代码列表（分页）。
 
       【使用场景】
@@ -478,6 +491,7 @@ tools:
 
   - name: get_etf_codes
     description: |
+      【· 在线】
       【ETF代码列表】获取 ETF 代码列表。
 
       【使用场景】
@@ -511,6 +525,7 @@ tools:
 
   - name: get_etf_list
     description: |
+      【· 在线】
       【ETF列表】获取 ETF 产品列表（带详细信息）。
 
       【使用场景】
@@ -544,6 +559,7 @@ tools:
 
   - name: get_market_count
     description: |
+      【· 在线】
       【市场证券数量】获取各市场的证券数量统计。
 
       【使用场景】
@@ -568,6 +584,7 @@ tools:
 
   - name: get_workday
     description: |
+      【· 在线】
       【交易日查询】查询基准日前 N 个交易日。
 
       【使用场景】
@@ -601,6 +618,7 @@ tools:
 
   - name: get_workday_range
     description: |
+      【· 在线】
       【交易日范围】查询指定日期区间的所有交易日。
 
       【使用场景】
@@ -634,6 +652,7 @@ tools:
 
   - name: get_income
     description: |
+      【· 在线】
       【盘后收益】获取股票盘后收益数据。
 
       【使用场景】
@@ -673,6 +692,7 @@ tools:
 
   - name: get_block
     description: |
+      【· 在线】
       【行业/概念板块】获取行业或概念板块列表。
 
       【使用场景】
@@ -703,6 +723,7 @@ tools:
 
   - name: get_stocks_in_block
     description: |
+      【· 在线】
       【板块成分股】查询指定板块包含的所有成分股。
 
       【使用场景】
@@ -746,6 +767,7 @@ tools:
 
   - name: get_blocks_for_stock
     description: |
+      【· 在线】
       【个股所属板块】查询指定股票所属的所有板块。
 
       【使用场景】
@@ -776,6 +798,7 @@ tools:
 
   - name: get_f10
     description: |
+      【· 在线】
       【F10基础数据】获取股票的 F10 基础数据。
 
       【使用场景】
@@ -811,6 +834,7 @@ tools:
 
   - name: get_f10_company
     description: |
+      【· 在线】
       【F10公司概况】获取股票的 F10 公司概况数据。
 
       【使用场景】
@@ -841,6 +865,7 @@ tools:
 
   - name: get_xdxr
     description: |
+      【· 在线】
       【除权除息数据】获取股票的除权除息信息。
 
       【使用场景】
@@ -870,6 +895,7 @@ tools:
 
   - name: get_stock_all
     description: |
+      【· 在线】
       【全部股票列表】获取全市场股票列表。
 
       【使用场景】
@@ -896,6 +922,7 @@ tools:
   # ===== 离线接口 (4) =====
   - name: get_k_data
     description: |
+      【· 离线】
       【K线数据（本地）】读取本地日线文件获取 K 线数据（指定日期范围）。
 
       【使用场景】
@@ -937,6 +964,7 @@ tools:
 
   - name: get_minutes
     description: |
+      【· 离线】
       【分钟K线（本地）】读取本地 1 分钟文件获取历史分时数据。
 
       【使用场景】
@@ -973,6 +1001,7 @@ tools:
 
   - name: search_stock
     description: |
+      【· 离线】
       【搜索股票（本地）】在本地 block 文件中模糊搜索股票。
 
       【使用场景】
@@ -1003,6 +1032,7 @@ tools:
 
   - name: mootdx2_stock_info
     description: |
+      【· 离线】
       【聚合股票信息】混合调用：在线快照 + 本地 K 线 + 本地分时。
 
       【使用场景】
@@ -1048,6 +1078,7 @@ tools:
 
   - name: get_index_overview
     description: |
+      【· 在线】
       【主要指数概览】获取 A 股 6 大主要指数的实时行情。
 
       【使用场景】
@@ -1071,6 +1102,7 @@ tools:
 
   - name: stock_top_board
     description: |
+      【· 在线】
       【市场排行榜】获取 A 股全市场排行榜，支持多维度排序。
 
       【使用场景】
@@ -1111,6 +1143,7 @@ tools:
 
   - name: stock_unusual
     description: |
+      【· 在线】
       【市场异动监控】获取市场异动数据（主力监控精灵）。
 
       【使用场景】
@@ -1136,6 +1169,7 @@ tools:
 
   - name: indicator_ma
     description: |
+      【· 在线】
       【移动平均线 MA】计算并返回 MA5/MA10/MA20/MA60 移动平均线。
 
       【使用场景】
@@ -1169,6 +1203,7 @@ tools:
 
   - name: indicator_ema
     description: |
+      【· 在线】
       【指数移动平均线 EMA】计算并返回 EMA12/EMA26 指数加权移动平均线。
 
       【使用场景】
@@ -1200,6 +1235,7 @@ tools:
 
   - name: indicator_macd
     description: |
+      【· 在线】
       【MACD 指标】计算 MACD (DIF/DEA/柱状图)。
 
       【使用场景】
@@ -1233,6 +1269,7 @@ tools:
 
   - name: indicator_rsi
     description: |
+      【· 在线】
       【RSI 相对强弱指标】计算 RSI6/RSI12/RSI24。
 
       【使用场景】
@@ -1263,6 +1300,7 @@ tools:
 
   - name: indicator_kdj
     description: |
+      【· 在线】
       【KDJ 随机指标】计算 K/D/J 值。
 
       【使用场景】
@@ -1293,6 +1331,7 @@ tools:
 
   - name: indicator_boll
     description: |
+      【· 在线】
       【布林带 BOLL】计算上轨/中轨/下轨。
 
       【使用场景】
@@ -1323,6 +1362,7 @@ tools:
 
   - name: indicator_atr
     description: |
+      【· 在线】
       【ATR 真实波幅】计算 ATR 指标。
 
       【使用场景】
@@ -1353,6 +1393,7 @@ tools:
 
   - name: indicator_vol_ma
     description: |
+      【· 在线】
       【成交量均线】计算 VOL_MA5/VOL_MA10 成交量简单移动平均。
 
       【使用场景】
