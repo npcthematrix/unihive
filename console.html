@@ -901,8 +901,7 @@ print(match.data)</pre>
         }
 
         const UPSTREAM_DISPLAY_NAME = {
-            'tdx_local':          '通达信-行情',
-            'tdx_tq_local':       '通达信-交易终端',
+            'tdx_quant':          '通达信-量化终端',
             'mootdx2':           'MooTDX2',
             'fuyao_ashare':       '同花顺-a-share',
             'fuyao_index':        '同花顺-a-share-index',
@@ -1067,10 +1066,9 @@ print(match.data)</pre>
         function stopAutoRefresh() {
             if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
         }
-        const GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'mootdx2', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
+        const GROUP_ORDER = ['tdx_quant', 'mootdx2', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
         const GROUP_META = {
-            'tdx_local':          { title: '通达信-行情', desc: '行情/K线/分时/ETF/指数' },
-            'tdx_tq_local':       { title: '通达信-交易终端', desc: '行情/自选/交易/公式系统 (TQ-Local codegen)' },
+            'tdx_quant':          { title: '通达信-量化终端', desc: '进程内直调 tqcenter.py：行情/板块/交易日/财务/公式/交易/预警 (54 工具)' },
             'mootdx2':            { title: 'MooTDX2', desc: '基于 mootdx2 的行情/K线/财务/板块/日历' },
             'fuyao_ashare':       { title: '同花顺-a-share', desc: 'A 股行情/财报/估值/特殊数据, 端点 /mcp/a-share' },
             'fuyao_index':        { title: '同花顺-a-share-index', desc: '指数/板块目录/成分股/历史K线, 端点 /mcp/a-share-index' },
@@ -1680,10 +1678,9 @@ print(match.data)</pre>
 
         /* ===== 工具清单 (tool-inventory) ===== */
         const INV_ALL_KEY = '__all__';
-        const INV_GROUP_ORDER = ['tdx_local', 'tdx_tq_local', 'mootdx2', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
+        const INV_GROUP_ORDER = ['tdx_quant', 'mootdx2', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
         const INV_GROUP_META = {
-            tdx_local:       { title: '通达信-行情' },
-            tdx_tq_local:    { title: '通达信-交易终端' },
+            tdx_quant:       { title: '通达信-量化终端' },
             mootdx2:        { title: 'MooTDX2' },
             fuyao_ashare:    { title: '同花顺-a-share' },
             fuyao_index:     { title: '同花顺-指数' },
