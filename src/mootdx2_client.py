@@ -1006,6 +1006,81 @@ class MooTDX2Client:
             logger.error(f"get_custom_sector_list failed: {e}")
             return self._error_result(e, "get_custom_sector_list()")
 
+    def _get_custom_sector_stocks_sync(self, sector_code: str, market: str = "auto") -> list:
+        """同步读取自定义板块成分股
+
+        Args:
+            sector_code: 板块名称（用户自定义）
+            market: 市场（保留参数，对齐其它工具签名；内部按代码前缀自动推断）
+        """
+        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
+        if not tdxdir:
+            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
+
+        blocknew_dir = Path(tdxdir) / "T0002" / "blocknew"
+        if not blocknew_dir.exists():
+            raise SectorDataError(
+                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
+                f"自定义板块目录不存在: {blocknew_dir}",
+            )
+
+        try:
+            from mootdx.tools.customize import Customize
+            customize = Customize(tdxdir=tdxdir)
+            codes = customize.search(name=sector_code)
+        except Exception as e:
+            logger.error(f"Customize.search(name=) failed: {e}")
+            raise SectorDataError(
+                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
+                f"读取自定义板块失败: {e}",
+            )
+
+        if codes is None:
+            raise SectorDataError(
+                MooTDXErrorType.SECTOR_NOT_FOUND,
+                f"自定义板块 '{sector_code}' 不存在",
+            )
+
+        result = []
+        for code in codes:
+            code_str = str(code).strip()
+            if code_str.lower().startswith(("sh", "sz", "bj")):
+                m = code_str[:2].lower()
+                pure = code_str[2:]
+            else:
+                if code_str.startswith(("60", "68")):
+                    m = "sh"
+                elif code_str.startswith(("00", "30")):
+                    m = "sz"
+                elif code_str.startswith(("8", "4")):
+                    m = "bj"
+                else:
+                    m = "sz"
+                pure = code_str
+            result.append({"code": pure, "market": m})
+        return result
+
+    async def get_custom_sector_stocks(
+        self, sector_code: str, market: str = "auto"
+    ) -> ToolResult:
+        """获取自定义板块的成分股
+
+        Args:
+            sector_code: 自定义板块名（用户在 TDX 客户端命名的标签）
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(
+                None, self._get_custom_sector_stocks_sync, sector_code, market
+            )
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except SectorDataError as e:
+            return self._sector_error_result(e)
+        except Exception as e:
+            logger.error(f"get_custom_sector_stocks failed: {e}")
+            return self._error_result(e, f"get_custom_sector_stocks({sector_code})")
+
     # ========== 指数概览 ==========
     def _index_overview_sync(self) -> list:
         """同步获取主要指数概览（6个指数）"""
