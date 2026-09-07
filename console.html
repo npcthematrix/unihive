@@ -139,8 +139,8 @@
         .ifs-toggle input { cursor: pointer; margin: 0; }
         .ifs-toggle .toggle-count { margin-left: auto; font-family: monospace; font-size: 0.7rem; padding: 1px 6px; background: var(--card-bg); border-radius: 999px; color: var(--text-secondary); }
         .ifs-toggle.active { color: var(--text); font-weight: 500; }
-        .filter-datasource-select { padding: 4px 8px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: 4px; font-size: 0.78rem; cursor: pointer; margin-left: 8px; }
-        .filter-datasource-select:hover { border-color: var(--primary); }
+        .datasource-chips { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+        .chip-label { font-size: 0.78rem; color: var(--text-secondary); margin-right: 4px; align-self: center; }
         .ifs-nav { display: flex; flex-direction: column; gap: 2px; }
         .ifs-nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: none; background: transparent; cursor: pointer; border-radius: 6px; font-size: 0.85rem; color: var(--text); text-align: left; transition: background 150ms ease; border-left: 3px solid transparent; width: 100%; }
         .ifs-nav-item:hover { background: #f8f9fa; }
@@ -490,7 +490,6 @@
         <div class="tabs" role="tablist" aria-label="功能面板">
             <button class="tab" data-panel="status" role="tab" aria-selected="false" aria-controls="status">上游状态</button>
             <button class="tab active" data-panel="interfaces" role="tab" aria-selected="true" aria-controls="interfaces">MCP APIs</button>
-            <button class="tab" data-panel="tool-inventory" role="tab" aria-selected="false" aria-controls="tool-inventory">工具清单</button>
             <button class="tab" data-panel="config" role="tab" aria-selected="false" aria-controls="config">配置信息</button>
             <button class="tab" data-panel="onboarding" role="tab" aria-selected="false" aria-controls="onboarding">接入指南</button>
         </div>
@@ -584,31 +583,19 @@
                             <label class="ifs-toggle" data-toggle="dangerous"><input type="checkbox" /> <span>仅显示危险工具</span><span class="toggle-count" id="tgl-count-dangerous">0</span></label>
                             <label class="ifs-toggle" data-toggle="cache"><input type="checkbox" /> <span>仅显示有缓存</span><span class="toggle-count" id="tgl-count-cache">0</span></label>
                             <label class="ifs-toggle" data-toggle="noparam"><input type="checkbox" /> <span>仅显示无参数</span><span class="toggle-count" id="tgl-count-noparam">0</span></label>
-                            <select id="filter-datasource" class="filter-datasource-select" title="按数据源类型筛选">
-                                <option value="">全部数据源</option>
-                                <option value="online">在线</option>
-                                <option value="offline">离线</option>
-                                <option value="mixed">混合</option>
-                            </select>
+                        </div>
+                        <div class="ifs-chips datasource-chips" id="datasource-chips">
+                            <span class="chip-label">数据源:</span>
+                            <button class="chip active" data-dst="">全部 <span class="chip-count" id="chip-dst-all">0</span></button>
+                            <button class="chip" data-dst="online">在线 <span class="chip-count" id="chip-dst-online">0</span></button>
+                            <button class="chip" data-dst="offline">离线 <span class="chip-count" id="chip-dst-offline">0</span></button>
+                            <button class="chip" data-dst="mixed">混合 <span class="chip-count" id="chip-dst-mixed">0</span></button>
                         </div>
                         <nav id="ifs-nav" class="ifs-nav" aria-label="接口分组"></nav>
                     </aside>
                     <main id="ifs-content" class="ifs-content">
                         <div class="loading">加载中...</div>
                     </main>
-                </div>
-            </div>
-        </div>
-        <div id="tool-inventory" class="panel">
-            <div class="card">
-                <div class="card-toolbar">
-                    <h2>工具清单 <span class="timestamp" id="inventory-timestamp"></span></h2>
-                    <div class="toolbar-actions">
-                        <span class="ifs-meta" id="inv-total-meta"></span>
-                    </div>
-                </div>
-                <div id="inv-content">
-                    <div class="loading">加载中...</div>
                 </div>
             </div>
         </div>
@@ -626,13 +613,11 @@
                 <button class="cfg-subtab" data-cfg="mapping">工具映射 <span class="cfg-subtab-count" id="cfg-count-mapping">0</span></button>
                 <button class="cfg-subtab" data-cfg="tools">工具规格 <span class="cfg-subtab-count" id="cfg-count-tools">0</span></button>
                 <button class="cfg-subtab" data-cfg="cache">缓存</button>
-                <button class="cfg-subtab" data-cfg="global">全局</button>
             </div>
             <div class="cfg-panel active" data-cfg-panel="upstreams" id="cfg-panel-upstreams"></div>
             <div class="cfg-panel" data-cfg-panel="mapping" id="cfg-panel-mapping"></div>
             <div class="cfg-panel" data-cfg-panel="tools" id="cfg-panel-tools"></div>
             <div class="cfg-panel" data-cfg-panel="cache" id="cfg-panel-cache"></div>
-            <div class="cfg-panel" data-cfg-panel="global" id="cfg-panel-global"></div>
         </div>
         <div id="onboarding" class="panel">
             <nav class="onboarding-nav" id="onboarding-nav">
@@ -1099,7 +1084,7 @@ print(match.data)</pre>
         let toggles = { dangerous: false, cache: false, noparam: false };
         let dataSourceFilter = ''; // online/offline/mixed
         function hasActiveFilters() {
-            return searchQuery || hasActiveFilters() || dataSourceFilter;
+            return searchQuery || Object.values(toggles).some(Boolean) || dataSourceFilter;
         }
         let upstreamDotStatus = {};
 
@@ -1200,6 +1185,10 @@ print(match.data)</pre>
             document.getElementById('tgl-count-dangerous').textContent = allTools.filter(t => t.dangerous).length;
             document.getElementById('tgl-count-cache').textContent = allTools.filter(t => t.cache_ttl_key).length;
             document.getElementById('tgl-count-noparam').textContent = allTools.filter(t => !t.params || t.params.length === 0 || (t.params.length === 1 && t.params[0] === '?')).length;
+            document.getElementById('chip-dst-all').textContent = allTools.length;
+            document.getElementById('chip-dst-online').textContent = allTools.filter(t => t.data_source_type === 'online').length;
+            document.getElementById('chip-dst-offline').textContent = allTools.filter(t => t.data_source_type === 'offline').length;
+            document.getElementById('chip-dst-mixed').textContent = allTools.filter(t => t.data_source_type === 'mixed').length;
         }
         function renderEmpty() {
             const root = document.getElementById('ifs-content');
@@ -1433,6 +1422,38 @@ print(match.data)</pre>
                         </table>
                     </div>
                 </div>`;
+            const logging = data.logging || {};
+            const dd = data.disable_dangerous;
+            const sr = data.strict_registry;
+            const sw = (label, val, hint) => val
+                ? `<span class="cfg-switch on" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">${escapeHtml(label)}</span>`
+                : `<span class="cfg-switch off" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">${escapeHtml(label)}</span>`;
+            const loggingKv = Object.entries(logging).map(([k, v]) => {
+                const display = typeof v === 'object' && v
+                    ? Object.entries(v).map(([k2, v2]) => `${escapeHtml(k2)}=${escapeHtml(String(v2))}`).join(', ')
+                    : escapeHtml(String(v));
+                return `<div class="k">${escapeHtml(k)}</div><div class="v">${display}</div>`;
+            }).join('') || '<div class="k">(无)</div><div class="v">-</div>';
+            root.innerHTML += `
+                <div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> 全局开关</span>
+                    </div>
+                    <div class="cfg-section-body">
+                        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+                            ${sw('disable_dangerous', dd, '启用后跳过所有 dangerous: true 的 tool')}
+                            ${sw('strict_registry', sr, '启用后启动校验 YAML 工具名都在上游 tools/list 中实际出现')}
+                        </div>
+                    </div>
+                </div>
+                <div class="cfg-section">
+                    <div class="cfg-section-header" data-toggle-section>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> Logging <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 日志配置</span></span>
+                    </div>
+                    <div class="cfg-section-body">
+                        <div class="cfg-kv-grid">${loggingKv}</div>
+                    </div>
+                </div>`;
             root.querySelectorAll('[data-toggle-section]').forEach(hdr => {
                 hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
             });
@@ -1613,44 +1634,6 @@ print(match.data)</pre>
                 hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
             });
         }
-        function renderCfgGlobal(data) {
-            const root = document.getElementById('cfg-panel-global');
-            const dd = data.disable_dangerous;
-            const sr = data.strict_registry;
-            const logging = data.logging || {};
-            const sw = (label, val, hint) => val
-                ? `<span class="cfg-switch on" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">${escapeHtml(label)}</span>`
-                : `<span class="cfg-switch off" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">${escapeHtml(label)}</span>`;
-            const loggingKv = Object.entries(logging).map(([k, v]) => {
-                const display = typeof v === 'object' && v
-                    ? Object.entries(v).map(([k2, v2]) => `${escapeHtml(k2)}=${escapeHtml(String(v2))}`).join(', ')
-                    : escapeHtml(String(v));
-                return `<div class="k">${escapeHtml(k)}</div><div class="v">${display}</div>`;
-            }).join('') || '<div class="k">(无)</div><div class="v">-</div>';
-            root.innerHTML = `
-                <div class="cfg-section">
-                    <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> 全局开关</span>
-                    </div>
-                    <div class="cfg-section-body">
-                        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-                            ${sw('disable_dangerous', dd, '启用后跳过所有 dangerous: true 的 tool')}
-                            ${sw('strict_registry', sr, '启用后启动校验 YAML 工具名都在上游 tools/list 中实际出现')}
-                        </div>
-                    </div>
-                </div>
-                <div class="cfg-section">
-                    <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> Logging <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 日志配置</span></span>
-                    </div>
-                    <div class="cfg-section-body">
-                        <div class="cfg-kv-grid">${loggingKv}</div>
-                    </div>
-                </div>`;
-            root.querySelectorAll('[data-toggle-section]').forEach(hdr => {
-                hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
-            });
-        }
         let _cfgCache = null;
         async function loadConfig(silent = false) {
             try {
@@ -1660,7 +1643,6 @@ print(match.data)</pre>
                 renderCfgMapping(data);
                 renderCfgTools(data);
                 renderCfgCache(data);
-                renderCfgGlobal(data);
                 if (!silent) {
                     const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
                     const el = document.getElementById('config-last-refresh');
@@ -1676,7 +1658,7 @@ print(match.data)</pre>
                 console.error('Load config error:', e);
                 _cfgCache = null;
                 const failMsg = '<div class="loading">加载失败，请点击「立即刷新」重试</div>';
-                ['cfg-panel-upstreams', 'cfg-panel-mapping', 'cfg-panel-tools', 'cfg-panel-cache', 'cfg-panel-global']
+                ['cfg-panel-upstreams', 'cfg-panel-mapping', 'cfg-panel-tools', 'cfg-panel-cache']
                 .forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = failMsg; });
                 const meta = document.getElementById('config-meta');
                 if (meta) meta.textContent = '加载失败';
@@ -1697,197 +1679,20 @@ print(match.data)</pre>
             await copyText(JSON.stringify(_cfgCache, null, 2), e.currentTarget);
         });
 
-        /* ===== 工具清单 (tool-inventory) ===== */
-        const INV_ALL_KEY = '__all__';
-        const INV_GROUP_ORDER = ['tdx_quant', 'mootdx2', 'fuyao_ashare', 'fuyao_index', 'fuyao_meta', 'fuyao_fund'];
-        const INV_GROUP_META = {
-            tdx_quant:       { title: '通达信-量化终端' },
-            mootdx2:        { title: 'MooTDX2' },
-            fuyao_ashare:    { title: '同花顺-a-share' },
-            fuyao_index:     { title: '同花顺-指数' },
-            fuyao_meta:      { title: '同花顺-meta' },
-            fuyao_fund:      { title: '同花顺-fund' },
-        };
-        let invTools = [];
-        let invActiveGroup = INV_ALL_KEY;
-        let invQuery = '';
-        let invSourceFilter = new Set();
-        let invDangerousOnly = false;
-        let invRawData = null;
-
-        async function loadInventory() {
-            try {
-                const data = await fetchJSON('/api/mcp-tools-list');
-                document.getElementById('inventory-timestamp').textContent = formatTime(data.timestamp);
-                if (data.error) {
-                    document.getElementById('inv-content').innerHTML = `<div class="loading">调用失败：${escapeHtml(data.error)}</div>`;
-                    return;
-                }
-                invTools = data.tools || [];
-                invRawData = data;
-                renderInvToggles();
-                renderInvAll();
-            } catch (e) {
-                console.error('Load inventory error:', e);
-                document.getElementById('inv-content').innerHTML = '<div class="loading">加载失败，请刷新重试</div>';
-            }
-        }
-
-        function renderInvToggles() {
-            const root = document.getElementById('inv-toggles');
-            if (!root) return;
-            const counts = {};
-            for (const t of invTools) {
-                counts[t.source] = (counts[t.source] || 0) + 1;
-            }
-            const groups = [INV_ALL_KEY, ...INV_GROUP_ORDER];
-            root.innerHTML = groups.map(key => {
-                if (key === INV_ALL_KEY) return '';
-                const meta = INV_GROUP_META[key] || { title: key };
-                const count = counts[key] || 0;
-                if (!count) return '';
-                const checked = invSourceFilter.has(key) ? ' checked' : '';
-                return `<label class="inv-src-toggle${checked ? ' active' : ''}"><input type="checkbox"${checked} data-source="${escapeHtml(key)}" /> <span>${escapeHtml(meta.title)}</span> <span class="toggle-count">${count}</span></label>`;
-            }).join('');
-        }
-
-        function invFiltered() {
-            let out = invTools;
-            if (invQuery) {
-                const q = invQuery.toLowerCase();
-                out = out.filter(t =>
-                    (t.name || '').toLowerCase().includes(q) ||
-                    (t.description || '').toLowerCase().includes(q)
-                );
-            }
-            if (invSourceFilter.size > 0) {
-                out = out.filter(t => invSourceFilter.has(t.source));
-            }
-            if (invDangerousOnly) {
-                out = out.filter(t => t.dangerous);
-            }
-            return out;
-        }
-
-        function renderInvNav() {
-            const root = document.getElementById('inv-nav');
-            if (!root) return;
-            const filtered = invFiltered();
-            const buckets = new Map();
-            for (const t of filtered) {
-                if (!buckets.has(t.source)) buckets.set(t.source, []);
-                buckets.get(t.source).push(t);
-            }
-            const allFiltered = filtered;
-            const groups = [INV_ALL_KEY, ...INV_GROUP_ORDER];
-            root.innerHTML = groups.map(key => {
-                const total = key === INV_ALL_KEY ? invTools.length : invTools.filter(t => t.source === key).length;
-                const matched = key === INV_ALL_KEY ? allFiltered.length : (buckets.get(key) || []).length;
-                if (total === 0) return '';
-                const meta = key === INV_ALL_KEY ? { title: '全部' } : (INV_GROUP_META[key] || { title: key });
-                const countText = (invQuery || invSourceFilter.size > 0) && total ? `${matched}/${total}` : `${total}`;
-                const isActive = key === invActiveGroup;
-                const isDisabled = matched === 0;
-                return `<button type="button" class="ifs-nav-item${isActive ? ' active' : ''}" data-group="${escapeHtml(key)}"${isActive ? ' aria-current="true"' : ''}${isDisabled ? ' disabled' : ''}><span class="label">${escapeHtml(meta.title)}</span><span class="count">${countText}</span></button>`;
-            }).join('');
-        }
-
-        function renderInvContent() {
-            const root = document.getElementById('inv-content');
-            if (!root) return;
-            if (invRawData) {
-                const json = JSON.stringify(invRawData, null, 2);
-                root.innerHTML = `<div class="json-block"><pre><code>${escapeHtml(json)}</code></pre></div>`;
-                return;
-            }
-            const buckets = new Map();
-            for (const t of filtered) {
-                if (!buckets.has(t.source)) buckets.set(t.source, []);
-                buckets.get(t.source).push(t);
-            }
-            const tools = invActiveGroup === INV_ALL_KEY ? filtered : (buckets.get(invActiveGroup) || []);
-            if (tools.length === 0) {
-                root.innerHTML = `<div class="ifs-empty"><div class="ifs-empty-icon">🔍</div><div class="ifs-empty-text">无匹配工具</div><button type="button" class="ifs-empty-action" onclick="invClearSearch()">清空搜索</button></div>`;
-                return;
-            }
-            const meta = invActiveGroup === INV_ALL_KEY
-                ? { title: '全部' }
-                : { title: (INV_GROUP_META[invActiveGroup] || { title: invActiveGroup }).title };
-            const metaEl = document.getElementById('inv-total-meta');
-            if (metaEl) metaEl.textContent = `${meta.title} · ${tools.length} 个工具`;
-            window._invFilteredNames = tools.map(t => t.name);
-            const headerHtml = invActiveGroup === INV_ALL_KEY
-                ? '<th style="width:26%">名称</th><th>描述</th><th style="width:80px">操作</th>'
-                : '<th style="width:26%">名称</th><th>描述</th><th style="width:12%">来源</th><th style="width:80px">操作</th>';
-            const rows = tools.map((t, i) => {
-                const params = t.params || [];
-                const hasEnum = params.some(p => p.enum);
-                const paramCount = params.length;
-                const badges = [];
-                if (hasEnum) badges.push('<span class="badge badge-cache" title="部分参数有枚举值">enum</span>');
-                const paramNames = params.map(p => p.name || '');
-                const moreCount = paramNames.length > 3 ? paramNames.length - 3 : 0;
-                const paramsDisplay = moreCount > 0
-                    ? highlight(paramNames.slice(0, 3).join(', '), invQuery) + ` <span class="params-more">+${moreCount} more</span>`
-                    : (paramNames.length > 0 ? highlight(paramNames.join(', '), invQuery) : '');
-                const sourceCell = invActiveGroup === INV_ALL_KEY
-                    ? ''
-                    : `<td><button type="button" class="chain chain-link" data-source="${escapeHtml(t.source || '')}">${escapeHtml(t.source || '-')} →</button></td>`;
-                const detailBody = buildInvDetailBody(t);
-                return `<tr data-tool="${escapeHtml(t.name)}"><td><span class="tool-name">${highlight(t.name, invQuery)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td><td><div class="tool-desc">${highlight(t.description || '-', invQuery)}</div>${paramsDisplay ? `<div class="tool-params">${paramsDisplay}</div>` : ''}</td>${sourceCell}<td><div class="row-actions"><button class="row-action-btn copy-name" data-name="${escapeHtml(t.name)}">复制</button><button class="row-action-btn toggle-detail" data-idx="${i}">详情</button></div></td></tr>${detailBody ? `<tr class="ifs-detail-row" data-detail-for="${escapeHtml(t.name)}" style="display:none"><td colspan="${invActiveGroup === INV_ALL_KEY ? 3 : 4}">${detailBody}</td></tr>` : ''}`;
-            }).join('');
-            root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)}</h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><div class="ifs-table-wrap"><table class="ifs-table"><caption style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden">${escapeHtml(meta.title)} 工具清单</caption><thead><tr>${headerHtml}</tr></thead><tbody>${rows}</tbody></table></div>`;
-        }
-
-        function buildInvDetailBody(t) {
-            const parts = [];
-            const params = t.params || [];
-            if (!params.length) {
-                parts.push('<div style="color:var(--text-secondary);font-size:0.85rem">无参数</div>');
-                return parts.join('');
-            }
-            parts.push('<div class="ifs-section-title">参数</div>');
-            const paramsHtml = params.map(p => {
-                let typeStr = p.type || 'any';
-                if (p.enum) typeStr += ` · ${p.enum.map(v => `\`${v}\``).join(', ')}`;
-                const reqStr = p.required ? '<span class="badge" style="background:#dbeafe;color:#1e40af;font-size:0.7rem">required</span>' : '<span class="badge" style="background:#f3f4f6;color:#6b7280;font-size:0.7rem">optional</span>';
-                return `<div class="ifs-param-item"><code>${escapeHtml(p.name)}</code> <span class="ifs-param-type">${typeStr}</span>${reqStr}${p.description ? `<div class="ifs-param-desc">${escapeHtml(p.description)}</div>` : ''}</div>`;
-            }).join('');
-            parts.push(`<div class="ifs-params-list">${paramsHtml}</div>`);
-            return parts.join('');
-        }
-
-        function renderInvAll() { renderInvNav(); renderInvContent(); }
-
-        function invClearSearch() {
-            invQuery = '';
-            const el = document.getElementById('inv-search');
-            if (el) el.value = '';
-            document.getElementById('inv-search-wrap').classList.remove('has-value');
-            renderInvAll();
-        }
-
-        function setInvGroup(key) {
-            invActiveGroup = key;
-            renderInvAll();
-        }
-
-        document.getElementById('inv-content').addEventListener('click', (e) => {
-            const copyBtn = e.target.closest('.copy-name');
-            if (copyBtn) { copyText(copyBtn.dataset.name, copyBtn); return; }
-        });
-
         function refreshAll() {
             loadStatus();
             loadInterfaces();
-            loadInventory();
             loadConfig();
         }
+        let searchDebounceTimer = null;
         document.getElementById('ifs-search').addEventListener('input', (e) => {
             searchQuery = (e.target.value || '').trim().toLowerCase();
             document.getElementById('ifs-search-wrap').classList.toggle('has-value', !!searchQuery);
-            maybeAutoSwitch();
-            renderAll();
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                maybeAutoSwitch();
+                renderAll();
+            }, 300);
         });
         document.getElementById('ifs-search-clear').addEventListener('click', () => clearSearch());
         document.getElementById('ifs-toggles').addEventListener('change', (e) => {
@@ -1898,8 +1703,12 @@ print(match.data)</pre>
             lbl.classList.toggle('active', e.target.checked);
             renderAll();
         });
-        document.getElementById('filter-datasource').addEventListener('change', (e) => {
-            dataSourceFilter = e.target.value;
+        document.getElementById('datasource-chips').addEventListener('click', (e) => {
+            const chip = e.target.closest('.chip');
+            if (!chip) return;
+            document.querySelectorAll('#datasource-chips .chip').forEach(c => c.classList.remove('active'));
+            chip.classList.add('active');
+            dataSourceFilter = chip.dataset.dst || '';
             renderAll();
         });
         document.getElementById('ifs-content').addEventListener('click', (e) => {
