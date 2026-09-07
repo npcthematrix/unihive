@@ -724,30 +724,78 @@ class MooTDX2Client:
             return self._error_result(e, f"get_income({code})")
 
     # ========== 板块数据 ==========
-    def _get_block_sync(self, block_type: str = "block"):
-        """同步板块数据"""
-        q = self._get_quotes()
-        df = q.block(block_type=block_type)
-        if df is not None and len(df) > 0:
-            return df.to_dict(orient="records")
-        return None
-
-    async def get_block(self, block_type: str = "block") -> ToolResult:
-        """获取板块数据
+    def _get_sector_list_sync(self, sector_type: str = "industry"):
+        """同步读取板块列表（本地 vipdoc/block/*.dat）
 
         Args:
-            block_type: 板块类型，如 'block'（行业板块）、'concept'（概念板块）
+            sector_type: industry / concept / region
+
+        Returns:
+            list[dict] or raises SectorDataError
+        """
+        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
+        if not tdxdir:
+            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
+
+        sector_file_map = {
+            "industry": "block_ch.dat",
+            "concept": "block_zs.dat",
+            "region": "block_fd.dat",
+        }
+        filename = sector_file_map.get(sector_type)
+        if filename is None:
+            raise SectorDataError(
+                MooTDXErrorType.INVALID_PARAM,
+                f"不支持的 sector_type: {sector_type}（必须为 industry/concept/region）",
+            )
+
+        sector_path = Path(tdxdir) / "vipdoc" / "block" / filename
+        if not sector_path.exists():
+            raise SectorDataError(
+                MooTDXErrorType.TDX_SECTOR_FILE_MISSING,
+                f"板块文件不存在: {sector_path}",
+            )
+
+        from tdxpy.reader import BlockReader
+        reader = BlockReader()
+        df = reader.get_df(str(sector_path), result_type=1)
+        if df is None or df.empty:
+            return []
+
+        result = []
+        for _, row in df.iterrows():
+            code_list = str(row.get("code_list", ""))
+            stock_count = len([c for c in code_list.split(",") if c.strip()])
+            result.append({
+                "sector_name": str(row.get("blockname", "")).strip(),
+                "sector_type": sector_type,
+                "stock_count": stock_count,
+            })
+        return result
+
+    async def get_sector_list(self, sector_type: str = "industry") -> ToolResult:
+        """获取板块列表（行业/概念/地区）
+
+        Args:
+            sector_type: 板块类型，默认 'industry'
+                - 'industry': 行业板块（block_ch.dat）
+                - 'concept':  概念板块（block_zs.dat）
+                - 'region':   地区板块（block_fd.dat）
+
+        数据源：通达信客户端本地 {tdxdir}/vipdoc/block/block_*.dat
         """
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_block_sync, block_type)
-            if data:
-                return ToolResult(success=True, data=data, source="mootdx2")
-            return self._no_data_result()
+            data = await loop.run_in_executor(
+                None, self._get_sector_list_sync, sector_type
+            )
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except SectorDataError as e:
+            return self._sector_error_result(e)
         except Exception as e:
-            logger.error(f"get_block failed: {e}")
-            return self._error_result(e, f"get_block({block_type})")
+            logger.error(f"get_sector_list failed: {e}")
+            return self._error_result(e, f"get_sector_list({sector_type})")
 
     # ========== 板块成分股查询 ==========
     def _stocks_in_block_sync(self, block_code: str, block_type: int = 0) -> list:
