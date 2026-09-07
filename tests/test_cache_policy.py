@@ -628,6 +628,128 @@ class TestExecuteCachedStatsAccounting:
         await cache.close()
 
 
+class TestExecuteCachedSingleFlight:
+    """HIGH 1 (2026-09-07 4th-round audit): _execute_cached cache miss 后
+    到 router.route() 之间必须有 per-key single-flight, 否则同 key 并发 miss
+    会让 router 被调 N 次, 上游负载翻倍。
+    cache 层 get_or_set 已有 single-flight, 但 _execute_cached 走的是
+    cache.get + cache.set 直接路径, 这一段没有保护。"""
+
+    async def test_concurrent_miss_only_routes_once(self, tmp_path, gateway_server_minimal):
+        """5 个并发同 key miss → router 只调 1 次。"""
+        from src.cache import Cache, CacheConfig
+        from src.gateway_server import GatewayServer
+
+        cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
+        await cache.initialize()
+
+        @dataclass
+        class FakeResult:
+            success: bool = True
+            data: dict = None
+            source: str = "fuyao_ashare"
+            hops: list = None
+            error: str | None = None
+
+            def __post_init__(self):
+                if self.hops is None:
+                    self.hops = []
+
+        class FakeRouter:
+            def __init__(self):
+                self.calls = 0
+
+            async def route(self, route_key, params):
+                self.calls += 1
+                # 慢路由: 模拟上游延迟, 确保并发 miss 真的同时进入窗口
+                await asyncio.sleep(0.1)
+                return FakeResult(data={"v": self.calls})
+
+        server = gateway_server_minimal
+        server.cache = cache
+        server.router = FakeRouter()
+        server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
+
+        # 5 个并发同 key 请求
+        results = await asyncio.gather(*[
+            server._execute_cached(
+                "t", {"k": "v"}, route_key="t", ttl_key="realtime_quote"
+            )
+            for _ in range(5)
+        ])
+
+        # 关键断言: 单飞, router 只调 1 次
+        assert server.router.calls == 1, (
+            f"单飞失败: 应只调 1 次 router, got {server.router.calls}"
+        )
+        # 所有 waiter 拿到 leader 的结果 (data={"v": 1})
+        for r in results:
+            assert r["success"] is True
+            assert r["data"] == {"v": 1}, "waiter 应拿到 leader 的结果"
+            assert r["cache_hit"] is False, "waiter 跟 leader 同窗口, 也算 miss"
+        # 单飞下只记 1 次 miss (跟 cache 层 get_or_set 一致)
+        assert cache.misses == 1
+        assert cache.hits == 0
+
+        await cache.close()
+
+    async def test_single_flight_does_not_leak_after_completion(
+        self, tmp_path, gateway_server_minimal
+    ):
+        """leader 完成 → in_flight dict 必须清掉, 否则下一次同 key 请求
+        复用旧 future, 拿到错误结果。"""
+        from src.cache import Cache, CacheConfig
+        from src.gateway_server import GatewayServer
+
+        cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
+        await cache.initialize()
+
+        @dataclass
+        class FakeResult:
+            success: bool = True
+            data: dict = None
+            source: str = "fuyao_ashare"
+            hops: list = None
+            error: str | None = None
+
+            def __post_init__(self):
+                if self.hops is None:
+                    self.hops = []
+
+        class FakeRouter:
+            def __init__(self):
+                self.calls = 0
+
+            async def route(self, route_key, params):
+                self.calls += 1
+                return FakeResult(data={"v": self.calls})
+
+        server = gateway_server_minimal
+        server.cache = cache
+        server.router = FakeRouter()
+        server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
+
+        # 第一次 (cold miss + cache.set)
+        await server._execute_cached(
+            "t", {"k": "v"}, route_key="t", ttl_key="realtime_quote"
+        )
+        assert server.router.calls == 1
+
+        # 清除 cache, 强制下次再 miss
+        key = server._cache_key("t", {"k": "v"})
+        await cache.delete(key)
+
+        # 第二次: in_flight 必须已清, 这次是新 leader
+        await server._execute_cached(
+            "t", {"k": "v"}, route_key="t", ttl_key="realtime_quote"
+        )
+        assert server.router.calls == 2, (
+            "in_flight 没清导致 waiter 复用旧 future, 没触发新路由"
+        )
+
+        await cache.close()
+
+
 class TestWalMode:
     """WAL mode: 解决 console (同步 sqlite3) 与 gateway (aiosqlite) 同时读写
     同一 cache.db 时的 "database is locked" 问题。"""

@@ -28,6 +28,8 @@ def gateway_server_minimal():
     server._shutdown_event = asyncio.Event()
     server._active_requests = 0
     server._requests_lock = asyncio.Lock()
+    server._in_flight_requests = {}
+    server._health_task = None
     server._running = False
     server._initialized = False
     return server
