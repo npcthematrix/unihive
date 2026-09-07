@@ -210,8 +210,11 @@ class GatewayServer:
             self.mcp = FastMCP("unihive")
             self._register_tools(specs=tool_specs)
 
-        except BaseException:
-            # 初始化失败，清理已分配资源，防止重复初始化
+        except Exception:
+            # LOW6: 改为 except Exception, 不再吃 CancelledError / KeyboardInterrupt /
+            # SystemExit. CancelledError 自 Py3.8 起是 BaseException 子类
+            # (而非 Exception), 它应直接传播让 asyncio.run() 处理取消;
+            # KeyboardInterrupt 同理. 这里只清理真正的 init 失败。
             for client in self.upstreams.values():
                 try:
                     await asyncio.wait_for(client.stop(), timeout=2.0)
