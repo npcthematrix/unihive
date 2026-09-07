@@ -614,111 +614,123 @@ tools:
         required: false
         description: 起始日期 YYYYMMDD
 
-  - name: get_block
+  - name: get_sector_list
     description: |
-      【· 在线】
-      【行业/概念板块】获取行业或概念板块列表。
+      【· 离线】
+      【板块列表】读取板块清单。
 
       【使用场景】
-      - 当用户问"某股票属于什么板块"或需要板块分类数据时调用
-      - 适合板块分析和热点追踪
+      - 当用户问"有哪些行业板块 / 概念板块 / 地区板块"时调用
+      - 板块分析和热点追踪的前置步骤
 
       【参数说明】
-      - block_type (可选): 板块类型，默认 'block'（行业板块）
-        - 'block'：行业板块
-        - 'concept'：概念板块
+      - sector_type (可选): 板块类型，默认 'industry'
+        - 'industry': 行业板块（block_ch.dat）
+        - 'concept':  概念板块（block_zs.dat）
+        - 'region':   地区板块（block_fd.dat）
+
+      【数据源】通达信客户端本地文件 {tdxdir}/vipdoc/block/block_*.dat
 
       【返回示例】
-      成功: {"success": true, "data": [{"code": "880301", "name": "银行板块", "stock_count": 50}, ...]}
-      失败: {"success": false, "error": {"error_type": "internal_error", "message": "获取板块数据失败"}}
+      成功: {"success": true, "data": [{"sector_name": "银行板块", "sector_type": "industry", "stock_count": 50}], "source": "mootdx2"}
 
       【典型错误】
-      - internal_error: 服务内部错误
-    routing: get_block
+      - tdx_not_installed: TDX 目录未配置
+      - tdx_sector_file_missing: 对应 block_*.dat 文件不存在
+      - invalid_param: sector_type 不在 industry/concept/region 内
+    routing: get_sector_list
     upstream_tool_mapping:
-      mootdx2: get_block
+      mootdx2: get_sector_list
     cache_ttl_key: null
     dangerous: false
     params:
-      - name: block_type
+      - name: sector_type
         type: str
         required: false
-        description: 板块类型，默认 'block'（行业板块）
+        description: 板块类型，默认 'industry'（行业）
+        enum:
+          - industry
+          - concept
+          - region
 
-  - name: get_stocks_in_block
+  - name: get_sector_stocks
     description: |
-      【· 在线】
+      【· 离线】
       【板块成分股】查询指定板块包含的所有成分股。
 
       【使用场景】
       - 用户问"银行板块有哪些股票"时调用
-      - 板块内股票筛选和批量行情查询的前置步骤
-      - 热点板块成分股分析
+      - 板块内股票筛选、批量行情前置步骤
 
       【参数说明】
-      - block_code (必填): 板块名称，如 '银行板块'、'猪肉概念'
-        注意：TDX本地文件只存储板块名称，不存储数字板块代码
-      - block_type (可选): 板块类型，默认 0
-        0 = 行业板块（block_ch.dat）
-        1 = 概念板块（block_zs.dat）
-        2 = 地区板块（block_fd.dat）
+      - sector_code (必填): 板块名称（中文），如 '银行板块'、'猪肉概念'
+        注意：TDX 本地文件只存板块名，不存数字板块代码
+      - sector_type (可选): 板块类型，默认 'industry'
+        'industry' / 'concept' / 'region'
+
+      【数据源】通达信客户端本地 {tdxdir}/vipdoc/block/block_*.dat
 
       【返回示例】
-      成功: {"success": true, "data": [{"code": "600000", "market": "sh"}, {"code": "600016", "market": "sz"}], "source": "mootdx2"}
-      失败: {"success": false, "error": {"error_type": "tdx_not_installed", "message": "请配置 TDX 安装目录"}}
+      成功: {"success": true, "data": [{"code": "600000", "market": "sh"}, ...], "source": "mootdx2"}
 
       【典型错误】
-      - tdx_not_installed: TDX 目录未配置（tdxdir 为空）
-      - block_not_found: 板块名称在文件中不存在
-    routing: get_stocks_in_block
+      - tdx_not_installed / tdx_sector_file_missing: TDX 环境问题
+      - sector_not_found: 板块名在文件中未找到
+    routing: get_sector_stocks
     upstream_tool_mapping:
-      mootdx2: get_stocks_in_block
+      mootdx2: get_sector_stocks
     cache_ttl_key: null
     dangerous: false
     params:
-      - name: block_code
+      - name: sector_code
         type: str
         required: true
-        description: 板块名称，如 '银行板块'、'猪肉概念'
-      - name: block_type
-        type: int
+        description: 板块名称（中文），如 '银行板块'
+      - name: sector_type
+        type: str
         required: false
-        description: 板块类型，默认 0（行业）；1=概念；2=地区
+        description: 板块类型，默认 industry
         enum:
-          - '0'
-          - '1'
-          - '2'
+          - industry
+          - concept
+          - region
 
-  - name: get_blocks_for_stock
+  - name: get_stock_sectors
     description: |
-      【· 在线】
-      【个股所属板块】查询指定股票所属的所有板块。
+      【· 离线】
+      【个股所属板块】查询指定股票所属的所有板块（行业 + 概念 + 地区聚合）。
 
       【使用场景】
       - 用户问"浦发银行属于哪些板块"时调用
-      - 股票板块归属分析、主题投资筛选
-      - 交叉板块股票查找
+      - 主题投资筛选、交叉板块股票查找
 
       【参数说明】
       - stock_code (必填): 股票代码，如 '600000'、'000001'
-        支持带市场前缀（sh600000）或纯代码
+        支持带市场前缀（sh600000）或纯 6 位代码
+
+      【数据源】通达信客户端本地 {tdxdir}/vipdoc/block/block_*.dat（聚合 3 种类型）
 
       【返回示例】
-      成功: {"success": true, "data": [{"block_name": "银行板块", "block_type": "industry", "block_type_code": 0}], "source": "mootdx2"}
-      空数据: {"success": true, "data": [], "source": "mootdx2"}（该股票无板块归属是正常数据）
+      成功: {"success": true, "data": [{"sector_name": "银行板块", "sector_type": "industry"}, ...], "source": "mootdx2"}
+      空数据: {"success": true, "data": []}（该股票无板块归属是正常数据）
 
       【典型错误】
-      - 无（股票无板块时返回空列表，不是错误）
-    routing: get_blocks_for_stock
+      - stock_not_found: 股票代码不是 6 位数字
+      - tdx_not_installed: TDX 目录未配置
+    routing: get_stock_sectors
     upstream_tool_mapping:
-      mootdx2: get_blocks_for_stock
+      mootdx2: get_stock_sectors
     cache_ttl_key: null
     dangerous: false
     params:
       - name: stock_code
         type: str
         required: true
-        description: 股票代码，如 '600000' 或 'sh600000'
+        description: 股票代码，如 '600000'
+      - name: market
+        type: str
+        required: false
+        description: 市场，默认 'auto'（自动按代码前缀推断）
 
   - name: get_f10
     description: |
