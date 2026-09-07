@@ -294,7 +294,7 @@ class MooTDX2Client:
             "search_stock": self.search_stock,
             "get_stock_info": self.get_stock_info,
             "get_stocks_in_block": self.get_stocks_in_block,
-            "get_blocks_for_stock": self.get_blocks_for_stock,
+            "get_blocks_for_stock": self.get_stock_sectors,
             "get_index_overview": self.get_index_overview,
             "stock_top_board": self.stock_top_board,
             "stock_unusual": self.stock_unusual,
@@ -879,64 +879,72 @@ class MooTDX2Client:
             return self._error_result(e, f"get_sector_stocks({sector_code})")
 
     # ========== 个股所属板块查询 ==========
-    def _blocks_for_stock_sync(self, stock_code: str, market: str = "auto") -> list:
-        """同步获取股票所属的所有板块（从本地 block .dat 文件）
+    def _stock_sectors_sync(self, stock_code: str, market: str = "auto") -> list:
+        """同步获取股票所属的所有板块（本地 block .dat 文件）
 
         Args:
-            stock_code: 股票代码，如 '600000'
-            market: 市场（auto/auto推断），本参数暂未使用
+            stock_code: 股票代码（接受 sh/sz/bj 前缀）
+            market: 市场（auto/auto 推断）
         """
         tdxdir = self.config.settings.tdxdir if self.config.settings else ""
         if not tdxdir:
-            return []
+            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
 
-        stock_code = stock_code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+        code = stock_code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+        if not code.isdigit() or len(code) != 6:
+            raise SectorDataError(
+                MooTDXErrorType.STOCK_NOT_FOUND,
+                f"股票代码格式错误: '{stock_code}'（需 6 位数字）",
+            )
 
-        block_type_names = {0: "industry", 1: "concept", 2: "region"}
-        block_files = {0: "block_ch.dat", 1: "block_zs.dat", 2: "block_fd.dat"}
+        sector_files = {
+            "industry": "block_ch.dat",
+            "concept": "block_zs.dat",
+            "region": "block_fd.dat",
+        }
 
         results = []
-
-        for block_type, filename in block_files.items():
-            block_path = Path(tdxdir) / "vipdoc" / "block" / filename
-            if not block_path.exists():
+        for sector_type, filename in sector_files.items():
+            sector_path = Path(tdxdir) / "vipdoc" / "block" / filename
+            if not sector_path.exists():
                 continue
             try:
                 from tdxpy.reader import BlockReader
                 reader = BlockReader()
-                # FLAT mode: one row per (block, stock) pair
-                df = reader.get_df(str(block_path), result_type=0)
+                df = reader.get_df(str(sector_path), result_type=0)
                 if df is None or df.empty:
                     continue
-                # Filter rows where code matches stock_code
-                matching = df[df["code"] == stock_code]
+                matching = df[df["code"] == code]
                 for _, row in matching.iterrows():
                     results.append({
-                        "block_name": str(row.get("blockname", "")),
-                        "block_type": block_type_names.get(block_type, "unknown"),
-                        "block_type_code": block_type,
+                        "sector_name": str(row.get("blockname", "")),
+                        "sector_type": sector_type,
                     })
             except Exception as e:
-                logger.error(f"_blocks_for_stock_sync [{filename}]: {e}")
+                logger.error(f"_stock_sectors_sync [{filename}]: {e}")
                 continue
 
         return results
 
-    async def get_blocks_for_stock(self, stock_code: str, market: str = "auto") -> ToolResult:
+    async def get_stock_sectors(self, stock_code: str, market: str = "auto") -> ToolResult:
         """获取指定股票所属的所有板块
 
         Args:
-            stock_code: 股票代码，如 '600000'
-            market: 市场，默认为 'auto'（自动推断）
+            stock_code: 股票代码（支持 sh/sz/bj 前缀）
+            market: 市场，默认为 'auto'
         """
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._blocks_for_stock_sync, stock_code, market)
+            data = await loop.run_in_executor(
+                None, self._stock_sectors_sync, stock_code, market
+            )
             return ToolResult(success=True, data=data, source="mootdx2")
+        except SectorDataError as e:
+            return self._sector_error_result(e)
         except Exception as e:
-            logger.error(f"get_blocks_for_stock failed: {e}")
-            return self._error_result(e, f"get_blocks_for_stock({stock_code})")
+            logger.error(f"get_stock_sectors failed: {e}")
+            return self._error_result(e, f"get_stock_sectors({stock_code})")
 
     # ========== 指数概览 ==========
     def _index_overview_sync(self) -> list:
