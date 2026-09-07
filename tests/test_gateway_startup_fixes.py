@@ -1,9 +1,9 @@
-"""Tests for gateway_server startup-logic review fixes (HIGH 1+2+3, MED 4+5).
+"""Tests for gateway_server startup-logic review fixes.
 
 - HIGH #1: initialize() concurrent calls only run init once (asyncio.Lock)
 - HIGH #2: upstreams: null in YAML doesn't crash initialize()
+- HIGH1 (review): single upstream start() timeout isolates, doesn't abort init
 - HIGH #3: --config CLI flag is accepted and plumbed through
-- MED  #4: upstream start() blocking > timeout raises + cleanup runs
 - MED  #5: console_api imports deduped (single import path)
 """
 from __future__ import annotations
@@ -88,13 +88,20 @@ class TestNullUpstreams:
         assert server.upstreams == {}
 
 
-# ========== MED #4: per-upstream start timeout ==========
+# ========== HIGH1 (review): per-upstream timeout isolation ==========
 
-class TestUpstreamStartTimeout:
-    async def test_upstream_start_timeout_raises_and_cleans_up(self, tmp_path):
-        """某个 upstream 的 start() 卡死, 超过 _upstream_start_timeout 必须抛,
-        已启动的 upstream 必须被 stop (cleanup)。"""
-        from src.gateway_server import GatewayServer, FuyaoClient
+class TestUpstreamTimeoutIsolation:
+    """HIGH1: 单个 upstream 的 start() 超时不应让整个 initialize() 失败.
+
+    旧行为: asyncio.wait_for 超时 → raise RuntimeError → 外层 except BaseException
+    清空所有已启动 upstream + cache, 网关起不来。
+    新行为: 超时 → log + 标记 UNAVAILABLE + 继续下一个 upstream。
+    """
+
+    async def test_single_upstream_timeout_does_not_break_init(self, tmp_path):
+        """场景: good 立刻成功, bad 卡死超过 timeout. 期望: init 不抛, 两者都被跟踪."""
+        from src.gateway_server import GatewayServer
+        import src.gateway_server as gs
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -115,43 +122,85 @@ class TestUpstreamStartTimeout:
         server._init_lock = asyncio.Lock()
         server._upstream_start_timeout = 0.2
 
-        stop_calls: list[str] = []
-
         class FakeClient:
             def __init__(self, name: str):
                 self.name = name
-                self.is_available = True
-                self.status = type("S", (), {"value": "connected"})()
+                self.is_available = (name == "good")
+                self.status = type(
+                    "S", (), {"value": "connected" if name == "good" else "unavailable"}
+                )()
 
             async def start(self):
                 if self.name == "bad":
                     await asyncio.sleep(10)
 
             async def stop(self):
-                stop_calls.append(self.name)
+                pass
 
-        # 拦截 FuyaoClient 构造, 让 good/bad 都返回 FakeClient
-        original_fuyao = FuyaoClient
-        def fake_fuyao(cfg):
-            return FakeClient(cfg.name)
-        GatewayServer.__bases__  # touch to avoid import warning
-
-        # 直接 patch gateway_server 模块内的 FuyaoClient 引用
-        import src.gateway_server as gs
-        gs.FuyaoClient = fake_fuyao  # type: ignore[assignment]
+        original_fuyao = gs.FuyaoClient
+        gs.FuyaoClient = lambda cfg: FakeClient(cfg.name)  # type: ignore[assignment]
 
         try:
-            with pytest.raises(RuntimeError, match="upstream start.*timed out"):
-                await server.initialize()
+            # 不应抛 RuntimeError
+            await server.initialize()
         finally:
             gs.FuyaoClient = original_fuyao  # type: ignore[assignment]
 
-        # cleanup: init 失败时 _do_initialize 的 BaseException handler 应 stop 已成功的 client
-        assert "good" in stop_calls, (
-            f"init 失败时已成功的 client 必须被 stop, stop_calls={stop_calls}"
-        )
-        assert server.cache is None
-        assert server.upstreams == {}
+        # init 成功, 两个 upstream 都被收录 (bad 状态为 unavailable 但仍被跟踪)
+        assert server._initialized is True
+        assert "good" in server.upstreams
+        assert "bad" in server.upstreams
+        assert server.upstreams["good"].is_available is True
+        assert server.upstreams["bad"].is_available is False
+
+    async def test_timed_out_upstream_logs_error_not_raises(self, tmp_path, caplog):
+        """超时的 upstream 必须打 ERROR 日志, 不能悄无声息."""
+        import logging
+        from src.gateway_server import GatewayServer
+        import src.gateway_server as gs
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {
+                "bad": {"enabled": True, "type": "http", "base_url": "http://x", "api_key": "k"},
+            },
+            "routing": {},
+            "upstream_tool_mapping": {},
+        }
+        server.config_path = tmp_path / "upstreams.yaml"
+        server.config_path.write_text("upstreams: {}\n", encoding="utf-8")
+        server.upstreams = {}
+        server._initialized = False
+        server._shutdown_event = asyncio.Event()
+        server._running = False
+        server._init_lock = asyncio.Lock()
+        server._upstream_start_timeout = 0.2
+
+        class StuckClient:
+            name = "bad"
+            is_available = False
+            status = type("S", (), {"value": "unavailable"})()
+
+            async def start(self):
+                await asyncio.sleep(10)
+
+            async def stop(self):
+                pass
+
+        original_fuyao = gs.FuyaoClient
+        gs.FuyaoClient = lambda cfg: StuckClient()  # type: ignore[assignment]
+
+        try:
+            with caplog.at_level(logging.ERROR):
+                await server.initialize()
+
+            error_msgs = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
+            assert any("timed out" in m and "bad" in m for m in error_msgs), (
+                f"应记录 bad upstream 超时 ERROR 日志, 实际: {error_msgs}"
+            )
+        finally:
+            gs.FuyaoClient = original_fuyao  # type: ignore[assignment]
 
 
 # ========== HIGH #3: --config CLI flag ==========

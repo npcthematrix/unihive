@@ -174,9 +174,16 @@ class GatewayServer:
                 try:
                     await asyncio.wait_for(client.start(), timeout=self._upstream_start_timeout)
                 except asyncio.TimeoutError:
-                    raise RuntimeError(
-                        f"[{name}] upstream start() timed out after {self._upstream_start_timeout}s"
-                    ) from None
+                    # 单 upstream 超时不应中断其他 upstream 初始化 (HIGH1).
+                    # 仍记录到 self.upstreams (status 由 client 内部标记),
+                    # 这样 get_server_status / health loop 仍能看到这个客户端.
+                    logger.error(
+                        f"[{name}] upstream start() timed out after "
+                        f"{self._upstream_start_timeout}s, marking unavailable "
+                        f"and continuing with other upstreams"
+                    )
+                    self.upstreams[name] = client
+                    continue
                 self.upstreams[name] = client
                 logger.info(f"[{name}] {'Connected' if client.is_available else 'Failed'}")
 
