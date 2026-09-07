@@ -15,6 +15,19 @@ from .mootdx2_errors import (
     no_data_result,
 )
 
+
+class SectorDataError(Exception):
+    """板块数据相关错误的领域异常
+
+    携带 MooTDXErrorType + 中文消息，由 async wrapper 转 ToolResult。
+    """
+
+    def __init__(self, error_type: "MooTDXErrorType", message: str):
+        self.error_type = error_type
+        self.message = message
+        super().__init__(message)
+
+
 if TYPE_CHECKING:
     from .mootdx2_config import MooTDX2Settings
     from .mootdx2_pool import ConnectionPool
@@ -127,6 +140,21 @@ class MooTDX2Client:
             success=False,
             error=error_detail.get("message", str(exc)[:100]),
             error_detail=error_detail,
+        )
+
+    def _sector_error_result(self, exc: "SectorDataError") -> ToolResult:
+        """将 SectorDataError 转换为 ToolResult（不打 error_metrics 计数）"""
+        self._metrics["total_errors"] += 1
+        error_type = exc.error_type.value
+        self._metrics["error_counts"][error_type] = self._metrics["error_counts"].get(error_type, 0) + 1
+        return ToolResult(
+            success=False,
+            error=exc.message,
+            error_detail={
+                "error_type": error_type,
+                "message": exc.message,
+                "recoverable": False,
+            },
         )
 
     def _no_data_result(self, message: str = "查询成功但无数据") -> ToolResult:
