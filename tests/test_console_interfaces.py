@@ -2,12 +2,14 @@
 from unittest.mock import patch
 
 
-def test_get_interfaces_returns_147_tools():
-    """Regression: /api/interfaces returns 147 tools after tdx-quant migration.
+def test_get_interfaces_returns_140_tools():
+    """Regression: /api/interfaces returns 140 tools.
 
     History: 148 -> 147 (tdx_tq_local HTTP JSON-RPC upstream replaced by
     tdx_quant in-process upstream; tdx_tq_local codegen had 58 tools,
     tdx_quant codegen has 54 tools; manual tools unchanged).
+    147 -> 140 (mootdx2 dropped 7 client-side computed indicators —
+    ma/ema/macd/rsi/kdj/boll/vol_ma; only indicator_atr kept).
     """
     import yaml
     config_path = "config/upstreams.yaml"
@@ -18,7 +20,7 @@ def test_get_interfaces_returns_147_tools():
         from src.console_api import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 147, f"Expected 147 tools, got {tool_count}"
+        assert tool_count == 140, f"Expected 140 tools, got {tool_count}"
 
 
 def test_merged_tool_specs_have_unique_names():
