@@ -946,6 +946,69 @@ class MooTDX2Client:
             logger.error(f"get_stock_sectors failed: {e}")
             return self._error_result(e, f"get_stock_sectors({stock_code})")
 
+    # ========== 自定义板块 ==========
+    def _get_custom_sector_list_sync(self) -> list:
+        """同步读取自定义板块列表（T0002/blocknew/）
+
+        Returns:
+            list[dict]: [{"sector_name", "sector_type": "custom", "stock_count"}, ...]
+        """
+        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
+        if not tdxdir:
+            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
+
+        vipdoc = Path(tdxdir) / "T0002" / "blocknew"
+        if not vipdoc.exists():
+            raise SectorDataError(
+                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
+                f"自定义板块目录不存在: {vipdoc}",
+            )
+
+        try:
+            from mootdx.tools.customize import Customize
+            customize = Customize(tdxdir=tdxdir)
+            # group=True 返回 group 模式列表 [(blockname, [code, code, ...]), ...]
+            grouped = customize.search(group=True)
+        except Exception as e:
+            logger.error(f"Customize.search failed: {e}")
+            raise SectorDataError(
+                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
+                f"解析自定义板块失败: {e}",
+            )
+
+        result = []
+        for entry in grouped or []:
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                name = entry[0]
+                codes = entry[1] if isinstance(entry[1], (list, tuple)) else []
+            elif isinstance(entry, dict):
+                name = entry.get("blockname") or entry.get("name", "")
+                codes = entry.get("code_list") or entry.get("codes") or []
+            else:
+                continue
+            result.append({
+                "sector_name": str(name).strip(),
+                "sector_type": "custom",
+                "stock_count": len(codes) if hasattr(codes, "__len__") else 0,
+            })
+        return result
+
+    async def get_custom_sector_list(self) -> ToolResult:
+        """获取自定义板块列表（用户在 TDX 客户端手动维护）
+
+        数据源：{tdxdir}/T0002/blocknew/blocknew.cfg + *.blk
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._get_custom_sector_list_sync)
+            return ToolResult(success=True, data=data, source="mootdx2")
+        except SectorDataError as e:
+            return self._sector_error_result(e)
+        except Exception as e:
+            logger.error(f"get_custom_sector_list failed: {e}")
+            return self._error_result(e, "get_custom_sector_list()")
+
     # ========== 指数概览 ==========
     def _index_overview_sync(self) -> list:
         """同步获取主要指数概览（6个指数）"""
