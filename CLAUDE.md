@@ -82,7 +82,7 @@ pip install -e .
 | moo_get_financial_data | 财务数据 | MooTDX |
 | moo_get_stock_info | 股票信息 | MooTDX |
 
-> 注: 139 个 MCP 接口全部通过管理控制台 http://127.0.0.1:18080 的 "MCP APIs" 标签页查看
+> 注: 138 个 MCP 接口全部通过管理控制台 http://127.0.0.1:18080 的 "MCP APIs" 标签页查看
 
 ## 技术栈
 

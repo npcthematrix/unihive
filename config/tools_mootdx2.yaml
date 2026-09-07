@@ -152,7 +152,7 @@ tools:
       【使用场景】
       - 当用户问"今日逐笔成交/大单交易"时调用
       - 当需要分析当日交易活跃度和大单时调用
-      - 不适合：历史逐笔（用 get_trade_history）、分时汇总（用 get_minute_trade_all）
+      - 不适合：历史逐笔（用 get_trade_history）
 
       【参数说明】
       - code (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
@@ -220,42 +220,6 @@ tools:
         type: int
         required: false
         description: 返回条数（默认 100，最大 500）
-
-  - name: get_minute_trade_all
-    description: |
-      【· 在线】
-      【分时成交汇总】获取股票全日分时成交汇总数据。
-
-      【使用场景】
-      - 当用户问"今日分时成交汇总"时调用
-      - 适合需要简化的分时统计时调用
-      - 不适合：详细逐笔（用 get_trade）、K线（用 get_kline）
-
-      【参数说明】
-      - code (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - date (可选): 日期 YYYYMMDD，省略默认当天
-
-      【返回示例】
-      成功: {"success": true, "data": [...]}
-      失败: {"success": true, "data": null, "error": {"error_type": "no_data", "message": "股票停牌或非交易日"}}
-
-      【典型错误】
-      - no_data: 非交易时段或停牌
-    routing: get_minute_trade_all
-    upstream_tool_mapping:
-      mootdx2: get_minute_trade_all
-    cache_ttl_key: null
-    dangerous: false
-    params:
-      - name: code
-        type: str
-        required: true
-        normalize: code
-        description: 股票代码
-      - name: date
-        type: str
-        required: false
-        description: 日期 YYYYMMDD（默认当天）
 
   - name: get_index_kline
     description: |
