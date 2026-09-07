@@ -144,3 +144,96 @@ async def test_reconnect_lock_serializes(client_config, mock_tq):
     # （lock 保证不并发，但每次获取 lock 后仍会调用一次 initialize）
     final_count = mock_tq.initialize.call_count
     assert final_count - initial_count <= 5
+
+
+# ========== HIGH2: tq.close() must not block event loop ==========
+
+@pytest.mark.asyncio
+async def test_stop_close_runs_in_executor_not_blocking_event_loop(client_config):
+    """HIGH2: stop() 内的 tq.close() 是同步 DLL 调用, 必须 run_in_executor.
+
+    验证: close 跑的同时, 用并发任务打点. 若 close 阻塞 event loop,
+    close 窗口内并发任务 0 tick; 若 run_in_executor, close 窗口内多次 tick。
+    """
+    import time
+    from src.tdx_quant_client import TdxQuantClient
+
+    close_started_at: list[float] = []
+    close_finished_at: list[float] = []
+
+    class SlowCloseTq:
+        def initialize(self, sid):
+            pass
+
+        def close(self):
+            close_started_at.append(time.monotonic())
+            time.sleep(0.5)  # 模拟 TdxW.exe DLL IPC 调用耗时
+            close_finished_at.append(time.monotonic())
+
+    c = TdxQuantClient(client_config)
+    c._tq = SlowCloseTq()
+
+    heartbeat_times: list[float] = []
+
+    async def heartbeat():
+        for _ in range(40):
+            heartbeat_times.append(time.monotonic())
+            await asyncio.sleep(0.025)
+
+    # 并发跑 stop 和 heartbeat. gather 不会等 stop 完了才跑 heartbeat —
+    # heartbeat 在 stop 内部 close 同步阻塞时也会被卡住, 这正是要验证的。
+    await asyncio.gather(c.stop(), heartbeat())
+
+    assert close_started_at and close_finished_at, "close() 必须实际执行"
+    start = close_started_at[0]
+    end = close_finished_at[0]
+
+    # 统计 close 窗口内 heartbeat tick 数.
+    # 若 close 阻塞 event loop: 0 tick (heartbeat 完全跑不动)
+    # 若 close 跑在 executor: ~20 tick (event loop 自由, heartbeat 每 25ms tick 一次)
+    ticks_during_close = sum(1 for t in heartbeat_times if start <= t <= end)
+    assert ticks_during_close >= 5, (
+        f"close 期间 event loop 死锁: heartbeat 在 {end - start:.3f}s close 窗口内"
+        f"只 tick 了 {ticks_during_close} 次 (期望 >= 5)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconnect_close_runs_in_executor_not_blocking_event_loop(client_config):
+    """HIGH2: _reconnect() 内的 tq.close() 也必须 run_in_executor."""
+    import time
+    from src.tdx_quant_client import TdxQuantClient
+
+    close_started_at: list[float] = []
+    close_finished_at: list[float] = []
+
+    class SlowCloseTq:
+        def initialize(self, sid):
+            pass
+
+        def close(self):
+            close_started_at.append(time.monotonic())
+            time.sleep(0.5)
+            close_finished_at.append(time.monotonic())
+
+    c = TdxQuantClient(client_config)
+    c._tq = SlowCloseTq()
+
+    heartbeat_times: list[float] = []
+
+    async def heartbeat():
+        for _ in range(40):
+            heartbeat_times.append(time.monotonic())
+            await asyncio.sleep(0.025)
+
+    await asyncio.gather(c._reconnect(), heartbeat())
+
+    assert close_started_at and close_finished_at, "close() 必须实际执行"
+    start = close_started_at[0]
+    end = close_finished_at[0]
+
+    ticks_during_close = sum(1 for t in heartbeat_times if start <= t <= end)
+    assert ticks_during_close >= 5, (
+        f"reconnect 期间 event loop 死锁: heartbeat 在 {end - start:.3f}s close 窗口内"
+        f"只 tick 了 {ticks_during_close} 次"
+    )

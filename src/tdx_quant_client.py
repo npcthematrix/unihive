@@ -77,7 +77,7 @@ class TdxQuantClient:
             return True
 
     async def stop(self):
-        """取消探活任务 + tq.close()。"""
+        """取消探活任务 + tq.close() (后者是同步 DLL 调用, 必须 run_in_executor)。"""
         if self._health_task:
             self._health_task.cancel()
             try:
@@ -87,7 +87,11 @@ class TdxQuantClient:
             self._health_task = None
         if self._tq:
             try:
-                self._tq.close()
+                # tq.close() 同步调 DLL, 在主线程跑会阻塞 event loop 0.5s+
+                # (HIGH2). executor 跑让其他 in-flight 请求继续调度。
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self._tq.close
+                )
             except Exception as e:
                 logger.warning(f"[{self.name}] close warning: {e}")
         self._tq = None
@@ -201,7 +205,10 @@ class TdxQuantClient:
         async with self._reconnect_lock:
             try:
                 if self._tq:
-                    self._tq.close()
+                    # HIGH2: tq.close() 同步 DLL, 必须 run_in_executor
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, self._tq.close
+                    )
             except Exception as e:
                 logger.warning(f"[{self.name}] close during reconnect: {e}")
             try:
