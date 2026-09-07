@@ -298,6 +298,10 @@ class MooTDX2Client:
             "stock_top_board": self.stock_top_board,
             "stock_unusual": self.stock_unusual,
             "indicator_atr": self.indicator_atr,
+            # Reader 离线接口（本地 .day / .lc1 / .lc5 文件）
+            "get_daily_local": self.get_daily_local,
+            "get_minute_local": self.get_minute_local,
+            "get_fzline_local": self.get_fzline_local,
         }
 
         method = method_map.get(tool_name)
@@ -1219,6 +1223,186 @@ class MooTDX2Client:
         except Exception as e:
             logger.error(f"get_minutes failed: {e}")
             return self._error_result(e, f"get_minutes({symbol})")
+
+    # ========== 离线日线（Reader，TDX 本地 .day 文件） ==========
+    def _get_daily_local_sync(
+        self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
+    ) -> list:
+        """同步读取离线日线数据。
+
+        Args:
+            code: 6 位股票代码（不带市场前缀）
+            adjust: 复权方式 none / qfq / hfq（默认不复权）
+            start_date: 起始日期 yyyy-MM-dd（可选）
+            end_date: 结束日期 yyyy-MM-dd（可选）
+        """
+        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
+        if not tdxdir:
+            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
+
+        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+        from mootdx.reader import Reader
+        reader = Reader.factory(market="std", tdxdir=tdxdir)
+        df = reader.daily(symbol=sym, adjust=adjust)
+        if df is None or df.empty:
+            return []
+
+        if start_date:
+            df = df[df.index >= start_date] if hasattr(df.index, "__ge__") else df
+        if end_date:
+            df = df[df.index <= end_date] if hasattr(df.index, "__le__") else df
+
+        records = df.reset_index().to_dict(orient="records")
+        for r in records:
+            if "index" in r:
+                idx = r.pop("index")
+                r["date"] = str(idx)[:10]
+        return records
+
+    async def get_daily_local(
+        self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
+    ) -> ToolResult:
+        """获取股票日线数据（离线，TDX 本地 .day 文件）
+
+        Args:
+            code: 股票代码（6 位数字，可带 sh/sz/bj 前缀）
+            adjust: 复权方式
+                - 'none': 不复权（默认）
+                - 'qfq': 前复权
+                - 'hfq': 后复权
+            start_date: 起始日期 yyyy-MM-dd（可选）
+            end_date: 结束日期 yyyy-MM-dd（可选）
+
+        数据源：{tdxdir}/vipdoc/sh/lday/sh600036.day 等本地二进制文件
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(
+                None, self._get_daily_local_sync, code, adjust, start_date, end_date
+            )
+            if data:
+                return ToolResult(success=True, data=data, source="mootdx2")
+            return self._no_data_result(f"未找到 {code} 的日线数据")
+        except SectorDataError as e:
+            return self._sector_error_result(e)
+        except Exception as e:
+            logger.error(f"get_daily_local failed: {e}")
+            return self._error_result(e, f"get_daily_local({code})")
+
+    # ========== 离线分钟线（Reader，TDX 本地 .lc1/.lc5 文件） ==========
+    def _get_minute_local_sync(
+        self, code: str, suffix: str = "1", start_date: str = "", end_date: str = ""
+    ) -> list:
+        """同步读取离线分钟线数据。
+
+        Args:
+            code: 6 位股票代码
+            suffix: '1' = 1 分钟线（minline/.lc1）/ '5' = 5 分钟线（fzline/.lc5）
+            start_date: 起始日期（可选）
+            end_date: 结束日期（可选）
+        """
+        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
+        if not tdxdir:
+            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
+
+        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+        suffix_int = 1 if str(suffix) == "1" else 5
+
+        from mootdx.reader import Reader
+        reader = Reader.factory(market="std", tdxdir=tdxdir)
+        df = reader.minute(symbol=sym, suffix=suffix_int)
+        if df is None or df.empty:
+            return []
+
+        if start_date:
+            df = df[df.index >= start_date] if hasattr(df.index, "__ge__") else df
+        if end_date:
+            df = df[df.index <= end_date] if hasattr(df.index, "__le__") else df
+
+        records = df.reset_index().to_dict(orient="records")
+        for r in records:
+            if "index" in r:
+                idx = r.pop("index")
+                r["datetime"] = str(idx)
+        return records
+
+    async def get_minute_local(
+        self, code: str, suffix: str = "1", start_date: str = "", end_date: str = ""
+    ) -> ToolResult:
+        """获取股票分钟线数据（离线，TDX 本地 .lc1/.lc5 文件）
+
+        Args:
+            code: 股票代码（6 位数字）
+            suffix: '1' = 1 分钟线（默认）/ '5' = 5 分钟线
+            start_date: 起始日期（可选）
+            end_date: 结束日期（可选）
+
+        数据源：{tdxdir}/vipdoc/sh/minline/sh600036.lc1
+              或 {tdxdir}/vipdoc/sh/fzline/sh600036.lc5
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(
+                None, self._get_minute_local_sync, code, suffix, start_date, end_date
+            )
+            if data:
+                return ToolResult(success=True, data=data, source="mootdx2")
+            return self._no_data_result(f"未找到 {code} 的{suffix}分钟数据")
+        except SectorDataError as e:
+            return self._sector_error_result(e)
+        except Exception as e:
+            logger.error(f"get_minute_local failed: {e}")
+            return self._error_result(e, f"get_minute_local({code})")
+
+    # ========== 离线分时线（Reader.fzline，本地 .lc5 文件） ==========
+    def _get_fzline_local_sync(self, code: str) -> list:
+        """同步读取离线分时线数据。
+
+        Args:
+            code: 6 位股票代码
+        """
+        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
+        if not tdxdir:
+            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
+
+        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+        from mootdx.reader import Reader
+        reader = Reader.factory(market="std", tdxdir=tdxdir)
+        df = reader.fzline(symbol=sym)
+        if df is None or (hasattr(df, "empty") and df.empty):
+            return []
+        if isinstance(df, bool):
+            return []
+
+        records = df.reset_index().to_dict(orient="records")
+        for r in records:
+            if "index" in r:
+                idx = r.pop("index")
+                r["datetime"] = str(idx)
+        return records
+
+    async def get_fzline_local(self, code: str) -> ToolResult:
+        """获取股票分时线数据（离线，TDX 本地 .lc5 文件）
+
+        Args:
+            code: 股票代码（6 位数字）
+
+        数据源：{tdxdir}/vipdoc/sh/fzline/sh600036.lc5
+        """
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, self._get_fzline_local_sync, code)
+            if data:
+                return ToolResult(success=True, data=data, source="mootdx2")
+            return self._no_data_result(f"未找到 {code} 的分时线数据")
+        except SectorDataError as e:
+            return self._sector_error_result(e)
+        except Exception as e:
+            logger.error(f"get_fzline_local failed: {e}")
+            return self._error_result(e, f"get_fzline_local({code})")
 
     # ========== 指数K线（指定起止） ==========
     def _get_index_bars_sync(self, symbol: str, frequency: int = 9, start: int = 0, offset: int = 800):

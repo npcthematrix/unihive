@@ -20,7 +20,7 @@ def test_get_interfaces_returns_140_tools():
         from src.console_api import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 140, f"Expected 140 tools, got {tool_count}"
+        assert tool_count == 143, f"Expected 143 tools, got {tool_count}"
 
 
 def test_merged_tool_specs_have_unique_names():

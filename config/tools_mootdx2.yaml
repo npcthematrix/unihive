@@ -1195,3 +1195,115 @@ tools:
         type: int
         required: false
         description: K线条数（默认100）
+
+  # ====== Reader 离线接口（TDX 本地 .day / .lc1 / .lc5 文件） ======
+  - name: get_daily_local
+    description: |-
+      【离线日线】读取通达信客户端本地 .day 文件，支持前/后复权。
+
+      【使用场景】
+      - 历史行情分析（不依赖网络，走本地数据）
+      - 需要前/后复权数据时使用
+
+      【参数说明】
+      - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀）
+      - adjust (可选): 复权方式，默认 none
+        none=不复权 / qfq=前复权 / hfq=后复权
+      - start_date (可选): 起始日期 yyyy-MM-dd
+      - end_date (可选): 结束日期 yyyy-MM-dd
+
+      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/xxx.day
+
+      【返回示例】
+      成功: {"success": true, "data": [{"date": "2024-01-02", "open": 10.0, ...}], "source": "mootdx2"}
+      失败: {"success": false, "error": "TDX 安装目录未配置"}
+    routing: get_daily_local
+    upstream_tool_mapping:
+      mootdx2: get_daily_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: code
+        type: str
+        required: true
+        description: 股票代码（6 位数字）
+      - name: adjust
+        type: str
+        required: false
+        enum: [none, qfq, hfq]
+        description: 复权方式：none=不复权 / qfq=前复权 / hfq=后复权
+      - name: start_date
+        type: str
+        required: false
+        description: 起始日期 yyyy-MM-dd（可选）
+      - name: end_date
+        type: str
+        required: false
+        description: 结束日期 yyyy-MM-dd（可选）
+
+  - name: get_minute_local
+    description: |-
+      【离线分钟线】读取通达信客户端本地 .lc1 / .lc5 文件，支持 1 分钟和 5 分钟周期。
+
+      【使用场景】
+      - 历史分钟级别回放
+      - 不依赖网络
+
+      【参数说明】
+      - code (必填): 股票代码（6 位数字）
+      - suffix (可选): '1' = 1 分钟线（默认）/ '5' = 5 分钟线
+      - start_date (可选): 起始日期 yyyy-MM-dd
+      - end_date (可选): 结束日期 yyyy-MM-dd
+
+      【数据源】
+      - suffix='1': {tdxdir}/vipdoc/{sh|sz|bj}/minline/xxx.lc1
+      - suffix='5': {tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
+    routing: get_minute_local
+    upstream_tool_mapping:
+      mootdx2: get_minute_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: code
+        type: str
+        required: true
+        description: 股票代码（6 位数字）
+      - name: suffix
+        type: str
+        required: false
+        enum: ['1', '5']
+        description: '1=1 分钟线（默认）/ 5=5 分钟线'
+      - name: start_date
+        type: str
+        required: false
+        description: 起始日期 yyyy-MM-dd（可选）
+      - name: end_date
+        type: str
+        required: false
+        description: 结束日期 yyyy-MM-dd（可选）
+
+  - name: get_fzline_local
+    description: |-
+      【离线分时线】读取通达信客户端本地 .lc5 文件（fzline 子目录）。
+
+      【使用场景】
+      - 历史分时数据回放
+      - 与 get_minute_local suffix='5' 等价（相同数据源 fzline/*.lc5）
+
+      【参数说明】
+      - code (必填): 股票代码（6 位数字）
+
+      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
+    routing: get_fzline_local
+    upstream_tool_mapping:
+      mootdx2: get_fzline_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: code
+        type: str
+        required: true
+        description: 股票代码（6 位数字）
