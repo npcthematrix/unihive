@@ -8,11 +8,14 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import sys
 import time
 from pathlib import Path
+
+import yaml
 
 import uvicorn
 from fastapi import Request
@@ -39,6 +42,196 @@ from .tdx_quant_config import TdxQuantConfig, TdxQuantSettings
 logger = logging.getLogger(__name__)
 
 
+def _read_gateway_version() -> str:
+    """读取 pyproject.toml 里的版本号，给 FastMCP 当 serverInfo.version。
+
+    不依赖 importlib.metadata (开发环境不一定 pip install -e .),
+    直接读源码根的 pyproject.toml。读不到时退回到 'unknown'，避免启动崩。
+    """
+    try:
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        text = pyproject.read_text(encoding="utf-8")
+        m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if m:
+            return m.group(1)
+    except Exception as e:
+        logger.warning(f"failed to read gateway version from pyproject.toml: {e}")
+    return "unknown"
+
+
+GATEWAY_VERSION = _read_gateway_version()
+
+
+def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, str]:
+    """Read console auth config from config.yaml, upstreams.yaml or env vars.
+
+    Returns (cfg, reason) where cfg is None when auth is disabled. Caller
+    logs ``reason`` at WARNING level and continues without auth; when cfg is
+    not None, caller passes it to ``setup_console_auth`` on the inner app.
+
+    Config priority (first found wins):
+      1. config/config.yaml (console section)
+      2. config/upstreams.yaml (console section)
+      3. Environment variables
+
+    config.yaml fields:
+      console.username
+      console.password / console.password_hash
+      console.session_secret
+    """
+    # Try config.yaml first
+    username = None
+    password = None
+    password_hash = None
+    secret = None
+
+    # Load config.yaml if it exists
+    config_yaml_path = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
+    if config_yaml_path.exists():
+        try:
+            with open(config_yaml_path, encoding="utf-8") as f:
+                config_yaml = yaml.safe_load(f) or {}
+            console_cfg = config_yaml.get("console", {})
+            if console_cfg:
+                username = console_cfg.get("username", "").strip() if console_cfg.get("username") else None
+                password = console_cfg.get("password", "").strip() if console_cfg.get("password") else None
+                password_hash = console_cfg.get("password_hash", "").strip() if console_cfg.get("password_hash") else None
+                secret = console_cfg.get("session_secret", "").strip() if console_cfg.get("session_secret") else None
+        except Exception as e:
+            logger.warning(f"Failed to load config.yaml: {e}")
+
+    # Fallback to upstreams.yaml config
+    if not username and config:
+        console_cfg = config.get("console", {})
+        if console_cfg:
+            username = console_cfg.get("username", "").strip() if console_cfg.get("username") else None
+            password = console_cfg.get("password", "").strip() if console_cfg.get("password") else None
+            password_hash = console_cfg.get("password_hash", "").strip() if console_cfg.get("password_hash") else None
+            secret = console_cfg.get("session_secret", "").strip() if console_cfg.get("session_secret") else None
+
+    # Fallback to env vars
+    if not username:
+        username = os.getenv("UNIHIVE_CONSOLE_USER", "").strip() or None
+    if not password:
+        password = os.getenv("UNIHIVE_CONSOLE_PASSWORD", "").strip() or None
+    if not secret:
+        secret = os.getenv("UNIHIVE_CONSOLE_SESSION_SECRET", "").strip() or None
+
+    # Either password or password_hash must be set
+    has_password = bool(password)
+    has_password_hash = bool(password_hash)
+    if not (has_password or has_password_hash):
+        return None, "no console auth configured; console is open"
+    if not username or not secret:
+        return None, "no console auth configured; console is open"
+
+    # Build config dict - prefer password_hash, fallback to password
+    cfg = {"username": username, "session_secret": secret}
+    if password_hash:
+        cfg["password_hash"] = password_hash
+    else:
+        cfg["password"] = password
+
+    if len(secret) < 32:
+        return None, (
+            "session_secret must be at least 32 characters "
+            "(setup_console_auth enforces this; refusing to enable with a "
+            "weak secret)."
+        )
+
+    return cfg, "ok"
+
+
+class _NoSlashStarlette(Starlette):
+    """Starlette 子类，关掉默认 redirect_slashes=True。
+
+    MCP StreamableHTTP 要求 POST /mcp 直接 200，不要被重定向到 /mcp/。
+    很多 MCP 客户端 (Claude Desktop / Cursor) 不会自动跟 POST 307，
+    会直接报 stream error。详见 MCP 2025-11-25 spec/authorization.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.router.redirect_slashes = False
+
+
+async def _install_capability_filter(mcp: FastMCP) -> None:
+    """Strip capability fields from initialize response when no backing components exist.
+
+    FastMCP 4.0.3 unconditionally registers handlers for prompts/list,
+    resources/list, resources/templates/list, prompts/get, resources/read,
+    logging/setLevel in ``MCPOperationsMixin._setup_handlers`` — even when no
+    prompts/resources are registered. The MCP SDK's ``Server.get_capabilities``
+    advertises any handler that's registered, so clients see ghost
+    capabilities (``prompts``, ``resources``, ``logging``) that only ever
+    return empty results.
+
+    Sample actual component counts here (async context, components settled
+    after ``_register_tools``) and wrap ``mcp._mcp_server.get_capabilities``
+    so empty component types get ``None`` capability fields. We leave the
+    handlers themselves registered so adding a component later (e.g. via a
+    future prompt manager) keeps working without re-installing the filter.
+
+    Tracked as HIGH #3 in MCP startup audit (2026-09-07). FastMCP 4.1+ was
+    hoped to expose a public setter, but as of 4.0.3 there is none — the
+    only fix is this private attr patch.
+    """
+    if getattr(mcp, "_unihive_capability_filter_installed", False):
+        return
+    has_prompts = bool(await mcp.list_prompts())
+    has_resources = bool(await mcp.list_resources()) or bool(
+        await mcp.list_resource_templates()
+    )
+    has_logging = False  # gateway never wires logging/setLevel to a sink
+
+    ll_server = mcp._mcp_server
+    original_get_capabilities = ll_server.get_capabilities
+
+    def _filtered(
+        notification_options=None,
+        experimental_capabilities=None,
+        extensions=None,
+        *,
+        protocol_version=None,
+    ):
+        caps = original_get_capabilities(
+            notification_options,
+            experimental_capabilities,
+            extensions,
+            protocol_version=protocol_version,
+        )
+        updates: dict = {}
+        if not has_prompts and caps.prompts is not None:
+            updates["prompts"] = None
+        if not has_resources and caps.resources is not None:
+            updates["resources"] = None
+        if not has_logging and caps.logging is not None:
+            updates["logging"] = None
+        if updates:
+            caps = caps.model_copy(update=updates)
+        return caps
+
+    ll_server.get_capabilities = _filtered
+    mcp._unihive_capability_filter_installed = True
+
+
+def _make_mcp_path_canonicalizer(app, mcp_path: str):
+    """ASGI 中间件: 把 POST /mcp 这种无尾斜杠的请求规范化为 /mcp/。
+
+    Starlette 的 Mount("/mcp") 只匹配 /mcp/ 和 /mcp/... 不匹配 /mcp 本身,
+    关掉 redirect_slashes 之后 /mcp 会直接 404。这个中间件在外层 router
+    之前跑, 把 path 改写成 /mcp/ 后再交给 app, 让 Mount 能命中。
+    """
+    canonical = mcp_path.rstrip("/") + "/"
+
+    async def middleware(scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "") == mcp_path:
+            scope = {**scope, "path": canonical}
+        await app(scope, receive, send)
+
+    return middleware
+
+
 class GatewayServer:
     """UniHive MCP 网关 - 聚合多个上游 MCP Server"""
 
@@ -55,7 +248,25 @@ class GatewayServer:
         health_check_timeout: float | None = None,
     ):
         self.config_path = Path(config_path)
+
+        # Load upstreams.yaml
         self.config = load_config(config_path, strict_env=strict_env)
+
+        # Load config.yaml and merge (config.yaml takes precedence for overlapping keys)
+        config_yaml_path = self.config_path.parent / "config.yaml"
+        if config_yaml_path.exists():
+            try:
+                config_yaml = load_config(str(config_yaml_path), strict_env=strict_env)
+                # Merge: config.yaml overrides upstreams.yaml
+                for key, value in config_yaml.items():
+                    if key not in self.config:
+                        self.config[key] = value
+                    elif isinstance(self.config[key], dict) and isinstance(value, dict):
+                        self.config[key].update(value)
+                    else:
+                        self.config[key] = value
+            except Exception as e:
+                logger.warning(f"Failed to load config.yaml: {e}")
         errors = validate_config(self.config)
         if errors:
             for e in errors:
@@ -193,6 +404,17 @@ class GatewayServer:
                     )
                     self.upstreams[name] = client
                     continue
+                except Exception as e:
+                    # 非超时异常 (FileNotFoundError / OSError / 等) 也会泄漏
+                    # 子进程 / 连接 — 必须把 client 加进 self.upstreams, 让
+                    # outer-except 的 cleanup / stop() 能调 client.stop() 关掉
+                    # subprocess/httpx 连接 (HIGH #1, 2026-09-07 audit C1).
+                    logger.error(
+                        f"[{name}] upstream start() raised {type(e).__name__}: {e}; "
+                        f"marking unavailable and continuing with other upstreams"
+                    )
+                    self.upstreams[name] = client
+                    continue
                 self.upstreams[name] = client
                 logger.info(f"[{name}] {'Connected' if client.is_available else 'Failed'}")
 
@@ -207,8 +429,9 @@ class GatewayServer:
             )
 
             # 初始化 MCP Server（传入已加载的 specs，避免重复 _load_all_tools() 调用）
-            self.mcp = FastMCP("unihive")
-            self._register_tools(specs=tool_specs)
+            # 经 _create_and_register_gateway_mcp 工厂走, FastMCP 构造 + tools
+            # 注册 + capability filter 安装一气呵成, 防止未来 refactor 跳过 filter。
+            await self._create_and_register_gateway_mcp(tool_specs)
 
         except Exception:
             # LOW6: 改为 except Exception, 不再吃 CancelledError / KeyboardInterrupt /
@@ -218,24 +441,28 @@ class GatewayServer:
             for client in self.upstreams.values():
                 try:
                     await asyncio.wait_for(client.stop(), timeout=2.0)
-                except (asyncio.TimeoutError, Exception):
+                except Exception:
                     pass
             self.upstreams.clear()
             if self.cache:
                 try:
                     await asyncio.wait_for(self.cache.close(), timeout=2.0)
-                except (asyncio.TimeoutError, Exception):
+                except Exception:
                     pass
                 self.cache = None
+            # M1 (2026-09-07 audit): 半构造的 router / mcp 也归零, 否则后续
+            # get_server_status / 路由调用拿到指向未完全初始化对象的引用。
+            self.router = None
+            self.mcp = None
             raise
 
         self._initialized = True
         logger.info(f"Gateway initialized with {len(self.upstreams)} upstreams")
 
     def _cache_key(self, name: str, params: dict) -> str:
-        """生成稳定的缓存 key。"""
+        """生成稳定的缓存 key。使用完整 SHA256 哈希避免碰撞。"""
         payload = json.dumps(params, sort_keys=True, default=str, ensure_ascii=False)
-        h = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+        h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return f"{name}:{h}"
 
     def _ttl_for(self, ttl_key: str) -> int | None:
@@ -244,9 +471,23 @@ class GatewayServer:
         return ttl.get(ttl_key)
 
     @staticmethod
-    def _is_fuyao_source(source: str | None) -> bool:
-        """缓存策略：仅缓存 FUYAO 上游响应。TDX/TQ-Local/TokenWave 本地数据不缓存。"""
-        return bool(source) and source.startswith("fuyao_")
+    def _is_cacheable_source(source: str | None) -> bool:
+        """缓存策略：仅缓存 FUYAO 和 MooTDX2 在线接口。"""
+        if not source:
+            return False
+        return source.startswith("fuyao_") or source == "mootdx2"
+
+    @staticmethod
+    def _is_realtime_ttl(ttl_key: str | None) -> bool:
+        """实时接口不缓存（realtime_quote TTL 极短，无意义）。"""
+        return ttl_key == "realtime_quote"
+
+    @staticmethod
+    def _is_cacheable_data_source(data_source_type: str | None) -> bool:
+        """仅在线数据源可缓存，离线和混合类型不缓存。"""
+        if not data_source_type:
+            return False
+        return data_source_type == "online"
 
     async def _execute_cached(
         self,
@@ -254,18 +495,24 @@ class GatewayServer:
         params: dict,
         route_key: str,
         ttl_key: str | None = None,
+        data_source_type: str = "online",
     ) -> dict:
         """路由 + 缓存包装。
 
         缓存策略：
-        - 仅当 ttl_key 在 config.cache.ttl 中配了 TTL、cache 启用、且上游是 fuyao_*
-          时才缓存。
+        - 仅当 ttl_key 配了 TTL、cache 启用、是在线数据源且非实时接口时才缓存。
         - 命中路径：直接返回缓存的响应，附 cache_hit=True。
         - 失效路径：调一次路由；失败响应也只算一次，不双倍路由。
         - hops 是请求级元数据，不进缓存。
         """
         ttl = self._ttl_for(ttl_key) if ttl_key else None
-        can_cache = ttl is not None and self.cache is not None and self.cache.enabled
+        can_cache = (
+            ttl is not None
+            and self.cache is not None
+            and self.cache.enabled
+            and self._is_cacheable_data_source(data_source_type)
+            and not self._is_realtime_ttl(ttl_key)
+        )
 
         key: str | None = None
         if can_cache:
@@ -301,9 +548,7 @@ class GatewayServer:
             hops=[h.source for h in result.hops],  # 真实 hops 留给消费者
         )
 
-        if (can_cache and key is not None and result.success
-                and result.data is not None
-                and self._is_fuyao_source(result.source)):
+        if can_cache and key is not None and result.success and result.data is not None:
             # 缓存里只存稳定数据：hops（请求级）入空，cache_hit 在 setdefault 之前写
             await self.cache.set(key, {**resp, "hops": []}, ttl=ttl)
 
@@ -316,6 +561,27 @@ class GatewayServer:
         """Delegate to tool_loader.load_all_tools for YAML merge."""
         from .tool_loader import load_all_tools
         return load_all_tools(self.config_path, self.config)
+
+    async def _create_and_register_gateway_mcp(
+        self, tool_specs: list[dict] | None = None
+    ) -> FastMCP:
+        """Single entry point for constructing the gateway FastMCP server.
+
+        M2 (2026-09-07 audit): 把 FastMCP("unihive") 构造 + _register_tools +
+        _install_capability_filter 收进一个方法, 防止未来 refactor 在 _do_initialize
+        之外构造裸 FastMCP 时漏掉 capability filter (HIGH #3, 2026-09-07 audit)。
+
+        Filter 必须等 _register_tools 后才能装 (_install_capability_filter 要
+        调 list_prompts / list_resources 采样组件数), 所以三步串行, 但都在这
+        一个工厂里, 缺一不可。
+        """
+        # version 显式传 GATEWAY_VERSION, 避免 FastMCP 默认 fallback 到框架版本
+        # (4.0.3), 让 client 把 framework 升级误判成 server 升级。
+        mcp = FastMCP("unihive", version=GATEWAY_VERSION)
+        self.mcp = mcp
+        self._register_tools(specs=tool_specs)
+        await _install_capability_filter(mcp)
+        return mcp
 
     def _register_tools(self, specs: list[dict] | None = None):
         # 特殊工具：手写（带特殊逻辑或网关内部）
@@ -484,13 +750,23 @@ class GatewayServer:
         # MCP ASGI app — path="/" 让 inner 路由在 root,
         # 由 Mount("/mcp", ...) 接管 URL 前缀。否则 inner 路由在 /mcp/ 会被
         # Mount 剥离前缀后变成 404 (外 /mcp/ → 内 /, 路由在 /mcp/ 不匹配)。
-        mcp_app = self.mcp.http_app(path="/")
+        # 显式传 allowed_hosts / allowed_origins / host_origin_protection,
+        # 不依赖 FastMCP 4.x 的默认值 (默认开, 但版本升级可能改),
+        # 始终满足 MCP 2025-11-25 spec 对 DNS-rebinding 防护的 MUST 要求。
+        mcp_app = self.mcp.http_app(
+            path="/",
+            allowed_hosts=["127.0.0.1:*", "localhost:*"],
+            allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
+            host_origin_protection=True,
+        )
 
-        # Combined router: MCP at /mcp, Console API at /api/*, static at /
-        # lifespan=mcp_app.lifespan 必须显式传, 否则 FastMCP 的
-        # StreamableHTTPSessionManager task group 不会启动, 任何 MCP 请求
-        # 都会在 handler 里抛 "task group is not initialized"。
-        app = Starlette(
+        # Mount("/mcp", ...) 对子路径 /mcp/foo 会剥前缀成 /foo,
+        # 对完全相等的 /mcp 则不剥, 透传 /mcp 给 inner app, 但 mcp_app
+        # 的 route 挂在 "/" 上, 不匹配会 404。
+        # 用 _make_mcp_path_canonicalizer 把 /mcp 改写成 /mcp/, 让 Mount 能命中。
+        # 用 _NoSlashStarlette 关掉 Starlette 默认的 redirect_slashes=True,
+        # 否则 POST /mcp → 307 → /mcp/, 多数 MCP 客户端不会自动跟 POST 307。
+        inner_app = _NoSlashStarlette(
             lifespan=mcp_app.lifespan,
             routes=[
                 Mount(mcp_path, app=mcp_app),
@@ -502,6 +778,21 @@ class GatewayServer:
                 Route("/api/mcp-tools-list", _mcp_tools_api),
             ]
         )
+
+        # HIGH #4 (console needs login): wire console_auth into inner_app when
+        # console config is set in YAML or all three UNIHIVE_CONSOLE_* env vars.
+        # ConsoleAuthMiddleware exempts /mcp, /health, /login, /logout, /static —
+        # so MCP clients and health probes keep working. If not configured,
+        # leave the console open and log why (backward compatible; opt-in auth).
+        auth_cfg, auth_reason = _get_console_auth_config(self.config)
+        if auth_cfg is not None:
+            from .console_auth import setup_console_auth
+            setup_console_auth(inner_app, auth_cfg)
+            logger.info("Console auth enabled (UNIHIVE_CONSOLE_* set)")
+        else:
+            logger.warning(f"Console auth disabled: {auth_reason}")
+
+        app = _make_mcp_path_canonicalizer(inner_app, mcp_path)
         log_level = self.config.get("logging", {}).get("level", "info").lower()
         config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
 
@@ -604,6 +895,16 @@ class GatewayServer:
             except asyncio.TimeoutError:
                 logger.warning("cache close() timed out after 2s")
             self.cache = None
+
+        # 重置状态以支持同实例 restart (HIGH B1, 2026-09-07 audit):
+        # 不清掉的话, 第二次 initialize() 会因 _initialized=True 短路,
+        # 用已经 stop 过的死 upstreams / router / mcp 路由 → 全程失败。
+        # 生产路径通常 stop 后进程退出, 重置是无害的; stop/start 循环
+        # (supervisor 重启 / 热重载配置) 则依赖这些归零。
+        self.upstreams.clear()
+        self.router = None
+        self.mcp = None
+        self._initialized = False
 
         logger.info("Gateway shutdown complete")
 

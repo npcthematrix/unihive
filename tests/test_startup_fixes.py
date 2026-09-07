@@ -298,8 +298,19 @@ class TestGatewayShutdownChain:
         async def empty_asgi_app(scope, receive, send):
             pass
 
+        # serve_http 还会读 mcp_app.lifespan 喂给 Starlette — 裸函数没这个属性,
+        # 必须用有 .lifespan 又能 ASGI-callable 的对象
+        class FakeMcpApp:
+            lifespan = "fake-lifespan"
+
+            def __init__(self, inner):
+                self._inner = inner
+
+            async def __call__(self, scope, receive, send):
+                await self._inner(scope, receive, send)
+
         def fake_http_app(*a, **kw):
-            return empty_asgi_app
+            return FakeMcpApp(empty_asgi_app)
         server.mcp = type("M", (), {"http_app": fake_http_app})()
 
         await server.serve_http(host="127.0.0.1", port=free_port)
@@ -351,7 +362,17 @@ class TestGatewayShutdownChain:
         async def empty_asgi_app(scope, receive, send):
             pass
 
-        server.mcp = type("M", (), {"http_app": lambda *a, **kw: empty_asgi_app})()
+        # serve_http 会读 mcp_app.lifespan 喂给 Starlette — 裸 lambda 没这个属性
+        class FakeMcpApp:
+            lifespan = "fake-lifespan"
+
+            def __init__(self, inner):
+                self._inner = inner
+
+            async def __call__(self, scope, receive, send):
+                await self._inner(scope, receive, send)
+
+        server.mcp = type("M", (), {"http_app": lambda *a, **kw: FakeMcpApp(empty_asgi_app)})()
 
         with pytest.raises(RuntimeError, match="uvicorn internal crash"):
             await server.serve_http(host="127.0.0.1", port=free_port)
@@ -401,6 +422,204 @@ class TestGatewayShutdownChain:
 
         await server.start()
         assert stop_calls == [True], "start() 必须把 run_stdio_async 包在 try/finally"
+
+
+# ========== MED A2: gateway MCP 工厂方法 ==========
+
+class TestCreateAndRegisterGatewayMcp:
+    """M2 (2026-09-07 audit): gateway FastMCP 必须经
+    _create_and_register_gateway_mcp 工厂走, 一次性完成 FastMCP 构造 +
+    _register_tools + _install_capability_filter。否则裸 FastMCP("unihive")
+    在 _do_initialize 之外被调用时, capability over-advertise 会复发
+    (HIGH #3, 2026-09-07 audit)。"""
+
+    async def test_factory_sets_self_mcp(self, tmp_path):
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {},
+        }
+        server.config_path = tmp_path / "upstreams.yaml"
+        server.config_path.write_text("upstreams: {}\n", encoding="utf-8")
+        server.upstreams = {}
+        server.cache = None
+        server.router = None
+        server.mcp = None
+        server._initialized = False
+        server._shutdown_event = asyncio.Event()
+        server._running = False
+
+        register_calls = []
+
+        def fake_register_tools(specs=None):
+            register_calls.append(specs)
+
+        server._register_tools = fake_register_tools  # type: ignore[assignment]
+
+        mcp = await server._create_and_register_gateway_mcp(
+            tool_specs=[{"name": "fake_tool"}]
+        )
+
+        assert server.mcp is mcp, "factory 必须把构造的 MCP 挂到 self.mcp"
+        assert register_calls == [[{"name": "fake_tool"}]], (
+            f"factory 必须以传入的 specs 调 _register_tools, 实际: {register_calls}"
+        )
+
+    async def test_factory_installs_capability_filter(self, tmp_path):
+        """factory 必须装 capability filter; 没有 _unihive_capability_filter_installed
+        标记就是 HIGH #3 复发路径。"""
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {},
+        }
+        server.config_path = tmp_path / "upstreams.yaml"
+        server.config_path.write_text("upstreams: {}\n", encoding="utf-8")
+        server.upstreams = {}
+        server.cache = None
+        server.router = None
+        server.mcp = None
+        server._initialized = False
+        server._shutdown_event = asyncio.Event()
+        server._running = False
+        server._register_tools = lambda specs=None: None  # type: ignore[assignment]
+
+        mcp = await server._create_and_register_gateway_mcp()
+
+        assert getattr(mcp, "_unihive_capability_filter_installed", False), (
+            "factory 出来的 MCP 必须带 _unihive_capability_filter_installed 标记, "
+            "否则 _install_capability_filter 没被调, HIGH #3 复发"
+        )
+
+
+# ========== MED A1: _do_initialize 失败时重置 router / mcp ==========
+
+class TestInitializeFailureResetsRouterMcp:
+    """_do_initialize 抛异常时, cleanup 块除清 upstreams / cache 外,
+    还必须把 self.router / self.mcp 归零 (M1, 2026-09-07 audit)。
+    否则后续 get_server_status / 路由调用读到半构造对象。"""
+
+    async def test_router_and_mcp_reset_on_init_failure(self, tmp_path, monkeypatch):
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {},
+            "routing": {},
+            "upstream_tool_mapping": {},
+        }
+        server.config_path = tmp_path / "upstreams.yaml"
+        server.config_path.write_text("upstreams: {}\n", encoding="utf-8")
+        server.upstreams = {}
+        server.cache = None
+        # 模拟 cleanup 前 router / mcp 已经被赋值 (半构造状态)
+        server.router = object()
+        server.mcp = object()
+        server._initialized = False
+        server._shutdown_event = asyncio.Event()
+        server._running = False
+        server._init_lock = asyncio.Lock()
+        server._upstream_start_timeout = 30.0
+
+        # 让 _load_all_tools 在 router/mcp 构造之前抛, 走 cleanup 块
+        def boom(*a, **kw):
+            raise RuntimeError("simulated init failure")
+        server._load_all_tools = boom  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="simulated init failure"):
+            await server._do_initialize()
+
+        assert server.router is None, (
+            f"router 必须重置为 None, 实际: {server.router!r}"
+        )
+        assert server.mcp is None, (
+            f"mcp 必须重置为 None, 实际: {server.mcp!r}"
+        )
+
+
+# ========== HIGH B1: stop() 重置状态支持 restart ==========
+
+class TestStopResetsStateForRestart:
+    """stop() 必须清空 upstreams / 重置 router / mcp / _initialized,
+    否则同实例 start() → stop() → start() 第二次 initialize() 会短路,
+    用已经 stop 过的死客户端路由 → 'Process not running'。"""
+
+    async def test_stop_clears_upstreams(self, tmp_path):
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {},
+        }
+        server.cache = None
+        server._shutdown_event = asyncio.Event()
+        server._requests_lock = asyncio.Lock()
+        server._active_requests = 0
+        server._running = True
+
+        stopped_clients = []
+
+        class FakeClient:
+            async def stop(self):
+                stopped_clients.append(self)
+
+        c1, c2 = FakeClient(), FakeClient()
+        server.upstreams = {"a": c1, "b": c2}
+
+        await server.stop()
+        assert server.upstreams == {}, (
+            f"stop() 后 upstreams 必须清空, 否则 restart 会路由到死客户端: "
+            f"{list(server.upstreams.keys())}"
+        )
+        assert len(stopped_clients) == 2, "两个 client 的 stop() 都必须被调"
+
+    async def test_stop_resets_router_mcp(self, tmp_path):
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {},
+        }
+        server.upstreams = {}
+        server.cache = None
+        server._shutdown_event = asyncio.Event()
+        server._requests_lock = asyncio.Lock()
+        server._active_requests = 0
+        server._running = True
+        server.router = object()
+        server.mcp = object()
+
+        await server.stop()
+        assert server.router is None, "stop() 后 router 必须重置为 None"
+        assert server.mcp is None, "stop() 后 mcp 必须重置为 None"
+
+    async def test_stop_resets_initialized_flag(self, tmp_path):
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {},
+        }
+        server.upstreams = {}
+        server.cache = None
+        server._shutdown_event = asyncio.Event()
+        server._requests_lock = asyncio.Lock()
+        server._active_requests = 0
+        server._running = True
+        server._initialized = True
+
+        await server.stop()
+        assert server._initialized is False, (
+            "stop() 后 _initialized 必须重置, 否则第二次 initialize() 短路"
+        )
 
 
 # ========== Cleanup fixture ==========

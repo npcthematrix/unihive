@@ -1,0 +1,45 @@
+# UniHive Gateway 配置文件
+
+# Gateway 配置
+gateway:
+  host: "0.0.0.0"
+  port: 18080
+  mcp_path: "/mcp"
+
+# Console 控制台认证配置（可选）
+# 设置后访问 http://127.0.0.1:18080 需要登录
+console:
+  username: "admin"
+  password_hash: "pbkdf2_sha256$200000$d506b2bd1306c1e8f4d3d228a3313022$41d50a4c0592c0a8e4eebdf9afdd99e2cda48a743a87095272cf1cc89b349445"
+  session_secret: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+# 全局开关
+disable_dangerous: false
+strict_registry: true
+
+# 缓存配置
+cache:
+  enabled: true
+  db_path: "logs/cache.db"
+
+  ttl:
+    index_data: 60
+    fundamentals: 3600
+    fund_data: 300
+    search: 300
+    special_data: 60
+    valuation: 300
+    fund_holdings: 3600
+    fund_history: 3600
+    ticker_list: 3600
+    workday: 86400
+    historical: 3600
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "json"
+  path: "logs"
+  rotation:
+    max_bytes: 10485760
+    backup_count: 5

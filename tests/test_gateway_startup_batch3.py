@@ -8,11 +8,26 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import socket
 import sys
 from unittest.mock import patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_root_logging_handlers():
+    """TestStartupBanner 触发 configure_logging 装了一个 sys.stderr 的
+    StreamHandler 到 root logger。pytest capsys/capfd 切换时会让该 handler
+    写到 closed file → TestPortInUse 拿到 'I/O operation on closed file'
+    traceback, 不是真实 bug 而是测试隔离问题。每个测试后清空 root handlers
+    把 configure_logging 副作用隔离在 TestStartupBanner 内部。
+    """
+    yield
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
 
 
 # ========== MED #6: log_level from config ==========
@@ -60,7 +75,7 @@ class TestArgparseTopLevel:
 # ========== LOW #13: startup banner ==========
 
 class TestStartupBanner:
-    async def test_async_main_logs_startup_banner(self, capfd, tmp_path):
+    async def test_async_main_logs_startup_banner(self, capsys, tmp_path):
         """async_main 启动时必须打 banner, 包含 transport / config path / upstream 数."""
         from src import gateway_server as gs
 
@@ -88,7 +103,10 @@ class TestStartupBanner:
                 config_path=str(cfg),
             )
 
-        captured = capfd.readouterr()
+        # 用 capsys 而不是 capfd: configure_logging 装了一个 sys.stderr 的
+        # StreamHandler, capfd 替换 fd 会让 StreamHandler 在下一个测试里写
+        # 到 closed file, 导致 TestPortInUse 失败。两边都用 capsys 就稳了。
+        captured = capsys.readouterr()
         combined = captured.out + captured.err
         assert "unihive starting" in combined, f"startup banner 应在 stdout/stderr, 实际: {combined[-200:]}"
         assert "transport=http" in combined

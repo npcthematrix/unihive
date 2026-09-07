@@ -138,6 +138,21 @@ def load_config() -> dict:
         from .config_loader import load_config as _shared_load_config
 
         config = _shared_load_config(config_path, strict_env=False)
+
+        # Merge config.yaml (gateway runtime config)
+        config_yaml_path = config_path.parent / "config.yaml"
+        if config_yaml_path.exists():
+            try:
+                config_yaml = _shared_load_config(str(config_yaml_path), strict_env=False)
+                for key, value in config_yaml.items():
+                    if key not in config:
+                        config[key] = value
+                    elif isinstance(config[key], dict) and isinstance(value, dict):
+                        config[key].update(value)
+                    else:
+                        config[key] = value
+            except Exception as e:
+                logger.warning(f"Failed to load config.yaml: {e}")
     except Exception as e:
         logger.warning(f"Shared config loader failed ({e}), falling back to raw YAML")
         with open(config_path, encoding="utf-8") as f:
@@ -360,7 +375,12 @@ def get_interfaces() -> dict:
         routing_key = spec.get("routing")
         chain = derive_routing_chain(config, routing_key) if routing_key else []
         cache_ttl_key = spec.get("cache_ttl_key")
-        cache_ttl_seconds = get_cache_ttl(config, cache_ttl_key) if cache_ttl_key else None
+        # realtime_quote 是实时接口，不缓存，过滤掉缓存配置
+        if cache_ttl_key == "realtime_quote":
+            cache_ttl_key = None
+            cache_ttl_seconds = None
+        else:
+            cache_ttl_seconds = get_cache_ttl(config, cache_ttl_key) if cache_ttl_key else None
         params = spec.get("params") or []
         result.append({
             "name": spec.get("name"),

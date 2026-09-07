@@ -11,6 +11,13 @@ upstreams:
     type: "mootdx2"
     market: "std"
     tdxdir: ""  # 通达信本地路径，空则自动探索
+    capabilities:
+      - market_data
+      - realtime_quote
+      - daily_bar
+      - minute_bar
+      - stock_info
+      - index_data
 
   tdx_quant:
     enabled: true
@@ -240,42 +247,3 @@ tools:
   - {name: fund_portfolio_bond_history, description: "基金债券持仓历史", routing: fund_portfolio_bond_history, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
   - {name: fund_portfolio_bond_report_dates, description: "基金债券持仓报告日", routing: fund_portfolio_bond_report_dates, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
   - {name: fund_portfolio_asset_allocation, description: "基金资产配置", routing: fund_portfolio_asset_allocation, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-
-
-# Gateway 配置
-gateway:
-  host: "0.0.0.0"
-  port: 18080
-  mcp_path: "/mcp"
-
-# 全局开关
-disable_dangerous: false
-strict_registry: true
-
-# 缓存配置
-cache:
-  enabled: true
-  db_path: "logs/cache.db"
-
-  ttl:
-    realtime_quote: 10
-    index_data: 60
-    fundamentals: 3600
-    fund_data: 300
-    search: 300
-    special_data: 60
-    valuation: 300
-    fund_holdings: 3600
-    fund_history: 3600
-    ticker_list: 3600
-    workday: 86400
-    historical: 3600
-
-# 日志配置
-logging:
-  level: "INFO"
-  format: "json"
-  path: "logs"
-  rotation:
-    max_bytes: 10485760
-    backup_count: 5
