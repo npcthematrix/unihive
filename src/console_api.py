@@ -454,7 +454,7 @@ def get_mcp_tools_list() -> dict:
                 p["enum"] = enum_vals
             params.append(p)
 
-        # 优先从 mapping 查真实来源，fallback 到前缀猜测
+        # SOURCE 100% 来自 upstream_tool_mapping；查不到时标 unknown
         source = source_map.get(name, "unknown")
 
         tools_out.append({
