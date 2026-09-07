@@ -504,6 +504,17 @@ class GatewayServer:
 
         # 端口可用性预检: uvicorn 绑定失败只 log + 退出 3, 不 raise OSError,
         # 拿不到干净错误。预检给一个明确消息 + 退出码 2。
+        #
+        # TOCTOU 评估 (MED5): _probe.close() → uvicorn serve() 之间存在
+        # 亚毫秒窗口, 另一进程理论上能抢端口。考虑到:
+        #   1) 单用户本地 dev 场景, 端口竞争源少;
+        #   2) 即便 uvicorn 二次 bind 失败, 它会进自己的 retry/backoff,
+        #      我们已有 serve_http 的 finally cleanup (停止 health loop /
+        #      upstreams), 不至于泄漏资源;
+        #   3) 加 retry loop 或 SO_REUSEADDR 反而会盖掉真实的端口冲突信号
+        #      (SO_REUSEADDR 在 Linux 上允许 bind 已被 LISTEN 但已 CLOSE 的端口,
+        #       在 Windows 上行为不同)。
+        # 结论: 接受 TOCTOU 风险, 维持现有预检作为友好错误信号。
         _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             _probe.bind((host, port))
