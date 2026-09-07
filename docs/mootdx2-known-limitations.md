@@ -163,7 +163,7 @@
 
 ### 板块代码
 - TDX 本地文件只存储中文板块名（`sector_name`），不存储数字板块代码
-- 调用方必须用中文板块名做 `get_sector_stocks` / `get_custom_sector_stocks` 的入参
+- 调用方必须用中文板块名做 `get_sector_stocks_local` / `get_custom_sector_stocks` 的入参
 - 不能跨机器共享板块名（不同 TDX 客户端板块名一致但 ID 不一定一致）
 
 ### 自定义板块可用性

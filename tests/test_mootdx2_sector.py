@@ -84,9 +84,9 @@ def test_get_sector_list_local_concept_ok(client):
     assert r.data[0]["sector_type"] == "concept"
 
 
-# ========== get_sector_stocks ==========
+# ========== get_sector_stocks_local ==========
 
-def test_get_sector_stocks_hit(client):
+def test_get_sector_stocks_local_hit(client):
     """sector name matches → return [{code, market}]."""
     import pandas as pd
 
@@ -100,7 +100,7 @@ def test_get_sector_stocks_hit(client):
     mock_reader.get_df.return_value = mock_df
     with patch.object(Path, "exists", return_value=True), \
          patch("tdxpy.reader.BlockReader", return_value=mock_reader):
-        r = asyncio.run(client.get_sector_stocks("银行板块", "industry"))
+        r = asyncio.run(client.get_sector_stocks_local("银行板块", "industry"))
 
     assert r.success is True
     assert r.data == [
@@ -109,7 +109,7 @@ def test_get_sector_stocks_hit(client):
     ]
 
 
-def test_get_sector_stocks_not_found(client):
+def test_get_sector_stocks_local_not_found(client):
     """sector name absent → sector_not_found error."""
     import pandas as pd
 
@@ -120,15 +120,15 @@ def test_get_sector_stocks_not_found(client):
     mock_reader.get_df.return_value = mock_df
     with patch.object(Path, "exists", return_value=True), \
          patch("tdxpy.reader.BlockReader", return_value=mock_reader):
-        r = asyncio.run(client.get_sector_stocks("不存在的板块", "industry"))
+        r = asyncio.run(client.get_sector_stocks_local("不存在的板块", "industry"))
 
     assert r.success is False
     assert r.error_detail["error_type"] == "sector_not_found"
 
 
-# ========== get_stock_sectors ==========
+# ========== get_stock_sectors_local ==========
 
-def test_get_stock_sectors_aggregates_three_types(client):
+def test_get_stock_sectors_local_aggregates_three_types(client):
     """stock code matches across 3 files → returns 3 entries."""
     import pandas as pd
 
@@ -143,14 +143,14 @@ def test_get_stock_sectors_aggregates_three_types(client):
     client.config.settings.tdxdir = "/fake/tdx"
     with patch.object(Path, "exists", return_value=True), \
          patch("tdxpy.reader.BlockReader", return_value=mock_reader):
-        r = asyncio.run(client.get_stock_sectors("600000"))
+        r = asyncio.run(client.get_stock_sectors_local("600000"))
 
     assert r.success is True
     assert len(r.data) == 3
     assert {x["sector_type"] for x in r.data} == {"industry", "concept", "region"}
 
 
-def test_get_stock_sectors_empty_when_no_match(client):
+def test_get_stock_sectors_local_empty_when_no_match(client):
     """stock not in any file → success with empty list (NOT error)."""
     import pandas as pd
 
@@ -161,22 +161,22 @@ def test_get_stock_sectors_empty_when_no_match(client):
     client.config.settings.tdxdir = "/fake/tdx"
     with patch.object(Path, "exists", return_value=True), \
          patch("tdxpy.reader.BlockReader", return_value=mock_reader):
-        r = asyncio.run(client.get_stock_sectors("600000"))
+        r = asyncio.run(client.get_stock_sectors_local("600000"))
 
     assert r.success is True
     assert r.data == []
 
 
-def test_get_stock_sectors_bad_format(client):
+def test_get_stock_sectors_local_bad_format(client):
     """non-6-digit code → stock_not_found error."""
     client.config.settings = MagicMock()
     client.config.settings.tdxdir = "/fake/tdx"
-    r = asyncio.run(client.get_stock_sectors("abc"))
+    r = asyncio.run(client.get_stock_sectors_local("abc"))
     assert r.success is False
     assert r.error_detail["error_type"] == "stock_not_found"
 
 
-def test_get_stock_sectors_strip_prefix(client):
+def test_get_stock_sectors_local_strip_prefix(client):
     """sh600000 → normalized to 600000, matches rows with code='600000'."""
     import pandas as pd
 
@@ -188,7 +188,7 @@ def test_get_stock_sectors_strip_prefix(client):
     client.config.settings.tdxdir = "/fake/tdx"
     with patch.object(Path, "exists", return_value=True), \
          patch("tdxpy.reader.BlockReader", return_value=mock_reader):
-        r = asyncio.run(client.get_stock_sectors("sh600000"))
+        r = asyncio.run(client.get_stock_sectors_local("sh600000"))
 
     assert r.success is True
     assert r.data == [{"sector_name": "银行板块", "sector_type": "industry"}]

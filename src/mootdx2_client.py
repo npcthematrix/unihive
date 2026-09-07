@@ -281,7 +281,7 @@ class MooTDX2Client:
             "get_income": self.get_income,
             # 新增接口
             "get_sector_list_local": self.get_sector_list_local,
-            "get_sector_stocks": self.get_sector_stocks,
+            "get_sector_stocks_local": self.get_sector_stocks_local,
             "get_f10": self.get_f10,
             "get_f10_company": self.get_f10_company,
             "get_minutes": self.get_minutes,
@@ -291,7 +291,7 @@ class MooTDX2Client:
             "get_k_data": self.get_k_data,
             "search_stock": self.search_stock,
             "get_stock_info": self.get_stock_info,
-            "get_stock_sectors": self.get_stock_sectors,
+            "get_stock_sectors_local": self.get_stock_sectors_local,
             "get_custom_sector_list": self.get_custom_sector_list,
             "get_custom_sector_stocks": self.get_custom_sector_stocks,
             "get_index_overview": self.get_index_overview,
@@ -857,7 +857,7 @@ class MooTDX2Client:
             f"板块 '{sector_code}' 不存在于 {sector_type}（{filename}）",
         )
 
-    async def get_sector_stocks(self, sector_code: str, sector_type: str = "industry") -> ToolResult:
+    async def get_sector_stocks_local(self, sector_code: str, sector_type: str = "industry") -> ToolResult:
         """获取指定板块的成分股
 
         Args:
@@ -874,8 +874,8 @@ class MooTDX2Client:
         except SectorDataError as e:
             return self._sector_error_result(e)
         except Exception as e:
-            logger.error(f"get_sector_stocks failed: {e}")
-            return self._error_result(e, f"get_sector_stocks({sector_code})")
+            logger.error(f"get_sector_stocks_local failed: {e}")
+            return self._error_result(e, f"get_sector_stocks_local({sector_code})")
 
     # ========== 个股所属板块查询 ==========
     def _stock_sectors_sync(self, stock_code: str, market: str = "auto") -> list:
@@ -925,7 +925,7 @@ class MooTDX2Client:
 
         return results
 
-    async def get_stock_sectors(self, stock_code: str, market: str = "auto") -> ToolResult:
+    async def get_stock_sectors_local(self, stock_code: str, market: str = "auto") -> ToolResult:
         """获取指定股票所属的所有板块
 
         Args:
@@ -942,8 +942,8 @@ class MooTDX2Client:
         except SectorDataError as e:
             return self._sector_error_result(e)
         except Exception as e:
-            logger.error(f"get_stock_sectors failed: {e}")
-            return self._error_result(e, f"get_stock_sectors({stock_code})")
+            logger.error(f"get_stock_sectors_local failed: {e}")
+            return self._error_result(e, f"get_stock_sectors_local({stock_code})")
 
     # ========== 自定义板块 ==========
     def _get_custom_sector_list_sync(self) -> list:

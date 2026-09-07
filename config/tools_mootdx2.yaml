@@ -653,7 +653,7 @@ tools:
           - concept
           - region
 
-  - name: get_sector_stocks
+  - name: get_sector_stocks_local
     description: |
       【· 离线】
       【板块成分股】查询指定板块包含的所有成分股。
@@ -676,9 +676,9 @@ tools:
       【典型错误】
       - tdx_not_installed / tdx_sector_file_missing: TDX 环境问题
       - sector_not_found: 板块名在文件中未找到
-    routing: get_sector_stocks
+    routing: get_sector_stocks_local
     upstream_tool_mapping:
-      mootdx2: get_sector_stocks
+      mootdx2: get_sector_stocks_local
     cache_ttl_key: null
     dangerous: false
     params:
@@ -695,7 +695,7 @@ tools:
           - concept
           - region
 
-  - name: get_stock_sectors
+  - name: get_stock_sectors_local
     description: |
       【· 离线】
       【个股所属板块】查询指定股票所属的所有板块（行业 + 概念 + 地区聚合）。
@@ -717,9 +717,9 @@ tools:
       【典型错误】
       - stock_not_found: 股票代码不是 6 位数字
       - tdx_not_installed: TDX 目录未配置
-    routing: get_stock_sectors
+    routing: get_stock_sectors_local
     upstream_tool_mapping:
-      mootdx2: get_stock_sectors
+      mootdx2: get_stock_sectors_local
     cache_ttl_key: null
     dangerous: false
     params:
