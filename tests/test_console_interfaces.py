@@ -2,21 +2,14 @@
 from unittest.mock import patch
 
 
-def test_get_interfaces_returns_138_tools():
-    """Regression: /api/interfaces returns 138 tools.
+def test_get_interfaces_returns_140_tools():
+    """Regression: /api/interfaces returns 140 tools.
 
-    History: 148 -> 147 (tdx_tq_local HTTP JSON-RPC upstream replaced by
-    tdx_quant in-process upstream; tdx_tq_local codegen had 58 tools,
-    tdx_quant codegen has 54 tools; manual tools unchanged).
-    147 -> 140 (mootdx2 dropped 7 client-side computed indicators —
-    ma/ema/macd/rsi/kdj/boll/vol_ma; only indicator_atr kept).
-    140 -> 139 (mootdx2 dropped get_trade_history_full — registered in
-    method_map but no implementation, would AttributeError on call;
-    get_trade_history already supports pagination).
-    139 -> 138 (mootdx2 dropped get_minute_trade_all — registered in
-    method_map but no implementation, and mootdx 0.11.7 has no such API
-    method; mootdx2 only exposes q.minute/q.minutes/q.transaction/
-    q.transactions).
+    History: 148 -> 147 -> 140 (indicator cleanup) -> 139 (trade_history_full) -> 138
+    (minute_trade_all) -> 140 (mootdx2 sector refactor: net +2 — added get_custom_sector_list
+    and get_custom_sector_stocks; the 3 block→sector renames preserved count; tdx_quant
+    codegen already contributed 8 sector-named tools independently — not introduced by
+    this plan).
     """
     import yaml
     config_path = "config/upstreams.yaml"
@@ -27,7 +20,7 @@ def test_get_interfaces_returns_138_tools():
         from src.console_api import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 138, f"Expected 138 tools, got {tool_count}"
+        assert tool_count == 140, f"Expected 140 tools, got {tool_count}"
 
 
 def test_merged_tool_specs_have_unique_names():
