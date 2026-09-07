@@ -4,6 +4,7 @@
 - HIGH #2: upstreams: null in YAML doesn't crash initialize()
 - HIGH1 (review): single upstream start() timeout isolates, doesn't abort init
 - HIGH #3: --config CLI flag is accepted and plumbed through
+- MED  #3 (review): health_check per-client timeout, slow client doesn't stall tick
 - MED  #5: console_api imports deduped (single import path)
 """
 from __future__ import annotations
@@ -201,6 +202,82 @@ class TestUpstreamTimeoutIsolation:
             )
         finally:
             gs.FuyaoClient = original_fuyao  # type: ignore[assignment]
+
+
+# ========== MED #3 (review): health_check timeout ==========
+
+class TestHealthCheckTimeout:
+    """MED3: 单 client.health_check() 卡死不能阻塞 health loop 整个 tick."""
+
+    async def test_slow_health_check_does_not_block_other_clients(self, tmp_path):
+        """slow client 永远挂死, fast client 仍必须被 health_check 到."""
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {
+            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
+            "upstreams": {},
+            "routing": {},
+            "upstream_tool_mapping": {},
+        }
+        server.config_path = tmp_path / "upstreams.yaml"
+        server.config_path.write_text("upstreams: {}\n", encoding="utf-8")
+        server.upstreams = {}
+        server.cache = None
+        server._running = True
+        server._shutdown_event = asyncio.Event()
+        server._health_check_timeout = 0.1  # 100ms timeout
+
+        class SlowClient:
+            name = "slow"
+            is_available = True
+            status = type("S", (), {"value": "healthy"})()
+            health_check_called = 0
+
+            async def health_check(self):
+                self.health_check_called += 1
+                await asyncio.sleep(100)  # 永远不返回
+
+            async def stop(self):
+                pass
+
+        class FastClient:
+            name = "fast"
+            is_available = True
+            status = type("S", (), {"value": "healthy"})()
+            health_check_called = 0
+
+            async def health_check(self):
+                self.health_check_called += 1
+
+            async def stop(self):
+                pass
+
+        slow = SlowClient()
+        fast = FastClient()
+        # slow 在前 — 无 timeout 时 fast 永远等不到
+        server.upstreams = {"slow": slow, "fast": fast}
+
+        loop_task = asyncio.create_task(server._health_check_loop())
+
+        # 等 fast 至少被调用过 (说明 loop 没被 slow 拖死)
+        deadline = asyncio.get_event_loop().time() + 2.0
+        while fast.health_check_called == 0 and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+
+        server._running = False
+        server._shutdown_event.set()
+        try:
+            await asyncio.wait_for(loop_task, timeout=2)
+        except asyncio.TimeoutError:
+            loop_task.cancel()
+
+        assert fast.health_check_called >= 1, (
+            f"fast client 应至少被 health_check 1 次, 实际 {fast.health_check_called} 次 "
+            f"(loop 被 slow 拖住)"
+        )
+        # slow 至少被启动过一次 (loop 真的尝试调它了)
+        assert slow.health_check_called >= 1
 
 
 # ========== HIGH #3: --config CLI flag ==========

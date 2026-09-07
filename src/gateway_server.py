@@ -43,6 +43,7 @@ class GatewayServer:
     """UniHive MCP 网关 - 聚合多个上游 MCP Server"""
 
     DEFAULT_UPSTREAM_START_TIMEOUT = 30.0
+    DEFAULT_HEALTH_CHECK_TIMEOUT = 10.0
 
     def __init__(
         self,
@@ -51,6 +52,7 @@ class GatewayServer:
         strict_env: bool = True,
         strict_validation: bool = True,
         upstream_start_timeout: float | None = None,
+        health_check_timeout: float | None = None,
     ):
         self.config_path = Path(config_path)
         self.config = load_config(config_path, strict_env=strict_env)
@@ -88,6 +90,13 @@ class GatewayServer:
             upstream_start_timeout
             if upstream_start_timeout is not None
             else self.DEFAULT_UPSTREAM_START_TIMEOUT
+        )
+        # 单个 client.health_check() 超时 (MED3): 防止某个 client 探活卡死
+        # 把 health loop 整个 tick 拖住, 后续 client 都探不到。
+        self._health_check_timeout = (
+            health_check_timeout
+            if health_check_timeout is not None
+            else self.DEFAULT_HEALTH_CHECK_TIMEOUT
         )
 
     async def initialize(self):
@@ -490,7 +499,20 @@ class GatewayServer:
             try:
                 for name, client in self.upstreams.items():
                     if hasattr(client, 'health_check'):
-                        await client.health_check()
+                        try:
+                            # MED3: 单 client.health_check() 加 timeout, 防止
+                            # 卡死的 client 拖住整个 tick, 后续 client 都探不到。
+                            await asyncio.wait_for(
+                                client.health_check(),
+                                timeout=self._health_check_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                f"[{name}] health_check timed out after "
+                                f"{self._health_check_timeout}s, skipping this tick"
+                            )
+                        except Exception as e:
+                            logger.warning(f"[{name}] health_check error: {e}")
                 if self.cache:
                     await self.cache.cleanup_expired()
             except Exception as e:
