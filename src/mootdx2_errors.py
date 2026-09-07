@@ -29,6 +29,13 @@ class MooTDXErrorType(Enum):
     # 内部错误 (需记录日志)
     INTERNAL_ERROR = "internal_error"  # 未预期异常
 
+    # 板块数据相关
+    TDX_NOT_INSTALLED = "tdx_not_installed"  # tdxdir 为空或目录不存在
+    TDX_SECTOR_FILE_MISSING = "tdx_sector_file_missing"  # vipdoc/block/*.dat 不存在
+    TDX_CUSTOM_SECTOR_UNAVAILABLE = "tdx_custom_sector_unavailable"  # T0002/blocknew/ 不存在
+    SECTOR_NOT_FOUND = "sector_not_found"  # 板块名在文件中未找到
+    STOCK_NOT_FOUND = "stock_not_found"  # 股票代码格式错误
+
 
 @dataclass
 class MooTDXError:
