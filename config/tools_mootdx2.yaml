@@ -29,7 +29,7 @@ tools:
     routing: get_quote
     upstream_tool_mapping:
       mootdx2: get_quote
-    cache_ttl_key:
+    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -65,7 +65,7 @@ tools:
     routing: get_kline
     upstream_tool_mapping:
       mootdx2: get_kline
-    cache_ttl_key:
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -106,7 +106,7 @@ tools:
     routing: get_batch_quote
     upstream_tool_mapping:
       mootdx2: get_batch_quote
-    cache_ttl_key:
+    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -135,7 +135,7 @@ tools:
     routing: get_minute_data
     upstream_tool_mapping:
       mootdx2: get_minute
-    cache_ttl_key:
+    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -166,7 +166,7 @@ tools:
     routing: get_trade
     upstream_tool_mapping:
       mootdx2: get_trade
-    cache_ttl_key:
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -200,7 +200,7 @@ tools:
     routing: get_trade_history
     upstream_tool_mapping:
       mootdx2: get_trade_history
-    cache_ttl_key:
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -247,7 +247,7 @@ tools:
     routing: get_index_kline
     upstream_tool_mapping:
       mootdx2: get_index
-    cache_ttl_key:
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -285,7 +285,7 @@ tools:
     routing: get_index_bars
     upstream_tool_mapping:
       mootdx2: get_index_bars
-    cache_ttl_key:
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -328,7 +328,7 @@ tools:
     routing: get_index_all
     upstream_tool_mapping:
       mootdx2: get_index_all
-    cache_ttl_key:
+    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -369,7 +369,7 @@ tools:
     routing: get_code_list
     upstream_tool_mapping:
       mootdx2: get_code_list
-    cache_ttl_key:
+    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -401,7 +401,7 @@ tools:
     routing: get_stock_codes
     upstream_tool_mapping:
       mootdx2: get_stock_codes
-    cache_ttl_key:
+    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -435,7 +435,7 @@ tools:
     routing: get_etf_codes
     upstream_tool_mapping:
       mootdx2: get_etf_codes
-    cache_ttl_key:
+    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -469,7 +469,7 @@ tools:
     routing: get_etf_list
     upstream_tool_mapping:
       mootdx2: get_etf_list
-    cache_ttl_key:
+    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -502,7 +502,7 @@ tools:
     routing: get_market_count
     upstream_tool_mapping:
       mootdx2: get_market_count
-    cache_ttl_key:
+    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params: []
@@ -528,7 +528,7 @@ tools:
     routing: get_workday
     upstream_tool_mapping:
       mootdx2: get_workday
-    cache_ttl_key:
+    cache_ttl_key: workday
     data_source_type: offline
     dangerous: false
     params:
@@ -562,7 +562,7 @@ tools:
     routing: get_workday_range
     upstream_tool_mapping:
       mootdx2: get_workday_range
-    cache_ttl_key:
+    cache_ttl_key: workday
     data_source_type: offline
     dangerous: false
     params:
@@ -597,7 +597,7 @@ tools:
     routing: get_income
     upstream_tool_mapping:
       mootdx2: get_income
-    cache_ttl_key:
+    cache_ttl_key: fundamentals
     data_source_type: online
     dangerous: false
     params:
@@ -815,7 +815,7 @@ tools:
     routing: get_f10
     upstream_tool_mapping:
       mootdx2: get_f10
-    cache_ttl_key:
+    cache_ttl_key: fundamentals
     data_source_type: online
     dangerous: false
     params:
@@ -850,7 +850,7 @@ tools:
     routing: get_f10_company
     upstream_tool_mapping:
       mootdx2: get_f10_company
-    cache_ttl_key:
+    cache_ttl_key: fundamentals
     data_source_type: online
     dangerous: false
     params:
@@ -880,7 +880,7 @@ tools:
     routing: get_xdxr
     upstream_tool_mapping:
       mootdx2: get_xdxr
-    cache_ttl_key:
+    cache_ttl_key: fundamentals
     data_source_type: online
     dangerous: false
     params:
@@ -911,7 +911,7 @@ tools:
     routing: get_stock_all
     upstream_tool_mapping:
       mootdx2: get_stock_all
-    cache_ttl_key:
+    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params: []
@@ -941,7 +941,7 @@ tools:
     routing: get_k_data
     upstream_tool_mapping:
       mootdx2: get_k_data
-    cache_ttl_key:
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -982,7 +982,7 @@ tools:
     routing: get_minutes
     upstream_tool_mapping:
       mootdx2: get_minutes
-    cache_ttl_key:
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -1093,7 +1093,7 @@ tools:
     routing: get_index_overview
     upstream_tool_mapping:
       mootdx2: get_index_overview
-    cache_ttl_key:
+    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params: []
@@ -1118,7 +1118,7 @@ tools:
     routing: stock_top_board
     upstream_tool_mapping:
       mootdx2: stock_top_board
-    cache_ttl_key:
+    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -1156,7 +1156,7 @@ tools:
     routing: stock_unusual
     upstream_tool_mapping:
       mootdx2: stock_unusual
-    cache_ttl_key:
+    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -1179,7 +1179,7 @@ tools:
     routing: indicator_atr
     upstream_tool_mapping:
       mootdx2: indicator_atr
-    cache_ttl_key:
+    cache_ttl_key: fundamentals
     data_source_type: online
     dangerous: false
     params:
