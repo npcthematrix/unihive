@@ -814,7 +814,12 @@ class MooTDX2Client:
             "concept": "block_zs.dat",
             "region": "block_fd.dat",
         }
-        filename = sector_file_map.get(sector_type, "block_ch.dat")
+        filename = sector_file_map.get(sector_type)
+        if filename is None:
+            raise SectorDataError(
+                MooTDXErrorType.INVALID_PARAM,
+                f"不支持的 sector_type: {sector_type}（必须为 industry/concept/region）",
+            )
         sector_path = Path(tdxdir) / "vipdoc" / "block" / filename
 
         if not sector_path.exists():
