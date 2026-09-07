@@ -237,3 +237,50 @@ async def test_reconnect_close_runs_in_executor_not_blocking_event_loop(client_c
         f"reconnect 期间 event loop 死锁: heartbeat 在 {end - start:.3f}s close 窗口内"
         f"只 tick 了 {ticks_during_close} 次"
     )
+
+
+# ========== MED4: stop() must wait for in-flight reconnect tasks ==========
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_in_flight_reconnect_task(client_config):
+    """MED4: in-flight _reconnect() task 必须被 stop() 等待, 不能被 tq.close()
+    半路截断导致状态不一致 (reconnect 内部 close + initialize 序列被切)。"""
+    from src.tdx_quant_client import TdxQuantClient
+
+    c = TdxQuantClient(client_config)
+
+    reconnect_started = asyncio.Event()
+    reconnect_can_finish = asyncio.Event()
+    reconnect_finished = asyncio.Event()
+
+    async def slow_reconnect():
+        reconnect_started.set()
+        await reconnect_can_finish.wait()
+        reconnect_finished.set()
+
+    # patch _reconnect 成慢版本, 让它挂在中间
+    c._reconnect = slow_reconnect  # type: ignore[assignment]
+
+    # fire-and-forget — 模拟 call_tool 在 DISCONNECTED 时调 _schedule_reconnect
+    task = asyncio.create_task(c._reconnect())
+    # 把 task 注册到 client 的 reconnect task tracking set (MED4 实现细节)
+    c._reconnect_tasks.add(task)
+    task.add_done_callback(c._reconnect_tasks.discard)
+
+    await reconnect_started.wait()
+
+    # reconnect 已开始但还在等 can_finish — 此时调 stop()
+    stop_task = asyncio.create_task(c.stop())
+
+    # stop 应该等 reconnect; 给一个稍长于 reconnect 剩余时间的 timeout
+    asyncio.get_event_loop().call_later(
+        0.1, reconnect_can_finish.set
+    )
+
+    # stop() 应该在 reconnect_finished 后才返回 (即 can_finish 后)
+    await asyncio.wait_for(stop_task, timeout=2.0)
+
+    assert reconnect_finished.is_set(), (
+        "stop() 没等 in-flight reconnect 就返回, 会与 tq.close()/状态重置产生竞态"
+    )
+    assert task.done(), "reconnect task 必须已完成 (而不是被默默丢弃)"

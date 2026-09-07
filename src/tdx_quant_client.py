@@ -36,6 +36,10 @@ class TdxQuantClient:
         self._tq: Any = None
         self._health_task: Optional[asyncio.Task] = None
         self._reconnect_lock = asyncio.Lock()
+        # MED4: 跟踪所有 in-flight reconnect 任务, stop() 时必须等它们
+        # 完成, 防止 tq.close() 与 reconnect 内部的 close+initialize 序列
+        # 发生竞态 (reconnect 跑到一半被截断, 留下半初始化状态)。
+        self._reconnect_tasks: set[asyncio.Task] = set()
         self._fail_count = 0
         self._strategy_id = config.settings.strategy_id or __file__
 
@@ -77,7 +81,11 @@ class TdxQuantClient:
             return True
 
     async def stop(self):
-        """取消探活任务 + tq.close() (后者是同步 DLL 调用, 必须 run_in_executor)。"""
+        """取消探活任务 + tq.close() (后者是同步 DLL 调用, 必须 run_in_executor)。
+
+        MED4: 先等所有 in-flight _reconnect() 完成, 再 tq.close()。
+        否则 reconnect 内部 close+initialize 序列会被 tq.close() 半路截断。
+        """
         if self._health_task:
             self._health_task.cancel()
             try:
@@ -85,6 +93,25 @@ class TdxQuantClient:
             except asyncio.CancelledError:
                 pass
             self._health_task = None
+        # MED4: 等 in-flight reconnect 完成 (最多 5s, 防止挂死的 reconnect
+        # 永久阻塞 stop)
+        if self._reconnect_tasks:
+            pending = list(self._reconnect_tasks)
+            logger.info(
+                f"[{self.name}] waiting for {len(pending)} in-flight reconnect task(s)"
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{self.name}] reconnect task(s) did not finish in 5s, cancelling"
+                )
+                for t in pending:
+                    t.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
         if self._tq:
             try:
                 # tq.close() 同步调 DLL, 在主线程跑会阻塞 event loop 0.5s+
@@ -96,6 +123,12 @@ class TdxQuantClient:
                 logger.warning(f"[{self.name}] close warning: {e}")
         self._tq = None
         self._status = UpstreamStatus.UNAVAILABLE
+
+    def _schedule_reconnect(self) -> None:
+        """MED4: 启动 reconnect 任务并加入 tracking set, 完成后自动从 set 移除."""
+        task = asyncio.create_task(self._reconnect())
+        self._reconnect_tasks.add(task)
+        task.add_done_callback(self._reconnect_tasks.discard)
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
         """调用 tq.{tool_name}(**arguments)。"""
@@ -127,7 +160,7 @@ class TdxQuantClient:
                     duration_ms=duration_ms,
                 )
             if err.error_type == TdxQuantErrorType.DISCONNECTED:
-                asyncio.create_task(self._reconnect())
+                self._schedule_reconnect()
             return ToolResult(
                 success=False,
                 error=err.message,
@@ -147,7 +180,7 @@ class TdxQuantClient:
             duration_ms = int((time.time() - start_time) * 1000)
             err = classify_exception(e)
             if err.error_type == TdxQuantErrorType.UPSTREAM_UNAVAILABLE:
-                asyncio.create_task(self._reconnect())
+                self._schedule_reconnect()
             logger.error(f"[{self.name}] call {tool_name} failed: {e}")
             return ToolResult(
                 success=False,
