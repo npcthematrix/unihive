@@ -2,14 +2,17 @@
 from unittest.mock import patch
 
 
-def test_get_interfaces_returns_140_tools():
-    """Regression: /api/interfaces returns 140 tools.
+def test_get_interfaces_returns_139_tools():
+    """Regression: /api/interfaces returns 139 tools.
 
     History: 148 -> 147 (tdx_tq_local HTTP JSON-RPC upstream replaced by
     tdx_quant in-process upstream; tdx_tq_local codegen had 58 tools,
     tdx_quant codegen has 54 tools; manual tools unchanged).
     147 -> 140 (mootdx2 dropped 7 client-side computed indicators —
     ma/ema/macd/rsi/kdj/boll/vol_ma; only indicator_atr kept).
+    140 -> 139 (mootdx2 dropped get_trade_history_full — registered in
+    method_map but no implementation, would AttributeError on call;
+    get_trade_history already supports pagination).
     """
     import yaml
     config_path = "config/upstreams.yaml"
@@ -20,7 +23,7 @@ def test_get_interfaces_returns_140_tools():
         from src.console_api import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 140, f"Expected 140 tools, got {tool_count}"
+        assert tool_count == 139, f"Expected 139 tools, got {tool_count}"
 
 
 def test_merged_tool_specs_have_unique_names():

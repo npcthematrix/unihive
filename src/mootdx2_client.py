@@ -241,7 +241,6 @@ class MooTDX2Client:
             "get_minute_data": self.get_minute_data,
             "get_trade": self.get_trade,
             "get_trade_history": self.get_trade_history,
-            "get_trade_history_full": self.get_trade_history_full,
             "get_minute_trade_all": self.get_minute_trade_all,
             "get_index_kline": self.get_index_kline,
             "get_code_list": self.get_code_list,
