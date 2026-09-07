@@ -139,6 +139,8 @@
         .ifs-toggle input { cursor: pointer; margin: 0; }
         .ifs-toggle .toggle-count { margin-left: auto; font-family: monospace; font-size: 0.7rem; padding: 1px 6px; background: var(--card-bg); border-radius: 999px; color: var(--text-secondary); }
         .ifs-toggle.active { color: var(--text); font-weight: 500; }
+        .filter-datasource-select { padding: 4px 8px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); border-radius: 4px; font-size: 0.78rem; cursor: pointer; margin-left: 8px; }
+        .filter-datasource-select:hover { border-color: var(--primary); }
         .ifs-nav { display: flex; flex-direction: column; gap: 2px; }
         .ifs-nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: none; background: transparent; cursor: pointer; border-radius: 6px; font-size: 0.85rem; color: var(--text); text-align: left; transition: background 150ms ease; border-left: 3px solid transparent; width: 100%; }
         .ifs-nav-item:hover { background: #f8f9fa; }
@@ -205,6 +207,9 @@
         .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
         .badge-dangerous { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
         .badge-cache { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
+        .badge-online { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+        .badge-offline { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; }
+        .badge-mixed { background: #fffbeb; color: #d97706; border: 1px solid #fed7aa; }
         @keyframes ifsFadeIn { from { opacity: 0.4; } to { opacity: 1; } }
 
         /* ===== Card toolbar ===== */
@@ -579,6 +584,12 @@
                             <label class="ifs-toggle" data-toggle="dangerous"><input type="checkbox" /> <span>仅显示危险工具</span><span class="toggle-count" id="tgl-count-dangerous">0</span></label>
                             <label class="ifs-toggle" data-toggle="cache"><input type="checkbox" /> <span>仅显示有缓存</span><span class="toggle-count" id="tgl-count-cache">0</span></label>
                             <label class="ifs-toggle" data-toggle="noparam"><input type="checkbox" /> <span>仅显示无参数</span><span class="toggle-count" id="tgl-count-noparam">0</span></label>
+                            <select id="filter-datasource" class="filter-datasource-select" title="按数据源类型筛选">
+                                <option value="">全部数据源</option>
+                                <option value="online">在线</option>
+                                <option value="offline">离线</option>
+                                <option value="mixed">混合</option>
+                            </select>
                         </div>
                         <nav id="ifs-nav" class="ifs-nav" aria-label="接口分组"></nav>
                     </aside>
@@ -1086,6 +1097,10 @@ print(match.data)</pre>
             return dynamicGroupOrder.length > 0 ? dynamicGroupOrder : GROUP_ORDER;
         }
         let toggles = { dangerous: false, cache: false, noparam: false };
+        let dataSourceFilter = ''; // online/offline/mixed
+        function hasActiveFilters() {
+            return searchQuery || hasActiveFilters() || dataSourceFilter;
+        }
         let upstreamDotStatus = {};
 
         function escapeHtml(s) {
@@ -1144,6 +1159,7 @@ print(match.data)</pre>
             if (toggles.dangerous) out = out.filter(t => t.dangerous);
             if (toggles.cache) out = out.filter(t => t.cache_ttl_key);
             if (toggles.noparam) out = out.filter(t => !t.params || t.params.length === 0 || (t.params.length === 1 && t.params[0] === '?'));
+            if (dataSourceFilter) out = out.filter(t => t.data_source_type === dataSourceFilter);
             return out;
         }
         function filteredAll() {
@@ -1162,13 +1178,13 @@ print(match.data)</pre>
                 const matched = key === ALL_KEY ? allCount : (buckets.get(key) || []).length;
                 const meta = key === ALL_KEY ? { title: '全部' } : (GROUP_META[key] || { title: key });
                 let countCls = '';
-                if (searchQuery || Object.values(toggles).some(Boolean)) {
+                if (searchQuery || hasActiveFilters()) {
                     if (matched === 0) countCls = 'zero';
                     else if (matched < total) countCls = 'has-match';
                 }
-                const countText = (searchQuery || Object.values(toggles).some(Boolean)) && total ? `${matched}/${total}` : `${total}`;
+                const countText = (searchQuery || hasActiveFilters()) && total ? `${matched}/${total}` : `${total}`;
                 const isActive = key === activeGroup;
-                const isDisabled = (searchQuery || Object.values(toggles).some(Boolean)) && matched === 0;
+                const isDisabled = (searchQuery || hasActiveFilters()) && matched === 0;
                 let dotCls = 'dot';
                 if (key !== ALL_KEY) {
                     const st = upstreamDotStatus[key];
@@ -1195,7 +1211,7 @@ print(match.data)</pre>
             const filtered = filteredAll();
             const buckets = bucketByGroup(filtered);
             const tools = activeGroup === ALL_KEY ? filtered : (buckets.get(activeGroup) || []);
-            if ((searchQuery || Object.values(toggles).some(Boolean)) && tools.length === 0) {
+            if ((searchQuery || hasActiveFilters()) && tools.length === 0) {
                 renderEmpty();
                 return;
             }
@@ -1209,6 +1225,11 @@ print(match.data)</pre>
             const rows = tools.map((t, i) => {
                 const badges = [];
                 if (t.dangerous) badges.push('<span class="badge badge-dangerous">dangerous</span>');
+                if (t.data_source_type) {
+                    const dst = t.data_source_type;
+                    const cls = dst === 'online' ? 'badge-online' : dst === 'offline' ? 'badge-offline' : 'badge-mixed';
+                    badges.push(`<span class="badge ${cls}" title="数据源类型">${dst}</span>`);
+                }
                 if (t.cache_ttl_key) badges.push(`<span class="badge badge-cache" title="cache_ttl_key=${escapeHtml(t.cache_ttl_key)}">${escapeHtml(t.cache_ttl_key)}</span>`);
                 const params = (t.params || []).filter(p => p && p !== '?');
                 const paramNames = params.map(p => typeof p === 'string' ? p : (p.name || '')).filter(Boolean);
@@ -1875,6 +1896,10 @@ print(match.data)</pre>
             const key = lbl.dataset.toggle;
             toggles[key] = e.target.checked;
             lbl.classList.toggle('active', e.target.checked);
+            renderAll();
+        });
+        document.getElementById('filter-datasource').addEventListener('change', (e) => {
+            dataSourceFilter = e.target.value;
             renderAll();
         });
         document.getElementById('ifs-content').addEventListener('click', (e) => {
