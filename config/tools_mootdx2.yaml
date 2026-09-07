@@ -732,6 +732,66 @@ tools:
         required: false
         description: 市场，默认 'auto'（自动按代码前缀推断）
 
+  - name: get_custom_sector_list
+    description: |
+      【· 离线】
+      【自定义板块列表】读取用户在 TDX 客户端维护的自定义板块（自选股分组）。
+
+      【使用场景】
+      - 用户问"我建了哪些分组 / 自选板块"时调用
+      - 个人持仓分组管理
+
+      【数据源】通达信客户端本地 {tdxdir}/T0002/blocknew/blocknew.cfg + *.blk
+      【依赖】需要用户在 TDX 客户端内创建过自定义板块；否则返回 tdx_custom_sector_unavailable
+
+      【返回示例】
+      成功: {"success": true, "data": [{"sector_name": "我的持仓", "sector_type": "custom", "stock_count": 5}], "source": "mootdx2"}
+
+      【典型错误】
+      - tdx_not_installed: TDX 目录未配置
+      - tdx_custom_sector_unavailable: T0002/blocknew 目录不存在或 blocknew.cfg 解析失败
+    routing: get_custom_sector_list
+    upstream_tool_mapping:
+      mootdx2: get_custom_sector_list
+    cache_ttl_key: null
+    dangerous: false
+    params: []
+
+  - name: get_custom_sector_stocks
+    description: |
+      【· 离线】
+      【自定义板块成分股】读取指定自定义板块的成分股列表。
+
+      【使用场景】
+      - 用户问"我的持仓里有哪几只"或"自选股 XX 包含哪些"时调用
+
+      【参数说明】
+      - sector_code (必填): 自定义板块名称（用户在 TDX 客户端命名的标签）
+
+      【数据源】通达信客户端本地 {tdxdir}/T0002/blocknew/
+
+      【返回示例】
+      成功: {"success": true, "data": [{"code": "600000", "market": "sh"}, ...], "source": "mootdx2"}
+
+      【典型错误】
+      - tdx_not_installed: TDX 目录未配置
+      - tdx_custom_sector_unavailable: 自定义板块目录不存在
+      - sector_not_found: 自定义板块名未找到
+    routing: get_custom_sector_stocks
+    upstream_tool_mapping:
+      mootdx2: get_custom_sector_stocks
+    cache_ttl_key: null
+    dangerous: false
+    params:
+      - name: sector_code
+        type: str
+        required: true
+        description: 自定义板块名（用户标签）
+      - name: market
+        type: str
+        required: false
+        description: 市场，默认 'auto'（按代码前缀推断）
+
   - name: get_f10
     description: |
       【· 在线】
