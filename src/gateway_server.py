@@ -683,44 +683,6 @@ class GatewayServer:
             async with self._requests_lock:
                 self._active_requests -= 1
 
-        # HIGH 1 (2026-09-07 4th-round audit): cache miss 后到 route 之间
-        # 必须 per-key single-flight, 否则同 key 并发 miss 让 router 被调
-        # N 次、上游负载翻倍。cache 层 get_or_set 已有 in-flight 保护,
-        # 但 _execute_cached 走 cache.get + cache.set 直接路径, 这一段
-        # 没有。waiter 复用 leader 的 future, leader 失败则 waiter 升级为
-        # 新 leader 自己再试一次 (fallback 行为).
-        if can_cache and key is not None:
-            existing = self._in_flight_requests.get(key)
-            if existing is not None and not existing.done():
-                try:
-                    cached_resp = await existing
-                    return {
-                        **cached_resp,
-                        "hops": cached_resp.get("hops", []),
-                        "cache_hit": False,
-                    }
-                except BaseException:
-                    pass  # leader 失败, 自己升级为新 leader
-            # leader: 跑路由 + 写缓存, 失败要传播给 waiter
-            future = asyncio.get_running_loop().create_future()
-            self._in_flight_requests[key] = future
-            # miss 只对发起者记一次, waiter 复用 leader 的 future 不重复计
-            self.cache.record_miss()
-            try:
-                resp = await _route_and_respond()
-                future.set_result(resp)
-                return resp
-            except BaseException as exc:
-                future.set_exception(exc)
-                raise
-            finally:
-                # 先 set_result/set_exception 再 pop, waiter 拿到结果时
-                # in_flight 已清理, 下次同 key 是新 leader.
-                self._in_flight_requests.pop(key, None)
-
-        # can_cache=False 走无单飞直接路径
-        return await _route_and_respond()
-
     def _load_all_tools(self) -> list[dict]:
         """Delegate to tool_loader.load_all_tools for YAML merge."""
         from .tool_loader import load_all_tools

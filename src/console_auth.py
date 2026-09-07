@@ -144,13 +144,21 @@ async def login_post(request: Request) -> HTMLResponse:
     stored_hash = cfg.get("password_hash")
 
     # Verify credentials
+    # M1 (2026-09-08 6th-round audit): use hmac.compare_digest for the
+    # plaintext password branch — `==` leaks character-by-character
+    # match timing. Username also uses compare_digest (both sides are
+    # equally attacker-controlled).
     valid = False
-    if stored_password and password == stored_password:
+    if stored_password and hmac.compare_digest(
+        password.encode("utf-8"), stored_password.encode("utf-8")
+    ):
         valid = True
     elif stored_hash and verify_password(password, stored_hash):
         valid = True
 
-    if not valid or username != expected_user:
+    if not valid or not hmac.compare_digest(
+        username.encode("utf-8"), expected_user.encode("utf-8")
+    ):
         # Re-render login page with error message
         error_html = '<div class="error">Invalid credentials</div>'
         return HTMLResponse(LOGIN_HTML.replace("{error}", error_html), status_code=401)

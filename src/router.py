@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -45,16 +46,29 @@ class Router:
     基于配置优先级链路由请求，支持降级
     """
 
+    DEFAULT_PER_UPSTREAM_TIMEOUT = 10.0
+
     def __init__(
         self,
         upstreams: dict[str, UpstreamClient | FuyaoClient | MooTDX2Client | TdxQuantClient],
         routing_config: dict[str, dict],
         upstream_tool_mapping: dict[str, dict[str, str]] | None = None,
+        per_upstream_timeout: float | None = None,
     ):
         self.upstreams = upstreams
         self.routing_config = routing_config
         # 来自 config.upstream_tool_mapping；未声明的 gateway_tool 自动回退到 chain 顺序
         self.upstream_tool_mapping = upstream_tool_mapping or {}
+        # H2 (2026-09-08 6th-round audit): 单个 upstream.call_tool() 超时,
+        # 防止上游卡死把整条 chain 拖住, 后续 fallback 永远走不到。
+        # 之前没有 per-upstream timeout, 整条 chain 总时间受 outer
+        # _execute_cached 30s 限制, hung upstream 1 会把后续 upstream 全部
+        # 浪费。
+        self._per_upstream_timeout = (
+            per_upstream_timeout
+            if per_upstream_timeout is not None
+            else self.DEFAULT_PER_UPSTREAM_TIMEOUT
+        )
 
     def _get_routing_chain(self, gateway_tool: str) -> list[str]:
         """获取路由链"""
@@ -70,7 +84,8 @@ class Router:
         self,
         gateway_tool: str,
         params: dict[str, Any],
-        force_source: str | None = None
+        force_source: str | None = None,
+        per_upstream_timeout: float | None = None,
     ) -> RouteResult:
         """
         执行路由
@@ -136,7 +151,33 @@ class Router:
                 continue
 
             # 调用上游
-            result = await upstream.call_tool(tool_name, params)
+            # H2 (2026-09-08 6th-round audit): wrap call_tool in
+            # asyncio.wait_for so a hung upstream doesn't block the
+            # fallback chain. Per-call override > constructor default.
+            timeout = (
+                per_upstream_timeout
+                if per_upstream_timeout is not None
+                else self._per_upstream_timeout
+            )
+            try:
+                result = await asyncio.wait_for(
+                    upstream.call_tool(tool_name, params),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{gateway_tool}] {source} call_tool timed out after "
+                    f"{timeout}s, trying next upstream"
+                )
+                hop = RouteHop(
+                    source=source,
+                    tool_name=tool_name,
+                    duration_ms=int((time.time() - hop_start) * 1000),
+                    success=False,
+                    error=f"call_tool timed out after {timeout}s",
+                )
+                hops.append(hop)
+                continue
 
             hop = RouteHop(
                 source=source,
