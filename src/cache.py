@@ -22,6 +22,10 @@ class CacheConfig:
     enabled: bool = True
     db_path: str = "logs/cache.db"
     max_entries: int = 10000
+    # M1 (2026-09-07 5th-round audit): 单次 SQLite 操作超时, 防止 aiosqlite
+    # 卡死 (例如 console 同进程 sqlite3 锁了 DB) 时让 request 永久 hang。
+    # 超时后返回安全默认值 (None / False / 0) + log warning, 下次重试。
+    operation_timeout: float = 5.0
 
 
 class Cache:
@@ -204,10 +208,21 @@ class Cache:
         return value, False
 
     async def get(self, key: str) -> Any | None:
-        """获取缓存值"""
+        """获取缓存值。 M1: 包 operation_timeout 防 SQLite 卡死。"""
         if not self.enabled:
             return None
+        try:
+            return await asyncio.wait_for(
+                self._get_impl(key), timeout=self.config.operation_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Cache get timed out after {self.config.operation_timeout}s "
+                f"for key={key}; returning None"
+            )
+            return None
 
+    async def _get_impl(self, key: str) -> Any | None:
         async with self._lock:
             try:
                 async with self._session_factory() as session:
@@ -238,10 +253,22 @@ class Cache:
                 return None
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
-        """设置缓存值"""
+        """设置缓存值。 M1: 包 operation_timeout。"""
         if not self.enabled:
             return False
+        try:
+            return await asyncio.wait_for(
+                self._set_impl(key, value, ttl),
+                timeout=self.config.operation_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Cache set timed out after {self.config.operation_timeout}s "
+                f"for key={key}; returning False"
+            )
+            return False
 
+    async def _set_impl(self, key: str, value: Any, ttl: int | None = None) -> bool:
         async with self._lock:
             try:
                 async with self._session_factory() as session:
@@ -268,10 +295,21 @@ class Cache:
                 return False
 
     async def delete(self, key: str) -> bool:
-        """删除缓存项"""
+        """删除缓存项。 M1: 包 operation_timeout。"""
         if not self.enabled:
             return False
+        try:
+            return await asyncio.wait_for(
+                self._delete_impl(key), timeout=self.config.operation_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Cache delete timed out after {self.config.operation_timeout}s "
+                f"for key={key}; returning False"
+            )
+            return False
 
+    async def _delete_impl(self, key: str) -> bool:
         async with self._lock:
             try:
                 async with self._session_factory() as session:
@@ -287,16 +325,21 @@ class Cache:
                 return False
 
     async def cleanup_expired(self) -> int:
-        """清理过期 + LRU 驱逐，返回删除的条目数。
-
-        两阶段：
-        1. 先删 expires_at < now 的过期项。
-        2. 若清理后仍超 max_entries，按 created_at 删最旧的，
-           直到 count <= max_entries * 0.9（10% 缓冲避免反复触发）。
-        """
+        """清理过期 + LRU 驱逐。 M1: 包 operation_timeout。"""
         if not self.enabled:
             return 0
+        try:
+            return await asyncio.wait_for(
+                self._cleanup_impl(), timeout=self.config.operation_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Cache cleanup timed out after "
+                f"{self.config.operation_timeout}s; returning 0"
+            )
+            return 0
 
+    async def _cleanup_impl(self) -> int:
         async with self._lock:
             try:
                 async with self._session_factory() as session:
@@ -346,10 +389,21 @@ class Cache:
                 return 0
 
     async def clear(self) -> bool:
-        """清空所有缓存"""
+        """清空所有缓存。 M1: 包 operation_timeout。"""
         if not self.enabled:
             return False
+        try:
+            return await asyncio.wait_for(
+                self._clear_impl(), timeout=self.config.operation_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Cache clear timed out after "
+                f"{self.config.operation_timeout}s; returning False"
+            )
+            return False
 
+    async def _clear_impl(self) -> bool:
         async with self._lock:
             try:
                 async with self._session_factory() as session:

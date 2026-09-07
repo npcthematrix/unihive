@@ -443,6 +443,18 @@ class GatewayServer:
 
                 try:
                     await asyncio.wait_for(client.start(), timeout=self._upstream_start_timeout)
+                except asyncio.CancelledError:
+                    # L2 (2026-09-07 5th-round audit): CancelledError 是 BaseException,
+                    # 下面 except Exception 漏掉它。如果不把 client 加进
+                    # self.upstreams, 进程退出时 stop() 拿不到这个 client,
+                    # subprocess / httpx 连接泄漏。re-raise 让 cancellation
+                    # 继续传播 (不要 swallow)。
+                    logger.error(
+                        f"[{name}] upstream start() cancelled, registering "
+                        f"client for cleanup and propagating"
+                    )
+                    self.upstreams[name] = client
+                    raise
                 except asyncio.TimeoutError:
                     # 单 upstream 超时不应中断其他 upstream 初始化 (HIGH1).
                     # 仍记录到 self.upstreams (status 由 client 内部标记),
@@ -561,42 +573,47 @@ class GatewayServer:
         - 命中路径：直接返回缓存的响应，附 cache_hit=True。
         - 失效路径：调一次路由；失败响应也只算一次，不双倍路由。
         - hops 是请求级元数据，不进缓存。
+
+        M2 (2026-09-07 5th-round audit): _active_requests 计数挪到外层
+        (整个 _execute_cached 入口 + 出口), waiter 在 await single-flight
+        future 时也算在 _active_requests 里, stop() 优雅关闭会等它们。
+        Pre-fix: 计数只在 _route_and_respond 里, waiter 不计。
         """
-        ttl = self._ttl_for(ttl_key) if ttl_key else None
-        cache_enabled = self.cache is not None and self.cache.enabled
-        can_cache = (
-            ttl is not None
-            and cache_enabled
-            and self._is_cacheable_data_source(data_source_type)
-            # realtime_quote 不再被 hardcoded 排除: 用户配的 TTL (哪怕短如
-            # 10s 作为外部服务故障兜底) 都应被尊重。
-        )
-        # hit/miss 统计跟踪范围: cache 启用 + TTL 配了即跟踪 (即便因
-        # data_source_type 不是 online 而 can_cache=False), 用于运维观测。
-        # ttl_key 没配 TTL 或 cache 禁用则不跟踪, 避免运维误判缓存效果。
-        tracks_stats = cache_enabled and ttl is not None
+        async with self._requests_lock:
+            self._active_requests += 1
+        try:
+            ttl = self._ttl_for(ttl_key) if ttl_key else None
+            cache_enabled = self.cache is not None and self.cache.enabled
+            can_cache = (
+                ttl is not None
+                and cache_enabled
+                and self._is_cacheable_data_source(data_source_type)
+                # realtime_quote 不再被 hardcoded 排除: 用户配的 TTL (哪怕短如
+                # 10s 作为外部服务故障兜底) 都应被尊重。
+            )
+            # hit/miss 统计跟踪范围: cache 启用 + TTL 配了即跟踪 (即便因
+            # data_source_type 不是 online 而 can_cache=False), 用于运维观测。
+            # ttl_key 没配 TTL 或 cache 禁用则不跟踪, 避免运维误判缓存效果。
+            tracks_stats = cache_enabled and ttl is not None
 
-        key: str | None = None
-        if can_cache:
-            key = self._cache_key(name, params)
-            cached = await self.cache.get(key)
-            if cached is not None:
-                # hops 不在缓存里；命中时给一个标记。不可变拷贝避免污染持久化对象。
-                self.cache.record_hit()
-                logger.info(f"[{name}] cache hit (key={key})")
-                return {**cached, "hops": cached.get("hops", []), "cache_hit": True}
+            key: str | None = None
+            if can_cache:
+                key = self._cache_key(name, params)
+                cached = await self.cache.get(key)
+                if cached is not None:
+                    # hops 不在缓存里；命中时给一个标记。不可变拷贝避免污染持久化对象。
+                    self.cache.record_hit()
+                    logger.info(f"[{name}] cache hit (key={key})")
+                    return {**cached, "hops": cached.get("hops", []), "cache_hit": True}
 
-        if tracks_stats and not can_cache:
-            # tracks_stats 但 can_cache=False 路径 (例如 data_source != online,
-            # 有 TTL 但 _is_cacheable_data_source 排除) 不走单飞, 每个请求
-            # 各自路由, 各自计 miss 用于运维观测。
-            self.cache.record_miss()
+            if tracks_stats and not can_cache:
+                # tracks_stats 但 can_cache=False 路径 (例如 data_source != online,
+                # 有 TTL 但 _is_cacheable_data_source 排除) 不走单飞, 每个请求
+                # 各自路由, 各自计 miss 用于运维观测。
+                self.cache.record_miss()
 
-        # 在途请求计数 + 路由 + 缓存写入的内部闭包
-        async def _route_and_respond() -> dict:
-            async with self._requests_lock:
-                self._active_requests += 1
-            try:
+            # 路由 + 缓存写入的内部闭包 (不再管 _active_requests)
+            async def _route_and_respond() -> dict:
                 # MED 3 (2026-09-07 4th-round audit): 总超时, 防止上游
                 # (特别是 MooTDX2 同步库走 run_in_executor, 0 个内部 timeout)
                 # 卡死整个 request。MooTDX2 call_tool 内部无 timeout, executor
@@ -605,28 +622,66 @@ class GatewayServer:
                     self.router.route(route_key, params),
                     timeout=self.DEFAULT_REQUEST_TIMEOUT,
                 )
-            finally:
-                async with self._requests_lock:
-                    self._active_requests -= 1
-            # hops 是请求级诊断信息，留在响应里随返回消费者；
-            # 进缓存的副本中我们设 []，避免历史 hops 被复用。
-            logger.debug(
-                f"[{name}] route result: success={result.success} "
-                f"source={result.source} hops={[h.source for h in result.hops]}"
-            )
-            resp = Normalizer.to_gateway_response(
-                success=result.success,
-                data=result.data,
-                error=result.error,
-                source=result.source,
-                hops=[h.source for h in result.hops],  # 真实 hops 留给消费者
-            )
-            if can_cache and key is not None and result.success and result.data is not None:
-                # 缓存里只存稳定数据：hops（请求级）入空，cache_hit 在 setdefault 之前写
-                await self.cache.set(key, {**resp, "hops": []}, ttl=ttl)
-            # 标记 miss，让消费者区分"缓存端点本次未命中"与"无缓存端点"
-            resp.setdefault("cache_hit", False)
-            return resp
+                # hops 是请求级诊断信息，留在响应里随返回消费者；
+                # 进缓存的副本中我们设 []，避免历史 hops 被复用。
+                logger.debug(
+                    f"[{name}] route result: success={result.success} "
+                    f"source={result.source} hops={[h.source for h in result.hops]}"
+                )
+                resp = Normalizer.to_gateway_response(
+                    success=result.success,
+                    data=result.data,
+                    error=result.error,
+                    source=result.source,
+                    hops=[h.source for h in result.hops],  # 真实 hops 留给消费者
+                )
+                if can_cache and key is not None and result.success and result.data is not None:
+                    # 缓存里只存稳定数据：hops（请求级）入空，cache_hit 在 setdefault 之前写
+                    await self.cache.set(key, {**resp, "hops": []}, ttl=ttl)
+                # 标记 miss，让消费者区分"缓存端点本次未命中"与"无缓存端点"
+                resp.setdefault("cache_hit", False)
+                return resp
+
+            # HIGH 1 (2026-09-07 4th-round audit): cache miss 后到 route 之间
+            # 必须 per-key single-flight, 否则同 key 并发 miss 让 router 被调
+            # N 次、上游负载翻倍。cache 层 get_or_set 已有 in-flight 保护,
+            # 但 _execute_cached 走 cache.get + cache.set 直接路径, 这一段
+            # 没有。waiter 复用 leader 的 future, leader 失败则 waiter 升级为
+            # 新 leader 自己再试一次 (fallback 行为).
+            if can_cache and key is not None:
+                existing = self._in_flight_requests.get(key)
+                if existing is not None and not existing.done():
+                    try:
+                        cached_resp = await existing
+                        return {
+                            **cached_resp,
+                            "hops": cached_resp.get("hops", []),
+                            "cache_hit": False,
+                        }
+                    except BaseException:
+                        pass  # leader 失败, 自己升级为新 leader
+                # leader: 跑路由 + 写缓存, 失败要传播给 waiter
+                future = asyncio.get_running_loop().create_future()
+                self._in_flight_requests[key] = future
+                # miss 只对发起者记一次, waiter 复用 leader 的 future 不重复计
+                self.cache.record_miss()
+                try:
+                    resp = await _route_and_respond()
+                    future.set_result(resp)
+                    return resp
+                except BaseException as exc:
+                    future.set_exception(exc)
+                    raise
+                finally:
+                    # 先 set_result/set_exception 再 pop, waiter 拿到结果时
+                    # in_flight 已清理, 下次同 key 是新 leader.
+                    self._in_flight_requests.pop(key, None)
+
+            # can_cache=False 走无单飞直接路径
+            return await _route_and_respond()
+        finally:
+            async with self._requests_lock:
+                self._active_requests -= 1
 
         # HIGH 1 (2026-09-07 4th-round audit): cache miss 后到 route 之间
         # 必须 per-key single-flight, 否则同 key 并发 miss 让 router 被调
@@ -731,28 +786,33 @@ class GatewayServer:
         @self.mcp.tool()
         async def get_server_status() -> dict:
             """获取网关状态"""
-            status = {
+            return {
                 "gateway": "healthy",
-                "upstreams": {},
+                "upstreams": self._build_upstream_summary(self.upstreams),
                 "timestamp": int(time.time()),
             }
-            for name, client in self.upstreams.items():
-                status["upstreams"][name] = {
-                    "status": client.status.value,
-                    "available": client.is_available,
-                }
-            return status
 
         @self.mcp.tool()
         async def get_health() -> dict:
             """健康检查 — 聚合上游状态, 不再硬编码 healthy."""
             return self.aggregate_health(self.upstreams)
 
-    @classmethod
-    def aggregate_health(
-        cls, upstreams: dict
-    ) -> dict:
-        """LOW8: 聚合 upstream 状态为整体 health.
+    @staticmethod
+    def _build_upstream_summary(upstreams: dict) -> dict:
+        """L5 (2026-09-07 5th-round audit): 共享 upstream → {status, available}
+        收集, get_server_status 与 aggregate_health 都用。"""
+        return {
+            name: {
+                "status": client.status.value,
+                "available": client.is_available,
+            }
+            for name, client in upstreams.items()
+        }
+
+    @staticmethod
+    def aggregate_health(upstreams: dict) -> dict:
+        """LOW8 + L4 (2026-09-07 5th-round audit): 聚合 upstream 状态为整体
+        health. 改 staticmethod (不用 cls)。
 
         - 无 upstream: healthy (无状态可报告)
         - 全 healthy: healthy
@@ -778,9 +838,16 @@ class GatewayServer:
         }
 
     async def start(self):
+        # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并
+        # 调 stop() 清 partial state, 允许同实例重试。Pre-fix: _running 在
+        # initialize 之前设 True, 失败时留在 True, 重试 start() 会状态错位。
         self._running = True
-        await self.initialize()
-        self._health_task = asyncio.create_task(self._health_check_loop())
+        try:
+            await self.initialize()
+            self._health_task = asyncio.create_task(self._health_check_loop())
+        except BaseException:
+            await self.stop()
+            raise
         # 注册 SIGINT/SIGTERM handler: stdio transport 模式下, 父进程 (Claude
         # Desktop 等) 关停会发 SIGTERM, Python 默认 handler 不通知 asyncio,
         # 我们的 stop() 不会被调用, stdio MCP 子进程泄漏。
@@ -790,10 +857,32 @@ class GatewayServer:
             loop = asyncio.get_running_loop()
             loop.add_signal_handler(signal.SIGTERM, self._shutdown_event.set)
             loop.add_signal_handler(signal.SIGINT, self._shutdown_event.set)
+        # M4 (2026-09-07 5th-round audit): signal handler 只 set _shutdown_event,
+        # 但 run_stdio_async 不 watch 它 (MCP stdio 默认依赖 stdin close 触发关闭)。
+        # 之前的注释说 "handler 修了泄漏" 是误导 — 实际上 stop() 仍然不会被调,
+        # 子进程要等 stdin 关才退出, 期间 health_task / upstreams / cache 全部泄漏。
+        # 加 _signal_watcher: 等 _shutdown_event, 触发后 cancel 当前 main_task,
+        # 让 run_stdio_async 抛 CancelledError, outer finally 调 stop()。
+        main_task = asyncio.current_task()
+
+        async def _signal_watcher():
+            await self._shutdown_event.wait()
+            if main_task is not None and not main_task.done():
+                main_task.cancel()
+
+        _watcher = asyncio.create_task(_signal_watcher())
         try:
-            await self.mcp.run_stdio_async()
+            try:
+                await self.mcp.run_stdio_async()
+            finally:
+                _watcher.cancel()
+                try:
+                    await _watcher
+                except (asyncio.CancelledError,):
+                    pass
         finally:
-            # 任何退出路径都跑 cleanup, 包括 KeyboardInterrupt / SIGTERM
+            # 任何退出路径都跑 cleanup, 包括 KeyboardInterrupt / SIGTERM /
+            # _signal_watcher 触发的 cancel。
             await self.stop()
 
     async def serve_http(self, host: str = None, port: int = None, mcp_path: str = None):
@@ -803,8 +892,14 @@ class GatewayServer:
         port = port if port is not None else gw_cfg.get("port", 18080)
         mcp_path = mcp_path if mcp_path is not None else gw_cfg.get("mcp_path", "/mcp")
         self._running = True
-        await self.initialize()
-        self._health_task = asyncio.create_task(self._health_check_loop())
+        # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并
+        # 调 stop() 清 partial state, 允许同实例重试。
+        try:
+            await self.initialize()
+            self._health_task = asyncio.create_task(self._health_check_loop())
+        except BaseException:
+            await self.stop()
+            raise
 
         # Console API handlers (delegates to console_api.py)
         from . import console_api as _ca
@@ -822,6 +917,13 @@ class GatewayServer:
             return JSONResponse(_ca.get_health())
 
         async def _mcp_tools_api(req: Request):
+            # L3 (2026-09-07 5th-round audit): mcp 未初始化时返回 503,
+            # 避免 AttributeError。实际不可达 (serve_http 必先 await init),
+            # 但加 guard 让 handler 更鲁棒。
+            if self.mcp is None:
+                return JSONResponse(
+                    {"error": "gateway not initialized"}, status_code=503
+                )
             raw = await self.mcp.list_tools()
             # 构建 routing_key → source 映射（从 upstream_tool_mapping 查，查不到返回 unknown）
             source_map = _ca._build_source_map()
@@ -918,21 +1020,25 @@ class GatewayServer:
         #      (SO_REUSEADDR 在 Linux 上允许 bind 已被 LISTEN 但已 CLOSE 的端口,
         #       在 Windows 上行为不同)。
         # 结论: 接受 TOCTOU 风险, 维持现有预检作为友好错误信号。
-        _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        #
+        # H1 (2026-09-07 5th-round audit): port probe + sys.exit(2) 必须
+        # 在 outer try/finally 里面, 否则端口冲突时 stop() 不跑,
+        # health_task / upstreams / cache 全部泄漏。
         try:
-            _probe.bind((host, port))
-        except OSError as e:
+            _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                _probe.bind((host, port))
+            except OSError as e:
+                _probe.close()
+                if e.errno in (98, 10048) or "address already in use" in str(e).lower():
+                    print(
+                        f"error: cannot bind {host}:{port} — port already in use",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
+                raise
             _probe.close()
-            if e.errno in (98, 10048) or "address already in use" in str(e).lower():
-                print(
-                    f"error: cannot bind {host}:{port} — port already in use",
-                    file=sys.stderr,
-                )
-                sys.exit(2)
-            raise
-        _probe.close()
 
-        try:
             await uvicorn.Server(config).serve()
         finally:
             await self.stop()
@@ -1003,14 +1109,14 @@ class GatewayServer:
             logger.info(f"Waiting for {active} in-flight requests to complete...")
             await asyncio.sleep(0.5)
 
-        # 关闭所有上游客户端
-        for name, client in self.upstreams.items():
-            try:
-                await asyncio.wait_for(client.stop(), timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.warning(f"[{name}] stop() timed out after 5s, force-exit")
-            except Exception as e:
-                logger.warning(f"[{name}] stop() raised: {e}")
+        # 关闭所有上游客户端 (L1, 2026-09-07 5th-round audit): 并行 gather
+        # 替代顺序循环, 总关闭时间从 O(N) 降到 O(1)。
+        if self.upstreams:
+            await asyncio.gather(
+                *[self._stop_one_upstream(name, client)
+                  for name, client in list(self.upstreams.items())],
+                return_exceptions=True,
+            )
 
         # 关闭缓存
         if self.cache:
@@ -1031,6 +1137,14 @@ class GatewayServer:
         self._initialized = False
 
         logger.info("Gateway shutdown complete")
+
+    async def _stop_one_upstream(self, name: str, client):
+        try:
+            await asyncio.wait_for(client.stop(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"[{name}] stop() timed out after 5s, force-exit")
+        except Exception as e:
+            logger.warning(f"[{name}] stop() raised: {e}")
 
 
 async def async_main(transport: str = "stdio", host: str | None = None, port: int | None = None, config_path: str | None = None):
