@@ -284,3 +284,93 @@ async def test_stop_waits_for_in_flight_reconnect_task(client_config):
         "stop() 没等 in-flight reconnect 就返回, 会与 tq.close()/状态重置产生竞态"
     )
     assert task.done(), "reconnect task 必须已完成 (而不是被默默丢弃)"
+
+
+# ========== LOW7: strategy_id fallback (no more __file__) ==========
+
+@pytest.mark.asyncio
+async def test_strategy_id_uses_configured_value(monkeypatch, tmp_path):
+    """配置里有 strategy_id 时, 必须用它, 不能用 __file__ 或 UUID."""
+    from src import tdx_quant_client as m
+    monkeypatch.setattr(m, "_STRATEGY_ID_FILE", tmp_path / "strategy_id")
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake", strategy_id="my_custom_strategy",
+            health_check_interval_sec=1, reconnect_threshold=3,
+            unavailable_threshold=10, call_timeout_sec=5,
+        ),
+    )
+    from src.tdx_quant_client import TdxQuantClient
+    c = TdxQuantClient(cfg)
+    assert c._strategy_id == "my_custom_strategy"
+    # 文件不应被创建
+    assert not (tmp_path / "strategy_id").exists()
+
+
+@pytest.mark.asyncio
+async def test_strategy_id_generates_uuid_when_no_config_or_file(monkeypatch, tmp_path):
+    """无配置 + 无持久化文件 → 生成 UUID 并写入文件."""
+    import uuid as uuid_mod
+    from src import tdx_quant_client as m
+    sf = tmp_path / "strategy_id"
+    monkeypatch.setattr(m, "_STRATEGY_ID_FILE", sf)
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake", strategy_id="",
+            health_check_interval_sec=1, reconnect_threshold=3,
+            unavailable_threshold=10, call_timeout_sec=5,
+        ),
+    )
+    from src.tdx_quant_client import TdxQuantClient
+    c = TdxQuantClient(cfg)
+    # 必须是合法 UUID
+    parsed = uuid_mod.UUID(c._strategy_id)
+    assert str(parsed) == c._strategy_id
+    # 必须持久化
+    assert sf.exists()
+    assert sf.read_text(encoding="utf-8").strip() == c._strategy_id
+
+
+@pytest.mark.asyncio
+async def test_strategy_id_reuses_persisted_file(monkeypatch, tmp_path):
+    """持久化文件存在时, 直接复用, 不再生成新 UUID."""
+    from src import tdx_quant_client as m
+    sf = tmp_path / "strategy_id"
+    sf.write_text("stable-id-12345", encoding="utf-8")
+    monkeypatch.setattr(m, "_STRATEGY_ID_FILE", sf)
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake", strategy_id="",
+            health_check_interval_sec=1, reconnect_threshold=3,
+            unavailable_threshold=10, call_timeout_sec=5,
+        ),
+    )
+    from src.tdx_quant_client import TdxQuantClient
+    c = TdxQuantClient(cfg)
+    assert c._strategy_id == "stable-id-12345"
+
+
+@pytest.mark.asyncio
+async def test_strategy_id_is_not_filepath(monkeypatch, tmp_path):
+    """LOW7 主断言: 绝对不能用 __file__ 路径 (不稳定 + 暴露部署信息)."""
+    import os
+    from src import tdx_quant_client as m
+    sf = tmp_path / "strategy_id"
+    monkeypatch.setattr(m, "_STRATEGY_ID_FILE", sf)
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake", strategy_id="",
+            health_check_interval_sec=1, reconnect_threshold=3,
+            unavailable_threshold=10, call_timeout_sec=5,
+        ),
+    )
+    from src.tdx_quant_client import TdxQuantClient
+    c = TdxQuantClient(cfg)
+    assert "\\" not in c._strategy_id and "/" not in c._strategy_id, (
+        f"strategy_id 不应是路径: {c._strategy_id}"
+    )
+    assert not c._strategy_id.endswith(".py")

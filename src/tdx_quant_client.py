@@ -13,6 +13,8 @@ import asyncio
 import logging
 import sys
 import time
+import uuid
+from pathlib import Path
 from typing import Any, Optional
 
 from .tdx_quant_config import TdxQuantConfig
@@ -24,6 +26,31 @@ from .tdx_quant_errors import (
 from .upstream_client import ToolResult, UpstreamStatus
 
 logger = logging.getLogger(__name__)
+
+# strategy_id 持久化路径: 让 UUID 在进程重启间保持稳定, TdxW.exe 才能跨
+# 重启保留该 strategy 的状态 (持仓/自选股等)。
+_STRATEGY_ID_FILE = Path("logs/tdx_quant_strategy_id")
+
+
+def _resolve_strategy_id(configured: str) -> str:
+    """LOW7: 配置优先 → 持久化 UUID → 新生成 UUID.
+
+    不再用 __file__ 兜底 (路径既不稳定又暴露部署信息)。
+    """
+    if configured:
+        return configured
+    try:
+        if _STRATEGY_ID_FILE.exists():
+            return _STRATEGY_ID_FILE.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        logger.warning(f"read strategy_id file failed: {e}, generating new UUID")
+    new_id = str(uuid.uuid4())
+    try:
+        _STRATEGY_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _STRATEGY_ID_FILE.write_text(new_id, encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"persist strategy_id failed: {e}")
+    return new_id
 
 
 class TdxQuantClient:
@@ -41,7 +68,7 @@ class TdxQuantClient:
         # 发生竞态 (reconnect 跑到一半被截断, 留下半初始化状态)。
         self._reconnect_tasks: set[asyncio.Task] = set()
         self._fail_count = 0
-        self._strategy_id = config.settings.strategy_id or __file__
+        self._strategy_id = _resolve_strategy_id(config.settings.strategy_id)
 
     @property
     def status(self) -> UpstreamStatus:
