@@ -1,1122 +1,1121 @@
 # Auto-generated from skills/SKILL.md
 # DO NOT EDIT — re-run scripts/gen_tdx_quant_tools.py
 tools:
-- name: get_market_data
-  description: 根据股票列表获取历史 K 线数据。
-  routing: get_market_data
-  upstream_tool_mapping:
-    tdx_quant: get_market_data
-  cache_ttl_key: historical
-  dangerous: false
-  params:
-  - name: field_list
-    required: false
-    type: List[str]
-    description: 需返回的字段列表；空列表返回所有字段
-  - name: stock_list
-    required: true
-    type: List[str]
-    description: 股票代码列表
-  - name: period
-    required: true
-    type: str
-    description: K线周期
-  - name: start_time
-    required: false
-    type: str
-    description: 开始时间
-  - name: end_time
-    required: false
-    type: str
-    description: 结束时间；未传则默认当前时间
-  - name: count
-    required: false
-    type: int
-    description: '`count>0`：取截止 end_time 最近 n 条；`count<=0`：使用 start_time/end_time
-      区间'
-  - name: dividend_type
-    required: false
-    type: str
-    description: 复权类型：`'none'`（不复权）、`'front'`（前复权）、`'back'`（后复权）
-    enum:
-    - '''back'''
-    - '''front'''
-    - '''none'''
-  - name: fill_data
-    required: false
-    type: bool
-    description: 是否向前填充缺失数据，默认 `True`
-- name: get_market_snapshot
-  description: 获取指定股票的最新行情快照数据。
-  routing: get_market_snapshot
-  upstream_tool_mapping:
-    tdx_quant: get_market_snapshot
-  cache_ttl_key: realtime_quote
-  dangerous: false
-  params:
-  - name: stock_code
-    required: true
-    type: str
-    description: 单个股票代码，如 `'300505.SZ'`
-    enum:
-    - '''300505.SZ'''
-  - name: field_list
-    required: false
-    type: List
-    description: 可选，指定返回字段（大小写不敏感）；空列表返回所有字段
-- name: get_stock_info
-  description: 获取股票基础信息
-  routing: get_stock_info
-  upstream_tool_mapping:
-    tdx_quant: get_stock_info
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_code
-    required: true
-    type: str
-    description: ''
-  - name: field_list
-    required: false
-    type: List
-    description: ''
-- name: get_relation
-  description: 获取指定股票所属的全部板块信息。
-  routing: get_relation
-  upstream_tool_mapping:
-    tdx_quant: get_relation
-  cache_ttl_key: ticker_list
-  dangerous: false
-  params:
-  - name: stock_code
-    required: false
-    type: str
-    description: 股票代码，如 `'688318.SH'`
-    enum:
-    - '''688318.SH'''
-- name: get_divid_factors
-  description: 获取分红配送数据
-  routing: get_divid_factors
-  upstream_tool_mapping:
-    tdx_quant: get_divid_factors
-  cache_ttl_key: historical
-  dangerous: false
-  params:
-  - name: stock_code
-    required: true
-    type: str
-    description: ''
-  - name: start_time
-    required: true
-    type: str
-    description: ''
-  - name: end_time
-    required: true
-    type: str
-    description: ''
-- name: get_more_info
-  description: 获取股票更多扩展信息，包含涨幅系列、主力净额、L2数据、封单、PE/PB/市值等上百个字段。`field_list` 为空返回所有字段。
-  routing: get_more_info
-  upstream_tool_mapping:
-    tdx_quant: get_more_info
-  cache_ttl_key: realtime_quote
-  dangerous: false
-  params:
-  - name: stock_code
-    required: false
-    type: str
-    description: ''
-  - name: field_list
-    required: false
-    type: List
-    description: ''
-- name: get_gb_info
-  description: 获取股本信息
-  routing: get_gb_info
-  upstream_tool_mapping:
-    tdx_quant: get_gb_info
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_code
-    required: false
-    type: str
-    description: ''
-  - name: date_list
-    required: false
-    type: List[str]
-    description: 日期列表，格式 `YYYYMMDD`；须从小到大排序；`len(date_list)` 必须 ≥ `count`
-    enum:
-    - count
-  - name: count
-    required: false
-    type: int
-    description: 要获取的日期数量，必须 ≥ 1
-- name: get_kzz_info
-  description: 获取可转债信息
-  routing: get_kzz_info
-  upstream_tool_mapping:
-    tdx_quant: get_kzz_info
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_code
-    required: false
-    type: str
-    description: ''
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-- name: get_ipo_info
-  description: 获取新股申购信息
-  routing: get_ipo_info
-  upstream_tool_mapping:
-    tdx_quant: get_ipo_info
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: ipo_type
-    required: false
-    type: int
-    description: '`0`=新股申购，`1`=新发债，`2`=两者都返回'
-    enum:
-    - '0'
-    - '1'
-    - '2'
-  - name: ipo_date
-    required: false
-    type: int
-    description: '`0`=只返回今天，`1`=今天及以后'
-    enum:
-    - '0'
-    - '1'
-- name: get_trackzs_etf_info
-  description: 获取跟踪某一指数的全部ETF基金信息。
-  routing: get_trackzs_etf_info
-  upstream_tool_mapping:
-    tdx_quant: get_trackzs_etf_info
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: zs_code
-    required: false
-    type: str
-    description: 指数代码，如 `'000300.CSI'`（沪深300）、`'950162.CSI'`（科创芯片设计）
-    enum:
-    - '''000300.CSI'''
-    - '''950162.CSI'''
-- name: get_financial_data
-  description: 获取财务报表数据（字段 FN1~FN584），需要客户端下载专业财务数据包。
-  routing: get_financial_data
-  upstream_tool_mapping:
-    tdx_quant: get_financial_data
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: start_time
-    required: false
-    type: str
-    description: ''
-  - name: end_time
-    required: false
-    type: str
-    description: ''
-  - name: report_type
-    required: false
-    type: str
-    description: '`''announce_time''`（按公告时间）或 `''tag_time''`（按标签时间），默认按报告期'
-- name: get_financial_data_by_date
-  description: 按年度/季度获取财务数据
-  routing: get_financial_data_by_date
-  upstream_tool_mapping:
-    tdx_quant: get_financial_data_by_date
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: year
-    required: false
-    type: int
-    description: 年份（如 `2023`）；`0` 返回最新
-    enum:
-    - '0'
-    - '2023'
-  - name: mmdd
-    required: false
-    type: int
-    description: 报告期月日（如 `331`=一季报，`630`=中报，`930`=三季报，`1231`=年报）；`0` 返回最新
-    enum:
-    - '0'
-    - '1231'
-    - '331'
-    - '630'
-    - '930'
-- name: get_gpjy_value
-  description: 获取股票市场交易数据（字段 GP1~GP46），包含：股东人数、龙虎榜、融资融券、大宗交易、陆股通、涨停数据等。
-  routing: get_gpjy_value
-  upstream_tool_mapping:
-    tdx_quant: get_gpjy_value
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: start_time
-    required: false
-    type: str
-    description: ''
-  - name: end_time
-    required: false
-    type: str
-    description: ''
-- name: get_gpjy_value_by_date
-  description: 按日期获取股票交易数据
-  routing: get_gpjy_value_by_date
-  upstream_tool_mapping:
-    tdx_quant: get_gpjy_value_by_date
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: year
-    required: false
-    type: int
-    description: ''
-  - name: mmdd
-    required: false
-    type: int
-    description: ''
-- name: get_bkjy_value
-  description: 获取板块级别市场交易数据（字段 BK5~BK19），包含：PE/PB/PS/PC、市值、涨跌停数、融资融券等。
-  routing: get_bkjy_value
-  upstream_tool_mapping:
-    tdx_quant: get_bkjy_value
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: start_time
-    required: false
-    type: str
-    description: ''
-  - name: end_time
-    required: false
-    type: str
-    description: ''
-- name: get_bkjy_value_by_date
-  description: 按日期获取板块交易数据
-  routing: get_bkjy_value_by_date
-  upstream_tool_mapping:
-    tdx_quant: get_bkjy_value_by_date
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: year
-    required: false
-    type: int
-    description: ''
-  - name: mmdd
-    required: false
-    type: int
-    description: ''
-- name: get_scjy_value
-  description: 获取市场整体宏观交易数据（字段 SC01~SC42），包含：融资融券、陆股通、涨停、打板资金、ETF规模、新开户等。无需传 `stock_list`。
-  routing: get_scjy_value
-  upstream_tool_mapping:
-    tdx_quant: get_scjy_value
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: start_time
-    required: false
-    type: str
-    description: ''
-  - name: end_time
-    required: false
-    type: str
-    description: ''
-- name: get_scjy_value_by_date
-  description: 按日期获取市场交易数据
-  routing: get_scjy_value_by_date
-  upstream_tool_mapping:
-    tdx_quant: get_scjy_value_by_date
-  cache_ttl_key: fundamentals
-  dangerous: false
-  params:
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: year
-    required: false
-    type: int
-    description: ''
-  - name: mmdd
-    required: false
-    type: int
-    description: ''
-- name: get_gp_one_data
-  description: 获取股票单个数据字段（字段 GO1~GO47，不按时间序列，返回当前值），包含：发行价、一致预期EPS、解禁日、机构持股、业绩预告等。
-  routing: get_gp_one_data
-  upstream_tool_mapping:
-    tdx_quant: get_gp_one_data
-  cache_ttl_key: realtime_quote
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: field_list
-    required: false
-    type: List[str]
-    description: ''
-- name: get_stock_list
-  description: 获取指定市场/分类的股票列表。
-  routing: get_stock_list
-  upstream_tool_mapping:
-    tdx_quant: get_stock_list
-  cache_ttl_key: ticker_list
-  dangerous: false
-  params:
-  - name: market
-    required: false
-    type: Optional
-    description: ''
-  - name: list_type
-    required: false
-    type: int
-    description: '`0`=只返回代码，`1`=返回代码和名称（`[{''Code'':..., ''Name'':...}, ...]`）'
-    enum:
-    - '0'
-    - '1'
-- name: get_sector_list
-  description: 获取 A 股全部板块代码列表（相当于 `get_stock_list('10')`）。
-  routing: get_sector_list
-  upstream_tool_mapping:
-    tdx_quant: get_sector_list
-  cache_ttl_key: ticker_list
-  dangerous: false
-  params:
-  - name: list_type
-    required: false
-    type: int
-    description: ''
-- name: get_stock_list_in_sector
-  description: 获取板块内股票列表
-  routing: get_stock_list_in_sector
-  upstream_tool_mapping:
-    tdx_quant: get_stock_list_in_sector
-  cache_ttl_key: ticker_list
-  dangerous: false
-  params:
-  - name: block_code
-    required: true
-    type: str
-    description: 板块代码或板块名称，如 `'BK0707'` 或 `'通达信88'`
-    enum:
-    - '''BK0707'''
-    - '''通达信88'''
-  - name: block_type
-    required: false
-    type: int
-    description: '- `0`：板块指数代码或板块名称（默认）'
-    enum:
-    - '0'
-  - name: list_type
-    required: false
-    type: int
-    description: '`0`=只返回代码'
-    enum:
-    - '0'
-- name: get_user_sector
-  description: 获取通达信客户端中用户设置的自选股板块列表。
-  routing: get_user_sector
-  upstream_tool_mapping:
-    tdx_quant: get_user_sector
-  cache_ttl_key: ticker_list
-  dangerous: false
-  params: []
-- name: create_sector
-  description: 创建板块
-  routing: create_sector
-  upstream_tool_mapping:
-    tdx_quant: create_sector
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: block_code
-    required: false
-    type: str
-    description: 板块简称（不能为空）
-  - name: block_name
-    required: false
-    type: str
-    description: 板块显示名称（不能为空）
-- name: delete_sector
-  description: 删除板块
-  routing: delete_sector
-  upstream_tool_mapping:
-    tdx_quant: delete_sector
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: block_code
-    required: false
-    type: str
-    description: ''
-- name: rename_sector
-  description: 重命名板块
-  routing: rename_sector
-  upstream_tool_mapping:
-    tdx_quant: rename_sector
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: block_code
-    required: false
-    type: str
-    description: ''
-  - name: block_name
-    required: false
-    type: str
-    description: ''
-- name: clear_sector
-  description: 清空板块内所有成分股（不删除板块本身）。
-  routing: clear_sector
-  upstream_tool_mapping:
-    tdx_quant: clear_sector
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: block_code
-    required: false
-    type: str
-    description: ''
-- name: refresh_cache
-  description: 刷新快照行情和K线缓存。首次调用 `get_market_snapshot` 或 `get_market_data` 时系统会自动刷新，无需手动调用。
-  routing: refresh_cache
-  upstream_tool_mapping:
-    tdx_quant: refresh_cache
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: market
-    required: false
-    type: str
-    description: ''
-  - name: force
-    required: false
-    type: bool
-    description: '`False`=距上次刷新不足10分钟则跳过；`True`=强制刷新'
-- name: refresh_kline
-  description: 刷新历史K线缓存
-  routing: refresh_kline
-  upstream_tool_mapping:
-    tdx_quant: refresh_kline
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: period
-    required: false
-    type: str
-    description: 仅支持 `'1m'`、`'5m'`、`'1d'` 三种
-    enum:
-    - '''1d'''
-    - '''1m'''
-    - '''5m'''
-- name: subscribe_hq
-  description: 订阅指定股票的实时行情更新，有行情变化时自动触发回调函数。**最多订阅 100 只。**
-  routing: subscribe_hq
-  upstream_tool_mapping:
-    tdx_quant: subscribe_hq
-  cache_ttl_key: null
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: callback
-    required: false
-    type: Optional
-    description: ''
-- name: unsubscribe_hq
-  description: 取消订阅
-  routing: unsubscribe_hq
-  upstream_tool_mapping:
-    tdx_quant: unsubscribe_hq
-  cache_ttl_key: null
-  dangerous: false
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-- name: get_subscribe_hq_stock_list
-  description: 下载通达信特定文件数据（十大股东、ETF申赎数据、舆情、综合信息等）。
-  routing: get_subscribe_hq_stock_list
-  upstream_tool_mapping:
-    tdx_quant: get_subscribe_hq_stock_list
-  cache_ttl_key: null
-  dangerous: false
-  params: []
-- name: send_message
-  description: 将字符串消息发送到通达信客户端 TQ 策略管理界面显示。用 `|` 分行。
-  routing: send_message
-  upstream_tool_mapping:
-    tdx_quant: send_message
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: msg_str
-    required: true
-    type: str
-    description: ''
-- name: send_file
-  description: 发送 txt/pdf/html 文件到通达信客户端展示。文件须放在 `./PYPlugins/file/` 目录。
-  routing: send_file
-  upstream_tool_mapping:
-    tdx_quant: send_file
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: file_path
-    required: true
-    type: str
-    description: ''
-- name: send_warn
-  description: 发送预警信号到通达信客户端 TQ 策略信号界面。
-  routing: send_warn
-  upstream_tool_mapping:
-    tdx_quant: send_warn
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: stock_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: time_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: price_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: close_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: volum_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: bs_flag_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: warn_type_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: reason_list
-    required: false
-    type: List[str]
-    description: ''
-  - name: count
-    required: false
-    type: int
-    description: ''
-- name: send_bt_data
-  description: 输出回测数据到通达信客户端显示，配合 `SIGNALS_TQ` 公式在K线图上展示。
-  routing: send_bt_data
-  upstream_tool_mapping:
-    tdx_quant: send_bt_data
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: stock_code
-    required: false
-    type: str
-    description: ''
-  - name: time_list
-    required: false
-    type: List[str]
-    description: 时间列表（`YYYYMMDDHHMMSS` 或 `YYYYMMDD`）；长度必须 ≥ `count`
-    enum:
-    - count
-  - name: data_list
-    required: false
-    type: List[List[str]]
-    description: 二维列表，每个子列表对应一个时间点，最多取前**16个**值（均为纯数字字符串）
-  - name: count
-    required: false
-    type: int
-    description: 数据条数，必须 > 0
-- name: send_user_block
-  description: 发送股票到自定义板块
-  routing: send_user_block
-  upstream_tool_mapping:
-    tdx_quant: send_user_block
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: block_code
-    required: false
-    type: str
-    description: 目标板块简称；**为空字符串时发送到"临时条件股"板块**
-  - name: stocks
-    required: false
-    type: List[str]
-    description: 股票代码列表；**传入空列表 `[]` = 清空板块**
-    enum:
-    - '[]'
-  - name: show
-    required: false
-    type: bool
-    description: 是否在客户端自动跳转显示该板块
-- name: exec_to_tdx
-  description: 让通达信客户端根据传入的 URL 或功能串执行指定操作。
-  routing: exec_to_tdx
-  upstream_tool_mapping:
-    tdx_quant: exec_to_tdx
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: url
-    required: false
-    type: str
-    description: 功能调用串或网址；若是功能串，请以 `http://www.treeid` 开头
-    enum:
-    - 'http:'
-    - www.treeid
-- name: print_to_tdx
-  description: 将多组 DataFrame 数据导出到通达信客户端 TQ 策略数据浏览中展示。
-  routing: print_to_tdx
-  upstream_tool_mapping:
-    tdx_quant: print_to_tdx
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: df_list
-    required: true
-    type: Any
-    description: ''
-  - name: sp_name
-    required: false
-    type: str
-    description: ''
-  - name: xml_filename
-    required: false
-    type: str
-    description: ''
-  - name: jsn_filenames
-    required: false
-    type: Optional
-    description: ''
-  - name: vertical
-    required: false
-    type: Optional
-    description: ''
-  - name: horizontal
-    required: false
-    type: Optional
-    description: ''
-  - name: height
-    required: false
-    type: Optional
-    description: ''
-  - name: table_names
-    required: false
-    type: Optional
-    description: ''
-- name: get_trading_dates
-  description: 获取指定市场在时间范围内的纯交易日列表。**需要先在客户端下载上证指数盘后数据。**
-  routing: get_trading_dates
-  upstream_tool_mapping:
-    tdx_quant: get_trading_dates
-  cache_ttl_key: workday
-  dangerous: false
-  params:
-  - name: market
-    required: true
-    type: str
-    description: 如 `'SH'`、`'SZ'`、`'HK'` 等
-    enum:
-    - '''HK'''
-    - '''SH'''
-    - '''SZ'''
-  - name: start_time
-    required: true
-    type: str
-    description: ''
-  - name: end_time
-    required: true
-    type: str
-    description: ''
-  - name: count
-    required: false
-    type: int
-    description: 返回数量限制，`-1` 返回全部
-    enum:
-    - '-1'
-- name: formula_format_data
-  description: 将 `get_market_data` 获取的K线数据格式化为通达信公式接口可识别的格式。
-  routing: formula_format_data
-  upstream_tool_mapping:
-    tdx_quant: formula_format_data
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: data_dict
-    required: false
-    type: Dict
-    description: ''
-- name: formula_set_data
-  description: 在调用公式前设置公式所需的K线数据（须先用 `formula_format_data` 格式化）。
-  routing: formula_set_data
-  upstream_tool_mapping:
-    tdx_quant: formula_set_data
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: stock_code
-    required: false
-    type: str
-    description: ''
-  - name: stock_period
-    required: false
-    type: str
-    description: ''
-  - name: stock_data
-    required: false
-    type: List
-    description: '`formula_format_data` 格式化后的数据'
-  - name: count
-    required: false
-    type: int
-    description: 生效的K线条数，`1 ≤ count ≤ 24000`，且 `len(stock_data) ≥ count`
-  - name: dividend_type
-    required: false
-    type: int
-    description: '`0`=不复权，`1`=前复权，`2`=后复权'
-    enum:
-    - '0'
-    - '1'
-    - '2'
-- name: formula_set_data_info
-  description: 向公式设置数据信息
-  routing: formula_set_data_info
-  upstream_tool_mapping:
-    tdx_quant: formula_set_data_info
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: stock_code
-    required: false
-    type: str
-    description: ''
-  - name: stock_period
-    required: false
-    type: str
-    description: ''
-  - name: start_time
-    required: false
-    type: str
-    description: ''
-  - name: end_time
-    required: false
-    type: str
-    description: ''
-  - name: count
-    required: false
-    type: int
-    description: ''
-  - name: dividend_type
-    required: false
-    type: int
-    description: ''
-- name: formula_zb
-  description: 调用指标公式
-  routing: formula_zb
-  upstream_tool_mapping:
-    tdx_quant: formula_zb
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: formula_name
-    required: false
-    type: str
-    description: ''
-  - name: formula_arg
-    required: false
-    type: str
-    description: ''
-  - name: xsflag
-    required: false
-    type: int
-    description: ''
-- name: formula_xg
-  description: 调用选股公式
-  routing: formula_xg
-  upstream_tool_mapping:
-    tdx_quant: formula_xg
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: formula_name
-    required: false
-    type: str
-    description: ''
-  - name: formula_arg
-    required: false
-    type: str
-    description: ''
-- name: formula_exp
-  description: 调用表达式公式
-  routing: formula_exp
-  upstream_tool_mapping:
-    tdx_quant: formula_exp
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: formula_name
-    required: false
-    type: str
-    description: 公式名称（区分大小写）
-  - name: formula_arg
-    required: false
-    type: str
-    description: 逗号分隔的数字字符串，最多16个参数，如 `'12,26,9'`
-    enum:
-    - '''12,26,9'''
-- name: formula_get_data
-  description: 在调用公式后，获取当前设置的公式数据结果。
-  routing: formula_get_data
-  upstream_tool_mapping:
-    tdx_quant: formula_get_data
-  cache_ttl_key: null
-  dangerous: true
-  params: []
-- name: formula_process_mul_zb
-  description: 对多只股票批量调用通达信指标公式，参数含义同 `formula_process_mul_xg`，额外支持 `xsflag` 精度控制。
-  routing: formula_process_mul_zb
-  upstream_tool_mapping:
-    tdx_quant: formula_process_mul_zb
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: formula_name
-    required: true
-    type: str
-    description: 专家公式名称
-  - name: formula_arg
-    required: false
-    type: str
-    description: 公式参数字符串
-  - name: return_count
-    required: false
-    type: int
-    description: 每只股票返回结果数量
-  - name: return_date
-    required: false
-    type: bool
-    description: 是否返回日期
-  - name: xsflag
-    required: false
-    type: int
-    description: 小数位控制
-  - name: stock_list
-    required: true
-    type: List[str]
-    description: 股票代码列表
-  - name: stock_period
-    required: false
-    type: str
-    description: 周期，默认 `1d`
-    enum:
-    - 1d
-  - name: start_time
-    required: false
-    type: str
-    description: 开始日期
-  - name: end_time
-    required: false
-    type: str
-    description: 结束日期
-  - name: count
-    required: false
-    type: int
-    description: 行情数据条数
-  - name: dividend_type
-    required: false
-    type: int
-    description: 复权类型数值
-- name: stock_account
-  description: 获取资金账户句柄
-  routing: stock_account
-  upstream_tool_mapping:
-    tdx_quant: stock_account
-  cache_ttl_key: null
-  dangerous: false
-  params:
-  - name: account
-    required: false
-    type: str
-    description: 资金账号（字符串）
-  - name: account_type
-    required: false
-    type: str
-    description: 账号类型，如 `'STOCK'`
-    enum:
-    - '''STOCK'''
-- name: query_stock_orders
-  description: 查询委托信息
-  routing: query_stock_orders
-  upstream_tool_mapping:
-    tdx_quant: query_stock_orders
-  cache_ttl_key: null
-  dangerous: false
-  params:
-  - name: account_id
-    required: false
-    type: int
-    description: ''
-  - name: stock_code
-    required: false
-    type: str
-    description: ''
-  - name: cancelable_only
-    required: false
-    type: bool
-    description: 是否仅查可撤委托（暂未生效）
-- name: query_stock_positions
-  description: 查询持仓信息
-  routing: query_stock_positions
-  upstream_tool_mapping:
-    tdx_quant: query_stock_positions
-  cache_ttl_key: null
-  dangerous: false
-  params:
-  - name: account_id
-    required: false
-    type: int
-    description: ''
-- name: order_stock
-  description: 下单
-  routing: order_stock
-  upstream_tool_mapping:
-    tdx_quant: order_stock
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: account_id
-    required: false
-    type: int
-    description: ''
-  - name: stock_code
-    required: false
-    type: str
-    description: ''
-  - name: order_type
-    required: false
-    type: int
-    description: ''
-  - name: order_volume
-    required: false
-    type: int
-    description: ''
-  - name: price_type
-    required: false
-    type: int
-    description: ''
-  - name: price
-    required: false
-    type: float
-    description: ''
-- name: cancel_order_stock
-  description: 根据委托编号撤单。
-  routing: cancel_order_stock
-  upstream_tool_mapping:
-    tdx_quant: cancel_order_stock
-  cache_ttl_key: null
-  dangerous: true
-  params:
-  - name: account_id
-    required: false
-    type: int
-    description: 资金账户句柄（由 `stock_account` 获取，`<0` 时使用当前账户）
-  - name: stock_code
-    required: false
-    type: str
-    description: 股票代码
-  - name: order_id
-    required: false
-    type: str
-    description: 委托编号（由 `query_stock_orders` 返回的 `Wtbh` 字段）
-- name: query_stock_asset
-  description: 查询指定账户的总资产、余额和持仓市值。
-  routing: query_stock_asset
-  upstream_tool_mapping:
-    tdx_quant: query_stock_asset
-  cache_ttl_key: null
-  dangerous: false
-  params:
-  - name: account_id
-    required: false
-    type: int
-    description: ''
+  - name: get_market_data
+    description: 根据股票列表获取历史 K 线数据。
+    routing: get_market_data
+    upstream_tool_mapping:
+      tdx_quant: get_market_data
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: field_list
+        required: false
+        type: List[str]
+        description: 需返回的字段列表；空列表返回所有字段
+      - name: stock_list
+        required: true
+        type: List[str]
+        description: 股票代码列表
+      - name: period
+        required: true
+        type: str
+        description: K线周期
+      - name: start_time
+        required: false
+        type: str
+        description: 开始时间
+      - name: end_time
+        required: false
+        type: str
+        description: 结束时间；未传则默认当前时间
+      - name: count
+        required: false
+        type: int
+        description: '`count>0`：取截止 end_time 最近 n 条；`count<=0`：使用 start_time/end_time 区间'
+      - name: dividend_type
+        required: false
+        type: str
+        description: 复权类型：`'none'`（不复权）、`'front'`（前复权）、`'back'`（后复权）
+        enum:
+          - '''back'''
+          - '''front'''
+          - '''none'''
+      - name: fill_data
+        required: false
+        type: bool
+        description: 是否向前填充缺失数据，默认 `True`
+  - name: get_market_snapshot
+    description: 获取指定股票的最新行情快照数据。
+    routing: get_market_snapshot
+    upstream_tool_mapping:
+      tdx_quant: get_market_snapshot
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_code
+        required: true
+        type: str
+        description: 单个股票代码，如 `'300505.SZ'`
+        enum:
+          - '''300505.SZ'''
+      - name: field_list
+        required: false
+        type: List
+        description: 可选，指定返回字段（大小写不敏感）；空列表返回所有字段
+  - name: get_stock_info
+    description: 获取股票基础信息
+    routing: get_stock_info
+    upstream_tool_mapping:
+      tdx_quant: get_stock_info
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_code
+        required: true
+        type: str
+        description: ''
+      - name: field_list
+        required: false
+        type: List
+        description: ''
+  - name: get_relation
+    description: 获取指定股票所属的全部板块信息。
+    routing: get_relation
+    upstream_tool_mapping:
+      tdx_quant: get_relation
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_code
+        required: false
+        type: str
+        description: 股票代码，如 `'688318.SH'`
+        enum:
+          - '''688318.SH'''
+  - name: get_divid_factors
+    description: 获取分红配送数据
+    routing: get_divid_factors
+    upstream_tool_mapping:
+      tdx_quant: get_divid_factors
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_code
+        required: true
+        type: str
+        description: ''
+      - name: start_time
+        required: true
+        type: str
+        description: ''
+      - name: end_time
+        required: true
+        type: str
+        description: ''
+  - name: get_more_info
+    description: 获取股票更多扩展信息，包含涨幅系列、主力净额、L2数据、封单、PE/PB/市值等上百个字段。`field_list` 为空返回所有字段。
+    routing: get_more_info
+    upstream_tool_mapping:
+      tdx_quant: get_more_info
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_code
+        required: false
+        type: str
+        description: ''
+      - name: field_list
+        required: false
+        type: List
+        description: ''
+  - name: get_gb_info
+    description: 获取股本信息
+    routing: get_gb_info
+    upstream_tool_mapping:
+      tdx_quant: get_gb_info
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_code
+        required: false
+        type: str
+        description: ''
+      - name: date_list
+        required: false
+        type: List[str]
+        description: 日期列表，格式 `YYYYMMDD`；须从小到大排序；`len(date_list)` 必须 ≥ `count`
+        enum:
+          - count
+      - name: count
+        required: false
+        type: int
+        description: 要获取的日期数量，必须 ≥ 1
+  - name: get_kzz_info
+    description: 获取可转债信息
+    routing: get_kzz_info
+    upstream_tool_mapping:
+      tdx_quant: get_kzz_info
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_code
+        required: false
+        type: str
+        description: ''
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+  - name: get_ipo_info
+    description: 获取新股申购信息
+    routing: get_ipo_info
+    upstream_tool_mapping:
+      tdx_quant: get_ipo_info
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: ipo_type
+        required: false
+        type: int
+        description: '`0`=新股申购，`1`=新发债，`2`=两者都返回'
+        enum:
+          - '0'
+          - '1'
+          - '2'
+      - name: ipo_date
+        required: false
+        type: int
+        description: '`0`=只返回今天，`1`=今天及以后'
+        enum:
+          - '0'
+          - '1'
+  - name: get_trackzs_etf_info
+    description: 获取跟踪某一指数的全部ETF基金信息。
+    routing: get_trackzs_etf_info
+    upstream_tool_mapping:
+      tdx_quant: get_trackzs_etf_info
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: zs_code
+        required: false
+        type: str
+        description: 指数代码，如 `'000300.CSI'`（沪深300）、`'950162.CSI'`（科创芯片设计）
+        enum:
+          - '''000300.CSI'''
+          - '''950162.CSI'''
+  - name: get_financial_data
+    description: 获取财务报表数据（字段 FN1~FN584），需要客户端下载专业财务数据包。
+    routing: get_financial_data
+    upstream_tool_mapping:
+      tdx_quant: get_financial_data
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: start_time
+        required: false
+        type: str
+        description: ''
+      - name: end_time
+        required: false
+        type: str
+        description: ''
+      - name: report_type
+        required: false
+        type: str
+        description: '`''announce_time''`（按公告时间）或 `''tag_time''`（按标签时间），默认按报告期'
+  - name: get_financial_data_by_date
+    description: 按年度/季度获取财务数据
+    routing: get_financial_data_by_date
+    upstream_tool_mapping:
+      tdx_quant: get_financial_data_by_date
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: year
+        required: false
+        type: int
+        description: 年份（如 `2023`）；`0` 返回最新
+        enum:
+          - '0'
+          - '2023'
+      - name: mmdd
+        required: false
+        type: int
+        description: 报告期月日（如 `331`=一季报，`630`=中报，`930`=三季报，`1231`=年报）；`0` 返回最新
+        enum:
+          - '0'
+          - '1231'
+          - '331'
+          - '630'
+          - '930'
+  - name: get_gpjy_value
+    description: 获取股票市场交易数据（字段 GP1~GP46），包含：股东人数、龙虎榜、融资融券、大宗交易、陆股通、涨停数据等。
+    routing: get_gpjy_value
+    upstream_tool_mapping:
+      tdx_quant: get_gpjy_value
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: start_time
+        required: false
+        type: str
+        description: ''
+      - name: end_time
+        required: false
+        type: str
+        description: ''
+  - name: get_gpjy_value_by_date
+    description: 按日期获取股票交易数据
+    routing: get_gpjy_value_by_date
+    upstream_tool_mapping:
+      tdx_quant: get_gpjy_value_by_date
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: year
+        required: false
+        type: int
+        description: ''
+      - name: mmdd
+        required: false
+        type: int
+        description: ''
+  - name: get_bkjy_value
+    description: 获取板块级别市场交易数据（字段 BK5~BK19），包含：PE/PB/PS/PC、市值、涨跌停数、融资融券等。
+    routing: get_bkjy_value
+    upstream_tool_mapping:
+      tdx_quant: get_bkjy_value
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: start_time
+        required: false
+        type: str
+        description: ''
+      - name: end_time
+        required: false
+        type: str
+        description: ''
+  - name: get_bkjy_value_by_date
+    description: 按日期获取板块交易数据
+    routing: get_bkjy_value_by_date
+    upstream_tool_mapping:
+      tdx_quant: get_bkjy_value_by_date
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: year
+        required: false
+        type: int
+        description: ''
+      - name: mmdd
+        required: false
+        type: int
+        description: ''
+  - name: get_scjy_value
+    description: 获取市场整体宏观交易数据（字段 SC01~SC42），包含：融资融券、陆股通、涨停、打板资金、ETF规模、新开户等。无需传 `stock_list`。
+    routing: get_scjy_value
+    upstream_tool_mapping:
+      tdx_quant: get_scjy_value
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: start_time
+        required: false
+        type: str
+        description: ''
+      - name: end_time
+        required: false
+        type: str
+        description: ''
+  - name: get_scjy_value_by_date
+    description: 按日期获取市场交易数据
+    routing: get_scjy_value_by_date
+    upstream_tool_mapping:
+      tdx_quant: get_scjy_value_by_date
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: year
+        required: false
+        type: int
+        description: ''
+      - name: mmdd
+        required: false
+        type: int
+        description: ''
+  - name: get_gp_one_data
+    description: 获取股票单个数据字段（字段 GO1~GO47，不按时间序列，返回当前值），包含：发行价、一致预期EPS、解禁日、机构持股、业绩预告等。
+    routing: get_gp_one_data
+    upstream_tool_mapping:
+      tdx_quant: get_gp_one_data
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: field_list
+        required: false
+        type: List[str]
+        description: ''
+  - name: get_stock_list
+    description: 获取指定市场/分类的股票列表。
+    routing: get_stock_list
+    upstream_tool_mapping:
+      tdx_quant: get_stock_list
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: market
+        required: false
+        type: Optional
+        description: ''
+      - name: list_type
+        required: false
+        type: int
+        description: '`0`=只返回代码，`1`=返回代码和名称（`[{''Code'':..., ''Name'':...}, ...]`）'
+        enum:
+          - '0'
+          - '1'
+  - name: get_sector_list
+    description: 获取 A 股全部板块代码列表（相当于 `get_stock_list('10')`）。
+    routing: get_sector_list
+    upstream_tool_mapping:
+      tdx_quant: get_sector_list
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: list_type
+        required: false
+        type: int
+        description: ''
+  - name: get_stock_list_in_sector
+    description: 获取板块内股票列表
+    routing: get_stock_list_in_sector
+    upstream_tool_mapping:
+      tdx_quant: get_stock_list_in_sector
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: block_code
+        required: true
+        type: str
+        description: 板块代码或板块名称，如 `'BK0707'` 或 `'通达信88'`
+        enum:
+          - '''BK0707'''
+          - '''通达信88'''
+      - name: block_type
+        required: false
+        type: int
+        description: '- `0`：板块指数代码或板块名称（默认）'
+        enum:
+          - '0'
+      - name: list_type
+        required: false
+        type: int
+        description: '`0`=只返回代码'
+        enum:
+          - '0'
+  - name: get_user_sector
+    description: 获取通达信客户端中用户设置的自选股板块列表。
+    routing: get_user_sector
+    upstream_tool_mapping:
+      tdx_quant: get_user_sector
+    cache_ttl_key:
+    dangerous: false
+    params: []
+  - name: create_sector
+    description: 创建板块
+    routing: create_sector
+    upstream_tool_mapping:
+      tdx_quant: create_sector
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: block_code
+        required: false
+        type: str
+        description: 板块简称（不能为空）
+      - name: block_name
+        required: false
+        type: str
+        description: 板块显示名称（不能为空）
+  - name: delete_sector
+    description: 删除板块
+    routing: delete_sector
+    upstream_tool_mapping:
+      tdx_quant: delete_sector
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: block_code
+        required: false
+        type: str
+        description: ''
+  - name: rename_sector
+    description: 重命名板块
+    routing: rename_sector
+    upstream_tool_mapping:
+      tdx_quant: rename_sector
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: block_code
+        required: false
+        type: str
+        description: ''
+      - name: block_name
+        required: false
+        type: str
+        description: ''
+  - name: clear_sector
+    description: 清空板块内所有成分股（不删除板块本身）。
+    routing: clear_sector
+    upstream_tool_mapping:
+      tdx_quant: clear_sector
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: block_code
+        required: false
+        type: str
+        description: ''
+  - name: refresh_cache
+    description: 刷新快照行情和K线缓存。首次调用 `get_market_snapshot` 或 `get_market_data` 时系统会自动刷新，无需手动调用。
+    routing: refresh_cache
+    upstream_tool_mapping:
+      tdx_quant: refresh_cache
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: market
+        required: false
+        type: str
+        description: ''
+      - name: force
+        required: false
+        type: bool
+        description: '`False`=距上次刷新不足10分钟则跳过；`True`=强制刷新'
+  - name: refresh_kline
+    description: 刷新历史K线缓存
+    routing: refresh_kline
+    upstream_tool_mapping:
+      tdx_quant: refresh_kline
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: period
+        required: false
+        type: str
+        description: 仅支持 `'1m'`、`'5m'`、`'1d'` 三种
+        enum:
+          - '''1d'''
+          - '''1m'''
+          - '''5m'''
+  - name: subscribe_hq
+    description: 订阅指定股票的实时行情更新，有行情变化时自动触发回调函数。**最多订阅 100 只。**
+    routing: subscribe_hq
+    upstream_tool_mapping:
+      tdx_quant: subscribe_hq
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: callback
+        required: false
+        type: Optional
+        description: ''
+  - name: unsubscribe_hq
+    description: 取消订阅
+    routing: unsubscribe_hq
+    upstream_tool_mapping:
+      tdx_quant: unsubscribe_hq
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+  - name: get_subscribe_hq_stock_list
+    description: 下载通达信特定文件数据（十大股东、ETF申赎数据、舆情、综合信息等）。
+    routing: get_subscribe_hq_stock_list
+    upstream_tool_mapping:
+      tdx_quant: get_subscribe_hq_stock_list
+    cache_ttl_key:
+    dangerous: false
+    params: []
+  - name: send_message
+    description: 将字符串消息发送到通达信客户端 TQ 策略管理界面显示。用 `|` 分行。
+    routing: send_message
+    upstream_tool_mapping:
+      tdx_quant: send_message
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: msg_str
+        required: true
+        type: str
+        description: ''
+  - name: send_file
+    description: 发送 txt/pdf/html 文件到通达信客户端展示。文件须放在 `./PYPlugins/file/` 目录。
+    routing: send_file
+    upstream_tool_mapping:
+      tdx_quant: send_file
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: file_path
+        required: true
+        type: str
+        description: ''
+  - name: send_warn
+    description: 发送预警信号到通达信客户端 TQ 策略信号界面。
+    routing: send_warn
+    upstream_tool_mapping:
+      tdx_quant: send_warn
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: stock_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: time_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: price_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: close_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: volum_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: bs_flag_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: warn_type_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: reason_list
+        required: false
+        type: List[str]
+        description: ''
+      - name: count
+        required: false
+        type: int
+        description: ''
+  - name: send_bt_data
+    description: 输出回测数据到通达信客户端显示，配合 `SIGNALS_TQ` 公式在K线图上展示。
+    routing: send_bt_data
+    upstream_tool_mapping:
+      tdx_quant: send_bt_data
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: stock_code
+        required: false
+        type: str
+        description: ''
+      - name: time_list
+        required: false
+        type: List[str]
+        description: 时间列表（`YYYYMMDDHHMMSS` 或 `YYYYMMDD`）；长度必须 ≥ `count`
+        enum:
+          - count
+      - name: data_list
+        required: false
+        type: List[List[str]]
+        description: 二维列表，每个子列表对应一个时间点，最多取前**16个**值（均为纯数字字符串）
+      - name: count
+        required: false
+        type: int
+        description: 数据条数，必须 > 0
+  - name: send_user_block
+    description: 发送股票到自定义板块
+    routing: send_user_block
+    upstream_tool_mapping:
+      tdx_quant: send_user_block
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: block_code
+        required: false
+        type: str
+        description: 目标板块简称；**为空字符串时发送到"临时条件股"板块**
+      - name: stocks
+        required: false
+        type: List[str]
+        description: 股票代码列表；**传入空列表 `[]` = 清空板块**
+        enum:
+          - '[]'
+      - name: show
+        required: false
+        type: bool
+        description: 是否在客户端自动跳转显示该板块
+  - name: exec_to_tdx
+    description: 让通达信客户端根据传入的 URL 或功能串执行指定操作。
+    routing: exec_to_tdx
+    upstream_tool_mapping:
+      tdx_quant: exec_to_tdx
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: url
+        required: false
+        type: str
+        description: 功能调用串或网址；若是功能串，请以 `http://www.treeid` 开头
+        enum:
+          - 'http:'
+          - www.treeid
+  - name: print_to_tdx
+    description: 将多组 DataFrame 数据导出到通达信客户端 TQ 策略数据浏览中展示。
+    routing: print_to_tdx
+    upstream_tool_mapping:
+      tdx_quant: print_to_tdx
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: df_list
+        required: true
+        type: Any
+        description: ''
+      - name: sp_name
+        required: false
+        type: str
+        description: ''
+      - name: xml_filename
+        required: false
+        type: str
+        description: ''
+      - name: jsn_filenames
+        required: false
+        type: Optional
+        description: ''
+      - name: vertical
+        required: false
+        type: Optional
+        description: ''
+      - name: horizontal
+        required: false
+        type: Optional
+        description: ''
+      - name: height
+        required: false
+        type: Optional
+        description: ''
+      - name: table_names
+        required: false
+        type: Optional
+        description: ''
+  - name: get_trading_dates
+    description: 获取指定市场在时间范围内的纯交易日列表。**需要先在客户端下载上证指数盘后数据。**
+    routing: get_trading_dates
+    upstream_tool_mapping:
+      tdx_quant: get_trading_dates
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: market
+        required: true
+        type: str
+        description: 如 `'SH'`、`'SZ'`、`'HK'` 等
+        enum:
+          - '''HK'''
+          - '''SH'''
+          - '''SZ'''
+      - name: start_time
+        required: true
+        type: str
+        description: ''
+      - name: end_time
+        required: true
+        type: str
+        description: ''
+      - name: count
+        required: false
+        type: int
+        description: 返回数量限制，`-1` 返回全部
+        enum:
+          - '-1'
+  - name: formula_format_data
+    description: 将 `get_market_data` 获取的K线数据格式化为通达信公式接口可识别的格式。
+    routing: formula_format_data
+    upstream_tool_mapping:
+      tdx_quant: formula_format_data
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: data_dict
+        required: false
+        type: Dict
+        description: ''
+  - name: formula_set_data
+    description: 在调用公式前设置公式所需的K线数据（须先用 `formula_format_data` 格式化）。
+    routing: formula_set_data
+    upstream_tool_mapping:
+      tdx_quant: formula_set_data
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: stock_code
+        required: false
+        type: str
+        description: ''
+      - name: stock_period
+        required: false
+        type: str
+        description: ''
+      - name: stock_data
+        required: false
+        type: List
+        description: '`formula_format_data` 格式化后的数据'
+      - name: count
+        required: false
+        type: int
+        description: 生效的K线条数，`1 ≤ count ≤ 24000`，且 `len(stock_data) ≥ count`
+      - name: dividend_type
+        required: false
+        type: int
+        description: '`0`=不复权，`1`=前复权，`2`=后复权'
+        enum:
+          - '0'
+          - '1'
+          - '2'
+  - name: formula_set_data_info
+    description: 向公式设置数据信息
+    routing: formula_set_data_info
+    upstream_tool_mapping:
+      tdx_quant: formula_set_data_info
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: stock_code
+        required: false
+        type: str
+        description: ''
+      - name: stock_period
+        required: false
+        type: str
+        description: ''
+      - name: start_time
+        required: false
+        type: str
+        description: ''
+      - name: end_time
+        required: false
+        type: str
+        description: ''
+      - name: count
+        required: false
+        type: int
+        description: ''
+      - name: dividend_type
+        required: false
+        type: int
+        description: ''
+  - name: formula_zb
+    description: 调用指标公式
+    routing: formula_zb
+    upstream_tool_mapping:
+      tdx_quant: formula_zb
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: formula_name
+        required: false
+        type: str
+        description: ''
+      - name: formula_arg
+        required: false
+        type: str
+        description: ''
+      - name: xsflag
+        required: false
+        type: int
+        description: ''
+  - name: formula_xg
+    description: 调用选股公式
+    routing: formula_xg
+    upstream_tool_mapping:
+      tdx_quant: formula_xg
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: formula_name
+        required: false
+        type: str
+        description: ''
+      - name: formula_arg
+        required: false
+        type: str
+        description: ''
+  - name: formula_exp
+    description: 调用表达式公式
+    routing: formula_exp
+    upstream_tool_mapping:
+      tdx_quant: formula_exp
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: formula_name
+        required: false
+        type: str
+        description: 公式名称（区分大小写）
+      - name: formula_arg
+        required: false
+        type: str
+        description: 逗号分隔的数字字符串，最多16个参数，如 `'12,26,9'`
+        enum:
+          - '''12,26,9'''
+  - name: formula_get_data
+    description: 在调用公式后，获取当前设置的公式数据结果。
+    routing: formula_get_data
+    upstream_tool_mapping:
+      tdx_quant: formula_get_data
+    cache_ttl_key:
+    dangerous: true
+    params: []
+  - name: formula_process_mul_zb
+    description: 对多只股票批量调用通达信指标公式，参数含义同 `formula_process_mul_xg`，额外支持 `xsflag` 精度控制。
+    routing: formula_process_mul_zb
+    upstream_tool_mapping:
+      tdx_quant: formula_process_mul_zb
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: formula_name
+        required: true
+        type: str
+        description: 专家公式名称
+      - name: formula_arg
+        required: false
+        type: str
+        description: 公式参数字符串
+      - name: return_count
+        required: false
+        type: int
+        description: 每只股票返回结果数量
+      - name: return_date
+        required: false
+        type: bool
+        description: 是否返回日期
+      - name: xsflag
+        required: false
+        type: int
+        description: 小数位控制
+      - name: stock_list
+        required: true
+        type: List[str]
+        description: 股票代码列表
+      - name: stock_period
+        required: false
+        type: str
+        description: 周期，默认 `1d`
+        enum:
+          - 1d
+      - name: start_time
+        required: false
+        type: str
+        description: 开始日期
+      - name: end_time
+        required: false
+        type: str
+        description: 结束日期
+      - name: count
+        required: false
+        type: int
+        description: 行情数据条数
+      - name: dividend_type
+        required: false
+        type: int
+        description: 复权类型数值
+  - name: stock_account
+    description: 获取资金账户句柄
+    routing: stock_account
+    upstream_tool_mapping:
+      tdx_quant: stock_account
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: account
+        required: false
+        type: str
+        description: 资金账号（字符串）
+      - name: account_type
+        required: false
+        type: str
+        description: 账号类型，如 `'STOCK'`
+        enum:
+          - '''STOCK'''
+  - name: query_stock_orders
+    description: 查询委托信息
+    routing: query_stock_orders
+    upstream_tool_mapping:
+      tdx_quant: query_stock_orders
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: account_id
+        required: false
+        type: int
+        description: ''
+      - name: stock_code
+        required: false
+        type: str
+        description: ''
+      - name: cancelable_only
+        required: false
+        type: bool
+        description: 是否仅查可撤委托（暂未生效）
+  - name: query_stock_positions
+    description: 查询持仓信息
+    routing: query_stock_positions
+    upstream_tool_mapping:
+      tdx_quant: query_stock_positions
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: account_id
+        required: false
+        type: int
+        description: ''
+  - name: order_stock
+    description: 下单
+    routing: order_stock
+    upstream_tool_mapping:
+      tdx_quant: order_stock
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: account_id
+        required: false
+        type: int
+        description: ''
+      - name: stock_code
+        required: false
+        type: str
+        description: ''
+      - name: order_type
+        required: false
+        type: int
+        description: ''
+      - name: order_volume
+        required: false
+        type: int
+        description: ''
+      - name: price_type
+        required: false
+        type: int
+        description: ''
+      - name: price
+        required: false
+        type: float
+        description: ''
+  - name: cancel_order_stock
+    description: 根据委托编号撤单。
+    routing: cancel_order_stock
+    upstream_tool_mapping:
+      tdx_quant: cancel_order_stock
+    cache_ttl_key:
+    dangerous: true
+    params:
+      - name: account_id
+        required: false
+        type: int
+        description: 资金账户句柄（由 `stock_account` 获取，`<0` 时使用当前账户）
+      - name: stock_code
+        required: false
+        type: str
+        description: 股票代码
+      - name: order_id
+        required: false
+        type: str
+        description: 委托编号（由 `query_stock_orders` 返回的 `Wtbh` 字段）
+  - name: query_stock_asset
+    description: 查询指定账户的总资产、余额和持仓市值。
+    routing: query_stock_asset
+    upstream_tool_mapping:
+      tdx_quant: query_stock_asset
+    cache_ttl_key:
+    dangerous: false
+    params:
+      - name: account_id
+        required: false
+        type: int
+        description: ''
