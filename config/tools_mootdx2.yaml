@@ -1026,7 +1026,7 @@ tools:
         required: true
         description: 搜索关键词（股票名称、代码或拼音缩写）
 
-  - name: mootdx2_stock_info
+  - name: get_stock_info
     description: |
       【· 离线】
       【聚合股票信息】混合调用：在线快照 + 本地 K 线 + 本地分时。
@@ -1048,7 +1048,7 @@ tools:
 
       【典型错误】
       - no_data: 股票无任何数据（可能代码错误或停牌）
-    routing: mootdx2_stock_info
+    routing: get_stock_info
     upstream_tool_mapping:
       mootdx2: get_stock_info
     cache_ttl_key: null
