@@ -49,20 +49,14 @@
         tr:hover { background: #f8f9fa; }
         .tool-name { font-family: monospace; font-weight: 500; color: var(--primary); }
         .chain { font-family: monospace; font-size: 0.875rem; color: var(--text-secondary); } .chain-link { background: transparent; border: 1px solid transparent; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.875rem; color: var(--primary); cursor: pointer; transition: all 120ms ease; } .chain-link:hover { background: var(--primary-soft); border-color: var(--primary); }
-        .error-msg { color: var(--danger); font-size: 0.875rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .cache-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-        .stat-item { background: var(--bg); padding: 12px; border-radius: 6px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-        .stat-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
         .stat-value { font-size: 1.25rem; font-weight: 600; margin-top: 4px; color: var(--text); }
         .stat-value.success { color: var(--success); }
         .stat-value.warning { color: var(--warning); }
         .stat-value.danger { color: var(--danger); }
         .hitrate-bar { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
-        .hitrate-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease, background 0.3s ease; }
         .panel { display: none; }
         .panel.active { display: block; }
         .loading { text-align: center; padding: 40px; color: var(--text-secondary); }
-        .json-block { background: var(--bg); padding: 16px; border-radius: 6px; overflow: auto; font-size: 0.8rem; font-family: 'Monaco', 'Menlo', monospace; max-height: 350px; }
         .latency { font-size: 0.8rem; color: var(--text-secondary); }
         .latency.good { color: var(--success); }
         .latency.slow { color: var(--warning); }
@@ -70,7 +64,6 @@
 
         /* ===== Config panel ===== */
         .cfg-banner { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 10px 14px; border-radius: 6px; font-size: 0.82rem; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; } .cfg-cache-banner { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 10px 14px; border-radius: 6px; font-size: 0.82rem; margin-bottom: 12px; }
-        .cfg-banner-icon { font-size: 1rem; }
         .cfg-subtabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
         .cfg-subtab { padding: 8px 16px; border: 0; background: transparent; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: all 120ms ease; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; min-width: 100px; justify-content: center; }
         .cfg-subtab:hover { color: var(--text); }
@@ -109,6 +102,21 @@
         .cfg-table .chain-pill { background: var(--bg); border: 1px solid var(--border); padding: 1px 8px; border-radius: 4px; font-size: 0.7rem; font-family: monospace; }
         .cfg-table .chain-pill.primary { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); font-weight: 500; }
         .cfg-mask { color: var(--text-secondary); font-style: italic; cursor: help; border-bottom: 1px dotted var(--text-secondary); }
+        .cfg-search-box { display: flex; gap: 8px; margin-bottom: 12px; }
+        .cfg-search-box .cfg-search { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; background: var(--card-bg); color: var(--text); }
+        .cfg-search-box .cfg-search:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
+        .cfg-search-box .cfg-search-clear { width: 28px; height: 28px; border: 0; background: var(--bg); color: var(--text-secondary); border-radius: 4px; cursor: pointer; font-size: 1rem; }
+        .cfg-search-box .cfg-search-clear:hover { background: var(--border); }
+        .cfg-more { background: var(--bg); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; color: var(--text-secondary); margin-left: 4px; }
+        .cfg-expand-icon { color: var(--text-secondary); font-size: 0.7rem; margin-left: 4px; }
+        .cfg-expandable.expanded .cfg-expand-icon { transform: rotate(90deg); display: inline-block; }
+        .cfg-env-row.hidden { display: none; }
+        .cfg-toggles-row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .cfg-kv-row { display: flex; gap: 16px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+        .cfg-kv-row:last-child { border-bottom: none; }
+        .cfg-kv-row .cfg-kv-key { min-width: 80px; color: var(--text-secondary); font-size: 0.8rem; }
+        .cfg-kv-row .cfg-kv-val { font-family: monospace; font-size: 0.8rem; color: var(--text); flex: 1; }
+        .cfg-kv-item { margin-right: 12px; }
         .cfg-switch { position: relative; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 22px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; white-space: nowrap; cursor: default; border: 1px solid transparent; }
         .cfg-switch::before { content: ''; position: absolute; left: 6px; width: 14px; height: 8px; border-radius: 4px; transition: background 0.2s; }
         .cfg-switch.on { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
@@ -361,8 +369,6 @@
         .onboarding-content p, .onboarding-content ul { line-height: 1.7; margin: 8px 0; color: var(--text); }
         .onboarding-content ul { padding-left: 22px; margin: 8px 0 8px 24px; }
         .onboarding-content li { margin: 4px 0; }
-        .badge-recommend { display: inline-block; padding: 2px 8px; background: var(--primary-soft); color: var(--primary); border-radius: 4px; font-size: 0.72rem; font-weight: 600; margin-left: 8px; vertical-align: middle; }
-        .badge-optional { display: inline-block; padding: 2px 8px; background: #f1f5f9; color: var(--text-secondary); border-radius: 4px; font-size: 0.72rem; font-weight: 500; margin-left: 8px; vertical-align: middle; }
         .onboarding-link-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 12px 0; }
         .onboarding-link-grid a {
             display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px; text-decoration: none; color: var(--text); background: var(--card-bg); transition: all 0.15s;
@@ -463,7 +469,6 @@
             .status-summary { display: none !important; }
             .panel { display: block !important; }
             /* ===== 工具清单来源切换 ===== */
-        .inv-source-toggles { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; padding: 0 4px; }
         .inv-raw-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; cursor: pointer; padding: 4px 8px; border-radius: 4px; color: var(--text-secondary); border: 1px solid var(--border); transition: all 120ms; }
         .inv-raw-toggle:hover { background: var(--bg); color: var(--text); }
         .inv-raw-toggle input { cursor: pointer; }
@@ -480,6 +485,8 @@
             .cfg-section.collapsed .cfg-section-body { display: block !important; }
             body { padding: 0; }
         }
+        :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+        button:focus-visible { outline-offset: 2px; }
     </style>
 </head>
 <body>
@@ -799,7 +806,7 @@ print(match.data)</pre>
     </div>
     <script>
         const STALE_THRESHOLD_SEC = 30;
-        const CFG_TABLE_COLSPANS = { upstreams: 7, mapping: 2, tools: 5, cache: 3 };
+        const CFG_TABLE_COLSPANS = { ups: 5, upstreams: 7, mapping: 2, tools: 5, cache: 3 };
         let updateClockTimer = null;
         function startUpdateClock() {
             if (updateClockTimer) return;
@@ -846,17 +853,6 @@ print(match.data)</pre>
             if (!ts) return '-';
             const d = new Date(ts * 1000);
             return d.toLocaleTimeString('zh-CN');
-        }
-        function formatLatency(ms) {
-            if (!ms || ms < 0) return '-';
-            let cls = 'good';
-            if (ms > 1000) cls = 'slow';
-            if (ms > 3000) cls = 'bad';
-            return `<span class="latency ${cls}">${ms}ms</span>`;
-        }
-        function formatPercent(v) {
-            if (v === undefined || v === null) return '-';
-            return (v * 100).toFixed(1) + '%';
         }
         async function fetchJSON(url) {
             const resp = await fetch(url);
@@ -913,7 +909,7 @@ print(match.data)</pre>
                 if (th.dataset.sort === statusSort.key) th.classList.add(statusSort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
             });
             if (statusUpstreams.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">○</div><div class="empty-state-title">暂无上游配置</div><div class="empty-state-hint">编辑 <code>config/upstreams.yaml</code> 后重启网关</div></div></td></tr>';
+                tbody.innerHTML = `<tr><td colspan="${CFG_TABLE_COLSPANS.ups}"><div class="empty-state"><div class="empty-state-icon">○</div><div class="empty-state-title">暂无上游配置</div><div class="empty-state-hint">编辑 <code>config/upstreams.yaml</code> 后重启网关</div></div></td></tr>`;
                 return;
             }
             if (sorted.length === 0) {
@@ -1142,7 +1138,7 @@ print(match.data)</pre>
                 );
             }
             if (toggles.dangerous) out = out.filter(t => t.dangerous);
-            if (toggles.cache) out = out.filter(t => t.cache_ttl_key);
+            if (toggles.cache) out = out.filter(t => t.cache_ttl_key && t.cache_ttl_key !== 'realtime_quote');
             if (toggles.noparam) out = out.filter(t => !t.params || t.params.length === 0 || (t.params.length === 1 && t.params[0] === '?'));
             if (dataSourceFilter) out = out.filter(t => t.data_source_type === dataSourceFilter);
             return out;
@@ -1183,7 +1179,7 @@ print(match.data)</pre>
         }
         function renderToggleCounts() {
             document.getElementById('tgl-count-dangerous').textContent = allTools.filter(t => t.dangerous).length;
-            document.getElementById('tgl-count-cache').textContent = allTools.filter(t => t.cache_ttl_key).length;
+            document.getElementById('tgl-count-cache').textContent = allTools.filter(t => t.cache_ttl_key && t.cache_ttl_key !== 'realtime_quote').length;
             document.getElementById('tgl-count-noparam').textContent = allTools.filter(t => !t.params || t.params.length === 0 || (t.params.length === 1 && t.params[0] === '?')).length;
             document.getElementById('chip-dst-all').textContent = allTools.length;
             document.getElementById('chip-dst-online').textContent = allTools.filter(t => t.data_source_type === 'online').length;
@@ -1236,7 +1232,8 @@ print(match.data)</pre>
 
             // Cache section
             if (t.cache_ttl_key) {
-                const ttlVal = t.cache_ttl_seconds != null ? `${t.cache_ttl_seconds}秒` : 'no TTL';
+                const isRealtime = t.cache_ttl_key === 'realtime_quote';
+                const ttlVal = isRealtime ? '<span style="color:var(--text-secondary)">实时（不缓存）</span>' : (t.cache_ttl_seconds != null ? `${t.cache_ttl_seconds}秒` : 'no TTL');
                 parts.push(`<div class="ifs-section-title">缓存</div>`);
                 parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">TTL Key</div><div class="ifs-detail-val">${escapeHtml(t.cache_ttl_key)}</div></div>`);
                 parts.push(`<div class="ifs-detail-grid"><div class="ifs-detail-key">TTL</div><div class="ifs-detail-val">${ttlVal}</div></div>`);
@@ -1350,30 +1347,32 @@ print(match.data)</pre>
             const d = s / 86400;
             return `${Number.isInteger(d) ? d : d.toFixed(1)} 天`;
         }
-        function syntaxHighlight(json) {
-            const safe = escapeHtml(typeof json === 'string' ? json : JSON.stringify(json, null, 2));
-            return safe.replace(
-                /(&quot;)([^&]*?)(&quot;)(\s*:)|(&quot;)([^&]*?)(&quot;)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\b(?:true|false|null)\b)/g,
-                (m, kq, k, kqc, sq, sv, sqc, num, lit) => {
-                    if (kq) return `<span class="k">${kq}${k}${kqc}</span>`;
-                    if (sq) return `<span class="s">${sq}${sv}${sqc}</span>`;
-                    if (num) return `<span class="n">${num}</span>`;
-                    if (lit === 'true' || lit === 'false') return `<span class="b">${lit}</span>`;
-                    if (lit === 'null') return `<span class="nl">${lit}</span>`;
-                    return m;
-                }
-            );
-        }
+        let _cfgUpstreamsSearch = '';
         function renderCfgUpstreams(data) {
             const root = document.getElementById('cfg-panel-upstreams');
             const ups = data.upstreams || {};
-            const entries = Object.entries(ups);
-            document.getElementById('cfg-count-upstreams').textContent = entries.length;
+            let entries = Object.entries(ups);
+
+            // Filter by search
+            if (_cfgUpstreamsSearch) {
+                const q = _cfgUpstreamsSearch.toLowerCase();
+                entries = entries.filter(([name, cfg]) =>
+                    name.toLowerCase().includes(q) ||
+                    (cfg.type || '').toLowerCase().includes(q) ||
+                    (cfg.base_url || '').toLowerCase().includes(q) ||
+                    (cfg.description || '').toLowerCase().includes(q)
+                );
+            }
+
+            const total = Object.keys(ups).length;
+            document.getElementById('cfg-count-upstreams').textContent = entries.length + (entries.length !== total ? `/${total}` : '');
+
             if (entries.length === 0) { root.innerHTML = '<div class="loading">暂无上游配置</div>'; return; }
+
             const rows = entries.map(([name, cfg]) => {
                 const enabled = cfg.enabled ? '<span class="cfg-switch on">启用</span>' : '<span class="cfg-switch off">停用</span>';
                 const caps = (cfg.capabilities || []);
-                const capHtml = caps.length ? caps.map(c => `<span class="cfg-cap">${escapeHtml(c)}</span>`).join('') : '<span style="color:var(--text-secondary)">-</span>';
+                const capHtml = caps.length ? caps.slice(0, 5).map(c => `<span class="cfg-cap">${escapeHtml(c)}</span>`).join('') + (caps.length > 5 ? `<span class="cfg-more">+${caps.length - 5}</span>` : '') : '<span style="color:var(--text-secondary)">-</span>';
                 const apiKeyHtml = cfg.api_key
                     ? `<span class="cfg-mask" title="服务端已脱敏 (前 2 + *** + 后 2 字符) — 原始值在 .env 中">${escapeHtml(cfg.api_key)}</span>`
                     : '<span style="color:var(--text-secondary)">-</span>';
@@ -1386,20 +1385,23 @@ print(match.data)</pre>
                         return `<tr><td class="tool-name">${escapeHtml(k)}</td><td>${tt ? `<span class="cfg-mask" title="${tt}">${escapeHtml(strVal)}</span>` : escapeHtml(strVal)}</td></tr>`;
                       }).join('')
                     : '';
-                const envRowHtml = envEntries.length ? `
+                const hasDetail = envEntries.length > 0 || cfg.retry;
+                const envRowHtml = hasDetail ? `
                     <tr class="cfg-env-row" data-env-for="${escapeHtml(name)}">
                         <td colspan="${CFG_TABLE_COLSPANS.upstreams}">
+                            ${envEntries.length ? `
                             <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:6px">环境变量 (env)</div>
                             <table class="cfg-table" style="background:var(--card-bg);border:1px solid var(--border);border-radius:4px">
                                 <thead><tr><th scope="col" style="width:30%">变量</th><th scope="col">值</th></tr></thead>
                                 <tbody>${envRowsHtml}</tbody>
-                            </table>
+                            </table>` : ''}
                             ${cfg.retry ? `<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:8px">retry: ${escapeHtml(JSON.stringify(cfg.retry))}</div>` : ''}
                         </td>
                     </tr>` : '';
+                const detailId = `cfg-up-${name.replace(/\W/g, '_')}`;
                 return `
-                    <tr>
-                        <td><span class="tool-name">${escapeHtml(name)}</span></td>
+                    <tr class="cfg-expandable" data-detail="${detailId}" onclick="this.classList.toggle('expanded'); document.getElementById('${detailId}').classList.toggle('hidden')">
+                        <td><span class="tool-name">${escapeHtml(name)}</span>${hasDetail ? '<span class="cfg-expand-icon">▸</span>' : ''}</td>
                         <td><span class="cfg-cap">${escapeHtml(cfg.type || '-')}</span></td>
                         <td>${enabled}</td>
                         <td style="font-family:monospace;font-size:0.75rem;word-break:break-all">${escapeHtml(cfg.base_url || '-')}</td>
@@ -1408,15 +1410,32 @@ print(match.data)</pre>
                         <td>${capHtml}</td>
                     </tr>${envRowHtml}`;
             }).join('');
-            root.innerHTML = `
+
+            // Add search box if not exists
+            let searchBox = root.querySelector('.cfg-search-box');
+            if (!searchBox) {
+                searchBox = document.createElement('div');
+                searchBox.className = 'cfg-search-box';
+                searchBox.innerHTML = `
+                    <input type="text" class="cfg-search" placeholder="搜索上游... (名称/类型/URL)" value="${escapeHtml(_cfgUpstreamsSearch)}" />
+                    ${_cfgUpstreamsSearch ? '<button class="cfg-search-clear" title="清空">×</button>' : ''}`;
+                root.insertBefore(searchBox, root.firstChild);
+                searchBox.querySelector('input')?.addEventListener('input', (e) => {
+                    _cfgUpstreamsSearch = e.target.value;
+                    renderCfgUpstreams(data);
+                });
+                searchBox.querySelector('.cfg-search-clear')?.addEventListener('click', () => {
+                    _cfgUpstreamsSearch = '';
+                    renderCfgUpstreams(data);
+                });
+            }
+
+            root.innerHTML += `
                 <div class="cfg-section">
-                    <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> ${entries.length} 个上游 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— type / enabled / endpoint / 能力</span></span>
-                    </div>
-                    <div class="cfg-section-body">
+                    <div class="cfg-section-body" style="padding:0">
                         <table class="cfg-table">
                             <thead>
-                                <tr><th scope="col" style="width:13%">名称</th><th scope="col" style="width:7%">类型</th><th scope="col" style="width:9%">状态</th><th scope="col" style="width:30%">Endpoint</th><th scope="col" class="num" style="width:7%">超时(s)</th><th scope="col" style="width:14%">API Key</th><th scope="col">能力</th></tr>
+                                <tr><th scope="col" style="width:15%">名称</th><th scope="col" style="width:8%">类型</th><th scope="col" style="width:8%">状态</th><th scope="col">Endpoint</th><th scope="col" class="num" style="width:6%">超时</th><th scope="col" style="width:12%">API Key</th><th scope="col">能力</th></tr>
                             </thead>
                             <tbody>${rows}</tbody>
                         </table>
@@ -1430,17 +1449,19 @@ print(match.data)</pre>
                 : `<span class="cfg-switch off" title="${escapeHtml(hint)} (只读 — 修改 YAML 后重启生效)">${escapeHtml(label)}</span>`;
             const loggingKv = Object.entries(logging).map(([k, v]) => {
                 const display = typeof v === 'object' && v
-                    ? Object.entries(v).map(([k2, v2]) => `${escapeHtml(k2)}=${escapeHtml(String(v2))}`).join(', ')
+                    ? Object.entries(v).map(([k2, v2]) => `<span class="cfg-kv-item"><span class="cfg-kv-key">${escapeHtml(k2)}</span>=<span class="cfg-kv-val">${escapeHtml(String(v2))}</span></span>`).join('')
                     : escapeHtml(String(v));
-                return `<div class="k">${escapeHtml(k)}</div><div class="v">${display}</div>`;
-            }).join('') || '<div class="k">(无)</div><div class="v">-</div>';
+                return `<div class="cfg-kv-row"><div class="cfg-kv-key">${escapeHtml(k)}</div><div class="cfg-kv-val">${display}</div></div>`;
+            }).join('') || '<div class="cfg-kv-row"><div class="cfg-kv-key">(无)</div><div class="cfg-kv-val">-</div></div>';
+
+            // Append global settings at bottom of upstreams tab
             root.innerHTML += `
                 <div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> 全局开关</span>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> 全局开关 <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— disable_dangerous / strict_registry</span></span>
                     </div>
                     <div class="cfg-section-body">
-                        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+                        <div class="cfg-toggles-row">
                             ${sw('disable_dangerous', dd, '启用后跳过所有 dangerous: true 的 tool')}
                             ${sw('strict_registry', sr, '启用后启动校验 YAML 工具名都在上游 tools/list 中实际出现')}
                         </div>
@@ -1448,7 +1469,7 @@ print(match.data)</pre>
                 </div>
                 <div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
-                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> Logging <span style="font-weight:400;color:var(--text-secondary);font-size:0.8rem">— 日志配置</span></span>
+                        <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> 日志配置</span>
                     </div>
                     <div class="cfg-section-body">
                         <div class="cfg-kv-grid">${loggingKv}</div>
@@ -1612,7 +1633,7 @@ print(match.data)</pre>
                     <div class="k">DB 路径</div><div class="v">${escapeHtml(cache.db_path || '-')}</div>
                     <div class="k">TTL 配置</div><div class="v"><span class="num">${ttlEntries.length}</span> 条 · 最短 <strong>${ttlEntries.length ? humanizeDuration(ttlEntries[0][1]) : '-'}</strong> · 最长 <strong>${ttlEntries.length ? humanizeDuration(ttlEntries[ttlEntries.length-1][1]) : '-'}</strong></div>
                 </div>`;
-            root.innerHTML = '<div class="cfg-cache-banner">⚠️ 此处显示的是 <code>config/upstreams.yaml</code> 里的 <code>cache.ttl</code> 配置，与"上游状态"标签页里的运行时缓存（hits/命中率）是不同的概念。<strong>修改后需重启网关</strong>才会生效。</div>'
+            root.innerHTML = '<div class="cfg-cache-banner">ℹ️ 此处显示的是 <code>config/config.yaml</code> 里的 <code>cache</code> 配置（与"上游状态"标签页的运行时缓存是不同概念）。<strong>修改后需重启网关</strong>生效。</div>'
                 + `<div class="cfg-section">
                     <div class="cfg-section-header" data-toggle-section>
                         <span class="cfg-section-title light"><span class="cfg-section-toggle">▾</span> 缓存基本配置</span>
