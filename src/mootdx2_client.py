@@ -143,7 +143,7 @@ class MooTDX2Client:
         )
 
     def _sector_error_result(self, exc: "SectorDataError") -> ToolResult:
-        """将 SectorDataError 转换为 ToolResult（不打 error_metrics 计数）"""
+        """将 SectorDataError 转换为 ToolResult（recoverable=False，配置/业务错误）"""
         self._metrics["total_errors"] += 1
         error_type = exc.error_type.value
         self._metrics["error_counts"][error_type] = self._metrics["error_counts"].get(error_type, 0) + 1
