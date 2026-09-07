@@ -655,7 +655,7 @@
                         <button class="copy-btn">复制</button>
                         <pre>.\scripts\start_all.ps1</pre>
                     </div>
-                    <p>启动后，控制台默认监听 <code>http://127.0.0.1:18080</code>，HTTP 网关（同时启用）监听 <code>http://127.0.0.1:18081/mcp</code>。</p>
+                    <p>启动后，控制台和 HTTP 网关共用端口 <code>http://127.0.0.1:18080</code>（MCP 接口在 <code>/mcp</code> 子路径下）。</p>
 
                     <h4>1.2 配置文件</h4>
                     <p>上游数据源在 <code>config/upstreams.yaml</code> 中配置。修改后需要重启网关生效。</p>
@@ -663,7 +663,7 @@
                     <h3 id="sec-integration">2. 接入方式</h3>
 
                     <h4>2.1 HTTP 模式（推荐）</h4>
-                    <p>网关以 <strong>Streamable HTTP</strong> 模式对外提供 MCP 接口，监听 <code>http://127.0.0.1:18081/mcp</code>。运行 <code>.\scripts\start_console.ps1</code> 会同时启动控制台和 HTTP 网关。</p>
+                    <p>网关以 <strong>Streamable HTTP</strong> 模式对外提供 MCP 接口，监听 <code>http://127.0.0.1:18080/mcp</code>。运行 <code>.\scripts\start_gateway.ps1</code> 会同时启动控制台和 HTTP 网关。</p>
 
                     <p><strong>Claude Desktop / Cursor 配置：</strong></p>
                     <div class="code-block">
@@ -671,7 +671,7 @@
                         <pre>{
   "mcpServers": {
     "unihive": {
-      "url": "http://127.0.0.1:18081/mcp"
+      "url": "http://127.0.0.1:18080/mcp"
     }
   }
 }</pre>
@@ -684,7 +684,7 @@
 from fastmcp.client import Client
 
 async def main():
-    async with Client("http://127.0.0.1:18081/mcp") as client:
+    async with Client("http://127.0.0.1:18080/mcp") as client:
         tools = await client.list_tools()
         result = await client.call_tool("get_realtime_quote", {"symbol": "600000"})
         print(result.data)
@@ -721,13 +721,13 @@ asyncio.run(main())</pre>
                     <h3 id="sec-examples">4. 常用示例</h3>
 
                     <h4>4.1 Python SDK（推荐）</h4>
-                    <p>通过 <a href="https://github.com/jlowin/fastmcp" target="_blank" rel="noopener">FastMCP</a> 客户端连接 HTTP 网关（默认 <code>http://127.0.0.1:18081/mcp</code>）。所有 tool 名、参数和返回结构以 <strong>"MCP APIs"</strong> 标签页为准。</p>
+                    <p>通过 <a href="https://github.com/jlowin/fastmcp" target="_blank" rel="noopener">FastMCP</a> 客户端连接 HTTP 网关（默认 <code>http://127.0.0.1:18080/mcp</code>）。所有 tool 名、参数和返回结构以 <strong>"MCP APIs"</strong> 标签页为准。</p>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
                         <pre>import asyncio
 from fastmcp.client import Client
 
-GATEWAY_URL = "http://127.0.0.1:18081/mcp"
+GATEWAY_URL = "http://127.0.0.1:18080/mcp"
 
 async def main():
     async with Client(GATEWAY_URL) as client:
