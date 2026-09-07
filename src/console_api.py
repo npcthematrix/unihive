@@ -369,6 +369,7 @@ def get_interfaces() -> dict:
             "dangerous": bool(spec.get("dangerous", False)),
             "cache_ttl_key": cache_ttl_key,
             "cache_ttl_seconds": cache_ttl_seconds,
+            "data_source_type": spec.get("data_source_type"),
             "routing": routing_key,
             "chain": chain,
             "params": params,
