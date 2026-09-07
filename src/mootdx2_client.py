@@ -957,11 +957,11 @@ class MooTDX2Client:
         if not tdxdir:
             raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
 
-        vipdoc = Path(tdxdir) / "T0002" / "blocknew"
-        if not vipdoc.exists():
+        blocknew_dir = Path(tdxdir) / "T0002" / "blocknew"
+        if not blocknew_dir.exists():
             raise SectorDataError(
                 MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
-                f"自定义板块目录不存在: {vipdoc}",
+                f"自定义板块目录不存在: {blocknew_dir}",
             )
 
         try:
@@ -981,15 +981,12 @@ class MooTDX2Client:
             if isinstance(entry, (list, tuple)) and len(entry) >= 2:
                 name = entry[0]
                 codes = entry[1] if isinstance(entry[1], (list, tuple)) else []
-            elif isinstance(entry, dict):
-                name = entry.get("blockname") or entry.get("name", "")
-                codes = entry.get("code_list") or entry.get("codes") or []
             else:
                 continue
             result.append({
                 "sector_name": str(name).strip(),
                 "sector_type": "custom",
-                "stock_count": len(codes) if hasattr(codes, "__len__") else 0,
+                "stock_count": len(codes),
             })
         return result
 
