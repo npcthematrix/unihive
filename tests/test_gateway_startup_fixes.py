@@ -5,6 +5,7 @@
 - HIGH1 (review): single upstream start() timeout isolates, doesn't abort init
 - HIGH #3: --config CLI flag is accepted and plumbed through
 - MED  #3 (review): health_check per-client timeout, slow client doesn't stall tick
+- LOW  #8 (review): get_health() aggregates upstream status (not hardcoded healthy)
 - MED  #5: console_api imports deduped (single import path)
 """
 from __future__ import annotations
@@ -278,6 +279,87 @@ class TestHealthCheckTimeout:
         )
         # slow 至少被启动过一次 (loop 真的尝试调它了)
         assert slow.health_check_called >= 1
+
+
+# ========== LOW #8 (review): get_health() aggregates upstream status ==========
+
+class TestGetHealthAggregation:
+    """LOW8: get_health() 必须聚合 upstream 状态, 不能硬编码 healthy."""
+
+    async def _build_server_with_upstreams(self, statuses: dict[str, str]):
+        """构造带 mock upstream 的 server. statuses: {name: status_value}."""
+        from src.gateway_server import GatewayServer
+
+        server = GatewayServer.__new__(GatewayServer)
+        server.config = {"upstreams": {}}
+        server.upstreams = {}
+        server.cache = None
+        server._running = False
+        server._shutdown_event = asyncio.Event()
+
+        from src.upstream_client import UpstreamStatus
+
+        for name, status_value in statuses.items():
+            client_status = UpstreamStatus(status_value)
+
+            class MockClient:
+                async def stop(self):
+                    pass
+
+            mc = MockClient()
+            mc.name = name
+            mc.status = client_status
+            mc.is_available = status_value == "healthy"
+            server.upstreams[name] = mc
+        return server
+
+    async def test_all_healthy_returns_healthy(self):
+        from src.gateway_server import GatewayServer
+
+        server = await self._build_server_with_upstreams(
+            {"a": "healthy", "b": "healthy"}
+        )
+        result = GatewayServer.aggregate_health(server.upstreams)
+        assert result["status"] == "healthy"
+        assert result["timestamp"] > 0
+        assert result["upstreams"]["a"] == "healthy"
+        assert result["upstreams"]["b"] == "healthy"
+
+    async def test_some_degraded_returns_degraded(self):
+        from src.gateway_server import GatewayServer
+
+        server = await self._build_server_with_upstreams(
+            {"a": "healthy", "b": "degraded"}
+        )
+        result = GatewayServer.aggregate_health(server.upstreams)
+        assert result["status"] == "degraded"
+
+    async def test_some_unavailable_returns_degraded(self):
+        """任一 upstream 不可用应反映到整体 health."""
+        from src.gateway_server import GatewayServer
+
+        server = await self._build_server_with_upstreams(
+            {"a": "healthy", "b": "unavailable"}
+        )
+        result = GatewayServer.aggregate_health(server.upstreams)
+        assert result["status"] == "degraded"
+
+    async def test_all_unavailable_returns_unhealthy(self):
+        from src.gateway_server import GatewayServer
+
+        server = await self._build_server_with_upstreams(
+            {"a": "unavailable", "b": "unavailable"}
+        )
+        result = GatewayServer.aggregate_health(server.upstreams)
+        assert result["status"] == "unhealthy"
+
+    async def test_no_upstreams_returns_healthy(self):
+        """无 upstream 时不应误报 degraded."""
+        from src.gateway_server import GatewayServer
+
+        server = await self._build_server_with_upstreams({})
+        result = GatewayServer.aggregate_health(server.upstreams)
+        assert result["status"] == "healthy"
 
 
 # ========== HIGH #3: --config CLI flag ==========

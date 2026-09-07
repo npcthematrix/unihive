@@ -367,8 +367,37 @@ class GatewayServer:
 
         @self.mcp.tool()
         async def get_health() -> dict:
-            """健康检查"""
-            return {"status": "healthy", "timestamp": int(time.time())}
+            """健康检查 — 聚合上游状态, 不再硬编码 healthy."""
+            return self.aggregate_health(self.upstreams)
+
+    @classmethod
+    def aggregate_health(
+        cls, upstreams: dict
+    ) -> dict:
+        """LOW8: 聚合 upstream 状态为整体 health.
+
+        - 无 upstream: healthy (无状态可报告)
+        - 全 healthy: healthy
+        - 全 unavailable: unhealthy
+        - 其他 (有 degraded / 部分 unavailable): degraded
+        """
+        upstream_states = {
+            name: client.status.value
+            for name, client in upstreams.items()
+        }
+        if not upstream_states:
+            overall = "healthy"
+        elif all(s == "healthy" for s in upstream_states.values()):
+            overall = "healthy"
+        elif all(s == "unavailable" for s in upstream_states.values()):
+            overall = "unhealthy"
+        else:
+            overall = "degraded"
+        return {
+            "status": overall,
+            "upstreams": upstream_states,
+            "timestamp": int(time.time()),
+        }
 
     async def start(self):
         self._running = True
