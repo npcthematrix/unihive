@@ -279,9 +279,6 @@ class MooTDX2Client:
             "get_workday_range": self.get_workday_range,
             "get_index_all": self.get_index_all,
             "get_income": self.get_income,
-            "get_metrics": self.get_metrics_async,
-            "get_health": self.get_health,
-            "get_server_status": self.get_server_status,
             # 新增接口
             "get_sector_list_local": self.get_sector_list_local,
             "get_sector_stocks": self.get_sector_stocks,
