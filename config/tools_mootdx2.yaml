@@ -614,10 +614,10 @@ tools:
         required: false
         description: 起始日期 YYYYMMDD
 
-  - name: get_sector_list
+  - name: get_sector_list_local
     description: |
       【· 离线】
-      【板块列表】读取板块清单。
+      【板块列表（本地文件）】读取板块清单。
 
       【使用场景】
       - 当用户问"有哪些行业板块 / 概念板块 / 地区板块"时调用
@@ -638,9 +638,9 @@ tools:
       - tdx_not_installed: TDX 目录未配置
       - tdx_sector_file_missing: 对应 block_*.dat 文件不存在
       - invalid_param: sector_type 不在 industry/concept/region 内
-    routing: get_sector_list
+    routing: get_sector_list_local
     upstream_tool_mapping:
-      mootdx2: get_sector_list
+      mootdx2: get_sector_list_local
     cache_ttl_key: null
     dangerous: false
     params:

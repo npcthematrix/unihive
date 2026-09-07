@@ -283,7 +283,7 @@ class MooTDX2Client:
             "get_health": self.get_health,
             "get_server_status": self.get_server_status,
             # 新增接口
-            "get_sector_list": self.get_sector_list,
+            "get_sector_list_local": self.get_sector_list_local,
             "get_sector_stocks": self.get_sector_stocks,
             "get_f10": self.get_f10,
             "get_f10_company": self.get_f10_company,
@@ -726,7 +726,7 @@ class MooTDX2Client:
             return self._error_result(e, f"get_income({code})")
 
     # ========== 板块数据 ==========
-    def _get_sector_list_sync(self, sector_type: str = "industry"):
+    def _get_sector_list_local_sync(self, sector_type: str = "industry"):
         """同步读取板块列表（本地 vipdoc/block/*.dat）
 
         Args:
@@ -775,7 +775,7 @@ class MooTDX2Client:
             })
         return result
 
-    async def get_sector_list(self, sector_type: str = "industry") -> ToolResult:
+    async def get_sector_list_local(self, sector_type: str = "industry") -> ToolResult:
         """获取板块列表（行业/概念/地区）
 
         Args:
@@ -790,14 +790,14 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                None, self._get_sector_list_sync, sector_type
+                None, self._get_sector_list_local_sync, sector_type
             )
             return ToolResult(success=True, data=data, source="mootdx2")
         except SectorDataError as e:
             return self._sector_error_result(e)
         except Exception as e:
-            logger.error(f"get_sector_list failed: {e}")
-            return self._error_result(e, f"get_sector_list({sector_type})")
+            logger.error(f"get_sector_list_local failed: {e}")
+            return self._error_result(e, f"get_sector_list_local({sector_type})")
 
     # ========== 板块成分股查询 ==========
     def _sector_stocks_sync(self, sector_code: str, sector_type: str = "industry") -> list:

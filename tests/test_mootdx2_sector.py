@@ -12,35 +12,35 @@ def client():
     return MooTDX2Client(MooTDX2Config(name="test", market="std"))
 
 
-# ========== get_sector_list ==========
+# ========== get_sector_list_local ==========
 
-def test_get_sector_list_tdxdir_empty(client):
+def test_get_sector_list_local_tdxdir_empty(client):
     """sector_type=industry + tdxdir empty → tdx_not_installed."""
-    r = asyncio.run(client.get_sector_list("industry"))
+    r = asyncio.run(client.get_sector_list_local("industry"))
     assert r.success is False
     assert r.error_detail["error_type"] == "tdx_not_installed"
 
 
-def test_get_sector_list_invalid_param(client):
+def test_get_sector_list_local_invalid_param(client):
     """sector_type not in industry/concept/region → invalid_param."""
     client.config.settings = MagicMock()
     client.config.settings.tdxdir = "/fake/tdx"
-    r = asyncio.run(client.get_sector_list("bogus"))
+    r = asyncio.run(client.get_sector_list_local("bogus"))
     assert r.success is False
     assert r.error_detail["error_type"] == "invalid_param"
 
 
-def test_get_sector_list_file_missing(client):
+def test_get_sector_list_local_file_missing(client):
     """sector file missing → tdx_sector_file_missing."""
     client.config.settings = MagicMock()
     client.config.settings.tdxdir = "/fake/tdx"
     with patch.object(Path, "exists", return_value=False):
-        r = asyncio.run(client.get_sector_list("industry"))
+        r = asyncio.run(client.get_sector_list_local("industry"))
     assert r.success is False
     assert r.error_detail["error_type"] == "tdx_sector_file_missing"
 
 
-def test_get_sector_list_industry_ok(client):
+def test_get_sector_list_local_industry_ok(client):
     """industry hits mock BlockReader → success, list of sectors."""
     import pandas as pd
 
@@ -57,7 +57,7 @@ def test_get_sector_list_industry_ok(client):
 
     with patch.object(Path, "exists", return_value=True), \
          patch("tdxpy.reader.BlockReader", return_value=mock_reader):
-        r = asyncio.run(client.get_sector_list("industry"))
+        r = asyncio.run(client.get_sector_list_local("industry"))
 
     assert r.success is True
     assert r.data == [
@@ -66,7 +66,7 @@ def test_get_sector_list_industry_ok(client):
     ]
 
 
-def test_get_sector_list_concept_ok(client):
+def test_get_sector_list_local_concept_ok(client):
     """concept path → success, different sector_type in output."""
     import pandas as pd
 
@@ -78,7 +78,7 @@ def test_get_sector_list_concept_ok(client):
     mock_reader.get_df.return_value = mock_df
     with patch.object(Path, "exists", return_value=True), \
          patch("tdxpy.reader.BlockReader", return_value=mock_reader):
-        r = asyncio.run(client.get_sector_list("concept"))
+        r = asyncio.run(client.get_sector_list_local("concept"))
 
     assert r.success is True
     assert r.data[0]["sector_type"] == "concept"
