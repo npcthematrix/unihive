@@ -15,6 +15,25 @@ sys.path.insert(0, str(ROOT))
 
 
 @pytest.fixture
+def gateway_server_minimal():
+    """返回一个 GatewayServer.__new__ 出来的实例, 已注入 __init__ 里初始化
+    的 runtime 字段 (shutdown event, requests lock, active count)。
+
+    测试想直接构造一个 server (跳过真实 config 加载) 但仍需要 _execute_cached
+    / stop() / health loop 等依赖这些字段时, 用这个 fixture 替代手工赋值。
+    """
+    from src.gateway_server import GatewayServer
+
+    server = GatewayServer.__new__(GatewayServer)
+    server._shutdown_event = asyncio.Event()
+    server._active_requests = 0
+    server._requests_lock = asyncio.Lock()
+    server._running = False
+    server._initialized = False
+    return server
+
+
+@pytest.fixture
 def config_path(tmp_path) -> Path:
     """返回临时 config 路径，方便各测试用"""
     return tmp_path / "upstreams.yaml"

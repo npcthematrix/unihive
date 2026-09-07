@@ -91,7 +91,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 class ConsoleAuthMiddleware:
     """Middleware to protect console routes."""
 
-    PUBLIC_PATHS = ("/mcp", "/health", "/login", "/logout", "/static", "/api/config", "/api/status", "/api/interfaces")
+    PUBLIC_PATHS = ("/mcp", "/health", "/login", "/logout", "/static")
 
     def __init__(self, app):
         self.app = app

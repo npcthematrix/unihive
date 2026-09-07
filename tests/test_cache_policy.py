@@ -107,7 +107,7 @@ class TestExecuteCachedEmptyDataGuard:
     触发场景：FUYAO HTTP 返回 {"data": null}（节假日无行情、网络抖动）。
     缓存空响应会导致整个 TTL 窗口内的请求都拿到空数据。"""
 
-    async def test_empty_data_response_is_not_cached(self, tmp_path):
+    async def test_empty_data_response_is_not_cached(self, tmp_path, gateway_server_minimal):
         from dataclasses import dataclass
         from src.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
@@ -137,7 +137,7 @@ class TestExecuteCachedEmptyDataGuard:
                 return self._result
 
         # bypass GatewayServer.__init__ — 只需要属性，不跑 initialize()
-        server = GatewayServer.__new__(GatewayServer)
+        server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter(FakeResult(
             success=True, data=None, source="fuyao_ashare",
@@ -164,7 +164,7 @@ class TestExecuteCachedEmptyDataGuard:
         key = server._cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
         assert await cache.get(key) is None, "空响应不应被缓存"
 
-    async def test_non_empty_data_response_is_cached(self, tmp_path):
+    async def test_non_empty_data_response_is_cached(self, tmp_path, gateway_server_minimal):
         """对照测试：data 非空时正常缓存。"""
         from src.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
@@ -196,7 +196,7 @@ class TestExecuteCachedEmptyDataGuard:
                     source="fuyao_ashare",
                 )
 
-        server = GatewayServer.__new__(GatewayServer)
+        server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
         server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
@@ -217,7 +217,7 @@ class TestExecuteCachedEmptyDataGuard:
 
         await cache.close()
 
-    async def test_miss_response_includes_cache_hit_false(self, tmp_path):
+    async def test_miss_response_includes_cache_hit_false(self, tmp_path, gateway_server_minimal):
         """Regression #4: miss 路径必须设 cache_hit=False。
         让消费者区分"缓存端点本次 miss"与"无缓存端点"。"""
         from src.cache import Cache, CacheConfig
@@ -242,7 +242,7 @@ class TestExecuteCachedEmptyDataGuard:
             async def route(self, route_key, params):
                 return FakeResult(success=True, data={"v": 1}, source="fuyao_ashare", hops=[])
 
-        server = GatewayServer.__new__(GatewayServer)
+        server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
         server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
@@ -258,7 +258,7 @@ class TestExecuteCachedEmptyDataGuard:
 
         await cache.close()
 
-    async def test_miss_response_includes_hops_from_router(self, tmp_path, caplog):
+    async def test_miss_response_includes_hops_from_router(self, tmp_path, caplog, gateway_server_minimal):
         """Regression #3: miss 路径响应应包含 router 返回的 hops 列表。
         hops 仍是请求级元数据（不进缓存），但消费者拿得到。
         debug 日志也记录一份。"""
@@ -298,7 +298,7 @@ class TestExecuteCachedEmptyDataGuard:
                     hops=[FakeHop(source="fuyao_meta"), FakeHop(source="tdx_local")],
                 )
 
-        server = GatewayServer.__new__(GatewayServer)
+        server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
         server.config = {"cache": {"ttl": {"search": 300}}}
@@ -322,7 +322,7 @@ class TestExecuteCachedEmptyDataGuard:
 
         await cache.close()
 
-    async def test_cached_response_strips_hops_and_cache_hit(self, tmp_path):
+    async def test_cached_response_strips_hops_and_cache_hit(self, tmp_path, gateway_server_minimal):
         """Regression #3+#4: 缓存里不应存 hops（请求级）和 cache_hit=True。
         命中的响应里由 _execute_cached 重算 cache_hit=True，
         hops 从缓存读时是 []（这次请求没有真实路由）。"""
@@ -365,7 +365,7 @@ class TestExecuteCachedEmptyDataGuard:
                     hops=[FakeHop(source="fuyao_ashare")],
                 )
 
-        server = GatewayServer.__new__(GatewayServer)
+        server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
         server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
@@ -541,7 +541,7 @@ class TestExecuteCachedStatsAccounting:
     之前 gateway 走 cache.get + cache.set 直接路径, _record_* 永远不触发,
     cache_stats.json 永远是 {hits:0, misses:0}."""
 
-    async def test_miss_increments_miss_counter(self, tmp_path):
+    async def test_miss_increments_miss_counter(self, tmp_path, gateway_server_minimal):
         from src.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
@@ -566,7 +566,7 @@ class TestExecuteCachedStatsAccounting:
                 self.calls += 1
                 return FakeResult(data={"v": self.calls})
 
-        server = GatewayServer.__new__(GatewayServer)
+        server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
         server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
@@ -588,7 +588,7 @@ class TestExecuteCachedStatsAccounting:
 
         await cache.close()
 
-    async def test_non_caching_path_does_not_count(self, tmp_path):
+    async def test_non_caching_path_does_not_count(self, tmp_path, gateway_server_minimal):
         """can_cache=False (无 TTL 或 cache 禁用) 不应计入 hit/miss,
         否则运维误判缓存效果。"""
         from src.cache import Cache, CacheConfig
@@ -613,7 +613,7 @@ class TestExecuteCachedStatsAccounting:
             async def route(self, route_key, params):
                 return FakeResult(data={"v": 1}, source="fuyao_ashare")
 
-        server = GatewayServer.__new__(GatewayServer)
+        server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
         server.config = {"cache": {"ttl": {}}}  # 空 ttl 配置

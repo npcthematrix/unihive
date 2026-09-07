@@ -62,6 +62,41 @@ def _read_gateway_version() -> str:
 GATEWAY_VERSION = _read_gateway_version()
 
 
+def _console_auth_config_from_env() -> tuple[dict | None, str]:
+    """Read console auth config from UNIHIVE_CONSOLE_* env vars only.
+
+    Returns ``(cfg, reason)`` where cfg is None when auth is disabled.
+    Empty string is treated as unset (opt-in via setting them).
+    Whitespace around values is stripped.
+    """
+    username = os.getenv("UNIHIVE_CONSOLE_USER", "").strip() or None
+    password = os.getenv("UNIHIVE_CONSOLE_PASSWORD", "").strip() or None
+    secret = os.getenv("UNIHIVE_CONSOLE_SESSION_SECRET", "").strip() or None
+
+    # Three empty => no env vars set at all
+    if not (username or password or secret):
+        return None, "disabled: no UNIHIVE_CONSOLE_* env vars set"
+
+    # Partial => tell user which var(s) are missing
+    missing = []
+    if not username:
+        missing.append("UNIHIVE_CONSOLE_USER")
+    if not password:
+        missing.append("UNIHIVE_CONSOLE_PASSWORD")
+    if not secret:
+        missing.append("UNIHIVE_CONSOLE_SESSION_SECRET")
+    if missing:
+        return None, f"disabled: missing env var(s): {', '.join(missing)}"
+
+    if len(secret) < 32:
+        return None, (
+            f"disabled: UNIHIVE_CONSOLE_SESSION_SECRET must be at least "
+            f"32 characters (got {len(secret)})"
+        )
+
+    return {"username": username, "password": password, "session_secret": secret}, "ok"
+
+
 def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, str]:
     """Read console auth config from config.yaml, upstreams.yaml or env vars.
 
@@ -109,13 +144,22 @@ def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, s
             password_hash = console_cfg.get("password_hash", "").strip() if console_cfg.get("password_hash") else None
             secret = console_cfg.get("session_secret", "").strip() if console_cfg.get("session_secret") else None
 
-    # Fallback to env vars
+    # Final fallback: env vars (via dedicated helper so the env-only
+    # behaviour is testable in isolation).
     if not username:
-        username = os.getenv("UNIHIVE_CONSOLE_USER", "").strip() or None
-    if not password:
-        password = os.getenv("UNIHIVE_CONSOLE_PASSWORD", "").strip() or None
-    if not secret:
-        secret = os.getenv("UNIHIVE_CONSOLE_SESSION_SECRET", "").strip() or None
+        env_cfg, env_reason = _console_auth_config_from_env()
+        if env_cfg is not None:
+            return env_cfg, env_reason
+        # If env vars also missing/disabled, surface env reason only when
+        # nothing was set anywhere — otherwise the config.yaml or
+        # upstreams.yaml partial-config reason is more informative.
+        if not (username or password or password_hash or secret):
+            return None, env_reason
+        # partial config from yaml
+        if not username or not secret:
+            return None, env_reason
+        if not (password or password_hash):
+            return None, env_reason
 
     # Either password or password_hash must be set
     has_password = bool(password)
@@ -478,6 +522,13 @@ class GatewayServer:
         return source.startswith("fuyao_") or source == "mootdx2"
 
     @staticmethod
+    def _is_fuyao_source(source: str | None) -> bool:
+        """是否 FUYAO 源：仅以 fuyao_ 开头（myfuyao_xx 不算）。"""
+        if not source:
+            return False
+        return source.startswith("fuyao_")
+
+    @staticmethod
     def _is_realtime_ttl(ttl_key: str | None) -> bool:
         """实时接口不缓存（realtime_quote TTL 极短，无意义）。"""
         return ttl_key == "realtime_quote"
@@ -506,13 +557,18 @@ class GatewayServer:
         - hops 是请求级元数据，不进缓存。
         """
         ttl = self._ttl_for(ttl_key) if ttl_key else None
+        cache_enabled = self.cache is not None and self.cache.enabled
         can_cache = (
             ttl is not None
-            and self.cache is not None
-            and self.cache.enabled
+            and cache_enabled
             and self._is_cacheable_data_source(data_source_type)
-            and not self._is_realtime_ttl(ttl_key)
+            # realtime_quote 不再被 hardcoded 排除: 用户配的 TTL (哪怕短如
+            # 10s 作为外部服务故障兜底) 都应被尊重。
         )
+        # hit/miss 统计跟踪范围: cache 启用 + TTL 配了即跟踪 (即便因
+        # data_source_type 不是 online 而 can_cache=False), 用于运维观测。
+        # ttl_key 没配 TTL 或 cache 禁用则不跟踪, 避免运维误判缓存效果。
+        tracks_stats = cache_enabled and ttl is not None
 
         key: str | None = None
         if can_cache:
@@ -523,7 +579,12 @@ class GatewayServer:
                 self.cache.record_hit()
                 logger.info(f"[{name}] cache hit (key={key})")
                 return {**cached, "hops": cached.get("hops", []), "cache_hit": True}
-            # miss：无论后续 FUYAO gate 是否通过，都算一次 miss
+
+        if tracks_stats:
+            # miss 路径: 包括 can_cache=True 但 cache miss,
+            # 与 can_cache=False 但 tracks_stats=True (例如 data_source
+            # != online, 有 TTL 但因 _is_cacheable_data_source 排除)。
+            # 不存数据进缓存, 但运维需要 hit/miss 观测。
             self.cache.record_miss()
 
         # 在途请求计数
