@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import pytest
 
+from src.core import cache_strategy
+
 
 class TestSingleFlight:
     """同一 key 并发 miss 只触发一次 factory。"""
@@ -109,7 +111,7 @@ class TestExecuteCachedEmptyDataGuard:
 
     async def test_empty_data_response_is_not_cached(self, tmp_path, gateway_server_minimal):
         from dataclasses import dataclass
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -161,12 +163,12 @@ class TestExecuteCachedEmptyDataGuard:
         assert resp["success"] is True
         assert resp["data"] is None
         # 但缓存里没有这条记录
-        key = server._cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
+        key = cache_strategy.cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
         assert await cache.get(key) is None, "空响应不应被缓存"
 
     async def test_non_empty_data_response_is_cached(self, tmp_path, gateway_server_minimal):
         """对照测试：data 非空时正常缓存。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -210,7 +212,7 @@ class TestExecuteCachedEmptyDataGuard:
 
         assert resp["success"] is True
         assert resp["data"] == {"close": 100.0}
-        key = server._cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
+        key = cache_strategy.cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
         cached = await cache.get(key)
         assert cached is not None, "data 非空的 FUYAO 成功响应应被缓存"
         assert cached["data"] == {"close": 100.0}
@@ -220,7 +222,7 @@ class TestExecuteCachedEmptyDataGuard:
     async def test_miss_response_includes_cache_hit_false(self, tmp_path, gateway_server_minimal):
         """Regression #4: miss 路径必须设 cache_hit=False。
         让消费者区分"缓存端点本次 miss"与"无缓存端点"。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -263,7 +265,7 @@ class TestExecuteCachedEmptyDataGuard:
         hops 仍是请求级元数据（不进缓存），但消费者拿得到。
         debug 日志也记录一份。"""
         import logging
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -326,7 +328,7 @@ class TestExecuteCachedEmptyDataGuard:
         """Regression #3+#4: 缓存里不应存 hops（请求级）和 cache_hit=True。
         命中的响应里由 _execute_cached 重算 cache_hit=True，
         hops 从缓存读时是 []（这次请求没有真实路由）。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -382,7 +384,7 @@ class TestExecuteCachedEmptyDataGuard:
         assert resp1["data"] == {"v": 1}
 
         # 缓存里不应有 hops 和 cache_hit=True
-        key = server._cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
+        key = cache_strategy.cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
         cached = await cache.get(key)
         assert cached["hops"] == [], "缓存里 hops 必须是空"
         assert "cache_hit" not in cached, "缓存里不应预存 cache_hit 字段"
@@ -407,7 +409,7 @@ class TestCleanupExpiredLru:
     之前 max_entries=10000 是死配置，cache.db 会无界增长。"""
 
     async def _make_cache(self, tmp_path, max_entries=10):
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         cache = Cache(CacheConfig(
             enabled=True,
             db_path=str(tmp_path / "cache.db"),
@@ -460,7 +462,10 @@ class TestCleanupExpiredLru:
             await cache.close()
 
     async def test_lru_eviction_above_limit(self, tmp_path):
-        """超 max_entries 时按 created_at 删最旧的，削到 max_entries * 0.9。"""
+        """Refactor 2 (2026-09-08): 超 max_entries 时按 last_access_at 删最久未访问的,
+        削到 max_entries * 0.9。被 get() 触碰过的 key 应保留, 证明 LRU 真在按访问时间排序。"""
+        from sqlalchemy import text
+
         cache = await self._make_cache(tmp_path, max_entries=10)
         try:
             # 插 20 条，全部 ttl=60 (不过期)
@@ -468,16 +473,49 @@ class TestCleanupExpiredLru:
                 await cache.set(f"k{i:02d}", {"v": i}, ttl=60)
             assert await self._count_entries(cache) == 20
 
+            # 等几毫秒确保 touch 时间晚于最后一次 set, 避免 k00.last_access
+            # 与 k19.created_at 同毫秒被 tiebreaker 按 created_at 误驱逐。
+            # Refactor 2 关键 invariant: last_access_at 必须严格大于所有未触碰 entry。
+            await asyncio.sleep(0.05)
+
+            # 触碰 k00, k01 (触发 fire-and-forget last_access_at 更新)
+            assert await cache.get("k00") == {"v": 0}
+            assert await cache.get("k01") == {"v": 1}
+
+            # 等两个 in-flight touch task 落盘 (create_task 调度后需 await 才能跑)。
+            # 必须检查 last_access_at > created_at, 不能只查 is not None —
+            # set 时就把 last_access_at = created_at 写进去了, 永远非空,
+            # 但还没"被访问过"。仅当 last_access 明显大于 created 才说明
+            # touch 真的跑过了。
+            for _ in range(50):
+                async with cache._session_factory() as session:
+                    rows = (await session.execute(
+                        text("SELECT key, last_access_at, created_at FROM cache "
+                             "WHERE key IN ('k00','k01') ORDER BY key")
+                    )).fetchall()
+                if (len(rows) == 2
+                        and all(r[1] is not None and r[1] > r[2] for r in rows)):
+                    break
+                await asyncio.sleep(0.02)
+
             deleted = await cache.cleanup_expired()
             # 目标: 10 * 0.9 = 9, 删 20 - 9 = 11
             assert deleted == 11, f"应删 11 条 (削到 9), got {deleted}"
             assert await self._count_entries(cache) == 9
 
-            # 最早插入的 (k00..k10) 应被驱逐，k11..k19 留下
-            for i in range(11):
-                assert await cache.get(f"k{i:02d}") is None, f"k{i:02d} 应被驱逐"
-            for i in range(11, 20):
-                assert await cache.get(f"k{i:02d}") is not None, f"k{i:02d} 应保留"
+            # k00, k01 因最近被访问应保留 (last_access 大于所有未触碰 entry)。
+            # 未触碰的 18 个 (k02..k19) 按 created_at 排序, 最旧 11 个 (k02..k12)
+            # 被驱逐; k13..k19 保留。所以共保留 9 条 (7 + k00 + k01)。
+            assert await cache.get("k00") == {"v": 0}, "k00 最近被 get, 应保留"
+            assert await cache.get("k01") == {"v": 1}, "k01 最近被 get, 应保留"
+            for i in range(2, 13):
+                assert await cache.get(f"k{i:02d}") is None, (
+                    f"k{i:02d} 未被访问且 created_at 最早, 应被驱逐"
+                )
+            for i in range(13, 20):
+                assert await cache.get(f"k{i:02d}") is not None, (
+                    f"k{i:02d} 后插入, 应保留"
+                )
         finally:
             await cache.close()
 
@@ -522,19 +560,16 @@ class TestIsFuyaoSource:
     """FUYAO-only 策略的源头判断。"""
 
     def test_fuyao_prefixes(self):
-        from src.gateway_server import GatewayServer
         for s in ["fuyao_ashare", "fuyao_index", "fuyao_meta", "fuyao_fund"]:
-            assert GatewayServer._is_fuyao_source(s) is True
+            assert cache_strategy.is_fuyao_source(s) is True
 
     def test_non_fuyao_rejected(self):
-        from src.gateway_server import GatewayServer
         for s in ["tdx_local", "tokenwave_tdx", "tdx_tq_local", "", None]:
-            assert GatewayServer._is_fuyao_source(s) is False
+            assert cache_strategy.is_fuyao_source(s) is False
 
     def test_substring_does_not_match(self):
         """必须以 fuyao_ 开头；仅包含 fuyao 不算。"""
-        from src.gateway_server import GatewayServer
-        assert GatewayServer._is_fuyao_source("myfuyao_ashare") is False
+        assert cache_strategy.is_fuyao_source("myfuyao_ashare") is False
 
 class TestExecuteCachedStatsAccounting:
     """Regression #7: _execute_cached 必须显式 record_hit/record_miss。
@@ -542,7 +577,7 @@ class TestExecuteCachedStatsAccounting:
     cache_stats.json 永远是 {hits:0, misses:0}."""
 
     async def test_miss_increments_miss_counter(self, tmp_path, gateway_server_minimal):
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -591,7 +626,7 @@ class TestExecuteCachedStatsAccounting:
     async def test_non_caching_path_does_not_count(self, tmp_path, gateway_server_minimal):
         """can_cache=False (无 TTL 或 cache 禁用) 不应计入 hit/miss,
         否则运维误判缓存效果。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -637,7 +672,7 @@ class TestExecuteCachedSingleFlight:
 
     async def test_concurrent_miss_only_routes_once(self, tmp_path, gateway_server_minimal):
         """5 个并发同 key miss → router 只调 1 次。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -698,7 +733,7 @@ class TestExecuteCachedSingleFlight:
     ):
         """leader 完成 → in_flight dict 必须清掉, 否则下一次同 key 请求
         复用旧 future, 拿到错误结果。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -736,7 +771,7 @@ class TestExecuteCachedSingleFlight:
         assert server.router.calls == 1
 
         # 清除 cache, 强制下次再 miss
-        key = server._cache_key("t", {"k": "v"})
+        key = cache_strategy.cache_key("t", {"k": "v"})
         await cache.delete(key)
 
         # 第二次: in_flight 必须已清, 这次是新 leader
@@ -756,7 +791,7 @@ class TestWalMode:
 
     async def test_wal_mode_is_active(self, tmp_path):
         """initialize 后 journal_mode 必须是 wal, 不是默认的 delete."""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from sqlalchemy import text
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -779,7 +814,7 @@ class TestAsyncStatsPersistence:
     async def test_close_flushes_dirty_stats_to_disk(self, tmp_path):
         """close() 在 dirty events < STATS_FLUSH_INTERVAL 时也应刷盘。
         否则 gateway 进程重启会丢这批累积的计数。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -806,7 +841,7 @@ class TestAsyncStatsPersistence:
         """越过 STATS_FLUSH_INTERVAL 时, record_hit/record_miss 必须
         通过 create_task 调度而不是阻塞同步调用。"""
         import json
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()

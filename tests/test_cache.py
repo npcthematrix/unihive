@@ -56,7 +56,7 @@ class TestCacheTTL:
 
 class TestCacheDisabled:
     async def test_disabled_returns_none(self, tmp_path):
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
 
         cfg = CacheConfig(enabled=False, db_path=str(tmp_path / "c.db"))
         c = Cache(cfg)

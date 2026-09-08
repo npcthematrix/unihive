@@ -4,7 +4,6 @@ UniHive MCP Gateway Server - 统一 MCP 网关
 """
 import argparse
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -21,23 +20,21 @@ import uvicorn
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
-from starlette.applications import Starlette
 from starlette.responses import Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from .cache import Cache, CacheConfig
-from .config_loader import load_config, validate_config
-from .log_config import configure_logging
-from .normalizer import Normalizer
-from .registry import register_tools_from_config, validate_specs
-from .router import Router
-from .upstream_client import UpstreamClient, UpstreamConfig
-from .fuyao_client import FuyaoClient, FuyaoConfig
-from .tokenwave_tdx_client import TokenWaveTdxClient, TokenWaveTdxConfig
-from .mootdx2_client import MooTDX2Client, MooTDX2Config
-from .tdx_quant_client import TdxQuantClient
-from .tdx_quant_config import TdxQuantConfig, TdxQuantSettings
+from .storage.cache import Cache, CacheConfig
+from .utils.config_loader import load_config, validate_config
+from .utils.log_config import configure_logging
+from .core.normalizer import Normalizer
+from .core.registry import register_tools_from_config, validate_specs
+from .core.router import Router
+from .api.upstream_client import UpstreamClient, UpstreamConfig
+from .api.fuyao_client import FuyaoClient, FuyaoConfig
+from .api.mootdx2_client import MooTDX2Client, MooTDX2Config
+from .api.tdx_quant_client import TdxQuantClient
+from .models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
 
 logger = logging.getLogger(__name__)
 
@@ -186,96 +183,6 @@ def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, s
     return cfg, "ok"
 
 
-class _NoSlashStarlette(Starlette):
-    """Starlette 子类，关掉默认 redirect_slashes=True。
-
-    MCP StreamableHTTP 要求 POST /mcp 直接 200，不要被重定向到 /mcp/。
-    很多 MCP 客户端 (Claude Desktop / Cursor) 不会自动跟 POST 307，
-    会直接报 stream error。详见 MCP 2025-11-25 spec/authorization.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.router.redirect_slashes = False
-
-
-async def _install_capability_filter(mcp: FastMCP) -> None:
-    """Strip capability fields from initialize response when no backing components exist.
-
-    FastMCP 4.0.3 unconditionally registers handlers for prompts/list,
-    resources/list, resources/templates/list, prompts/get, resources/read,
-    logging/setLevel in ``MCPOperationsMixin._setup_handlers`` — even when no
-    prompts/resources are registered. The MCP SDK's ``Server.get_capabilities``
-    advertises any handler that's registered, so clients see ghost
-    capabilities (``prompts``, ``resources``, ``logging``) that only ever
-    return empty results.
-
-    Sample actual component counts here (async context, components settled
-    after ``_register_tools``) and wrap ``mcp._mcp_server.get_capabilities``
-    so empty component types get ``None`` capability fields. We leave the
-    handlers themselves registered so adding a component later (e.g. via a
-    future prompt manager) keeps working without re-installing the filter.
-
-    Tracked as HIGH #3 in MCP startup audit (2026-09-07). FastMCP 4.1+ was
-    hoped to expose a public setter, but as of 4.0.3 there is none — the
-    only fix is this private attr patch.
-    """
-    if getattr(mcp, "_unihive_capability_filter_installed", False):
-        return
-    has_prompts = bool(await mcp.list_prompts())
-    has_resources = bool(await mcp.list_resources()) or bool(
-        await mcp.list_resource_templates()
-    )
-    has_logging = False  # gateway never wires logging/setLevel to a sink
-
-    ll_server = mcp._mcp_server
-    original_get_capabilities = ll_server.get_capabilities
-
-    def _filtered(
-        notification_options=None,
-        experimental_capabilities=None,
-        extensions=None,
-        *,
-        protocol_version=None,
-    ):
-        caps = original_get_capabilities(
-            notification_options,
-            experimental_capabilities,
-            extensions,
-            protocol_version=protocol_version,
-        )
-        updates: dict = {}
-        if not has_prompts and caps.prompts is not None:
-            updates["prompts"] = None
-        if not has_resources and caps.resources is not None:
-            updates["resources"] = None
-        if not has_logging and caps.logging is not None:
-            updates["logging"] = None
-        if updates:
-            caps = caps.model_copy(update=updates)
-        return caps
-
-    ll_server.get_capabilities = _filtered
-    mcp._unihive_capability_filter_installed = True
-
-
-def _make_mcp_path_canonicalizer(app, mcp_path: str):
-    """ASGI 中间件: 把 POST /mcp 这种无尾斜杠的请求规范化为 /mcp/。
-
-    Starlette 的 Mount("/mcp") 只匹配 /mcp/ 和 /mcp/... 不匹配 /mcp 本身,
-    关掉 redirect_slashes 之后 /mcp 会直接 404。这个中间件在外层 router
-    之前跑, 把 path 改写成 /mcp/ 后再交给 app, 让 Mount 能命中。
-    """
-    canonical = mcp_path.rstrip("/") + "/"
-
-    async def middleware(scope, receive, send):
-        if scope["type"] == "http" and scope.get("path", "") == mcp_path:
-            scope = {**scope, "path": canonical}
-        await app(scope, receive, send)
-
-    return middleware
-
-
 class GatewayServer:
     """UniHive MCP 网关 - 聚合多个上游 MCP Server"""
 
@@ -322,9 +229,9 @@ class GatewayServer:
                     + "; ".join(errors)
                 )
         # 与 console_api 共用同一份 config，避免双轨不一致
-        from . import console_api as _ca
+        from .utils import console_api as _ca
         _ca.set_config(self.config)
-        self.upstreams: dict[str, UpstreamClient | FuyaoClient | TokenWaveTdxClient | MooTDX2Client | TdxQuantClient] = {}
+        self.upstreams: dict[str, UpstreamClient | FuyaoClient | MooTDX2Client | TdxQuantClient] = {}
         self.cache: Cache | None = None
         self.router: Router | None = None
         self.mcp: FastMCP | None = None
@@ -413,13 +320,6 @@ class GatewayServer:
                         settings=tdx_quant_settings,
                     )
                     client = TdxQuantClient(tdx_quant_cfg)
-                elif cfg.get("type") == "python":
-                    # TokenWave TDX 客户端
-                    tokenwave_cfg = TokenWaveTdxConfig(
-                        name=name,
-                        mode=cfg.get("mode", "auto"),
-                    )
-                    client = TokenWaveTdxClient(tokenwave_cfg)
                 elif cfg.get("type") == "mootdx2":
                     # MooTDX2 客户端
                     mootdx2_cfg = MooTDX2Config(
@@ -521,43 +421,6 @@ class GatewayServer:
         self._initialized = True
         logger.info(f"Gateway initialized with {len(self.upstreams)} upstreams")
 
-    def _cache_key(self, name: str, params: dict) -> str:
-        """生成稳定的缓存 key。使用完整 SHA256 哈希避免碰撞。"""
-        payload = json.dumps(params, sort_keys=True, default=str, ensure_ascii=False)
-        h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        return f"{name}:{h}"
-
-    def _ttl_for(self, ttl_key: str) -> int | None:
-        """从 config.cache.ttl 查 TTL（秒）；未配置返回 None。"""
-        ttl = self.config.get("cache", {}).get("ttl", {})
-        return ttl.get(ttl_key)
-
-    @staticmethod
-    def _is_cacheable_source(source: str | None) -> bool:
-        """缓存策略：仅缓存 FUYAO 和 MooTDX2 在线接口。"""
-        if not source:
-            return False
-        return source.startswith("fuyao_") or source == "mootdx2"
-
-    @staticmethod
-    def _is_fuyao_source(source: str | None) -> bool:
-        """是否 FUYAO 源：仅以 fuyao_ 开头（myfuyao_xx 不算）。"""
-        if not source:
-            return False
-        return source.startswith("fuyao_")
-
-    @staticmethod
-    def _is_realtime_ttl(ttl_key: str | None) -> bool:
-        """实时接口不缓存（realtime_quote TTL 极短，无意义）。"""
-        return ttl_key == "realtime_quote"
-
-    @staticmethod
-    def _is_cacheable_data_source(data_source_type: str | None) -> bool:
-        """仅在线数据源可缓存，离线和混合类型不缓存。"""
-        if not data_source_type:
-            return False
-        return data_source_type == "online"
-
     async def _execute_cached(
         self,
         name: str,
@@ -582,12 +445,17 @@ class GatewayServer:
         async with self._requests_lock:
             self._active_requests += 1
         try:
-            ttl = self._ttl_for(ttl_key) if ttl_key else None
+            # 缓存策略判定下沉到 src.core.cache_strategy 纯函数, 见 plan
+            # warm-imagining-quilt.md (Refactor 1)。本地 import 避免模块
+            # 顶层循环依赖。
+            from .core import cache_strategy
+
+            ttl = cache_strategy.ttl_for(self.config, ttl_key) if ttl_key else None
             cache_enabled = self.cache is not None and self.cache.enabled
             can_cache = (
                 ttl is not None
                 and cache_enabled
-                and self._is_cacheable_data_source(data_source_type)
+                and cache_strategy.is_cacheable_data_source(data_source_type)
                 # realtime_quote 不再被 hardcoded 排除: 用户配的 TTL (哪怕短如
                 # 10s 作为外部服务故障兜底) 都应被尊重。
             )
@@ -598,7 +466,7 @@ class GatewayServer:
 
             key: str | None = None
             if can_cache:
-                key = self._cache_key(name, params)
+                key = cache_strategy.cache_key(name, params)
                 cached = await self.cache.get(key)
                 if cached is not None:
                     # hops 不在缓存里；命中时给一个标记。不可变拷贝避免污染持久化对象。
@@ -685,7 +553,7 @@ class GatewayServer:
 
     def _load_all_tools(self) -> list[dict]:
         """Delegate to tool_loader.load_all_tools for YAML merge."""
-        from .tool_loader import load_all_tools
+        from .core.tool_loader import load_all_tools
         return load_all_tools(self.config_path, self.config)
 
     async def _create_and_register_gateway_mcp(
@@ -693,21 +561,24 @@ class GatewayServer:
     ) -> FastMCP:
         """Single entry point for constructing the gateway FastMCP server.
 
-        M2 (2026-09-07 audit): 把 FastMCP("unihive") 构造 + _register_tools +
-        _install_capability_filter 收进一个方法, 防止未来 refactor 在 _do_initialize
-        之外构造裸 FastMCP 时漏掉 capability filter (HIGH #3, 2026-09-07 audit)。
-
-        Filter 必须等 _register_tools 后才能装 (_install_capability_filter 要
-        调 list_prompts / list_resources 采样组件数), 所以三步串行, 但都在这
-        一个工厂里, 缺一不可。
+        M2 (2026-09-07 audit) + 2026-09-08 Refactor 1: 三步（构造 + 注册工具 +
+        capability filter 安装）全部委派给 ``src.core.mcp_factory.create_and_register_gateway_mcp``，
+        防止未来 refactor 在 _do_initialize 之外构造裸 FastMCP 时漏掉 capability
+        filter (HIGH #3, 2026-09-07 audit)。
         """
-        # version 显式传 GATEWAY_VERSION, 避免 FastMCP 默认 fallback 到框架版本
-        # (4.0.3), 让 client 把 framework 升级误判成 server 升级。
-        mcp = FastMCP("unihive", version=GATEWAY_VERSION)
-        self.mcp = mcp
-        self._register_tools(specs=tool_specs)
-        await _install_capability_filter(mcp)
-        return mcp
+        from .core.mcp_factory import create_and_register_gateway_mcp
+
+        def _on_constructed(mcp: FastMCP) -> None:
+            # version 显式传 GATEWAY_VERSION, 避免 FastMCP 默认 fallback 到框架
+            # 版本 (4.0.3), 让 client 把 framework 升级误判成 server 升级。
+            self.mcp = mcp
+            self._register_tools(specs=tool_specs)
+
+        return await create_and_register_gateway_mcp(
+            tool_specs,
+            version=GATEWAY_VERSION,
+            on_constructed=_on_constructed,
+        )
 
     def _register_tools(self, specs: list[dict] | None = None):
         # 特殊工具：手写（带特殊逻辑或网关内部）
@@ -864,7 +735,7 @@ class GatewayServer:
             raise
 
         # Console API handlers (delegates to console_api.py)
-        from . import console_api as _ca
+        from .utils import console_api as _ca
 
         async def _status_api(req: Request):
             return JSONResponse(_ca.get_upstream_status())
@@ -936,10 +807,13 @@ class GatewayServer:
         # Mount("/mcp", ...) 对子路径 /mcp/foo 会剥前缀成 /foo,
         # 对完全相等的 /mcp 则不剥, 透传 /mcp 给 inner app, 但 mcp_app
         # 的 route 挂在 "/" 上, 不匹配会 404。
-        # 用 _make_mcp_path_canonicalizer 把 /mcp 改写成 /mcp/, 让 Mount 能命中。
-        # 用 _NoSlashStarlette 关掉 Starlette 默认的 redirect_slashes=True,
+        # 用 make_mcp_path_canonicalizer 把 /mcp 改写成 /mcp/, 让 Mount 能命中。
+        # 用 NoSlashStarlette 关掉 Starlette 默认的 redirect_slashes=True,
         # 否则 POST /mcp → 307 → /mcp/, 多数 MCP 客户端不会自动跟 POST 307。
-        inner_app = _NoSlashStarlette(
+        # 来自 src.core.mcp_factory (Refactor 1, 2026-09-08)。
+        from .core.mcp_factory import NoSlashStarlette, make_mcp_path_canonicalizer
+
+        inner_app = NoSlashStarlette(
             lifespan=mcp_app.lifespan,
             routes=[
                 Mount(mcp_path, app=mcp_app),
@@ -965,7 +839,7 @@ class GatewayServer:
         else:
             logger.warning(f"Console auth disabled: {auth_reason}")
 
-        app = _make_mcp_path_canonicalizer(inner_app, mcp_path)
+        app = make_mcp_path_canonicalizer(inner_app, mcp_path)
         log_level = self.config.get("logging", {}).get("level", "info").lower()
         config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
 

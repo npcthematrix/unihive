@@ -44,7 +44,7 @@ def config_path(tmp_path) -> Path:
 @pytest_asyncio.fixture
 async def temp_cache(tmp_path):
     """返回一个已初始化的临时 Cache 实例"""
-    from src.cache import Cache, CacheConfig
+    from src.storage.cache import Cache, CacheConfig
 
     cfg = CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db"))
     cache = Cache(cfg)

@@ -8,7 +8,7 @@ no prompts/resources are registered. The MCP SDK's Server.get_capabilities
 advertises any registered handler, so the gateway (which only implements
 tools) was over-advertising prompts/resources/logging capabilities.
 
-`_install_capability_filter` samples actual component counts and wraps
+`install_capability_filter` samples actual component counts and wraps
 `_mcp_server.get_capabilities` to zero out capability fields for empty
 component types. This test verifies the filter at the unit level — no
 HTTP, no lifespan needed.
@@ -20,7 +20,7 @@ import asyncio
 import pytest
 from fastmcp import FastMCP
 
-from src.gateway_server import _install_capability_filter
+from src.core.mcp_factory import install_capability_filter
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def tools_only_mcp():
 
 class TestCapabilityFilter:
     async def test_strips_prompts_capability_when_no_prompts_registered(self, tools_only_mcp):
-        await _install_capability_filter(tools_only_mcp)
+        await install_capability_filter(tools_only_mcp)
         caps = tools_only_mcp._mcp_server.get_capabilities()
         assert caps.prompts is None, (
             f"prompts capability must be None when no prompts are registered, "
@@ -46,7 +46,7 @@ class TestCapabilityFilter:
         )
 
     async def test_strips_resources_capability_when_no_resources_registered(self, tools_only_mcp):
-        await _install_capability_filter(tools_only_mcp)
+        await install_capability_filter(tools_only_mcp)
         caps = tools_only_mcp._mcp_server.get_capabilities()
         assert caps.resources is None, (
             f"resources capability must be None when no resources/templates are "
@@ -54,7 +54,7 @@ class TestCapabilityFilter:
         )
 
     async def test_strips_logging_capability(self, tools_only_mcp):
-        await _install_capability_filter(tools_only_mcp)
+        await install_capability_filter(tools_only_mcp)
         caps = tools_only_mcp._mcp_server.get_capabilities()
         assert caps.logging is None, (
             f"logging capability must always be stripped (gateway never wires "
@@ -62,7 +62,7 @@ class TestCapabilityFilter:
         )
 
     async def test_preserves_tools_capability(self, tools_only_mcp):
-        await _install_capability_filter(tools_only_mcp)
+        await install_capability_filter(tools_only_mcp)
         # FastMCP's LowLevelServer stores notification_options with
         # tools_changed=True; that's what the live initialize handshake passes
         # via create_initialization_options. Mirror it here so we exercise the
@@ -79,7 +79,7 @@ class TestCapabilityFilter:
 
     async def test_completions_stays_none(self, tools_only_mcp):
         """completion/complete is NOT registered by FastMCP, so no change."""
-        await _install_capability_filter(tools_only_mcp)
+        await install_capability_filter(tools_only_mcp)
         caps = tools_only_mcp._mcp_server.get_capabilities()
         assert caps.completions is None
 
@@ -95,7 +95,7 @@ class TestCapabilityFilterWithPrompts:
             """A trivial prompt."""
             return "hello"
 
-        await _install_capability_filter(mcp)
+        await install_capability_filter(mcp)
         notif = mcp._mcp_server.notification_options
         caps = mcp._mcp_server.get_capabilities(notification_options=notif)
         assert caps.prompts is not None, (
@@ -106,14 +106,14 @@ class TestCapabilityFilterWithPrompts:
 
 class TestIdempotent:
     async def test_install_twice_does_not_recurse(self, tools_only_mcp):
-        """Calling _install_capability_filter twice must not stack wrappers.
+        """Calling install_capability_filter twice must not stack wrappers.
 
         Stacking wrappers means each layer patches the previous layer's output,
         which is fine for caps where we set None, but if a future filter
         non-trivially transforms caps we'd silently double-transform.
         """
-        await _install_capability_filter(tools_only_mcp)
-        await _install_capability_filter(tools_only_mcp)
+        await install_capability_filter(tools_only_mcp)
+        await install_capability_filter(tools_only_mcp)
         # Bypass the wrapper by reading _filter_marker. The second install
         # must be a no-op when the marker already exists.
         sentinel = "_unihive_capability_filter_installed"

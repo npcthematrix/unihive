@@ -279,7 +279,7 @@ class TestCacheOperationTimeout:
         """M1: cache.get 内 SQLite 卡死时, wait_for 超时应返回 None,
         不让 request 永久 hang。
         """
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
 
         cfg = CacheConfig(
             enabled=True,
@@ -305,7 +305,7 @@ class TestCacheOperationTimeout:
 
     async def test_set_returns_false_on_timeout(self, tmp_path, monkeypatch):
         """M1: cache.set 超时应返回 False (写入失败, 但不挂死)。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
 
         cfg = CacheConfig(
             enabled=True,
@@ -327,7 +327,7 @@ class TestCacheOperationTimeout:
         self, tmp_path, monkeypatch
     ):
         """M3: cleanup_expired 超时应返回 0 (清理失败, 但 health loop 不挂死)。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
 
         cfg = CacheConfig(
             enabled=True,
@@ -347,7 +347,7 @@ class TestCacheOperationTimeout:
 
     async def test_operation_timeout_configurable(self, tmp_path):
         """M1: operation_timeout 应可通过 CacheConfig 配置, 默认 5s。"""
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
 
         cfg = CacheConfig(enabled=True, db_path=str(tmp_path / "test.db"))
         cache = Cache(cfg)
@@ -373,7 +373,7 @@ class TestWaiterCountedInActiveRequests:
         Post-fix: 整个 _execute_cached 入口 + 出口都计数, waiter 也算上。
         """
         from dataclasses import dataclass
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
 
         @dataclass
         class FakeResult:
