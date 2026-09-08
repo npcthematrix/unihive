@@ -7,3 +7,6 @@ __pycache__/
 htmlcov/
 logs/*.log
 logs/*.db
+logs/*.db-shm
+logs/*.db-wal
+logs/cache_stats.json
