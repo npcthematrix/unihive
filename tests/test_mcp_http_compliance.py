@@ -51,9 +51,9 @@ def _build_app_like_serve_http(version: str):
     from fastmcp import FastMCP
     from starlette.routing import Mount
 
-    from src.gateway_server import (
-        _NoSlashStarlette,
-        _make_mcp_path_canonicalizer,
+    from src.core.mcp_factory import (
+        NoSlashStarlette,
+        make_mcp_path_canonicalizer,
     )
 
     mcp = FastMCP("unihive", version=version)
@@ -70,11 +70,11 @@ def _build_app_like_serve_http(version: str):
         host_origin_protection=True,
     )
 
-    inner = _NoSlashStarlette(
+    inner = NoSlashStarlette(
         lifespan=mcp_app.lifespan,
         routes=[Mount("/mcp", app=mcp_app)],
     )
-    return _make_mcp_path_canonicalizer(inner, "/mcp")
+    return make_mcp_path_canonicalizer(inner, "/mcp")
 
 
 @asynccontextmanager
@@ -102,10 +102,10 @@ async def _live_app_with_capability_filter(version: str):
     from fastmcp import FastMCP
     from starlette.routing import Mount
 
-    from src.gateway_server import (
-        _NoSlashStarlette,
-        _install_capability_filter,
-        _make_mcp_path_canonicalizer,
+    from src.core.mcp_factory import (
+        NoSlashStarlette,
+        install_capability_filter,
+        make_mcp_path_canonicalizer,
     )
 
     mcp = FastMCP("unihive", version=version)
@@ -120,12 +120,12 @@ async def _live_app_with_capability_filter(version: str):
         allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
         host_origin_protection=True,
     )
-    inner = _NoSlashStarlette(
+    inner = NoSlashStarlette(
         lifespan=mcp_app.lifespan,
         routes=[Mount("/mcp", app=mcp_app)],
     )
-    await _install_capability_filter(mcp)
-    app = _make_mcp_path_canonicalizer(inner, "/mcp")
+    await install_capability_filter(mcp)
+    app = make_mcp_path_canonicalizer(inner, "/mcp")
     async with LifespanManager(app):
         yield app
 

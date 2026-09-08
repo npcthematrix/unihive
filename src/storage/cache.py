@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -47,6 +47,11 @@ class Cache:
         # Single-flight: 同一 key 并发 miss 时只触发一次 factory。
         # 详见 get_or_set。
         self._in_flight: dict[str, asyncio.Future] = {}
+        # LRU 簿记 (进程本地, 不持久化): key → 最近访问时间 (time.time() float)。
+        # 热路径 O(1) dict 写, 零磁盘 I/O。evict 时与 SQL 的 created_at 合并:
+        # _access_times 里有则用, 否则 fallback 到 created_at。进程重启
+        # 后 _access_times 空, 行为平滑退化到 FIFO (跟 refactor 前一样)。
+        self._access_times: dict[str, float] = {}
 
     @property
     def hits(self) -> int:
@@ -141,20 +146,6 @@ class Cache:
                 # 同时读写同一 cache.db 时的 "database is locked" 问题。
                 await session.execute(text("PRAGMA journal_mode=WAL"))
                 await session.execute(text("PRAGMA synchronous=NORMAL"))
-                # 幂等迁移: 旧 DB 没有 last_access_at 列。Refactor 2 (2026-09-08)
-                # 把 FIFO 驱逐改为真 LRU, 需要按访问时间排序。先查 PRAGMA
-                # 避免 ALTER TABLE 重复添加同名列报错。
-                # 列类型用 REAL 而非 INTEGER: 亚秒级精度是 LRU 工作的前提 —
-                # 同一秒内批量 set/get 会让所有 last_access_at 相等, 回退到
-                # created_at tiebreaker, 行为退化成 FIFO。
-                cols = (await session.execute(
-                    text("PRAGMA table_info(cache)")
-                )).fetchall()
-                if not any(c[1] == "last_access_at" for c in cols):
-                    await session.execute(
-                        text("ALTER TABLE cache ADD COLUMN last_access_at REAL")
-                    )
-                    logger.info("Cache schema migrated: added last_access_at REAL column")
                 await session.commit()
 
             self._initialized = True
@@ -258,40 +249,19 @@ class Cache:
                             {"key": key}
                         )
                         await session.commit()
+                        self._access_times.pop(key, None)
                         return None
 
-                    # Refactor 2 (2026-09-08): 命中后 fire-and-forget 更新
-                    # last_access_at (LRU 簿记)。create_task 不阻塞热路径;
-                    # close() 时引擎 dispose 会取消 in-flight task, 最坏损失
-                    # 一次 timestamp, LRU 容错。
-                    self._schedule_touch(key)
+                    # LRU 簿记: 进程本地 dict 写, O(1), 零磁盘 I/O。
+                    # 不持久化 — 进程重启后 dict 为空, 行为平滑退化到 FIFO
+                    # (跟 refactor 前一致, 无回归)。
+                    self._access_times[key] = time.time()
 
                     return json.loads(value_str)
 
             except Exception as e:
                 logger.error(f"Cache get error: {e}")
                 return None
-
-    def _schedule_touch(self, key: str) -> None:
-        """调度一次 fire-and-forget UPDATE last_access_at。close() 时 in-flight
-        task 可能被引擎 dispose 取消；异常吞掉，避免污染热路径。"""
-        async def _touch() -> None:
-            try:
-                async with self._session_factory() as session:
-                    await session.execute(
-                        text("UPDATE cache SET last_access_at = :now WHERE key = :key"),
-                        {"now": time.time(), "key": key},
-                    )
-                    await session.commit()
-            except Exception:
-                pass
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # 无运行 loop (脚本上下文) — 跳过 touch, 不影响 cache 正确性
-            return
-        loop.create_task(_touch())
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """设置缓存值。 M1: 包 operation_timeout。"""
@@ -319,18 +289,19 @@ class Cache:
 
                     await session.execute(
                         text("""
-                            INSERT OR REPLACE INTO cache (key, value, expires_at, created_at, last_access_at)
-                            VALUES (:key, :value, :expires_at, :created_at, :last_access_at)
+                            INSERT OR REPLACE INTO cache (key, value, expires_at, created_at)
+                            VALUES (:key, :value, :expires_at, :created_at)
                         """),
                         {
                             "key": key,
                             "value": value_str,
                             "expires_at": expires_at,
                             "created_at": now,
-                            "last_access_at": now,
                         }
                     )
                     await session.commit()
+                    # set 视为最近活动, 重置 LRU 时间戳
+                    self._access_times[key] = now
                     return True
 
             except Exception as e:
@@ -361,6 +332,7 @@ class Cache:
                         {"key": key}
                     )
                     await session.commit()
+                    self._access_times.pop(key, None)
                     return True
 
             except Exception as e:
@@ -405,26 +377,37 @@ class Cache:
                     if count > max_entries:
                         target = int(max_entries * 0.9)
                         evict_n = count - target
-                        # Refactor 2 (2026-09-08): 真 LRU — 按 last_access_at 排序,
-                        # 未访问过 (NULL last_access_at, 旧 DB 迁移前的行) 的回退
-                        # 到 created_at 作为 tiebreaker, 保证驱逐确定性。
-                        evict_result = await session.execute(
-                            text("""
-                                DELETE FROM cache WHERE key IN (
-                                    SELECT key FROM cache
-                                    ORDER BY last_access_at ASC, created_at ASC
-                                    LIMIT :n
-                                )
-                            """),
-                            {"n": evict_n},
+                        # 真 LRU (2026-09-08 refactor): 进程本地 dict 持有
+                        # 最近访问时间戳, 热路径 (get/set) 都是 O(1) 写,
+                        # 零磁盘 I/O。evict 时把 SQL 的 created_at 与 dict 的
+                        # 最近访问时间合并: 进程重启后 dict 为空, 平滑退化到
+                        # created_at (跟 refactor 前 FIFO 行为一致, 无回归)。
+                        rows_result = await session.execute(
+                            text("SELECT key, created_at FROM cache")
                         )
-                        await session.commit()
-                        evict_count = evict_result.rowcount or 0
-                        deleted_total += evict_count
-                        logger.warning(
-                            f"Cache over max_entries ({count} > {max_entries}); "
-                            f"LRU evicted {evict_count} least-recently-accessed entries"
-                        )
+                        entries = [
+                            (self._access_times.get(key, created_at), key)
+                            for key, created_at in rows_result.fetchall()
+                        ]
+                        entries.sort()
+                        evict_keys = [key for _, key in entries[:evict_n]]
+                        if evict_keys:
+                            stmt = text(
+                                "DELETE FROM cache WHERE key IN :keys"
+                            ).bindparams(bindparam("keys", expanding=True))
+                            await session.execute(
+                                stmt, {"keys": evict_keys}
+                            )
+                            await session.commit()
+                            for key in evict_keys:
+                                self._access_times.pop(key, None)
+                            deleted_total += len(evict_keys)
+                            logger.warning(
+                                f"Cache over max_entries ({count} > "
+                                f"{max_entries}); LRU evicted "
+                                f"{len(evict_keys)} least-recently-accessed "
+                                f"entries"
+                            )
 
                     if deleted_total > 0:
                         logger.info(f"Cleaned up {deleted_total} cache entries")
@@ -455,6 +438,7 @@ class Cache:
                 async with self._session_factory() as session:
                     await session.execute(text("DELETE FROM cache"))
                     await session.commit()
+                    self._access_times.clear()
                     logger.info("Cache cleared")
                     return True
 

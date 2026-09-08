@@ -462,10 +462,13 @@ class TestCleanupExpiredLru:
             await cache.close()
 
     async def test_lru_eviction_above_limit(self, tmp_path):
-        """Refactor 2 (2026-09-08): 超 max_entries 时按 last_access_at 删最久未访问的,
-        削到 max_entries * 0.9。被 get() 触碰过的 key 应保留, 证明 LRU 真在按访问时间排序。"""
-        from sqlalchemy import text
+        """Refactor 2 (2026-09-08): 超 max_entries 时按最近访问时间删最久未访问的,
+        削到 max_entries * 0.9。被 get() 触碰过的 key 应保留, 证明 LRU 真在按访问时间排序。
 
+        关键 invariant: 触碰时间必须严格大于所有未触碰 entry 的 created_at。
+        由 _access_times 是 in-memory dict 同步写, get() 返回后 touch 即生效,
+        无需 polling / sleep。
+        """
         cache = await self._make_cache(tmp_path, max_entries=10)
         try:
             # 插 20 条，全部 ttl=60 (不过期)
@@ -473,37 +476,17 @@ class TestCleanupExpiredLru:
                 await cache.set(f"k{i:02d}", {"v": i}, ttl=60)
             assert await self._count_entries(cache) == 20
 
-            # 等几毫秒确保 touch 时间晚于最后一次 set, 避免 k00.last_access
-            # 与 k19.created_at 同毫秒被 tiebreaker 按 created_at 误驱逐。
-            # Refactor 2 关键 invariant: last_access_at 必须严格大于所有未触碰 entry。
-            await asyncio.sleep(0.05)
-
-            # 触碰 k00, k01 (触发 fire-and-forget last_access_at 更新)
+            # 触碰 k00, k01 — 同步写入 _access_times dict (无 SQLite I/O)
             assert await cache.get("k00") == {"v": 0}
             assert await cache.get("k01") == {"v": 1}
-
-            # 等两个 in-flight touch task 落盘 (create_task 调度后需 await 才能跑)。
-            # 必须检查 last_access_at > created_at, 不能只查 is not None —
-            # set 时就把 last_access_at = created_at 写进去了, 永远非空,
-            # 但还没"被访问过"。仅当 last_access 明显大于 created 才说明
-            # touch 真的跑过了。
-            for _ in range(50):
-                async with cache._session_factory() as session:
-                    rows = (await session.execute(
-                        text("SELECT key, last_access_at, created_at FROM cache "
-                             "WHERE key IN ('k00','k01') ORDER BY key")
-                    )).fetchall()
-                if (len(rows) == 2
-                        and all(r[1] is not None and r[1] > r[2] for r in rows)):
-                    break
-                await asyncio.sleep(0.02)
 
             deleted = await cache.cleanup_expired()
             # 目标: 10 * 0.9 = 9, 删 20 - 9 = 11
             assert deleted == 11, f"应删 11 条 (削到 9), got {deleted}"
             assert await self._count_entries(cache) == 9
 
-            # k00, k01 因最近被访问应保留 (last_access 大于所有未触碰 entry)。
+            # k00, k01 因最近被访问应保留 (in-memory _access_times 严格晚于
+            # 所有未触碰 entry 的 created_at)。
             # 未触碰的 18 个 (k02..k19) 按 created_at 排序, 最旧 11 个 (k02..k12)
             # 被驱逐; k13..k19 保留。所以共保留 9 条 (7 + k00 + k01)。
             assert await cache.get("k00") == {"v": 0}, "k00 最近被 get, 应保留"
