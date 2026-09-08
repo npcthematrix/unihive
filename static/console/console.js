@@ -715,12 +715,14 @@
 
         let searchBox = root.querySelector('.cfg-search-box');
         if (!searchBox) {
+            // Clear any skeleton placeholder
+            root.innerHTML = '';
             searchBox = document.createElement('div');
             searchBox.className = 'cfg-search-box';
             searchBox.innerHTML = `
                 <input type="text" class="cfg-search" placeholder="搜索上游... (名称/类型/URL)" value="${escapeHtml(_cfgUpstreamsSearch)}" />
                 ${_cfgUpstreamsSearch ? '<button class="cfg-search-clear" title="清空">×</button>' : ''}`;
-            root.insertBefore(searchBox, root.firstChild);
+            root.appendChild(searchBox);
             searchBox.querySelector('input')?.addEventListener('input', (e) => {
                 _cfgUpstreamsSearch = e.target.value;
                 renderCfgUpstreams(data);
