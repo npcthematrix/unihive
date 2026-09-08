@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .upstream_client import ToolResult, UpstreamStatus
-from .mootdx2_errors import (
+from ..models.mootdx2_errors import (
     ErrorClassifier,
     MooTDXErrorType,
     error_to_result,
@@ -29,7 +29,7 @@ class SectorDataError(Exception):
 
 
 if TYPE_CHECKING:
-    from .mootdx2_config import MooTDX2Settings
+    from ..models.mootdx2_config import MooTDX2Settings
     from .mootdx2_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)

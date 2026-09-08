@@ -15,7 +15,7 @@
 
     /* ===== Constants ===== */
     const STALE_THRESHOLD_SEC = 30;
-    const CFG_TABLE_COLSPANS = { ups: 5, upstreams: 7, mapping: 2, tools: 5, cache: 3 };
+    const CFG_TABLE_COLSPANS = { ups: 4, upstreams: 7, mapping: 2, tools: 5, cache: 3 };
     const STATUS_TEXT = { online: '在线', degraded: '降级', offline: '离线', configured: '就绪', disabled: '已禁用', unknown: '未知' };
     const STATUS_BUCKET = { online: 'good', degraded: 'warn', offline: 'bad', configured: 'idle', disabled: 'idle', unknown: 'bad' };
     const STATUS_ORDER = { online: 0, degraded: 1, configured: 2, offline: 3, disabled: 4, unknown: 5 };
@@ -672,8 +672,6 @@
 
         const rows = entries.map(([name, cfg]) => {
             const enabled = cfg.enabled ? '<span class="cfg-switch on">启用</span>' : '<span class="cfg-switch off">停用</span>';
-            const caps = (cfg.capabilities || []);
-            const capHtml = caps.length ? caps.slice(0, 5).map(c => `<span class="cfg-cap">${escapeHtml(c)}</span>`).join('') + (caps.length > 5 ? `<span class="cfg-more">+${caps.length - 5}</span>` : '') : '<span style="color:var(--text-secondary)">-</span>';
             const apiKeyHtml = cfg.api_key
                 ? `<span class="cfg-mask" title="服务端已脱敏 (前 2 + *** + 后 2 字符) — 原始值在 .env 中">${escapeHtml(cfg.api_key)}</span>`
                 : '<span style="color:var(--text-secondary)">-</span>';
@@ -709,7 +707,6 @@
                     <td style="font-family:monospace;font-size:0.75rem;word-break:break-all">${escapeHtml(cfg.base_url || '-')}</td>
                     <td class="num">${cfg.timeout_seconds != null ? cfg.timeout_seconds : '-'}</td>
                     <td style="font-family:monospace;font-size:0.75rem">${apiKeyHtml}</td>
-                    <td>${capHtml}</td>
                 </tr>${envRowHtml}`;
         }).join('');
 
@@ -738,7 +735,7 @@
                 <div class="cfg-section-body" style="padding:0">
                     <table class="cfg-table">
                         <thead>
-                            <tr><th scope="col" style="width:15%">名称</th><th scope="col" style="width:8%">类型</th><th scope="col" style="width:8%">状态</th><th scope="col">Endpoint</th><th scope="col" class="num" style="width:6%">超时</th><th scope="col" style="width:12%">API Key</th><th scope="col">能力</th></tr>
+                            <tr><th scope="col" style="width:15%">名称</th><th scope="col" style="width:8%">类型</th><th scope="col" style="width:8%">状态</th><th scope="col">Endpoint</th><th scope="col" class="num" style="width:6%">超时</th><th scope="col" style="width:12%">API Key</th></tr>
                         </thead>
                         <tbody>${rows}</tbody>
                     </table>

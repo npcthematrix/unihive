@@ -14,8 +14,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from .mootdx2_config import MooTDX2Settings, ServerConfig
-from .mootdx2_errors import (
+from ..models.mootdx2_config import MooTDX2Settings, ServerConfig
+from ..models.mootdx2_errors import (
     MooTDXError,
     MooTDXErrorType,
     error_to_result,
@@ -297,7 +297,7 @@ class RetryHelper:
                 last_error = e
 
                 # 判断是否可重试
-                from .mootdx2_errors import ErrorClassifier
+                from ..models.mootdx2_errors import ErrorClassifier
 
                 error = ErrorClassifier.classify(e)
                 if not error.recoverable or attempt >= self.max_retries:

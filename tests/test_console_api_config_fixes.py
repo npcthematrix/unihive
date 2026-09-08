@@ -44,7 +44,7 @@ class TestIsSecretField:
         "authorization",
     ])
     def test_secret_field_names_are_detected(self, name):
-        from src.console_api import _is_secret_field
+        from src.utils.console_api import _is_secret_field
         assert _is_secret_field(name) is True, f"{name!r} 应当识别为密钥字段"
 
     @pytest.mark.parametrize("name", [
@@ -62,11 +62,11 @@ class TestIsSecretField:
         "port",
     ])
     def test_non_secret_field_names_are_not_detected(self, name):
-        from src.console_api import _is_secret_field
+        from src.utils.console_api import _is_secret_field
         assert _is_secret_field(name) is False, f"{name!r} 不应识别为密钥字段"
 
     def test_empty_string_returns_false(self):
-        from src.console_api import _is_secret_field
+        from src.utils.console_api import _is_secret_field
         assert _is_secret_field("") is False
 
 
@@ -74,7 +74,7 @@ class TestMaskSecretsConfig:
     """整段 config 通过 _mask_config_secrets 后, 密钥字段必须打码, 其它字段保持原样。"""
 
     def test_api_key_masked_but_description_intact(self):
-        from src.console_api import _mask_config_secrets
+        from src.utils.console_api import _mask_config_secrets
         cfg = {
             "upstreams": {
                 "fuyao": {
@@ -95,7 +95,7 @@ class TestMaskSecretsConfig:
 
     def test_apikey_field_now_detected(self):
         """回归: 'apikey' (无下划线) 之前用子串匹配漏报, 现在精确匹配打码。"""
-        from src.console_api import _mask_config_secrets
+        from src.utils.console_api import _mask_config_secrets
         cfg = {"creds": {"apikey": "abcdef1234567890"}}
         out = _mask_config_secrets(cfg)
         assert out["creds"]["apikey"] != "abcdef1234567890"

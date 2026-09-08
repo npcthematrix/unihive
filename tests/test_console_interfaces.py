@@ -17,7 +17,7 @@ def test_get_interfaces_returns_140_tools():
         full_config = yaml.safe_load(f)
 
     with patch("src.console_api.load_config", return_value=full_config):
-        from src.console_api import get_interfaces
+        from src.utils.console_api import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
         assert tool_count == 143, f"Expected 143 tools, got {tool_count}"
@@ -52,7 +52,7 @@ def test_get_interfaces_enriches_with_generated_tools():
         full_config = yaml.safe_load(f)
 
     with patch("src.console_api.load_config", return_value=full_config):
-        from src.console_api import get_interfaces
+        from src.utils.console_api import get_interfaces
         result = get_interfaces()
         tool_names = {t["name"] for t in result["tools"]}
         # These are some tools from the generated file
@@ -67,7 +67,7 @@ def test_get_interfaces_includes_cache_ttl_seconds():
         full_config = yaml.safe_load(f)
 
     with patch("src.console_api.load_config", return_value=full_config):
-        from src.console_api import get_interfaces
+        from src.utils.console_api import get_interfaces
         result = get_interfaces()
         # Find a tool with cache_ttl_key configured
         tools_with_ttl = [t for t in result["tools"] if t.get("cache_ttl_key")]
@@ -87,7 +87,7 @@ def test_get_interfaces_includes_routing():
         full_config = yaml.safe_load(f)
 
     with patch("src.console_api.load_config", return_value=full_config):
-        from src.console_api import get_interfaces
+        from src.utils.console_api import get_interfaces
         result = get_interfaces()
         # Generated tools have routing keys
         tools_with_routing = [t for t in result["tools"] if t.get("routing")]
@@ -100,14 +100,14 @@ def test_get_interfaces_includes_chain():
     """Contract: response includes chain field (router-walk order, not priority sort)."""
     import yaml
     from unittest.mock import patch
-    from src.console_api import get_interfaces
+    from src.utils.console_api import get_interfaces
 
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
     with patch("src.console_api.load_config", return_value=full_config):
-        from src.console_api import get_interfaces
+        from src.utils.console_api import get_interfaces
         result = get_interfaces()
 
     tools_with_chain = [t for t in result["tools"] if t.get("chain")]
@@ -131,7 +131,7 @@ def test_get_interfaces_chain_matches_router_for_explicit_chain_tools():
     """
     import yaml
     from unittest.mock import patch
-    from src.console_api import get_interfaces
+    from src.utils.console_api import get_interfaces
 
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
@@ -164,7 +164,7 @@ def test_get_interfaces_includes_full_params():
         full_config = yaml.safe_load(f)
 
     with patch("src.console_api.load_config", return_value=full_config):
-        from src.console_api import get_interfaces
+        from src.utils.console_api import get_interfaces
         result = get_interfaces()
         # Find a tool with params
         tools_with_params = [t for t in result["tools"] if t.get("params")]
@@ -186,7 +186,7 @@ def test_get_upstreams_includes_description():
     """
     import yaml
     from unittest.mock import patch
-    from src.console_api import get_upstream_status
+    from src.utils.console_api import get_upstream_status
 
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:

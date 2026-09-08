@@ -11,16 +11,6 @@ upstreams:
     type: "mootdx2"
     market: "std"
     tdxdir: ""  # 通达信本地路径，空则自动探索
-    capabilities:
-      - market_data
-      - realtime_quote
-      - daily_bar
-      - minute_bar
-      - stock_info
-      - index_data
-
-  tdx_quant:
-    enabled: true
     description: "通达信-量化终端 (TdxQuant): 进程内直调 tqcenter.py，含 60+ 工具（行情/板块/交易日/财务/公式/交易/预警）"
     type: "tdx_quant"
     market: "std"
@@ -30,20 +20,6 @@ upstreams:
     call_timeout_sec: 10
     reconnect_threshold: 3
     unavailable_threshold: 10
-    capabilities:
-      - market_data
-      - market_snapshot
-      - stock_info
-      - sector
-      - watchlist
-      - trading_calendar
-      - financials
-      - formula
-      - trading
-      - subscribe
-
-  fuyao_ashare:
-    enabled: true
     description: "同花顺-a-share-mcp: A 股行情/财报/估值/特殊数据, 28 个 gateway 工具, 端点: /mcp/a-share"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share"
@@ -52,20 +28,6 @@ upstreams:
     retry:
       max_attempts: 3
       backoff_base: 2
-    capabilities:
-      - a_share_snapshot
-      - a_share_history
-      - corporate_actions
-      - financials_income
-      - financials_balance_sheet
-      - financials_cash_flow
-      - financials_indicators
-      - valuation_snapshot
-      - calendar
-      - special_data
-
-  fuyao_index:
-    enabled: true
     description: "同花顺-a-share-index-mcp: 指数/板块目录/成分股/历史K线, 7 个 gateway 工具, 端点: /mcp/a-share-index"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share-index"
@@ -74,14 +36,6 @@ upstreams:
     retry:
       max_attempts: 3
       backoff_base: 2
-    capabilities:
-      - index_catalog
-      - index_constituents
-      - index_snapshot
-      - index_history
-
-  fuyao_meta:
-    enabled: true
     description: "同花顺-meta-mcp: 跨市场 ticker 搜索/列表, 2 个 gateway 工具, 端点: /mcp/meta"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/meta"
@@ -90,12 +44,6 @@ upstreams:
     retry:
       max_attempts: 3
       backoff_base: 2
-    capabilities:
-      - ticker_search
-      - ticker_list
-
-  fuyao_fund:
-    enabled: true
     description: "同花顺-fund-mcp: 公募基金持仓/业绩/经理/财务/历史, 30 个 gateway 工具, 端点: /mcp/fund"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/fund"
@@ -104,146 +52,3 @@ upstreams:
     retry:
       max_attempts: 3
       backoff_base: 2
-    capabilities:
-      - fund_profile
-      - fund_holdings
-      - fund_nav
-      - fund_returns
-      - fund_holders
-      - fund_snapshot
-      - fund_history
-
-# 上游 tool 映射 (gateway_tool -> {upstream_name: upstream_tool_name})
-# 是 routing 链之外的另一种声明方式：当某 gateway_tool 没有 routing chain，
-# router 会用本段的 keys 作为 chain
-upstream_tool_mapping:
-  # MooTDX2 工具已移至 config/tools_mootdx2.yaml（自带 upstream_tool_mapping）
-  # TdxQuant 工具移至 config/tools_tdx_quant.yaml（自带 upstream_tool_mapping）
-  # Fuyao a-share
-  a_share_prices_snapshot:                    {fuyao_ashare: get_a_share_prices_snapshot}
-  a_share_prices_historical:                  {fuyao_ashare: get_a_share_prices_historical}
-  a_share_corporate_actions_adjustment_factors: {fuyao_ashare: get_a_share_corporate_actions_adjustment_factors}
-  a_share_financials_income_statements:       {fuyao_ashare: get_a_share_financials_income_statements}
-  a_share_financials_balance_sheets:          {fuyao_ashare: get_a_share_financials_balance_sheets}
-  a_share_financials_cash_flow_statements:    {fuyao_ashare: get_a_share_financials_cash_flow_statements}
-  a_share_financials_indicators:              {fuyao_ashare: get_a_share_financials_indicators}
-  a_share_valuations_snapshot:                {fuyao_ashare: get_a_share_valuations_snapshot}
-  a_share_calendar_trading_days:              {fuyao_ashare: get_a_share_calendar_trading_days}
-  a_share_special_data_limit_up_pool:         {fuyao_ashare: get_a_share_special_data_limit_up_pool}
-  a_share_special_data_limit_down_pool:       {fuyao_ashare: get_a_share_special_data_limit_down_pool}
-  a_share_special_data_limit_break_pool:      {fuyao_ashare: get_a_share_special_data_limit_break_pool}
-  a_share_special_data_limit_up_ladder:       {fuyao_ashare: get_a_share_special_data_limit_up_ladder}
-  a_share_special_data_anomaly_analysis_stock: {fuyao_ashare: get_a_share_special_data_anomaly_analysis_stock}
-  a_share_special_data_skyrocket_list:        {fuyao_ashare: get_a_share_special_data_skyrocket_list}
-  a_share_special_data_hot_stock_list:        {fuyao_ashare: get_a_share_special_data_hot_stock_list}
-  a_share_special_data_hot_stock_list_history: {fuyao_ashare: get_a_share_special_data_hot_stock_list_history}
-  a_share_special_data_hot_stock_rank_trend:  {fuyao_ashare: get_a_share_special_data_hot_stock_rank_trend}
-  a_share_special_data_dragon_tiger_list:     {fuyao_ashare: get_a_share_special_data_dragon_tiger_list}
-  a_share_auction_snapshot:                   {fuyao_ashare: get_a_share_auction_snapshot}
-  a_share_auction_short_term_benchmark:       {fuyao_ashare: get_a_share_auction_short_term_benchmark}
-
-  # Fuyao a-share-index
-  a_share_index_catalog:                      {fuyao_index: get_a_share_index_catalog_ths_index_list}
-  a_share_index_constituents:                 {fuyao_index: get_a_share_index_constituents_ths_stock_list}
-  a_share_index_prices_snapshot:              {fuyao_index: get_a_share_index_prices_snapshot}
-  a_share_index_prices_historical:            {fuyao_index: get_a_share_index_prices_historical}
-
-  # Fuyao meta
-  meta_tickers_list:                          {fuyao_meta: get_meta_tickers_list}
-
-  # Fuyao fund
-  fund_profile_detail:                        {fuyao_fund: get_fund_profile_detail}
-  fund_portfolio_holdings:                    {fuyao_fund: get_fund_portfolio_holdings}
-  fund_performance_returns:                   {fuyao_fund: get_fund_performance_returns}
-  fund_holders_detail:                        {fuyao_fund: get_fund_holders_detail}
-  fund_market_historical:                     {fuyao_fund: get_fund_market_historical}
-  fund_market_snapshot:                        {fuyao_fund: get_fund_market_snapshot}
-  fund_companies_detail:                      {fuyao_fund: get_fund_companies_detail}
-  fund_portfolio_industry_allocation:         {fuyao_fund: get_fund_portfolio_industry_allocation}
-  fund_performance_indicators_historical:     {fuyao_fund: get_fund_performance_indicators_historical}
-  fund_performance_drawdowns:                 {fuyao_fund: get_fund_performance_drawdowns}
-  fund_holders_top:                           {fuyao_fund: get_fund_holders_top}
-  fund_corporate_actions_dividends:           {fuyao_fund: get_fund_corporate_actions_dividends}
-  fund_diagnostics_detail:                    {fuyao_fund: get_fund_diagnostics_detail}
-  fund_financials_indicators:                 {fuyao_fund: get_fund_financials_indicators}
-  fund_financials_income_statements:          {fuyao_fund: get_fund_financials_income_statements}
-  fund_financials_balance_sheets:             {fuyao_fund: get_fund_financials_balance_sheets}
-  fund_managers_investment_style:             {fuyao_fund: get_fund_managers_investment_style}
-  fund_managers_performance:                  {fuyao_fund: get_fund_managers_performance}
-  fund_managers_experience:                   {fuyao_fund: get_fund_managers_experience}
-  fund_managers_detail:                       {fuyao_fund: get_fund_managers_detail}
-  fund_news_article_list:                     {fuyao_fund: get_fund_news_article_list}
-  fund_offerings_list:                        {fuyao_fund: get_fund_offerings_list}
-  fund_portfolio_stock_history:               {fuyao_fund: get_fund_portfolio_stock_history}
-  fund_portfolio_stock_report_dates:          {fuyao_fund: get_fund_portfolio_stock_report_dates}
-  fund_portfolio_bond_history:                {fuyao_fund: get_fund_portfolio_bond_history}
-  fund_portfolio_bond_report_dates:           {fuyao_fund: get_fund_portfolio_bond_report_dates}
-  fund_portfolio_asset_allocation:            {fuyao_fund: get_fund_portfolio_asset_allocation}
-
-# 路由配置 (带 fallback 链的 gateway_tool)
-routing: {}
-
-# 对外暴露的工具清单
-# 由 registry.py 解析后自动注册为 FastMCP tool
-# MooTDX2 工具已移至 config/tools_mootdx2.yaml
-# Fuyao 参数语义说明：详见 docs/fuyao-api-params.md
-tools:
-  # === Fuyao a-share (21) ===
-  - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，如 '600519.SH,000001.SZ'。省略则遍历全市场分页返回。"}, {name: limit, type: int, required: false, description: "分页大小，省略 thscodes 时生效（默认 100）"}, {name: offset, type: int, required: false, description: "分页偏移，省略 thscodes 时生效（默认 0）"}], cache_ttl_key: realtime_quote, data_source_type: online}
-  - {name: a_share_prices_historical, description: "A 股历史K线 (10年)", routing: a_share_prices_historical, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'，不支持逗号多标的"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}, {name: adjust, type: str, required: false, enum: [none, forward, backward], description: "复权方式：none=不复权 / forward=前复权（默认） / backward=后复权"}], cache_ttl_key: historical, data_source_type: online}
-  - {name: a_share_corporate_actions_adjustment_factors, description: "A 股复权因子", routing: a_share_corporate_actions_adjustment_factors, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'，不支持逗号多标的"}], cache_ttl_key: historical, data_source_type: online}
-  - {name: a_share_financials_income_statements, description: "A 股利润表", routing: a_share_financials_income_statements, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: period, type: str, required: true, enum: [annual, quarterly], description: "报告期类型：annual=仅年报（默认）/ quarterly=每个季度末"}, {name: limit, type: int, required: false, description: "最近 N 期，范围 [1,20]，与 start/end 互斥（默认 4）"}, {name: start, type: str, required: false, description: "起始毫秒时间戳，需与 end 同传，窗口不超过 10 年"}, {name: end, type: str, required: false, description: "结束毫秒时间戳，需 >= start"}], cache_ttl_key: fundamentals, data_source_type: online}
-  - {name: a_share_financials_balance_sheets, description: "A 股资产负债表", routing: a_share_financials_balance_sheets, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: period, type: str, required: true, enum: [annual, quarterly], description: "报告期类型：annual=仅年报（默认）/ quarterly=每个季度末"}, {name: limit, type: int, required: false, description: "最近 N 期，范围 [1,20]，与 start/end 互斥（默认 4）"}, {name: start, type: str, required: false, description: "起始毫秒时间戳，需与 end 同传"}, {name: end, type: str, required: false, description: "结束毫秒时间戳，需 >= start"}], cache_ttl_key: fundamentals, data_source_type: online}
-  - {name: a_share_financials_cash_flow_statements, description: "A 股现金流量表", routing: a_share_financials_cash_flow_statements, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: period, type: str, required: true, enum: [annual, quarterly], description: "报告期类型：annual=仅年报（默认）/ quarterly=每个季度末"}, {name: limit, type: int, required: false, description: "最近 N 期，范围 [1,20]，与 start/end 互斥（默认 4）"}, {name: start, type: str, required: false, description: "起始毫秒时间戳，需与 end 同传"}, {name: end, type: str, required: false, description: "结束毫秒时间戳，需 >= start"}], cache_ttl_key: fundamentals, data_source_type: online}
-  - {name: a_share_financials_indicators, description: "A 股财务指标", routing: a_share_financials_indicators, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: period, type: str, required: true, enum: [annual, quarterly], description: "报告期类型：annual=仅年报（默认）/ quarterly=每个季度末"}, {name: limit, type: int, required: false, description: "最近 N 期，范围 [1,20]，与 start/end 互斥（默认 4）"}, {name: start, type: str, required: false, description: "起始毫秒时间戳，需与 end 同传"}, {name: end, type: str, required: false, description: "结束毫秒时间戳，需 >= start"}], cache_ttl_key: fundamentals, data_source_type: online}
-  - {name: a_share_valuations_snapshot, description: "A 股估值快照", routing: a_share_valuations_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，如 '600519.SH,000001.SZ'"}], cache_ttl_key: valuation, data_source_type: online}
-  - {name: a_share_calendar_trading_days, description: "A 股交易日历", routing: a_share_calendar_trading_days, params: [{name: date, type: str, required: false, description: "目标日期，格式 yyyy-MM-dd，省略则返回当年全部交易日"}], cache_ttl_key: workday, data_source_type: online}
-  - {name: a_share_special_data_limit_up_pool, description: "A 股涨停池", routing: a_share_special_data_limit_up_pool, params: [{name: date, type: str, required: false, description: "交易日，格式 yyyy-MM-dd，省略默认当天"}, {name: page, type: int, required: false, description: "页码，从 1 开始（默认 1）"}, {name: size, type: int, required: false, description: "分页大小，范围 1~200（默认 50）"}, {name: sort_field, type: str, required: false, enum: [last_price, continue_day_cnt, seal_money, limit_up_time], description: "排序字段（默认 last_price）"}, {name: sort_dir, type: str, required: false, enum: [asc, desc], description: "排序方向：asc=升序 / desc=降序（默认 desc）"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_limit_down_pool, description: "A 股跌停池", routing: a_share_special_data_limit_down_pool, params: [{name: date, type: str, required: false, description: "交易日，格式 yyyy-MM-dd，省略默认当天"}, {name: page, type: int, required: false, description: "页码，从 1 开始（默认 1）"}, {name: size, type: int, required: false, description: "分页大小，范围 1~200（默认 50）"}, {name: sort_field, type: str, required: false, enum: [last_limit_time, first_limit_time, last_price, price_change_ratio_pct, turnover_ratio_pct], description: "排序字段（默认 last_limit_time）"}, {name: sort_dir, type: str, required: false, enum: [asc, desc], description: "排序方向（默认 desc）"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_limit_break_pool, description: "A 股炸板池", routing: a_share_special_data_limit_break_pool, params: [{name: date, type: str, required: false, description: "交易日，格式 yyyy-MM-dd，省略默认当天"}, {name: page, type: int, required: false, description: "页码，从 1 开始（默认 1）"}, {name: size, type: int, required: false, description: "分页大小，范围 1~200（默认 50）"}, {name: sort_field, type: str, required: false, enum: [price_change_ratio_pct, open_times, last_price, turnover_ratio_pct, turnover], description: "排序字段（默认 price_change_ratio_pct）"}, {name: sort_dir, type: str, required: false, enum: [asc, desc], description: "排序方向（默认 desc）"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_limit_up_ladder, description: "A 股涨停天梯 (30日 6档)", routing: a_share_special_data_limit_up_ladder, params: [], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_anomaly_analysis_stock, description: "A 股异动原因分析", routing: a_share_special_data_anomaly_analysis_stock, params: [{name: thscodes, type: str, required: true, description: "逗号分隔的 THS 代码列表，如 '600519.SH,000001.SZ'"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_skyrocket_list, description: "A 股飙升榜 (火箭榜)", routing: a_share_special_data_skyrocket_list, params: [{name: period, type: str, required: false, enum: [day, hour], description: "榜单周期：day=日榜（默认）/ hour=小时榜"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_hot_stock_list, description: "A 股热门股 (24h)", routing: a_share_special_data_hot_stock_list, params: [{name: period, type: str, required: false, enum: [day, hour], description: "榜单周期：day=24小时级（默认）/ hour=小时级"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_hot_stock_list_history, description: "A 股热门股历史", routing: a_share_special_data_hot_stock_list_history, params: [{name: date, type: str, required: true, description: "目标日期，格式 yyyy-MM-dd，只支持一年内数据"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_hot_stock_rank_trend, description: "A 股热门股排名趋势", routing: a_share_special_data_hot_stock_rank_trend, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd，需 >= start_date"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_special_data_dragon_tiger_list, description: "A 股龙虎榜", routing: a_share_special_data_dragon_tiger_list, params: [{name: board_type, type: str, required: false, enum: [all, org, hot_money], description: "榜单类型：all=全部（默认）/ org=机构榜 / hot_money=游资榜"}, {name: date, type: str, required: false, description: "目标日期，格式 yyyy-MM-dd，省略则默认最近可用交易日"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_auction_snapshot, description: "A 股集合竞价快照", routing: a_share_auction_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，省略则返回全市场"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_auction_short_term_benchmark, description: "A 股短期竞价基准", routing: a_share_auction_short_term_benchmark, params: [{name: date, type: str, required: false, description: "目标日期，格式 yyyy-MM-dd，省略默认当天"}], cache_ttl_key: special_data, data_source_type: online}
-
-  # === Fuyao a-share-index (4) ===
-  - {name: a_share_index_catalog, description: "THS 指数/板块目录", routing: a_share_index_catalog, params: [{name: tag, type: str, required: false, enum: [cn_concept, region, tszs, industry], description: "板块标签：cn_concept=A 股概念（默认）/ region=区域指数 / tszs=特色指数 / industry=行业指数"}], cache_ttl_key: ticker_list, data_source_type: online}
-  - {name: a_share_index_constituents, description: "指数/板块成分股", routing: a_share_index_constituents, params: [{name: thscode, type: str, required: true, description: "指数 THS 代码，如 '886042.TI'（同花顺概念）或 '000300.SH'（沪深 300）"}], cache_ttl_key: ticker_list, data_source_type: online}
-  - {name: a_share_index_prices_snapshot, description: "指数行情快照", routing: a_share_index_prices_snapshot, params: [{name: thscodes, type: str, required: true, description: "逗号分隔的指数 THS 代码，如 '000001.SH,399001.SZ,886042.TI'"}], cache_ttl_key: index_data, data_source_type: online}
-  - {name: a_share_index_prices_historical, description: "指数历史K线 (10年)", routing: a_share_index_prices_historical, params: [{name: thscode, type: str, required: true, description: "指数 THS 代码，如 '000300.SH'"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}], cache_ttl_key: historical, data_source_type: online}
-
-  # === Fuyao meta (1, 另一个 search_stock 手写) ===
-  - {name: meta_tickers_list, description: "【分页拉全量 ticker 列表】按 type 与 exchange 过滤，用于浏览全部可用标的。模糊搜索请用 search_stock。", routing: meta_tickers_list, params: [{name: type, type: str, required: false, enum: [a-share, a-share-index, fund-otc, fund-etf, fund-lof], description: "资产类型：a-share=A 股 / a-share-index=指数 / fund-otc=场外公募 / fund-etf=ETF / fund-lof=LOF，省略返回全部"}, {name: exchange, type: str, required: false, description: "交易所过滤：SH / SZ / BJ"}, {name: limit, type: int, required: false, description: "单页条数，最大 10000（默认 1000）"}, {name: offset, type: int, required: false, description: "分页偏移（默认 0）"}], cache_ttl_key: ticker_list, data_source_type: online}
-
-  # === Fuyao fund (28) ===
-  - {name: fund_profile_detail, description: "基金基础资料", routing: fund_profile_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_portfolio_holdings, description: "基金持仓(最新)", routing: fund_portfolio_holdings, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-  - {name: fund_performance_returns, description: "基金各期收益 (1M/3M/6M/1Y/3Y/5Y/成立来)", routing: fund_performance_returns, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_holders_detail, description: "基金持有人结构(合并/单类)", routing: fund_holders_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_market_historical, description: "ETF/LOF 历史行情", routing: fund_market_historical, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: interval, type: str, required: false, enum: [1d, 1w, 1M], description: "K 线周期：1d=日（默认）/ 1w=周 / 1M=月"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}], cache_ttl_key: fund_history, data_source_type: online}
-  - {name: fund_companies_detail, description: "基金公司信息", routing: fund_companies_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_portfolio_industry_allocation, description: "基金行业配置", routing: fund_portfolio_industry_allocation, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-  - {name: fund_performance_indicators_historical, description: "基金历史业绩指标", routing: fund_performance_indicators_historical, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}], cache_ttl_key: fund_history, data_source_type: online}
-  - {name: fund_performance_drawdowns, description: "基金回撤指标", routing: fund_performance_drawdowns, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_holders_top, description: "基金前十大持有人", routing: fund_holders_top, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_corporate_actions_dividends, description: "基金分红记录", routing: fund_corporate_actions_dividends, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_diagnostics_detail, description: "基金诊断", routing: fund_diagnostics_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_financials_indicators, description: "基金财务指标", routing: fund_financials_indicators, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_financials_income_statements, description: "基金利润表", routing: fund_financials_income_statements, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_financials_balance_sheets, description: "基金资产负债表", routing: fund_financials_balance_sheets, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_managers_investment_style, description: "基金经理投资风格", routing: fund_managers_investment_style, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_managers_performance, description: "基金经理业绩", routing: fund_managers_performance, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_managers_experience, description: "基金经理经验", routing: fund_managers_experience, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_managers_detail, description: "基金经理详情", routing: fund_managers_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_news_article_list, description: "基金新闻", routing: fund_news_article_list, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: offset, type: int, required: false, description: "分页偏移"}, {name: limit, type: int, required: false, description: "返回条数"}], data_source_type: online}
-  - {name: fund_offerings_list, description: "基金募集列表", routing: fund_offerings_list, params: [], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_portfolio_stock_history, description: "基金股票持仓历史", routing: fund_portfolio_stock_history, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-  - {name: fund_portfolio_stock_report_dates, description: "基金股票持仓报告日", routing: fund_portfolio_stock_report_dates, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-  - {name: fund_portfolio_bond_history, description: "基金债券持仓历史", routing: fund_portfolio_bond_history, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-  - {name: fund_portfolio_bond_report_dates, description: "基金债券持仓报告日", routing: fund_portfolio_bond_report_dates, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-  - {name: fund_portfolio_asset_allocation, description: "基金资产配置", routing: fund_portfolio_asset_allocation, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}

@@ -17,8 +17,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from .tdx_quant_config import TdxQuantConfig
-from .tdx_quant_errors import (
+from ..models.tdx_quant_config import TdxQuantConfig
+from ..exceptions.tdx_quant_errors import (
     TdxQuantErrorType,
     classify_exception,
     translate_errorid,

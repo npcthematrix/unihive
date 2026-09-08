@@ -19,7 +19,7 @@ class TestGatewayInitializeIdempotent:
     否则会重新构造 cache / 重启 upstreams 进程。"""
 
     async def test_initialize_called_twice_short_circuits(self, tmp_path):
-        from src.cache import Cache, CacheConfig
+        from src.storage.cache import Cache, CacheConfig
         from src.gateway_server import GatewayServer
 
         # bypass __init__ (跳过真实 config 加载); 手动注入测试所需的最小状态
@@ -88,7 +88,7 @@ class TestProbeCacheKey:
     """同 name 改了 type 或 base_url 后, 下一次探测必须 miss 缓存。"""
 
     def test_same_name_different_type_misses_cache(self):
-        from src.console_api import _probe_upstream, _probe_cache
+        from src.utils.console_api import _probe_upstream, _probe_cache
         from time import monotonic
 
         _probe_cache.clear()
@@ -103,7 +103,7 @@ class TestProbeCacheKey:
         assert result is not sentinel_http, "同 name 改 type 后不应复用旧缓存"
 
     def test_same_name_different_base_url_misses_cache(self):
-        from src.console_api import _probe_upstream, _probe_cache
+        from src.utils.console_api import _probe_upstream, _probe_cache
         from time import monotonic
 
         _probe_cache.clear()
@@ -129,17 +129,17 @@ class TestConsoleLoadConfigMasksSecrets:
             "    api_key: supersecret123\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr("src.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
+        monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
-        from src.console_api import load_config
+        from src.utils.console_api import load_config
         cfg = load_config()
         api_key = cfg["upstreams"]["fuyao"]["api_key"]
         assert api_key != "supersecret123", "raw secret 应被 mask"
         assert "***" in api_key
 
     def test_load_config_returns_empty_when_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.console_api.GATEWAY_CONFIG_PATH", str(tmp_path / "nope.yaml"))
-        from src.console_api import load_config
+        monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(tmp_path / "nope.yaml"))
+        from src.utils.console_api import load_config
         assert load_config() == {}
 
     def test_load_config_resolves_env_placeholder(self, tmp_path, monkeypatch):
@@ -152,9 +152,9 @@ class TestConsoleLoadConfigMasksSecrets:
             encoding="utf-8",
         )
         monkeypatch.setenv("TEST_API_KEY", "resolved-secret-xyz")
-        monkeypatch.setattr("src.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
+        monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
-        from src.console_api import load_config
+        from src.utils.console_api import load_config
         cfg = load_config()
         api_key = cfg["upstreams"]["fuyao"]["api_key"]
         assert "${" not in api_key, "应解析 ${TEST_API_KEY}, 不是原样返回"
@@ -170,9 +170,9 @@ class TestConsoleLoadConfigMasksSecrets:
             "    base_url: http://x\n    api_key: a-secret\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr("src.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
+        monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
-        from src.console_api import load_config
+        from src.utils.console_api import load_config
         cfg1 = load_config()
         # 模拟 tool_loader.load_all_tools 的回写副作用
         cfg1["upstream_tool_mapping"] = {"sneaky": "leaked"}
@@ -190,7 +190,7 @@ class TestGatewayReachabilityProbe:
 
     def test_returns_false_when_nothing_listening(self, monkeypatch):
         """没有 gateway 监听时必须返回 False, 而不是 True。"""
-        from src.console_api import is_gateway_reachable, _gateway_health_cache
+        from src.utils.console_api import is_gateway_reachable, _gateway_health_cache
         _gateway_health_cache.clear()
         # GATEWAY_HTTP_PORT 指向一个没东西监听的随机端口
         # 用 1 (需 root, 不可用) 或 找空闲端口再关掉
@@ -199,20 +199,20 @@ class TestGatewayReachabilityProbe:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
         s.close()  # 立刻关掉, 这个端口 99% 没人监听
-        monkeypatch.setattr("src.console_api._gateway_port", lambda: port)
+        monkeypatch.setattr("src.utils.console_api._gateway_port", lambda: port)
 
         assert is_gateway_reachable() is False, "没监听时应返回 False"
 
     def test_returns_true_when_port_open(self, monkeypatch):
         """监听着的端口必须返回 True。"""
-        from src.console_api import is_gateway_reachable, _gateway_health_cache
+        from src.utils.console_api import is_gateway_reachable, _gateway_health_cache
         import socket
         _gateway_health_cache.clear()
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         port = s.getsockname()[1]
-        monkeypatch.setattr("src.console_api._gateway_port", lambda: port)
+        monkeypatch.setattr("src.utils.console_api._gateway_port", lambda: port)
         try:
             assert is_gateway_reachable() is True
         finally:
@@ -220,14 +220,14 @@ class TestGatewayReachabilityProbe:
 
     def test_result_is_cached_within_ttl(self, monkeypatch):
         """1s 内重复调用应走缓存, 不重连。"""
-        from src.console_api import is_gateway_reachable, _gateway_health_cache
+        from src.utils.console_api import is_gateway_reachable, _gateway_health_cache
         import socket
         _gateway_health_cache.clear()
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         port = s.getsockname()[1]
-        monkeypatch.setattr("src.console_api._gateway_port", lambda: port)
+        monkeypatch.setattr("src.utils.console_api._gateway_port", lambda: port)
         try:
             first = is_gateway_reachable()
             # 关掉监听, 不应有第二次连接尝试 (否则会 False)
@@ -626,7 +626,7 @@ class TestStopResetsStateForRestart:
 
 @pytest.fixture(autouse=True)
 def _clear_probe_cache():
-    from src.console_api import _probe_cache
+    from src.utils.console_api import _probe_cache
     _probe_cache.clear()
     yield
     _probe_cache.clear()

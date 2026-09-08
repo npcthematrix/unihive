@@ -9,12 +9,12 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .upstream_client import ToolResult, UpstreamClient
+from ..api.upstream_client import ToolResult, UpstreamClient
 
 if TYPE_CHECKING:
-    from .fuyao_client import FuyaoClient
-    from .mootdx2_client import MooTDX2Client
-    from .tdx_quant_client import TdxQuantClient
+    from ..api.fuyao_client import FuyaoClient
+    from ..api.mootdx2_client import MooTDX2Client
+    from ..api.tdx_quant_client import TdxQuantClient
 
 logger = logging.getLogger(__name__)
 
