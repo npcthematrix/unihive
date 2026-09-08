@@ -44,9 +44,6 @@ class Cache:
         self._hits = 0
         self._misses = 0
         self._dirty_events = 0
-        # Single-flight: 同一 key 并发 miss 时只触发一次 factory。
-        # 详见 get_or_set。
-        self._in_flight: dict[str, asyncio.Future] = {}
         # LRU 簿记 (进程本地, 不持久化): key → 最近访问时间 (time.time() float)。
         # 热路径 O(1) dict 写, 零磁盘 I/O。evict 时与 SQL 的 created_at 合并:
         # _access_times 里有则用, 否则 fallback 到 created_at。进程重启
@@ -153,64 +150,6 @@ class Cache:
         except Exception as e:
             logger.error(f"Failed to initialize cache: {e}")
             self.enabled = False
-
-    async def get_or_set(
-        self,
-        key: str,
-        ttl: int | None,
-        factory,
-    ) -> tuple[Any, bool]:
-        """命中返回 (value, True)；未命中调 factory() 算结果并缓存，返回 (value, False)。
-
-        factory 应是 async callable，无参，返回要缓存的值。失败（None）不缓存。
-
-        Single-flight：同一 key 并发 miss 只触发一次 factory，其余 waiter 复用同一结果。
-        """
-        if not self.enabled:
-            value = await factory()
-            return value, False
-
-        cached = await self.get(key)
-        if cached is not None:
-            self.record_hit()
-            return cached, True
-
-        # 未命中：若已有 in-flight 计算，复用它（避免 thundering herd）。
-        existing = self._in_flight.get(key)
-        if existing is not None and not existing.done():
-            value = await existing
-            return value, False
-
-        # 本次 miss 记账只对发起者记录；waiter 不重复记。
-        self.record_miss()
-
-        future = asyncio.get_running_loop().create_future()
-        self._in_flight[key] = future
-
-        async def _runner():
-            try:
-                value = await factory()
-                if value is not None:
-                    # 缓存层故障不应让上游成功响应"看起来失败"。
-                    # 下次同 key 请求会再次 miss + factory，业务可恢复。
-                    try:
-                        await self.set(key, value, ttl=ttl)
-                    except Exception as e:
-                        logger.warning(f"cache.set failed for {key}: {e}")
-                future.set_result(value)
-                return value
-            except BaseException as exc:
-                future.set_exception(exc)
-                raise
-            finally:
-                # 先 set_result/set_exception 再 pop，waiter 才能在 in-flight
-                # 仍登记期间正确走到 await 分支。
-                self._in_flight.pop(key, None)
-
-        asyncio.create_task(_runner())
-
-        value = await future
-        return value, False
 
     async def get(self, key: str) -> Any | None:
         """获取缓存值。 M1: 包 operation_timeout 防 SQLite 卡死。"""

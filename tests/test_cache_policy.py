@@ -1,107 +1,10 @@
-"""新增缓存测试：单飞保护 + FUYAO-only 策略。"""
+"""FUYAO-only 策略 + LRU 驱逐 + execute_cached 行为测试。"""
 import asyncio
 from dataclasses import dataclass
 
 import pytest
 
 from src.core import cache_strategy
-
-
-class TestSingleFlight:
-    """同一 key 并发 miss 只触发一次 factory。"""
-
-    async def test_concurrent_miss_single_flight(self, temp_cache):
-        calls = []
-
-        async def factory():
-            calls.append(1)
-            await asyncio.sleep(0.1)
-            return {"v": len(calls)}
-
-        results = await asyncio.gather(*[
-            temp_cache.get_or_set("thunder", ttl=60, factory=factory)
-            for _ in range(20)
-        ])
-
-        # 关键断言：20 个并发只触发一次 factory
-        assert len(calls) == 1
-        for value, hit in results:
-            assert value == {"v": 1}
-            # 单飞的 waiter 既不算 hit（缓存里还没东西），也不算 miss（没触发新计算）
-            assert hit is False
-
-    async def test_waiter_does_not_record_miss(self, temp_cache):
-        """单飞的 waiter 不应重复计 miss，避免命中率被稀释。"""
-        calls = []
-
-        async def factory():
-            calls.append(1)
-            await asyncio.sleep(0.1)
-            return "x"
-
-        await asyncio.gather(*[
-            temp_cache.get_or_set("k", ttl=60, factory=factory)
-            for _ in range(10)
-        ])
-
-        # 1 miss (发起者), 0 hit
-        assert temp_cache.misses == 1
-        assert temp_cache.hits == 0
-
-    async def test_subsequent_call_after_warmup_records_hit(self, temp_cache):
-        """单飞计算完成后，下次访问应走 hit。"""
-        async def factory():
-            return {"a": 1}
-
-        await temp_cache.get_or_set("k", ttl=60, factory=factory)
-        # miss 已计 1
-
-        value, hit = await temp_cache.get_or_set("k", ttl=60, factory=factory)
-        assert hit is True
-        assert value == {"a": 1}
-        assert temp_cache.misses == 1
-        assert temp_cache.hits == 1
-
-    async def test_factory_exception_propagates_to_waiters(self, temp_cache):
-        """factory 抛异常时所有 waiter 都收到同一异常。"""
-        async def factory():
-            await asyncio.sleep(0.05)
-            raise ValueError("boom")
-
-        with pytest.raises(ValueError, match="boom"):
-            await asyncio.gather(*[
-                temp_cache.get_or_set("k", ttl=60, factory=factory)
-                for _ in range(5)
-            ])
-
-        # factory 失败时不写缓存
-        assert await temp_cache.get("k") is None
-
-    async def test_cache_set_failure_does_not_break_waiters(self, temp_cache):
-        """Regression #2: cache.set 失败不应让所有 waiter 收到异常。
-        上游 factory 已成功返回，缓存层只是写不进去。"""
-        async def factory():
-            return {"v": 1}
-
-        # 模拟 cache.set 抛异常（DB 锁、磁盘满、aiosqlite bug）
-        original_set = temp_cache.set
-
-        async def broken_set(*args, **kwargs):
-            raise RuntimeError("sqlite locked")
-
-        temp_cache.set = broken_set
-
-        # 5 个 waiter 都不应收到异常 — 应都拿到 {"v": 1}
-        results = await asyncio.gather(*[
-            temp_cache.get_or_set("k", ttl=60, factory=factory)
-            for _ in range(5)
-        ])
-        for value, hit in results:
-            assert value == {"v": 1}
-            assert hit is False
-
-        # 清理：恢复 set，后续测试不受影响
-        temp_cache.set = original_set
 
 
 class TestExecuteCachedEmptyDataGuard:
@@ -650,8 +553,8 @@ class TestExecuteCachedSingleFlight:
     """HIGH 1 (2026-09-07 4th-round audit): _execute_cached cache miss 后
     到 router.route() 之间必须有 per-key single-flight, 否则同 key 并发 miss
     会让 router 被调 N 次, 上游负载翻倍。
-    cache 层 get_or_set 已有 single-flight, 但 _execute_cached 走的是
-    cache.get + cache.set 直接路径, 这一段没有保护。"""
+    _execute_cached 走 cache.get + cache.set 直接路径, 这一段没有 cache 层
+    保护, 必须在 gateway 层补。"""
 
     async def test_concurrent_miss_only_routes_once(self, tmp_path, gateway_server_minimal):
         """5 个并发同 key miss → router 只调 1 次。"""
@@ -705,7 +608,7 @@ class TestExecuteCachedSingleFlight:
             assert r["success"] is True
             assert r["data"] == {"v": 1}, "waiter 应拿到 leader 的结果"
             assert r["cache_hit"] is False, "waiter 跟 leader 同窗口, 也算 miss"
-        # 单飞下只记 1 次 miss (跟 cache 层 get_or_set 一致)
+        # 单飞下只记 1 次 miss (waiter 不重复计)
         assert cache.misses == 1
         assert cache.hits == 0
 

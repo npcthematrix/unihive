@@ -512,9 +512,9 @@ class GatewayServer:
 
             # HIGH 1 (2026-09-07 4th-round audit): cache miss 后到 route 之间
             # 必须 per-key single-flight, 否则同 key 并发 miss 让 router 被调
-            # N 次、上游负载翻倍。cache 层 get_or_set 已有 in-flight 保护,
-            # 但 _execute_cached 走 cache.get + cache.set 直接路径, 这一段
-            # 没有。waiter 复用 leader 的 future, leader 失败则 waiter 升级为
+            # N 次、上游负载翻倍。_execute_cached 走 cache.get + cache.set
+            # 直接路径, 这一段没有 in-flight 保护, 必须在 gateway 层补。
+            # waiter 复用 leader 的 future, leader 失败则 waiter 升级为
             # 新 leader 自己再试一次 (fallback 行为).
             if can_cache and key is not None:
                 existing = self._in_flight_requests.get(key)
