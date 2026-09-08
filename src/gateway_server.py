@@ -817,6 +817,7 @@ class GatewayServer:
             lifespan=mcp_app.lifespan,
             routes=[
                 Mount(mcp_path, app=mcp_app),
+                Mount("/static", StaticFiles(directory="static", html=False)),
                 Route("/", _index_route),
                 Route("/api/status", _status_api),
                 Route("/api/interfaces", _interfaces_api),

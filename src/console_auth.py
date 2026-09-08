@@ -59,31 +59,26 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 LOGIN_HTML = """<!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UniHive Console - Login</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        .login-box { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 300px; }
-        h1 { margin: 0 0 1.5rem; font-size: 1.5rem; color: #333; }
-        .error { color: #dc3545; font-size: 0.875rem; margin-bottom: 1rem; }
-        input { width: 100%; padding: 0.75rem; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 1rem; }
-        button { width: 100%; padding: 0.75rem; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; }
-        button:hover { background: #0056b3; }
-    </style>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'self'; form-action 'self';">
+    <title>UniHive Console — 登录</title>
+    <link rel="stylesheet" href="/static/console/login.css">
 </head>
 <body>
-    <div class="login-box">
+    <main class="login-card">
         <h1>UniHive Console</h1>
+        <p class="login-subtitle">金融数据 MCP 聚合网关</p>
         {error}
-        <form method="post">
-            <input type="text" name="username" placeholder="Username" required autocomplete="username">
-            <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
-            <button type="submit">Login</button>
+        <form method="post" class="login-form" autocomplete="on">
+            <input type="text" name="username" class="login-input" placeholder="用户名" required autocomplete="username" autofocus>
+            <input type="password" name="password" class="login-input" placeholder="密码" required autocomplete="current-password">
+            <button type="submit" class="login-button">登录</button>
         </form>
-    </div>
+        <p class="login-meta">需授权访问 · 配置请见 config/config.yaml</p>
+    </main>
 </body>
 </html>"""
 
@@ -128,7 +123,7 @@ class ConsoleAuthMiddleware:
 async def login_get(request: Request) -> HTMLResponse:
     """Serve login page."""
     error = request.query_params.get("error", "")
-    error_html = f'<div class="error">{error}</div>' if error else ""
+    error_html = f'<div class="login-error" role="alert">{error}</div>' if error else ""
     return HTMLResponse(LOGIN_HTML.replace("{error}", error_html))
 
 
@@ -160,7 +155,7 @@ async def login_post(request: Request) -> HTMLResponse:
         username.encode("utf-8"), expected_user.encode("utf-8")
     ):
         # Re-render login page with error message
-        error_html = '<div class="error">Invalid credentials</div>'
+        error_html = '<div class="login-error" role="alert">用户名或密码错误</div>'
         return HTMLResponse(LOGIN_HTML.replace("{error}", error_html), status_code=401)
 
     # Set session
