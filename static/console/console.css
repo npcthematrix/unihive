@@ -189,6 +189,7 @@ tr:hover { background: #f8f9fa; }
 .row-action-btn { background: transparent; border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.78rem; color: var(--text-secondary); font-family: inherit; }
 .row-action-btn:hover { background: var(--bg); color: var(--primary); border-color: var(--primary); }
 .row-action-btn.copied { background: var(--success); color: white; border-color: var(--success); }
+.ifs-detail-row { display: none; }
 .ifs-detail-row td { background: #f8fafc; padding: 12px 16px; }
 .ifs-detail-grid { display: grid; grid-template-columns: minmax(72px, max-content) 1fr; gap: 6px 12px; font-size: 0.8rem; }
 .ifs-detail-key { color: var(--text-secondary); font-weight: 500; }
