@@ -18,6 +18,7 @@
             <button class="tab active" data-panel="interfaces" role="tab" aria-selected="true" aria-controls="interfaces">MCP APIs</button>
             <button class="tab" data-panel="config" role="tab" aria-selected="false" aria-controls="config">配置信息</button>
             <button class="tab" data-panel="onboarding" role="tab" aria-selected="false" aria-controls="onboarding">接入指南</button>
+            <button class="tab" data-panel="omni" role="tab" aria-selected="false" aria-controls="omni">OMNI板块数据</button>
         </div>
         <div id="status" class="panel">
             <div class="card">
@@ -321,6 +322,225 @@ print(match.data)</pre>
 
                 </div>
             </div>
+        </div>
+        <div id="omni" class="panel">
+            <div class="card-toolbar">
+                <h2>OMNI板块数据</h2>
+                <div class="toolbar-actions">
+                    <span class="last-refresh" id="omni-last-refresh" aria-live="polite">从未刷新</span>
+                    <button class="btn-secondary" id="omni-refresh-btn" title="刷新数据">↻ 刷新</button>
+                </div>
+            </div>
+
+            <!-- 子标签页导航 -->
+            <div class="omni-subtabs" id="omni-subtabs">
+                <button class="omni-subtab active" data-omni="query">板块查询</button>
+                <button class="omni-subtab" data-omni="sync">同步管理</button>
+                <button class="omni-subtab" data-omni="stats">数据统计</button>
+            </div>
+
+            <!-- 子标签页内容 -->
+            <div class="omni-panel active" data-omni-panel="query" id="omni-panel-query">
+                <!-- 搜索栏 -->
+                <div class="omni-search-bar">
+                    <input type="text" id="omni-keyword" placeholder="输入板块名称或代码搜索...">
+                    <select id="omni-query-source">
+                        <option value="">全部数据源</option>
+                        <option value="fuyao">Fuyao</option>
+                        <option value="mootdx2">MooTDX2</option>
+                    </select>
+                    <select id="omni-query-type">
+                        <option value="">全部类型</option>
+                        <option value="industry">行业板块</option>
+                        <option value="concept">概念板块</option>
+                    </select>
+                    <button class="btn-primary" id="omni-query-btn">查询</button>
+                </div>
+                <!-- 结果列表 -->
+                <div class="omni-results" id="omni-results">
+                    <p class="omni-hint">请输入关键词搜索板块，或选择筛选条件后点击查询</p>
+                </div>
+            </div>
+
+            <div class="omni-panel" data-omni-panel="sync" id="omni-panel-sync">
+                <!-- 同步控制区 -->
+                <div class="omni-sync-controls">
+                    <div class="form-row">
+                        <label>数据源：</label>
+                        <select id="omni-sync-source">
+                            <option value="all">全部</option>
+                            <option value="fuyao">Fuyao (同花顺)</option>
+                            <option value="mootdx2">MooTDX2 (通达信)</option>
+                        </select>
+                        <label>板块类型：</label>
+                        <select id="omni-sync-type">
+                            <option value="all">全部</option>
+                            <option value="industry">行业板块</option>
+                            <option value="concept">概念板块</option>
+                        </select>
+                        <button class="btn-primary" id="omni-sync-btn">立即同步</button>
+                    </div>
+                </div>
+                <!-- 同步状态 -->
+                <div class="omni-sync-status" id="omni-sync-status">
+                    <p class="omni-hint">点击"立即同步"开始同步数据</p>
+                </div>
+            </div>
+
+            <div class="omni-panel" data-omni-panel="stats" id="omni-panel-stats">
+                <!-- 统计卡片 -->
+                <div class="omni-stats" id="omni-stats">
+                    <p class="omni-hint">加载中...</p>
+                </div>
+                <!-- 同步日志 -->
+                <div class="omni-logs">
+                    <h3>同步记录</h3>
+                    <div id="omni-log-list">
+                        <p class="omni-hint">暂无同步记录</p>
+                    </div>
+                </div>
+            </div>
+            <script>
+            (async function(){
+                // 格式化时间
+                function fmtTime(s){
+                    if(!s) return '-';
+                    return s.replace('T',' ').substring(0,19);
+                }
+                function fmtStatus(s){
+                    const colors={success:'var(--success)',failed:'var(--danger)',running:'var(--warning)'};
+                    return `<span style="color:${colors[s]||'#666'}">${s}</span>`;
+                }
+
+                // 子标签页切换
+                const omniSubtabs = document.getElementById('omni-subtabs');
+                if(omniSubtabs){
+                    omniSubtabs.addEventListener('click', function(e){
+                        if(e.target.classList.contains('omni-subtab')){
+                            const tab = e.target.dataset.omni;
+                            // 更新按钮状态
+                            omniSubtabs.querySelectorAll('.omni-subtab').forEach(t=>t.classList.remove('active'));
+                            e.target.classList.add('active');
+                            // 更新面板显示
+                            document.querySelectorAll('.omni-panel').forEach(p=>p.classList.remove('active'));
+                            document.querySelector(`[data-omni-panel="${tab}"]`).classList.add('active');
+                        }
+                    });
+                }
+
+                // 加载数据
+                async function loadData(){
+                    try {
+                        const r = await fetch('/api/omni');
+                        if(!r.ok){
+                            document.getElementById('omni-stats').innerHTML = '<p>数据库未初始化，请先同步</p>';
+                            return;
+                        }
+                        const d = await r.json();
+                        if(d.stats && d.stats.length){
+                            document.getElementById('omni-stats').innerHTML = d.stats.map(s=>`<div class="stat-card"><div class="stat-label">${s.source} / ${s.board_type}</div><div class="stat-value">${s.sector_count}</div><div class="stat-unit">板块</div><div class="stat-value">${s.total_stocks||0}</div><div class="stat-unit">股票</div></div>`).join('');
+                        }else{
+                            document.getElementById('omni-stats').innerHTML = '<p>暂无数据，请先同步</p>';
+                        }
+                        if(d.recent_logs && d.recent_logs.length){
+                            document.getElementById('omni-log-list').innerHTML = d.recent_logs.map(l=>`<div class="log-item"><span class="log-time">${fmtTime(l.start_time)}</span><span class="log-source">${l.source}</span><span class="log-type">${l.board_type}</span><span class="log-status">${fmtStatus(l.status)}</span><span class="log-count">${l.record_count}条</span></div>`).join('');
+                        }else{
+                            document.getElementById('omni-log-list').innerHTML = '<p>暂无同步记录</p>';
+                        }
+                        // 更新最后刷新时间
+                        document.getElementById('omni-last-refresh').textContent = new Date().toLocaleTimeString();
+                    }catch(e){
+                        document.getElementById('omni-stats').innerHTML = '<p>加载失败: '+e.message+'</p>';
+                    }
+                }
+                loadData();
+
+                // 查询板块
+                async function querySectors(){
+                    const source = document.getElementById('omni-query-source').value;
+                    const boardType = document.getElementById('omni-query-type').value;
+                    const keyword = document.getElementById('omni-keyword').value.trim();
+                    const resultsDiv = document.getElementById('omni-results');
+
+                    if(!keyword && !source && !boardType){
+                        resultsDiv.innerHTML = '<p class="omni-hint">请输入关键词，或选择筛选条件</p>';
+                        return;
+                    }
+
+                    resultsDiv.innerHTML = '<p class="omni-hint">查询中...</p>';
+
+                    try {
+                        const params = new URLSearchParams();
+                        if(source) params.append('source', source);
+                        if(boardType) params.append('board_type', boardType);
+                        if(keyword) params.append('keyword', keyword);
+
+                        const r = await fetch('/api/omni/query?' + params);
+                        const d = await r.json();
+
+                        if(d.error){
+                            resultsDiv.innerHTML = '<p class="omni-hint">'+d.error+'</p>';
+                            return;
+                        }
+
+                        if(!d.sectors || d.sectors.length === 0){
+                            resultsDiv.innerHTML = '<p class="omni-hint">未找到匹配的板块</p>';
+                            return;
+                        }
+
+                        resultsDiv.innerHTML = '<div class="sector-list">' + d.sectors.map(s=>`<div class="sector-item" data-id="${s.id}"><div class="sector-name">${s.name}</div><div class="sector-meta"><span class="sector-code">${s.code}</span><span class="sector-type">${s.board_type}</span><span class="sector-count">${s.stock_count}只</span></div></div>`).join('') + '</div>';
+
+                        // 点击板块查看成分股
+                        document.querySelectorAll('.sector-item').forEach(item=>{
+                            item.addEventListener('click', async function(){
+                                const sid = this.dataset.id;
+                                const rr = await fetch('/api/omni/query?source='+(source||'')+'&board_type='+(boardType||'')+'&keyword='+encodeURIComponent(keyword));
+                                const dd = await rr.json();
+                                // TODO: 显示成分股弹窗
+                            });
+                        });
+                    }catch(e){
+                        resultsDiv.innerHTML = '<p class="omni-hint">查询失败: '+e.message+'</p>';
+                    }
+                }
+
+                // 刷新按钮
+                document.getElementById('omni-refresh-btn').addEventListener('click', loadData);
+
+                // 同步按钮 - 使用新的元素 ID
+                document.getElementById('omni-sync-btn').addEventListener('click', async function(){
+                    const btn = this;
+                    const source = document.getElementById('omni-sync-source').value;
+                    const boardType = document.getElementById('omni-sync-type').value;
+                    btn.disabled = true;
+                    btn.textContent = '同步中...';
+                    try {
+                        const r = await fetch('/api/omni/sync', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({source, board_type: boardType})
+                        });
+                        const d = await r.json();
+                        if(d.status === 'success'){
+                            alert('同步成功！');
+                        }else{
+                            alert('同步失败: ' + (d.message || '未知错误').substring(0,200));
+                        }
+                    }catch(e){
+                        alert('同步失败: ' + e.message);
+                    }
+                    btn.disabled = false;
+                    btn.textContent = '立即同步';
+                    loadData();
+                });
+
+                // 查询按钮
+                document.getElementById('omni-query-btn').addEventListener('click', querySectors);
+                document.getElementById('omni-keyword').addEventListener('keypress', function(e){
+                    if(e.key==='Enter') querySectors();
+                });
+            })();
+            </script>
         </div>
     </div>
         <script src="/static/console/console.js" defer></script>
