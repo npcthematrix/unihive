@@ -491,3 +491,64 @@ button:focus-visible { outline-offset: 2px; }
 }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 button:focus-visible { outline-offset: 2px; }
+
+/* OMNI 板块数据面板 */
+.omni-controls { margin-bottom: 20px; }
+.omni-controls .form-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--bg); padding: 16px; border-radius: 8px; }
+.omni-controls label { font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+.omni-controls select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 120px; }
+.omni-controls select:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+.omni-controls .btn-primary { padding: 8px 20px; font-size: 0.875rem; }
+
+.omni-section { margin-bottom: 24px; }
+.omni-section h3 { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+.omni-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.stat-card { background: var(--bg); padding: 16px; border-radius: 8px; text-align: center; border-left: 3px solid var(--primary); }
+.stat-label { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px; }
+.stat-value { font-size: 1.5rem; font-weight: 700; color: var(--text); }
+.stat-unit { font-size: 0.75rem; color: var(--text-secondary); }
+
+.omni-results { background: var(--bg); border-radius: 8px; padding: 16px; min-height: 80px; }
+.omni-hint { font-size: 0.875rem; color: var(--text-secondary); text-align: center; padding: 20px; }
+.sector-list { display: flex; flex-direction: column; gap: 8px; }
+.sector-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--card-bg); border-radius: 6px; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; }
+.sector-item:hover { border-color: var(--primary); background: var(--primary-soft); }
+.sector-name { font-weight: 500; font-size: 0.9rem; }
+.sector-meta { display: flex; gap: 10px; font-size: 0.75rem; color: var(--text-secondary); }
+.sector-code { font-family: monospace; }
+.sector-type { padding: 2px 6px; background: var(--bg); border-radius: 4px; }
+.sector-count { color: var(--primary); font-weight: 500; }
+
+.omni-log-list { background: var(--bg); border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto; }
+.log-item { display: flex; align-items: center; gap: 12px; font-size: 0.8rem; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.log-item:last-child { border-bottom: none; }
+.log-time { font-family: monospace; color: var(--text-secondary); font-size: 0.7rem; }
+.log-source { font-weight: 500; }
+.log-type { padding: 2px 6px; background: var(--card-bg); border-radius: 4px; font-size: 0.7rem; }
+.log-status { font-weight: 500; }
+.log-count { margin-left: auto; color: var(--text-secondary); }
+
+#omni-refresh-btn { padding: 6px 12px; font-size: 0.8rem; }
+
+/* OMNI 板块数据子标签页 */
+.omni-subtabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.omni-subtab { padding: 8px 16px; border: 0; background: transparent; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: all 120ms ease; }
+.omni-subtab:hover { color: var(--text); }
+.omni-subtab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+
+.omni-panel { display: none; }
+.omni-panel.active { display: block; }
+
+/* 搜索栏 */
+.omni-search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.omni-search-bar input { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; }
+.omni-search-bar select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 120px; }
+.omni-search-bar input:focus, .omni-search-bar select:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* 同步控制 */
+.omni-sync-controls { margin-bottom: 16px; }
+.omni-sync-controls .form-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--bg); padding: 16px; border-radius: 8px; }
+.omni-sync-controls label { font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+.omni-sync-controls select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 120px; }
+.omni-sync-status { margin-bottom: 20px; }
