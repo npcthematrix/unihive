@@ -60,6 +60,7 @@
     let _expandedTools = new Set();
     let activePanel = 'interfaces';
     let _omniSyncInFlight = false;
+    let _onboardingObserver = null;
 
     /* ===== Helpers ===== */
     function escapeHtml(s) {
@@ -202,12 +203,12 @@
             if (th.dataset.sort === statusSort.key) th.classList.add(statusSort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
         });
         if (statusUpstreams.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="${CFG_TABLE_COLSPANS.ups}"><div class="empty-state"><div class="empty-state-icon">○</div><div class="empty-state-title">暂无上游配置</div><div class="empty-state-hint">编辑 <code>config/upstreams.yaml</code> 后重启网关</div></div></td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${CFG_TABLE_COLSPANS.ups}"><div class="empty-state"><div class="empty-state-icon"><span class="status-icon status-icon-empty">○</span></div><div class="empty-state-title">暂无上游配置</div><div class="empty-state-hint">编辑 <code>config/upstreams.yaml</code> 后重启网关</div></div></td></tr>`;
             return;
         }
         if (sorted.length === 0) {
             const msg = statusFilter === 'healthy' ? '当前没有正常的上游' : statusFilter === 'unhealthy' ? '当前没有异常的上游' : '没有匹配的上游';
-            tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">○</div><div class="empty-state-title">${msg}</div><div class="empty-state-hint">点击上方"全部"查看所有上游</div></div></td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon"><span class="status-icon status-icon-empty">○</span></div><div class="empty-state-title">${msg}</div><div class="empty-state-hint">点击上方"全部"查看所有上游</div></div></td></tr>`;
             return;
         }
         tbody.innerHTML = sorted.map(u => {
@@ -379,6 +380,11 @@
         tab.classList.add('active');
         tab.setAttribute('aria-selected', 'true');
         document.getElementById(panelId).classList.add('active');
+        // 离开 onboarding 时 disconnect observer
+        if (activePanel === 'onboarding' && _onboardingObserver) {
+            _onboardingObserver.disconnect();
+            _onboardingObserver = null;
+        }
         activePanel = panelId;
         if (panelId === 'status') {
             const age = Math.floor(Date.now() / 1000) - (lastStatusFetch || 0);
@@ -392,6 +398,8 @@
             if (list && (list.children.length === 0 || list.querySelector('.loading-state'))) {
                 loadOnboarding();
             }
+            // 初始化 IntersectionObserver
+            initOnboardingObserver();
         }
         if (panelId === 'omni' && !omniStatsLoaded) {
             omniStatsLoaded = true;
@@ -1255,10 +1263,14 @@
             if (retryLink) { loadOnboarding(); return; }
         });
 
+        initOnboardingObserver();
+    }
+
+    function initOnboardingObserver() {
         const navLinks = document.querySelectorAll('#onboarding-nav a');
         const sections = Array.from(navLinks).map(a => document.getElementById(a.dataset.target)).filter(Boolean);
         if (sections.length === 0) return;
-        const observer = new IntersectionObserver((entries) => {
+        _onboardingObserver = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     navLinks.forEach(l => l.classList.remove('active'));
@@ -1267,7 +1279,7 @@
                 }
             });
         }, { rootMargin: '-20% 0px -70% 0px' });
-        sections.forEach(s => observer.observe(s));
+        sections.forEach(s => _onboardingObserver.observe(s));
     }
 
     function wireGlobalActions() {
@@ -1387,7 +1399,7 @@
         // 保存查询状态
         _omniQueryState = { source, boardType, keyword, page, pageSize: 50, totalCount: 0 };
 
-        resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-info">⏳ 查询中…</div>';
+        resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-info"><span class="status-icon status-icon-loading">⏳</span> 查询中…</div>';
 
         try {
             const params = new URLSearchParams();
@@ -1402,7 +1414,7 @@
             const queryDesc = [source && `数据源=${source}`, boardType && `类型=${boardType}`, keyword && `关键词="${keyword}"`].filter(Boolean).join(', ') || '(无筛选)';
 
             if (!d.sectors || d.sectors.length === 0) {
-                resultsDiv.innerHTML = `<div class="omni-feedback omni-feedback-empty">○ 未找到匹配的板块 <span class="omni-feedback-meta">[${escapeHtml(queryDesc)}]</span></div>`;
+                resultsDiv.innerHTML = `<div class="omni-feedback omni-feedback-empty"><span class="status-icon status-icon-empty">○</span> 未找到匹配的板块 <span class="omni-feedback-meta">[${escapeHtml(queryDesc)}]</span></div>`;
                 return;
             }
 
@@ -1438,21 +1450,24 @@
             resultsDiv.innerHTML = header + list + pagination;
             // 分页与板块行的点击由 wireOmni 里的事件委托统一处理 (避免每次重渲 forEach addEventListener)
         } catch (e) {
-            resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-error">✕ 查询异常：' + escapeHtml(e.message) + '</div>';
+            resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-error"><span class="status-icon status-icon-error">✕</span> 查询异常：' + escapeHtml(e.message) + '</div>';
         }
     }
 
     async function omniSync() {
-        if (_omniSyncInFlight) return;
+        if (_omniSyncInFlight) {
+            showToast('同步已在进行中，请等待完成', 'warn');
+            return;
+        }
         const btn = document.getElementById('omni-sync-btn');
-        const statusEl = document.getElementById('omni-sync-status');
+        const historyEl = document.getElementById('omni-sync-history-list');
         const source = document.getElementById('omni-sync-source').value;
         const boardType = document.getElementById('omni-sync-type').value;
         if (!btn) return;
         _omniSyncInFlight = true;
         btn.disabled = true;
         btn.textContent = '同步中...';
-        if (statusEl) statusEl.innerHTML = '<div class="omni-feedback omni-feedback-info">⏳ 同步中… <span class="omni-feedback-meta">(同步可能持续数十秒, 请勿关闭页面)</span></div>';
+        if (historyEl) historyEl.innerHTML = '<div class="omni-feedback omni-feedback-info"><span class="status-icon status-icon-loading">⏳</span> 同步中… <span class="omni-feedback-meta">(同步可能持续数十秒, 请勿关闭页面)</span></div>';
         try {
             const d = await fetchJSON('/api/omni/sync', {
                 method: 'POST',
@@ -1462,33 +1477,88 @@
             });
             if (d.status === 'success') {
                 showToast('同步成功: ' + (d.message || ''), 'success');
-                if (statusEl) statusEl.innerHTML = `<div class="omni-feedback omni-feedback-info">✓ 同步完成 <span class="omni-feedback-meta">${escapeHtml(d.message || '')}</span></div>`;
             } else {
                 const msg = (d.message || '未知错误').substring(0, 200);
                 showToast('同步失败: ' + msg, 'error');
-                if (statusEl) statusEl.innerHTML = `<div class="omni-feedback omni-feedback-error">✕ 同步失败 <span class="omni-feedback-meta">${escapeHtml(msg)}</span></div>`;
             }
         } catch (e) {
             showToast('同步失败: ' + e.message, 'error');
-            if (statusEl) statusEl.innerHTML = `<div class="omni-feedback omni-feedback-error">✕ 同步异常 <span class="omni-feedback-meta">${escapeHtml(e.message)}</span></div>`;
         } finally {
             _omniSyncInFlight = false;
             btn.disabled = false;
             btn.textContent = '立即同步';
         }
-        omniLoadStats();
+        // 完成后刷新概览 + 历史 (这两块在 sync tab 内自包含, 不依赖 stats tab)
+        omniLoadSyncTab();
+    }
+
+    /* ===== OMNI 同步管理 tab 自渲染 (上次同步概览 + 最近历史) ===== */
+    async function omniLoadSyncTab() {
+        const lastEl = document.getElementById('omni-last-sync');
+        const historyEl = document.getElementById('omni-sync-history-list');
+        if (!lastEl && !historyEl) return;
+        try {
+            const d = await fetchJSON('/api/omni', { silent: true });
+            if (lastEl) lastEl.innerHTML = omniRenderLastSync(d.recent_logs);
+            if (historyEl) historyEl.innerHTML = omniRenderRecentHistory(d.recent_logs, 3);
+        } catch (e) {
+            if (lastEl) lastEl.innerHTML = '<div class="omni-hint">加载失败</div>';
+        }
+    }
+
+    function omniRenderLastSync(logs) {
+        if (!logs || logs.length === 0) return '<div class="omni-hint">暂无同步记录 — 下方点击"立即同步"开始</div>';
+        const last = logs[0];
+        const statusClass = last.status === 'success' ? 'omni-last-sync-success'
+            : last.status === 'running' ? 'omni-last-sync-running'
+            : 'omni-last-sync-failed';
+        return `
+            <div class="omni-last-sync-card ${statusClass}">
+                <div class="omni-last-sync-label">上次同步</div>
+                <div class="omni-last-sync-main">
+                    <span class="omni-last-sync-source">${escapeHtml(last.source)}</span>
+                    <span class="omni-last-sync-type">${escapeHtml(last.board_type || '-')}</span>
+                    <span class="omni-last-sync-status">${omniFmtStatus(last.status)}</span>
+                </div>
+                <div class="omni-last-sync-meta">
+                    <span>${escapeHtml(omniFmtTime(last.start_time))}</span>
+                    <span class="omni-last-sync-count">写入 <strong>${Number(last.record_count) || 0}</strong> 条</span>
+                </div>
+            </div>`;
+    }
+
+    function omniRenderRecentHistory(logs, limit) {
+        const items = (logs || []).slice(0, limit);
+        if (items.length === 0) return '<p class="omni-hint">暂无同步记录</p>';
+        return items.map(l => `
+            <div class="log-item">
+                <span class="log-time">${escapeHtml(omniFmtTime(l.start_time))}</span>
+                <span class="log-source">${escapeHtml(l.source)}</span>
+                <span class="log-type">${escapeHtml(l.board_type || '-')}</span>
+                <span class="log-status">${omniFmtStatus(l.status)}</span>
+                <span class="log-count">${Number(l.record_count) || 0}条</span>
+            </div>
+        `).join('');
     }
 
     function wireOmni() {
-        // 子标签页切换
+        // 子标签页切换 (同步 aria-selected + tabindex, 让屏幕阅读器 + 键盘 Tab 顺序正确)
         document.querySelectorAll('.omni-subtab').forEach(btn => {
             btn.addEventListener('click', () => {
                 const tab = btn.dataset.omni;
-                document.querySelectorAll('.omni-subtab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.omni-subtab').forEach(t => {
+                    t.classList.remove('active');
+                    t.setAttribute('aria-selected', 'false');
+                    t.setAttribute('tabindex', '-1');
+                });
                 btn.classList.add('active');
+                btn.setAttribute('aria-selected', 'true');
+                btn.setAttribute('tabindex', '0');
                 document.querySelectorAll('.omni-panel').forEach(p => p.classList.remove('active'));
                 const panel = document.querySelector('[data-omni-panel="' + tab + '"]');
                 if (panel) panel.classList.add('active');
+                // 切换到 sync tab 时加载概览 + 历史
+                if (tab === 'sync') omniLoadSyncTab();
             });
         });
 
@@ -1505,7 +1575,7 @@
             });
         }
         const refreshBtn = document.getElementById('omni-refresh-btn');
-        if (refreshBtn) refreshBtn.addEventListener('click', omniLoadStats);
+        if (refreshBtn) refreshBtn.addEventListener('click', () => { omniLoadStats(); omniLoadSyncTab(); });
         const syncBtn = document.getElementById('omni-sync-btn');
         if (syncBtn) syncBtn.addEventListener('click', omniSync);
 
@@ -1523,12 +1593,100 @@
                 }
                 const sectorRow = e.target.closest('tr.sector-item');
                 if (sectorRow) {
-                    // TODO: 板块点击 → 成分股弹窗
-                    console.log('sector clicked:', sectorRow.dataset.id);
+                    omniOpenSectorModal(sectorRow);
                 }
             });
         }
         // 首屏不再预加载, 改为首次切到 OMNI 标签页时触发 (activatePanel 内)
+    }
+
+    /* ===== OMNI 板块成分股弹窗 ===== */
+    let _omniModalLastFocus = null;
+
+    function omniOpenSectorModal(rowEl) {
+        const modal = document.getElementById('omni-modal');
+        const bodyEl = document.getElementById('omni-modal-body');
+        const titleEl = document.getElementById('omni-modal-title');
+        const metaEl = document.getElementById('omni-modal-meta');
+        if (!modal || !bodyEl) return;
+
+        // 从行 dataset + cell 抽取需要的信息 (避免重复请求元数据)
+        const sectorId = rowEl.dataset.id;
+        const name = rowEl.querySelector('.sector-name')?.textContent || '板块';
+        const code = rowEl.querySelector('.sector-code')?.textContent || '';
+        const source = rowEl.querySelector('.sector-source')?.textContent || '';
+        const boardType = rowEl.querySelector('.sector-type-badge')?.textContent || '';
+
+        // 立即打开 modal, 内容由 fetch 填充
+        _omniModalLastFocus = document.activeElement;
+        titleEl.textContent = name;
+        metaEl.textContent = `${code} · ${boardType} · ${source}`;
+        bodyEl.innerHTML = '<div class="omni-feedback omni-feedback-info"><span class="status-icon status-icon-loading">⏳</span> 加载中…</div>';
+        modal.hidden = false;
+
+        // 焦点移到关闭按钮 (基本可访问性)
+        const closeBtn = modal.querySelector('.omni-modal-close');
+        if (closeBtn) setTimeout(() => closeBtn.focus(), 0);
+
+        // 请求成分股
+        const params = new URLSearchParams();
+        if (sectorId) params.set('sector_id', sectorId);
+        else { params.set('code', code); params.set('source', source); }
+
+        fetchJSON('/api/omni/sector-stocks?' + params.toString(), { silent: true })
+            .then(d => omniRenderStocks(bodyEl, d))
+            .catch(err => {
+                bodyEl.innerHTML = '<div class="omni-feedback omni-feedback-error"><span class="status-icon status-icon-error">✕</span> 加载失败：' + escapeHtml(err.message || '未知错误') + '</div>';
+            });
+    }
+
+    function omniRenderStocks(bodyEl, data) {
+        const stocks = (data && data.stocks) || [];
+        const sector = (data && data.sector) || {};
+        if (!stocks.length) {
+            bodyEl.innerHTML = '<div class="omni-feedback omni-feedback-empty"><span class="status-icon status-icon-empty">○</span> 暂无成分股数据</div>';
+            return;
+        }
+        const rows = stocks.map(s => `
+            <tr>
+                <td class="stock-rank">${Number(s.rank) || '-'}</td>
+                <td class="stock-code">${escapeHtml(s.stock_code)}</td>
+                <td class="stock-name">${escapeHtml(s.stock_name || '')}</td>
+            </tr>
+        `).join('');
+        bodyEl.innerHTML = `
+            <div class="omni-results-header">共 <strong>${stocks.length}</strong> 只成分股 ${sector.stock_count ? `(板块宣称 ${sector.stock_count} 只)` : ''}</div>
+            <table class="omni-stocks-table">
+                <thead><tr><th>#</th><th>代码</th><th>名称</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    }
+
+    function omniCloseModal() {
+        const modal = document.getElementById('omni-modal');
+        if (!modal || modal.hidden) return;
+        modal.hidden = true;
+        if (_omniModalLastFocus && typeof _omniModalLastFocus.focus === 'function') {
+            _omniModalLastFocus.focus();
+        }
+        _omniModalLastFocus = null;
+    }
+
+    // 弹窗事件一次性绑定 (DOMContentLoaded 后只跑一次)
+    function wireOmniModal() {
+        const modal = document.getElementById('omni-modal');
+        if (!modal) return;
+        // backdrop + 关闭按钮
+        modal.addEventListener('click', (e) => {
+            if (e.target.closest('[data-modal-close]')) omniCloseModal();
+        });
+        // Escape 关闭
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !modal.hidden) {
+                e.preventDefault();
+                omniCloseModal();
+            }
+        });
     }
 
     function init() {
@@ -1539,6 +1697,7 @@
         wireOnboarding();
         wireGlobalActions();
         wireOmni();
+        wireOmniModal();
 
         if (document.getElementById('auto-refresh').checked) startAutoRefresh();
         const initialActivePanel = document.querySelector('.panel.active')?.id;

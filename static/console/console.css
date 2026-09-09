@@ -67,7 +67,14 @@ tr:hover { background: #f8f9fa; }
 
 /* ===== Config panel ===== */
 .cfg-banner { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 10px 14px; border-radius: 6px; font-size: 0.82rem; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; } .cfg-cache-banner { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 10px 14px; border-radius: 6px; font-size: 0.82rem; margin-bottom: 12px; }
-.cfg-subtabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+
+/* Subtabs 基类 */
+.subtabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.subtab { padding: 8px 16px; border: 0; background: transparent; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: all 120ms ease; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; min-width: 100px; justify-content: center; }
+.subtab:hover { color: var(--text); }
+.subtab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+
+.cfg-subtabs { }
 .cfg-subtab { padding: 8px 16px; border: 0; background: transparent; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: all 120ms ease; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; min-width: 100px; justify-content: center; }
 .cfg-subtab:hover { color: var(--text); }
 .cfg-subtab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
@@ -97,7 +104,7 @@ tr:hover { background: #f8f9fa; }
 .cfg-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .cfg-table tbody tr:hover { background: #f8f9fa; }
 .cfg-table .num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'SF Mono', monospace; }
-.cfg-table tr.cfg-env-row > td { background: #f8fafc !important; border-top: 1px dashed var(--border); padding: 10px 12px 12px 24px; }
+.cfg-table tr.cfg-env-row > td { background: #f8fafc; border-top: 1px dashed var(--border); padding: 10px 12px 12px 24px; }
 .cfg-table tr.cfg-expandable { cursor: pointer; }
 .cfg-table tr.cfg-detail-row > td { background: #f8fafc; padding: 10px 16px; border-top: 1px dashed var(--border); font-size: 0.78rem; color: var(--text); white-space: pre-wrap; }
 .cfg-table .tool-name { font-family: monospace; font-size: 0.78rem; color: var(--primary); font-weight: 500; }
@@ -385,9 +392,6 @@ mark.ifs-hl { background: #fef08a; color: inherit; padding: 0 1px; border-radius
 .onboarding-toolbox { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 16px; }
 .onboarding-toolbox button { padding: 6px 12px; font-size: 0.82rem; }
 .onboarding-section-meta { background: #f8fafc; border-left: 3px solid var(--primary); padding: 10px 14px; margin: 12px 0; border-radius: 0 4px 4px 0; font-size: 0.85rem; }
-.code-block { position: relative; }
-.code-block .copy-btn { z-index: 5; }
-
 .code-block {
     position: relative;
     background: var(--bg);
@@ -439,6 +443,7 @@ mark.ifs-hl { background: #fef08a; color: inherit; padding: 0 1px; border-radius
     color: var(--text-secondary);
     font-size: 0.875rem;
 }
+.loading-state-full { grid-column: 1 / -1; }
 .retry-link {
     color: var(--primary);
     cursor: pointer;
@@ -467,6 +472,24 @@ button:focus-visible { outline-offset: 2px; }
         --danger: #f87171;
     }
     body { background: var(--bg); color: var(--text); }
+    .cfg-json { background: #0f172a; color: #e2e8f0; }
+    .cfg-json .k { color: #93c5fd; }
+    .cfg-json .s { color: #86efac; }
+    .cfg-json .n { color: #fdba74; }
+    .cfg-json .b { color: #c4b5fd; }
+    .cfg-json .nl { color: #fca5a5; }
+    .cache-hitrate-card { background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%); border-color: #334155; }
+    .cache-hitrate-value { color: #38bdf8; }
+    .cache-hitrate-bar { background: #334155; }
+    .cache-hitrate-meta { color: #94a3b8; }
+
+    /* OMNI 反馈消息 — 暗色用半透明背景 + 浅色文字 */
+    .omni-feedback-info { background: rgba(59, 130, 246, 0.15); border-left-color: #60a5fa; color: #93c5fd; }
+    .omni-feedback-warn { background: rgba(251, 191, 36, 0.15); border-left-color: #fbbf24; color: #fcd34d; }
+    .omni-feedback-error { background: rgba(248, 113, 113, 0.15); border-left-color: #f87171; color: #fca5a5; }
+    .omni-feedback-empty { background: var(--bg); border-left-color: var(--border); color: var(--text-secondary); }
+    .omni-feedback-meta { color: var(--text-secondary); }
+    .omni-status-default { color: var(--text-secondary); }
 }
 
 /* ===== Print ===== */
@@ -494,17 +517,8 @@ button:focus-visible { outline-offset: 2px; }
     .cfg-section.collapsed .cfg-section-body { display: block !important; }
     body { padding: 0; }
 }
-:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-button:focus-visible { outline-offset: 2px; }
 
 /* OMNI 板块数据面板 */
-.omni-controls { margin-bottom: 20px; }
-.omni-controls .form-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--bg); padding: 16px; border-radius: 8px; }
-.omni-controls label { font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
-.omni-controls select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 120px; }
-.omni-controls select:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
-.omni-controls .btn-primary { padding: 8px 20px; font-size: 0.875rem; }
-
 .omni-section { margin-bottom: 24px; }
 .omni-section h3 { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 
@@ -537,10 +551,8 @@ button:focus-visible { outline-offset: 2px; }
 #omni-refresh-btn { padding: 6px 12px; font-size: 0.8rem; }
 
 /* OMNI 板块数据子标签页 */
-.omni-subtabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-.omni-subtab { padding: 8px 16px; border: 0; background: transparent; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: all 120ms ease; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; min-width: 100px; justify-content: center; }
-.omni-subtab:hover { color: var(--text); }
-.omni-subtab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+.omni-subtabs { }
+.omni-subtab { }
 
 .omni-panel { display: none; }
 .omni-panel.active { display: block; }
@@ -556,8 +568,24 @@ button:focus-visible { outline-offset: 2px; }
 .omni-sync-controls .form-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--card-bg); padding: 16px; border-radius: 8px; border: 1px solid var(--border); }
 .omni-sync-controls label { font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
 .omni-sync-controls select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 140px; }
-.omni-sync-status { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-height: 100px; }
-.omni-sync-status .omni-hint { padding: 20px; }
+
+/* 上次同步概览卡片 (顶部, 用户最想看的"刚才同步结果") */
+.omni-last-sync { margin-bottom: 16px; }
+.omni-last-sync-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; border-left: 4px solid; }
+.omni-last-sync-card.omni-last-sync-success { border-left-color: var(--success); }
+.omni-last-sync-card.omni-last-sync-failed { border-left-color: var(--danger); }
+.omni-last-sync-card.omni-last-sync-running { border-left-color: var(--warning); }
+.omni-last-sync-label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+.omni-last-sync-main { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+.omni-last-sync-source { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+.omni-last-sync-type { font-size: 0.875rem; color: var(--text-secondary); background: var(--bg); padding: 2px 8px; border-radius: 4px; }
+.omni-last-sync-status { font-size: 0.875rem; margin-left: auto; }
+.omni-last-sync-meta { display: flex; gap: 16px; font-size: 0.875rem; color: var(--text-secondary); }
+.omni-last-sync-count strong { color: var(--text); font-size: 1rem; }
+
+/* 最近同步历史列表 (替代空 hint) */
+.omni-sync-history { margin-top: 16px; }
+.omni-sync-history h3 { font-size: 1rem; margin: 0 0 12px; color: var(--text); }
 
 /* OMNI status 颜色 (替代 inline style) */
 .omni-status-success { color: var(--success); font-weight: 600; }
@@ -572,6 +600,13 @@ button:focus-visible { outline-offset: 2px; }
 .omni-feedback-error { background: #fee2e2; border-left-color: #ef4444; color: #991b1b; }
 .omni-feedback-empty { background: #f3f4f6; border-left-color: #9ca3af; color: #4b5563; }
 .omni-feedback-meta { font-size: 0.75rem; color: #6b7280; margin-left: 6px; font-weight: normal; }
+
+/* Status icons (替代 emoji) */
+.status-icon { display: inline-block; margin-right: 6px; font-weight: 600; }
+.status-icon-loading { color: #3b82f6; }
+.status-icon-success { color: #22c55e; }
+.status-icon-error { color: #ef4444; }
+.status-icon-empty { color: #9ca3af; }
 
 /* OMNI 结果头 */
 .omni-results-header { padding: 8px 4px 12px; font-size: 0.875rem; color: var(--text); border-bottom: 1px solid var(--border); margin-bottom: 12px; }
@@ -597,9 +632,8 @@ button:focus-visible { outline-offset: 2px; }
 .omni-sector-table .sector-count { text-align: right; font-weight: 500; color: var(--primary); }
 .omni-sector-table .sector-source { color: var(--text-secondary); font-size: 0.75rem; }
 .omni-sector-table .sector-update { color: var(--text-secondary); font-size: 0.75rem; white-space: nowrap; }
-.omni-sector-table .sector-update { color: var(--text-secondary); font-size: 0.75rem; }
 .sector-type-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.6875rem; background: var(--bg); border: 1px solid var(--border); }
-.sector-type-badge:empty, .sector-type-badge:not(:empty) { background: #e0f2fe; border-color: #bae6fd; color: #0369a1; }
+.sector-type-badge:not(:empty) { background: #e0f2fe; border-color: #bae6fd; color: #0369a1; }
 
 /* Cache 命中率条颜色 (替代 inline style) */
 .cache-hitrate-fill-high { background: #10b981; }
@@ -608,3 +642,31 @@ button:focus-visible { outline-offset: 2px; }
 
 /* 详情行默认隐藏 (替代 inline style="display:none") */
 .ifs-detail-row-hidden { display: none; }
+
+/* ===== OMNI 板块成分股弹窗 ===== */
+.omni-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.omni-modal[hidden] { display: none; }
+.omni-modal-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); cursor: pointer; }
+.omni-modal-dialog { position: relative; background: var(--card-bg); border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); max-width: 640px; width: 100%; max-height: calc(100vh - 80px); display: flex; flex-direction: column; overflow: hidden; }
+.omni-modal-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px; border-bottom: 1px solid var(--border); gap: 12px; }
+.omni-modal-header h3 { font-size: 1rem; font-weight: 600; margin: 0; color: var(--text); }
+.omni-modal-meta { font-size: 0.78rem; color: var(--text-secondary); margin-top: 4px; }
+.omni-modal-close { background: transparent; border: 0; font-size: 1.5rem; line-height: 1; color: var(--text-secondary); cursor: pointer; padding: 0 4px; border-radius: 4px; transition: color 120ms, background 120ms; }
+.omni-modal-close:hover { color: var(--text); background: var(--bg); }
+.omni-modal-close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.omni-modal-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+.omni-stocks-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.omni-stocks-table th { text-align: left; padding: 8px 10px; background: var(--bg); border-bottom: 2px solid var(--border); font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+.omni-stocks-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.omni-stocks-table .stock-rank { width: 56px; text-align: right; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.omni-stocks-table .stock-code { font-family: monospace; color: var(--primary); }
+.omni-stocks-table .stock-name { font-weight: 500; }
+.omni-stocks-table tbody tr:hover { background: var(--bg); }
+.omni-modal-body .omni-hint { padding: 24px 12px; }
+@media (max-width: 600px) { .omni-modal { padding: 8px; } .omni-modal-dialog { max-height: calc(100vh - 16px); } .omni-modal-header { padding: 12px 14px; } .omni-modal-body { padding: 12px 14px; } }
+
+/* OMNI 弹窗暗色适配 */
+@media (prefers-color-scheme: dark) {
+    .omni-modal-backdrop { background: rgba(0, 0, 0, 0.65); }
+    .omni-modal-dialog { box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); }
+}

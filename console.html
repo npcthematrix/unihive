@@ -6,7 +6,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
     <link rel="icon" href="data:,">
     <title>UniHive Console</title>
-    <link rel="stylesheet" href="/static/console/console.css?v=20260908-7">
+    <link rel="stylesheet" href="/static/console/console.css?v=20260909-2">
 </head>
 <body>
     <div class="container">
@@ -136,11 +136,11 @@
                         <button class="btn-secondary" id="config-copy-all" title="复制当前运行时视图为 JSON（api_key 已脱敏）">复制 JSON</button>
                     </div>
                 </div>
-                <div class="cfg-subtabs" id="cfg-subtabs">
-                    <button class="cfg-subtab active" data-cfg="upstreams">上游 <span class="cfg-subtab-count" id="cfg-count-upstreams">0</span></button>
-                    <button class="cfg-subtab" data-cfg="mapping">工具映射 <span class="cfg-subtab-count" id="cfg-count-mapping">0</span></button>
-                    <button class="cfg-subtab" data-cfg="tools">工具规格 <span class="cfg-subtab-count" id="cfg-count-tools">0</span></button>
-                    <button class="cfg-subtab" data-cfg="cache">缓存</button>
+                <div class="cfg-subtabs subtabs" id="cfg-subtabs">
+                    <button class="cfg-subtab subtab active" data-cfg="upstreams">上游 <span class="cfg-subtab-count" id="cfg-count-upstreams">0</span></button>
+                    <button class="cfg-subtab subtab" data-cfg="mapping">工具映射 <span class="cfg-subtab-count" id="cfg-count-mapping">0</span></button>
+                    <button class="cfg-subtab subtab" data-cfg="tools">工具规格 <span class="cfg-subtab-count" id="cfg-count-tools">0</span></button>
+                    <button class="cfg-subtab subtab" data-cfg="cache">缓存</button>
                 </div>
                 <div class="cfg-panel active" data-cfg-panel="upstreams" id="cfg-panel-upstreams"></div>
                 <div class="cfg-panel" data-cfg-panel="mapping" id="cfg-panel-mapping"></div>
@@ -240,7 +240,7 @@ asyncio.run(main())</pre>
                     <h3 id="sec-interfaces">3. MCP APIs</h3>
                     <p>当前网关对外暴露 <strong id="ifs-total-count">—</strong> 个 MCP 接口，按上游自动分组、路由与缓存。完整列表（含每个 tool 的描述、参数、缓存策略）都在 <strong>"MCP APIs"</strong> 标签页。下表按上游给出入口，点击直接跳转到对应分组：</p>
                     <div class="onboarding-link-grid" id="interfaces-summary">
-                        <div class="loading-state" style="grid-column: 1/-1;">正在加载接口摘要...</div>
+                        <div class="loading-state loading-state-full">正在加载接口摘要...</div>
                     </div>
 
                     <h3 id="sec-examples">4. 常用示例</h3>
@@ -334,22 +334,38 @@ print(match.data)</pre>
                 </div>
             </div>
 
-            <!-- 子标签页导航 -->
-            <div class="omni-subtabs" id="omni-subtabs">
-                <button class="omni-subtab active" data-omni="query">板块查询</button>
-                <button class="omni-subtab" data-omni="sync">同步管理</button>
-                <button class="omni-subtab" data-omni="stats">数据统计</button>
+            <!-- 子标签页导航 (顺序: 概览 → 浏览 → 管理, 符合用户从读到写的操作路径) -->
+            <div class="omni-subtabs subtabs" id="omni-subtabs" role="tablist" aria-label="OMNI 子标签">
+                <button class="omni-subtab subtab active" data-omni="stats" id="omni-subtab-stats" role="tab" aria-selected="true" aria-controls="omni-panel-stats" tabindex="0">数据统计</button>
+                <button class="omni-subtab subtab" data-omni="query" id="omni-subtab-query" role="tab" aria-selected="false" aria-controls="omni-panel-query" tabindex="-1">板块查询</button>
+                <button class="omni-subtab subtab" data-omni="sync" id="omni-subtab-sync" role="tab" aria-selected="false" aria-controls="omni-panel-sync" tabindex="-1">同步管理</button>
             </div>
 
-            <!-- 子标签页内容 -->
-            <div class="omni-panel active" data-omni-panel="query" id="omni-panel-query">
+            <!-- 子标签页内容 (顺序对应上面导航) -->
+            <!-- 1. 数据统计 (默认显示) -->
+            <div class="omni-panel active" data-omni-panel="stats" id="omni-panel-stats" role="tabpanel" aria-labelledby="omni-subtab-stats">
+                <!-- 统计卡片 -->
+                <div class="omni-stats" id="omni-stats">
+                    <p class="omni-hint">加载中...</p>
+                </div>
+                <!-- 同步日志 -->
+                <div class="omni-logs">
+                    <h3>同步记录</h3>
+                    <div id="omni-log-list">
+                        <p class="omni-hint">暂无同步记录</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. 板块查询 -->
+            <div class="omni-panel" data-omni-panel="query" id="omni-panel-query" role="tabpanel" aria-labelledby="omni-subtab-query">
                 <!-- 搜索栏 -->
                 <div class="omni-search-bar">
                     <input type="text" id="omni-keyword" placeholder="输入板块名称或代码搜索...">
                     <select id="omni-query-source" title="数据源">
                         <option value="">全部数据源</option>
                         <option value="fuyao">Fuyao</option>
-                        <option value="tqquant">TQ-QUANT</option>
+                        <option value="tqquant">TDX-QUANT</option>
                     </select>
                     <select id="omni-query-type" title="板块类型">
                         <option value="">全部类型</option>
@@ -364,7 +380,12 @@ print(match.data)</pre>
                 </div>
             </div>
 
-            <div class="omni-panel" data-omni-panel="sync" id="omni-panel-sync">
+            <!-- 3. 同步管理 -->
+            <div class="omni-panel" data-omni-panel="sync" id="omni-panel-sync" role="tabpanel" aria-labelledby="omni-subtab-sync">
+                <!-- 上次同步概览 (始终可见, 即使未同步) -->
+                <div class="omni-last-sync" id="omni-last-sync">
+                    <div class="omni-hint">暂无同步记录</div>
+                </div>
                 <!-- 同步控制区 -->
                 <div class="omni-sync-controls">
                     <div class="form-row">
@@ -372,7 +393,7 @@ print(match.data)</pre>
                         <select id="omni-sync-source">
                             <option value="all">全部</option>
                             <option value="fuyao">Fuyao (同花顺)</option>
-                            <option value="tqquant" selected>TQ-QUANT</option>
+                            <option value="tqquant" selected>TDX-QUANT</option>
                         </select>
                         <label>板块类型：</label>
                         <select id="omni-sync-type">
@@ -383,28 +404,35 @@ print(match.data)</pre>
                         <button class="btn-primary" id="omni-sync-btn">立即同步</button>
                     </div>
                 </div>
-                <!-- 同步状态 -->
-                <div class="omni-sync-status" id="omni-sync-status">
-                    <p class="omni-hint">点击"立即同步"开始同步数据</p>
-                </div>
-            </div>
-
-            <div class="omni-panel" data-omni-panel="stats" id="omni-panel-stats">
-                <!-- 统计卡片 -->
-                <div class="omni-stats" id="omni-stats">
-                    <p class="omni-hint">加载中...</p>
-                </div>
-                <!-- 同步日志 -->
-                <div class="omni-logs">
-                    <h3>同步记录</h3>
-                    <div id="omni-log-list">
+                <!-- 最近 N 次同步历史 (替代空 hint) -->
+                <div class="omni-sync-history">
+                    <h3>最近同步</h3>
+                    <div id="omni-sync-history-list">
                         <p class="omni-hint">暂无同步记录</p>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-        <script src="/static/console/console.js?v=20260908-6" defer></script>
+
+        <!-- OMNI 板块成分股弹窗 (由 .omni-sector-table 行点击触发) -->
+        <div id="omni-modal" class="omni-modal" hidden role="dialog" aria-modal="true" aria-labelledby="omni-modal-title">
+            <div class="omni-modal-backdrop" data-modal-close></div>
+            <div class="omni-modal-dialog" role="document">
+                <header class="omni-modal-header">
+                    <div>
+                        <h3 id="omni-modal-title">板块成分股</h3>
+                        <div class="omni-modal-meta" id="omni-modal-meta"></div>
+                    </div>
+                    <button class="omni-modal-close" type="button" aria-label="关闭" data-modal-close>×</button>
+                </header>
+                <div class="omni-modal-body" id="omni-modal-body">
+                    <p class="omni-hint">加载中...</p>
+                </div>
+            </div>
+        </div>
+
+        <script src="/static/console/console.js?v=20260909-3" defer></script>
 
 </body>
 </html>
