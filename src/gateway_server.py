@@ -882,11 +882,31 @@ class GatewayServer:
                             stocks = stocks_result.data if stocks_result and stocks_result.success and stocks_result.data else []
                             stock_count = len(stocks)
 
-                            cursor = conn.execute(
-                                "INSERT INTO sectors (source, board_type, code, name, stock_count) VALUES (?, ?, ?, ?, ?)",
-                                ("TDX", bt, code, name, stock_count)
+                            # 检查板块是否存在，存在则更新，不存在则插入
+                            cursor_check = conn.execute(
+                                "SELECT id FROM sectors WHERE source = 'TDX' AND code = ?",
+                                (code,)
                             )
-                            sector_id = cursor.lastrowid
+                            existing = cursor_check.fetchone()
+
+                            if existing:
+                                sector_id = existing["id"]
+                                conn.execute(
+                                    "UPDATE sectors SET name = ?, stock_count = ?, update_time = datetime('now') WHERE id = ?",
+                                    (name, stock_count, sector_id)
+                                )
+                            else:
+                                cursor = conn.execute(
+                                    "INSERT INTO sectors (source, board_type, code, name, stock_count) VALUES (?, ?, ?, ?, ?)",
+                                    ("TDX", bt, code, name, stock_count)
+                                )
+                                sector_id = cursor.lastrowid
+
+                            # 先删除该板块的所有旧成分股
+                            conn.execute(
+                                "DELETE FROM sector_stocks WHERE sector_id = ?",
+                                (sector_id,)
+                            )
 
                             for rank, stock in enumerate(stocks, 1):
                                 # TQ list_type=1 返回 [{'Code':'...','Name':'...'}]
