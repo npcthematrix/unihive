@@ -299,6 +299,11 @@ class GatewayServer:
     async def _do_initialize(self):
         logger.info("Initializing UniHive Gateway Server...")
 
+        # console_api 是 set_omni_client 的目标。__init__ 里也 import 了
+        # _ca, 那是给 set_config 用的; 这个 import 是给 _find_omni_client()
+        # 之后的 _ca.set_omni_client() 用, 必须在 _do_initialize 局部可见。
+        from .utils import console_api as _ca
+
         try:
             # 初始化缓存
             cache_cfg = self.config.get("cache", {})
@@ -709,6 +714,18 @@ class GatewayServer:
             "timestamp": int(time.time()),
         }
 
+    def _find_omni_client(self) -> "OmniClient | None":
+        """从 self.upstreams 里找到 OmniClient 实例 (按类型, 不依赖配置里的 name)
+
+        提升到类方法是为了让 ``_do_initialize`` 也能调。原先是 ``serve_http``
+        内部的嵌套函数, commit 399b18c 把调用挪进 ``_do_initialize`` 时忘了
+        同步上提, 启动会 AttributeError。
+        """
+        for client in self.upstreams.values():
+            if isinstance(client, OmniClient):
+                return client
+        return None
+
     async def start(self):
         # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并
         # 调 stop() 清 partial state, 允许同实例重试。Pre-fix: _running 在
@@ -778,13 +795,6 @@ class GatewayServer:
 
         async def _status_api(req: Request):
             return JSONResponse(_ca.get_upstream_status())
-
-        def _find_omni_client() -> "OmniClient | None":
-            """从 self.upstreams 里找到 OmniClient 实例 (按类型, 不依赖配置里的 name)"""
-            for client in self.upstreams.values():
-                if isinstance(client, OmniClient):
-                    return client
-            return None
 
         async def _interfaces_api(req: Request):
             return JSONResponse(_ca.get_interfaces())
@@ -965,6 +975,9 @@ class GatewayServer:
         self._shutdown_event.set()  # 唤醒 health loop，立即退出而不是等下次 tick
 
         # Reset console_api state
+        # _ca 在 stop() 局部 import, 与 _do_initialize / serve_http 各 import
+        # 一次保持一致 (避免隐式依赖 __init__ 的局部变量)。
+        from .utils import console_api as _ca
         _ca.set_omni_client(None)
 
         # HIGH 2 (2026-09-07 4th-round audit): 取消 health task 防止它跑

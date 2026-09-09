@@ -39,7 +39,9 @@ class FuyaoClient:
 
     @property
     def is_available(self) -> bool:
-        return self._status == UpstreamStatus.HEALTHY
+        # P1 (2026-09-09 7th-round audit): 与 UpstreamClient / OmniClient 对齐,
+        # DEGRADED 仍可响应, router 不应直接跳过 fallback。
+        return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def start(self) -> bool:
         """初始化连接"""
@@ -104,9 +106,42 @@ class FuyaoClient:
                     duration_ms=duration_ms
                 )
 
+            # 解析 Fuyao 返回的嵌套格式
+            # 格式: {"result": {"content": [{"text": "{\"code\":0,\"data\":{\"item\":[...]}}", "type": "text"}]}}
+            result = data.get("result")
+            if result and isinstance(result, dict):
+                content = result.get("content")
+                if content and isinstance(content, list) and len(content) > 0:
+                    first_content = content[0]
+                    if isinstance(first_content, dict):
+                        text = first_content.get("text")
+                        if text and isinstance(text, str):
+                            # 解析嵌套的 JSON 字符串
+                            try:
+                                inner_data = json.loads(text)
+                                # 提取 data.item 作为返回数据
+                                if isinstance(inner_data, dict):
+                                    inner_result = inner_data.get("data", inner_data)
+                                    if isinstance(inner_result, dict):
+                                        # 统一返回 item 列表
+                                        return ToolResult(
+                                            success=True,
+                                            data=inner_result.get("item", []),
+                                            source=self.name,
+                                            duration_ms=duration_ms
+                                        )
+                                    return ToolResult(
+                                        success=True,
+                                        data=inner_result,
+                                        source=self.name,
+                                        duration_ms=duration_ms
+                                    )
+                            except json.JSONDecodeError:
+                                pass
+
             return ToolResult(
                 success=True,
-                data=data.get("result"),
+                data=result,
                 source=self.name,
                 duration_ms=duration_ms
             )

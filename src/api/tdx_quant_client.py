@@ -76,7 +76,11 @@ class TdxQuantClient:
 
     @property
     def is_available(self) -> bool:
-        return self._status == UpstreamStatus.HEALTHY
+        # P1 (2026-09-09 7th-round audit): TdxQuant 的 _reconnect() 失败会
+        # 把 status 置 DEGRADED（半恢复状态, 仍能响应 tq.* 调用）。
+        # 之前只有 HEALTHY 才 is_available, reconnect 失败期间 router 会
+        # 直接跳过, 降级路径走错。改为对齐 UpstreamClient / OmniClient。
+        return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def start(self) -> bool:
         """加载 tqcenter + initialize + 启动探活任务。
@@ -90,11 +94,15 @@ class TdxQuantClient:
             if tqcenter_dir and tqcenter_dir not in sys.path:
                 sys.path.insert(0, tqcenter_dir)
             import tqcenter  # noqa: F401
-            self._tq = tqcenter.tq()
-            self._tq.initialize(self._strategy_id)
+            # tq 是 classmethod 集合, 不要实例化
+            self._tq = tqcenter.tq
+            # tqcenter.initialize 仅接受 path 参数 (dll_path='')，不支持 strategy_id
+            tdx_root = str(self.config.tdx_root_path)
+            self._tq.initialize(tdx_root)
+            logger.info(f"[{self.name}] TQ strategy_id={self._strategy_id} (记录用, 未传给 DLL)")
             self._status = UpstreamStatus.HEALTHY
             self._health_task = asyncio.create_task(self._health_loop())
-            logger.info(f"[{self.name}] initialized (strategy_id={self._strategy_id})")
+            logger.info(f"[{self.name}] initialized (tdx_root={tdx_root}, strategy_id={self._strategy_id})")
             return True
         except (FileNotFoundError, ModuleNotFoundError) as e:
             logger.error(f"[{self.name}] init failed: {e}")
@@ -102,10 +110,15 @@ class TdxQuantClient:
             return False
         except Exception as e:
             # 含 ErrorId='12' 同名策略：仅警告，仍标记 HEALTHY
-            logger.warning(f"[{self.name}] initialize warning: {e}")
-            self._status = UpstreamStatus.HEALTHY
-            self._health_task = asyncio.create_task(self._health_loop())
-            return True
+            err_str = str(e)
+            if "ErrorId='12'" in err_str or "同名策略" in err_str:
+                logger.warning(f"[{self.name}] initialize warning: {e}")
+                self._status = UpstreamStatus.HEALTHY
+                self._health_task = asyncio.create_task(self._health_loop())
+                return True
+            logger.error(f"[{self.name}] initialize failed: {e}")
+            self._status = UpstreamStatus.UNAVAILABLE
+            return False
 
     async def stop(self):
         """取消探活任务 + tq.close() (后者是同步 DLL 调用, 必须 run_in_executor)。

@@ -128,6 +128,14 @@ class MooTDX2Client:
         self._request_id += 1
         return f"{self.name}-{int(time.time())}-{self._request_id}"
 
+    def _get_tdxdir(self) -> str | None:
+        """获取 tdxdir，如果没有配置则返回 None 让 mootdx2 自动探测"""
+        if self.config.settings:
+            tdxdir = self.config.settings.tdxdir
+            if tdxdir:
+                return tdxdir
+        return None
+
     def _error_result(self, exc: Exception, context: str) -> ToolResult:
         """将异常转换为错误结果"""
         self._metrics["total_errors"] += 1
@@ -225,7 +233,19 @@ class MooTDX2Client:
         if self._quotes is None:
             from mootdx2.quotes import Quotes
             self._quotes_cls = Quotes
-            self._quotes = Quotes.factory(market=self.config.market, multithread=True, bestip=True)
+            # 从配置获取超时设置
+            timeout = 30  # 默认 30 秒
+            if self.config.settings:
+                timeout = max(
+                    self.config.settings.connect_timeout_seconds,
+                    self.config.settings.read_timeout_seconds,
+                ) * 3  # 给足够的重试时间
+            self._quotes = Quotes.factory(
+                market=self.config.market,
+                multithread=True,
+                bestip=True,
+                timeout=timeout,
+            )
         return self._quotes
 
     def _get_quote_sync(self, code: str):
@@ -252,7 +272,9 @@ class MooTDX2Client:
 
     @property
     def is_available(self) -> bool:
-        return self._status == UpstreamStatus.HEALTHY
+        # P1 (2026-09-09 7th-round audit): 与 UpstreamClient / OmniClient 对齐,
+        # DEGRADED 仍可响应, router 不应直接跳过 fallback。
+        return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def start(self):
         self._status = UpstreamStatus.HEALTHY
@@ -280,8 +302,6 @@ class MooTDX2Client:
             "get_index_all": self.get_index_all,
             "get_income": self.get_income,
             # 新增接口
-            "get_sector_list_local": self.get_sector_list_local,
-            "get_sector_stocks_local": self.get_sector_stocks_local,
             "get_f10": self.get_f10,
             "get_f10_company": self.get_f10_company,
             "get_minutes": self.get_minutes,
@@ -291,7 +311,6 @@ class MooTDX2Client:
             "get_k_data": self.get_k_data,
             "search_stock": self.search_stock,
             "get_stock_info": self.get_stock_info,
-            "get_stock_sectors_local": self.get_stock_sectors_local,
             "get_custom_sector_list": self.get_custom_sector_list,
             "get_custom_sector_stocks": self.get_custom_sector_stocks,
             "get_index_overview": self.get_index_overview,
@@ -299,9 +318,9 @@ class MooTDX2Client:
             "stock_unusual": self.stock_unusual,
             "indicator_atr": self.indicator_atr,
             # Reader 离线接口（本地 .day / .lc1 / .lc5 文件）
-            "get_daily_local": self.get_daily_local,
-            "get_minute_local": self.get_minute_local,
-            "get_fzline_local": self.get_fzline_local,
+            "get_daily": self.get_daily,
+            "get_minute": self.get_minute,
+            "get_fzline": self.get_fzline,
         }
 
         method = method_map.get(tool_name)
@@ -616,7 +635,6 @@ class MooTDX2Client:
     def _get_workday_sync(self, date: str, count: int):
         """同步交易日查询"""
         from datetime import datetime, timedelta
-        from mootdx2.const import TRADE_DAY
         # 简化的交易日计算
         try:
             target = datetime.strptime(date, "%Y%m%d")
@@ -726,272 +744,89 @@ class MooTDX2Client:
             logger.error(f"get_income failed: {e}")
             return self._error_result(e, f"get_income({code})")
 
-    # ========== 板块数据 ==========
-    def _get_sector_list_local_sync(self, sector_type: str = "industry"):
-        """同步读取板块列表（本地 vipdoc/block/*.dat）
+    # ========== 自定义板块 ==========
+    def _scan_blk_files_sync(self) -> list[dict]:
+        """直接扫描 T0002/blocknew/*.blk 文件（不依赖 cfg 索引）
 
-        Args:
-            sector_type: industry / concept / region
+        适用于 V7.73+ 通达信：cfg 索引格式可能更新，但 .blk 文件本身仍可读。
+        策略：先尝试 cfg 解析（拿到 blockname → blk_file 映射），
+        cfg 解析失败时退化为用 .blk 文件名作为 sector_name。
 
-        Returns:
-            list[dict] or raises SectorDataError
+        .blk 文件格式：每行 = market_id(1=SH / 0=SZ / 2=BJ) + 6位股票代码
+        例如：'1600000' 表示 SH 600000，'0000001' 表示 SZ 000001。
         """
-        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
-        if not tdxdir:
-            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
-
-        sector_file_map = {
-            "industry": "block_ch.dat",
-            "concept": "block_zs.dat",
-            "region": "block_fd.dat",
-        }
-        filename = sector_file_map.get(sector_type)
-        if filename is None:
-            raise SectorDataError(
-                MooTDXErrorType.INVALID_PARAM,
-                f"不支持的 sector_type: {sector_type}（必须为 industry/concept/region）",
+        tdxdir = self._get_tdxdir()
+        blocknew_dir = Path(tdxdir) / "T0002" / "blocknew"
+        if not blocknew_dir.exists():
+            logger.info(
+                f"custom sector dir missing (V7.73+ TDX?): {blocknew_dir}"
             )
-
-        sector_path = Path(tdxdir) / "vipdoc" / "block" / filename
-        if not sector_path.exists():
-            raise SectorDataError(
-                MooTDXErrorType.TDX_SECTOR_FILE_MISSING,
-                f"板块文件不存在: {sector_path}",
-            )
-
-        from tdxpy.reader import BlockReader
-        reader = BlockReader()
-        df = reader.get_df(str(sector_path), result_type=1)
-        if df is None or df.empty:
             return []
 
-        result = []
-        for _, row in df.iterrows():
-            code_list = str(row.get("code_list", ""))
-            stock_count = len([c for c in code_list.split(",") if c.strip()])
-            result.append({
-                "sector_name": str(row.get("blockname", "")).strip(),
-                "sector_type": sector_type,
-                "stock_count": stock_count,
-            })
-        return result
-
-    async def get_sector_list_local(self, sector_type: str = "industry") -> ToolResult:
-        """获取板块列表（行业/概念/地区）
-
-        Args:
-            sector_type: 板块类型，默认 'industry'
-                - 'industry': 行业板块（block_ch.dat）
-                - 'concept':  概念板块（block_zs.dat）
-                - 'region':   地区板块（block_fd.dat）
-
-        数据源：通达信客户端本地 {tdxdir}/vipdoc/block/block_*.dat
-        """
-        self._metrics["total_requests"] += 1
+        # 1. 尝试从 cfg 解析 sector_name → blk_file 映射
+        name_by_blk: dict[str, str] = {}
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
-                None, self._get_sector_list_local_sync, sector_type
-            )
-            return ToolResult(success=True, data=data, source="mootdx2")
-        except SectorDataError as e:
-            return self._sector_error_result(e)
+            from mootdx2.tools.customize import Customize
+            customize = Customize(tdxdir=tdxdir)
+            grouped = customize.search(group=True)
+            # mootdx2 返回 DataFrame，列: blockname, block_type, stock_count, code_list
+            if grouped is not None and len(grouped) > 0:
+                # 检查是否是 DataFrame
+                if hasattr(grouped, 'iterrows'):
+                    # DataFrame 格式
+                    for _, row in grouped.iterrows():
+                        blk_file = str(row.get('block_type', '')).strip()
+                        name = str(row.get('blockname', '')).strip()
+                        if blk_file and name:
+                            name_by_blk[blk_file] = name
+                else:
+                    # 列表格式（旧版本兼容）
+                    for entry in grouped or []:
+                        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                            name = str(entry[0]).strip()
+                            blk_file = entry[2] if len(entry) >= 3 else None
+                            if blk_file:
+                                name_by_blk[str(blk_file).strip()] = name
         except Exception as e:
-            logger.error(f"get_sector_list_local failed: {e}")
-            return self._error_result(e, f"get_sector_list_local({sector_type})")
-
-    # ========== 板块成分股查询 ==========
-    def _sector_stocks_sync(self, sector_code: str, sector_type: str = "industry") -> list:
-        """同步获取板块成分股（本地 block .dat 文件）
-
-        Args:
-            sector_code: 板块名称（中文，如 '银行板块'）
-            sector_type: industry / concept / region
-        """
-        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
-        if not tdxdir:
-            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
-
-        sector_file_map = {
-            "industry": "block_ch.dat",
-            "concept": "block_zs.dat",
-            "region": "block_fd.dat",
-        }
-        filename = sector_file_map.get(sector_type)
-        if filename is None:
-            raise SectorDataError(
-                MooTDXErrorType.INVALID_PARAM,
-                f"不支持的 sector_type: {sector_type}（必须为 industry/concept/region）",
-            )
-        sector_path = Path(tdxdir) / "vipdoc" / "block" / filename
-
-        if not sector_path.exists():
-            raise SectorDataError(
-                MooTDXErrorType.TDX_SECTOR_FILE_MISSING,
-                f"板块文件不存在: {sector_path}",
+            logger.info(
+                f"Customize.search failed (V7.73 cfg may be incompatible): {e}; "
+                f"falling back to .blk filename as sector name"
             )
 
-        from tdxpy.reader import BlockReader
-        reader = BlockReader()
-        df = reader.get_df(str(sector_path), result_type=1)
-        if df is None or df.empty:
-            return []
-
-        for _, row in df.iterrows():
-            bn = str(row.get("blockname", "")).strip()
-            if bn == sector_code:
-                code_list = str(row.get("code_list", ""))
-                stock_codes = [c.strip() for c in code_list.split(",") if c.strip()]
-                result = []
-                for code in stock_codes:
-                    if code.startswith(("60", "68")):
-                        market = "sh"
-                    elif code.startswith(("00", "30")):
-                        market = "sz"
-                    elif code.startswith(("8", "4")):
-                        market = "bj"
-                    else:
-                        market = "sz"
-                    result.append({"code": code, "market": market})
-                return result
-
-        # 板块名未找到 → 业务 404
-        raise SectorDataError(
-            MooTDXErrorType.SECTOR_NOT_FOUND,
-            f"板块 '{sector_code}' 不存在于 {sector_type}（{filename}）",
-        )
-
-    async def get_sector_stocks_local(self, sector_code: str, sector_type: str = "industry") -> ToolResult:
-        """获取指定板块的成分股
-
-        Args:
-            sector_code: 板块名称（中文）
-            sector_type: 板块类型，默认 'industry'
-        """
-        self._metrics["total_requests"] += 1
-        try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
-                None, self._sector_stocks_sync, sector_code, sector_type
-            )
-            return ToolResult(success=True, data=data, source="mootdx2")
-        except SectorDataError as e:
-            return self._sector_error_result(e)
-        except Exception as e:
-            logger.error(f"get_sector_stocks_local failed: {e}")
-            return self._error_result(e, f"get_sector_stocks_local({sector_code})")
-
-    # ========== 个股所属板块查询 ==========
-    def _stock_sectors_sync(self, stock_code: str, market: str = "auto") -> list:
-        """同步获取股票所属的所有板块（本地 block .dat 文件）
-
-        Args:
-            stock_code: 股票代码（接受 sh/sz/bj 前缀）
-            market: 市场（auto/auto 推断）
-        """
-        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
-        if not tdxdir:
-            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
-
-        code = stock_code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        if not code.isdigit() or len(code) != 6:
-            raise SectorDataError(
-                MooTDXErrorType.STOCK_NOT_FOUND,
-                f"股票代码格式错误: '{stock_code}'（需 6 位数字）",
-            )
-
-        sector_files = {
-            "industry": "block_ch.dat",
-            "concept": "block_zs.dat",
-            "region": "block_fd.dat",
-        }
-
+        # 2. 扫描 .blk 文件，统计每板块的股票数
+        market_prefix_map = {"1": "sh", "0": "sz", "2": "bj"}
         results = []
-        for sector_type, filename in sector_files.items():
-            sector_path = Path(tdxdir) / "vipdoc" / "block" / filename
-            if not sector_path.exists():
-                continue
+        for blk_path in sorted(blocknew_dir.glob("*.blk")):
+            blk_name = blk_path.stem
+            display_name = name_by_blk.get(blk_name, blk_name)
             try:
-                from tdxpy.reader import BlockReader
-                reader = BlockReader()
-                df = reader.get_df(str(sector_path), result_type=0)
-                if df is None or df.empty:
-                    continue
-                matching = df[df["code"] == code]
-                for _, row in matching.iterrows():
-                    results.append({
-                        "sector_name": str(row.get("blockname", "")),
-                        "sector_type": sector_type,
-                    })
-            except Exception as e:
-                logger.error(f"_stock_sectors_sync [{filename}]: {e}")
-                continue
-
+                content = blk_path.read_text(encoding="gbk", errors="ignore")
+            except Exception:
+                content = blk_path.read_text(encoding="utf-8", errors="ignore")
+            codes = []
+            for line in content.splitlines():
+                line = line.strip()
+                if len(line) >= 7 and line[0].isdigit():
+                    code = line[1:]
+                    if code.isdigit() and len(code) == 6:
+                        codes.append(code)
+            results.append({
+                "sector_name": display_name,
+                "sector_type": "custom",
+                "stock_count": len(codes),
+                "blk_file": blk_name,
+            })
         return results
 
-    async def get_stock_sectors_local(self, stock_code: str, market: str = "auto") -> ToolResult:
-        """获取指定股票所属的所有板块
-
-        Args:
-            stock_code: 股票代码（支持 sh/sz/bj 前缀）
-            market: 市场，默认为 'auto'
-        """
-        self._metrics["total_requests"] += 1
-        try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
-                None, self._stock_sectors_sync, stock_code, market
-            )
-            return ToolResult(success=True, data=data, source="mootdx2")
-        except SectorDataError as e:
-            return self._sector_error_result(e)
-        except Exception as e:
-            logger.error(f"get_stock_sectors_local failed: {e}")
-            return self._error_result(e, f"get_stock_sectors_local({stock_code})")
-
-    # ========== 自定义板块 ==========
     def _get_custom_sector_list_sync(self) -> list:
         """同步读取自定义板块列表（T0002/blocknew/）
 
         Returns:
             list[dict]: [{"sector_name", "sector_type": "custom", "stock_count"}, ...]
+
+        V7.73+ 通达信 cfg 索引可能更新，直接扫描 .blk 文件更稳定。
         """
-        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
-        if not tdxdir:
-            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
-
-        blocknew_dir = Path(tdxdir) / "T0002" / "blocknew"
-        if not blocknew_dir.exists():
-            raise SectorDataError(
-                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
-                f"自定义板块目录不存在: {blocknew_dir}",
-            )
-
-        try:
-            from mootdx.tools.customize import Customize
-            customize = Customize(tdxdir=tdxdir)
-            # group=True 返回 group 模式列表 [(blockname, [code, code, ...]), ...]
-            grouped = customize.search(group=True)
-        except Exception as e:
-            logger.error(f"Customize.search failed: {e}")
-            raise SectorDataError(
-                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
-                f"解析自定义板块失败: {e}",
-            )
-
-        result = []
-        for entry in grouped or []:
-            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
-                name = entry[0]
-                codes = entry[1] if isinstance(entry[1], (list, tuple)) else []
-            else:
-                continue
-            result.append({
-                "sector_name": str(name).strip(),
-                "sector_type": "custom",
-                "stock_count": len(codes),
-            })
-        return result
+        return self._scan_blk_files_sync()
 
     async def get_custom_sector_list(self) -> ToolResult:
         """获取自定义板块列表（用户在 TDX 客户端手动维护）
@@ -1013,54 +848,65 @@ class MooTDX2Client:
         """同步读取自定义板块成分股
 
         Args:
-            sector_code: 板块名称（用户自定义）
-            market: 市场（保留参数，对齐其它工具签名；内部按代码前缀自动推断）
-        """
-        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
-        if not tdxdir:
-            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
+            sector_code: 板块名称（用户自定义）或 .blk 文件名（不含扩展名）
+            market: 市场（保留参数，对齐其它工具签名；内部按 .blk 文件的 market_id 前缀自动推断）
 
+        V7.73+ 通达信 cfg 索引可能更新，直接扫描 .blk 文件更稳定。
+        """
+        tdxdir = self._get_tdxdir()
         blocknew_dir = Path(tdxdir) / "T0002" / "blocknew"
         if not blocknew_dir.exists():
-            raise SectorDataError(
-                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
-                f"自定义板块目录不存在: {blocknew_dir}",
+            logger.info(
+                f"custom sector dir missing (V7.73+ TDX?): {blocknew_dir}"
             )
+            return []
 
+        # 1. 尝试 cfg 解析拿到 blk_file
+        blk_file = None
         try:
-            from mootdx.tools.customize import Customize
+            from mootdx2.tools.customize import Customize
             customize = Customize(tdxdir=tdxdir)
-            codes = customize.search(name=sector_code)
+            grouped = customize.search(group=True)
+            for entry in grouped or []:
+                if isinstance(entry, (list, tuple)) and len(entry) >= 3:
+                    if str(entry[0]).strip() == sector_code:
+                        blk_file = str(entry[2]).strip()
+                        break
         except Exception as e:
-            logger.error(f"Customize.search(name=) failed: {e}")
-            raise SectorDataError(
-                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE,
-                f"读取自定义板块失败: {e}",
+            logger.info(
+                f"Customize.search(name=) failed (V7.73 cfg may be incompatible): {e}; "
+                f"treating sector_code as .blk filename"
             )
 
-        if codes is None:
-            raise SectorDataError(
-                MooTDXErrorType.SECTOR_NOT_FOUND,
-                f"自定义板块 '{sector_code}' 不存在",
+        # 2. cfg 失败或未匹配时，直接把 sector_code 当作 .blk 文件名
+        if blk_file is None:
+            blk_file = sector_code
+
+        blk_path = blocknew_dir / f"{blk_file}.blk"
+        if not blk_path.exists():
+            logger.info(
+                f"custom sector '{sector_code}' not found (blk={blk_path} missing)"
             )
+            return []
+
+        # 3. 解析 .blk 文件：每行 = market_id + 6位代码
+        market_prefix_map = {"1": "sh", "0": "sz", "2": "bj"}
+        try:
+            content = blk_path.read_text(encoding="gbk", errors="ignore")
+        except Exception:
+            content = blk_path.read_text(encoding="utf-8", errors="ignore")
 
         result = []
-        for code in codes:
-            code_str = str(code).strip()
-            if code_str.lower().startswith(("sh", "sz", "bj")):
-                m = code_str[:2].lower()
-                pure = code_str[2:]
-            else:
-                if code_str.startswith(("60", "68")):
-                    m = "sh"
-                elif code_str.startswith(("00", "30")):
-                    m = "sz"
-                elif code_str.startswith(("8", "4")):
-                    m = "bj"
-                else:
-                    m = "sz"
-                pure = code_str
-            result.append({"code": pure, "market": m})
+        for line in content.splitlines():
+            line = line.strip()
+            if len(line) < 7 or not line[0].isdigit():
+                continue
+            prefix = line[0]
+            code = line[1:]
+            if not (code.isdigit() and len(code) == 6):
+                continue
+            m = market_prefix_map.get(prefix, "sz")
+            result.append({"code": code, "market": m})
         return result
 
     async def get_custom_sector_stocks(
@@ -1225,7 +1071,7 @@ class MooTDX2Client:
             return self._error_result(e, f"get_minutes({symbol})")
 
     # ========== 离线日线（Reader，TDX 本地 .day 文件） ==========
-    def _get_daily_local_sync(
+    def _get_daily_sync(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
     ) -> list:
         """同步读取离线日线数据。
@@ -1236,12 +1082,9 @@ class MooTDX2Client:
             start_date: 起始日期 yyyy-MM-dd（可选）
             end_date: 结束日期 yyyy-MM-dd（可选）
         """
-        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
-        if not tdxdir:
-            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
-
+        tdxdir = self._get_tdxdir()
         sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        from mootdx.reader import Reader
+        from mootdx2.reader import Reader
         reader = Reader.factory(market="std", tdxdir=tdxdir)
         df = reader.daily(symbol=sym, adjust=adjust)
         if df is None or df.empty:
@@ -1259,7 +1102,7 @@ class MooTDX2Client:
                 r["date"] = str(idx)[:10]
         return records
 
-    async def get_daily_local(
+    async def get_daily(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
     ) -> ToolResult:
         """获取股票日线数据（离线，TDX 本地 .day 文件）
@@ -1279,7 +1122,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                None, self._get_daily_local_sync, code, adjust, start_date, end_date
+                None, self._get_daily_sync, code, adjust, start_date, end_date
             )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -1287,11 +1130,11 @@ class MooTDX2Client:
         except SectorDataError as e:
             return self._sector_error_result(e)
         except Exception as e:
-            logger.error(f"get_daily_local failed: {e}")
-            return self._error_result(e, f"get_daily_local({code})")
+            logger.error(f"get_daily failed: {e}")
+            return self._error_result(e, f"get_daily({code})")
 
     # ========== 离线分钟线（Reader，TDX 本地 .lc1/.lc5 文件） ==========
-    def _get_minute_local_sync(
+    def _get_minute_sync(
         self, code: str, suffix: str = "1", start_date: str = "", end_date: str = ""
     ) -> list:
         """同步读取离线分钟线数据。
@@ -1302,14 +1145,11 @@ class MooTDX2Client:
             start_date: 起始日期（可选）
             end_date: 结束日期（可选）
         """
-        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
-        if not tdxdir:
-            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
-
+        tdxdir = self._get_tdxdir()
         sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
         suffix_int = 1 if str(suffix) == "1" else 5
 
-        from mootdx.reader import Reader
+        from mootdx2.reader import Reader
         reader = Reader.factory(market="std", tdxdir=tdxdir)
         df = reader.minute(symbol=sym, suffix=suffix_int)
         if df is None or df.empty:
@@ -1327,7 +1167,7 @@ class MooTDX2Client:
                 r["datetime"] = str(idx)
         return records
 
-    async def get_minute_local(
+    async def get_minute(
         self, code: str, suffix: str = "1", start_date: str = "", end_date: str = ""
     ) -> ToolResult:
         """获取股票分钟线数据（离线，TDX 本地 .lc1/.lc5 文件）
@@ -1345,7 +1185,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                None, self._get_minute_local_sync, code, suffix, start_date, end_date
+                None, self._get_minute_sync, code, suffix, start_date, end_date
             )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -1353,22 +1193,19 @@ class MooTDX2Client:
         except SectorDataError as e:
             return self._sector_error_result(e)
         except Exception as e:
-            logger.error(f"get_minute_local failed: {e}")
-            return self._error_result(e, f"get_minute_local({code})")
+            logger.error(f"get_minute failed: {e}")
+            return self._error_result(e, f"get_minute({code})")
 
     # ========== 离线分时线（Reader.fzline，本地 .lc5 文件） ==========
-    def _get_fzline_local_sync(self, code: str) -> list:
+    def _get_fzline_sync(self, code: str) -> list:
         """同步读取离线分时线数据。
 
         Args:
             code: 6 位股票代码
         """
-        tdxdir = self.config.settings.tdxdir if self.config.settings else ""
-        if not tdxdir:
-            raise SectorDataError(MooTDXErrorType.TDX_NOT_INSTALLED, "TDX 安装目录未配置")
-
+        tdxdir = self._get_tdxdir()
         sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        from mootdx.reader import Reader
+        from mootdx2.reader import Reader
         reader = Reader.factory(market="std", tdxdir=tdxdir)
         df = reader.fzline(symbol=sym)
         if df is None or (hasattr(df, "empty") and df.empty):
@@ -1383,7 +1220,7 @@ class MooTDX2Client:
                 r["datetime"] = str(idx)
         return records
 
-    async def get_fzline_local(self, code: str) -> ToolResult:
+    async def get_fzline(self, code: str) -> ToolResult:
         """获取股票分时线数据（离线，TDX 本地 .lc5 文件）
 
         Args:
@@ -1394,15 +1231,15 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_fzline_local_sync, code)
+            data = await loop.run_in_executor(None, self._get_fzline_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的分时线数据")
         except SectorDataError as e:
             return self._sector_error_result(e)
         except Exception as e:
-            logger.error(f"get_fzline_local failed: {e}")
-            return self._error_result(e, f"get_fzline_local({code})")
+            logger.error(f"get_fzline failed: {e}")
+            return self._error_result(e, f"get_fzline({code})")
 
     # ========== 指数K线（指定起止） ==========
     def _get_index_bars_sync(self, symbol: str, frequency: int = 9, start: int = 0, offset: int = 800):
@@ -1513,10 +1350,17 @@ class MooTDX2Client:
 
     # ========== 搜索股票 ==========
     def _search_stock_sync(self, keyword: str):
-        """同步搜索股票（基于本地 block 板块文件）"""
+        """同步搜索股票（基于本地 block 板块文件）
+
+        V7.73-64 注意事项：mootdx2 `reader.block()` 接口在新版通达信已废弃
+        （官方 dat 文件迁到 infoharbor_block.dat / spblock.dat，mootdx2 未适配）。
+        本方法在 V7.73 环境下会返回空列表，由 router 串行 fallback 到 fuyao_meta。
+        """
         try:
-            from mootdx.reader import Reader
-            tdxdir = self.config.settings.tdxdir if self.config.settings else ""
+            from mootdx2.reader import Reader
+            tdxdir = self._get_tdxdir()
+            if not tdxdir:
+                return []
             reader = Reader.factory(market="std", tdxdir=tdxdir)
             df_block = reader.block()
             if df_block is None or len(df_block) == 0:
@@ -1546,7 +1390,11 @@ class MooTDX2Client:
                     })
             return result[:20]
         except Exception as e:
-            logger.error(f"search_stock failed: {e}")
+            # V7.73 下 reader.block() 会报"板块文件不存在"，
+            # 降级为 warning，让 router fallback 到 fuyao_meta 搜索。
+            logger.warning(
+                f"search_stock fallback (likely V7.73+ TDX): {e}"
+            )
             return []
 
     async def search_stock(self, keyword: str) -> ToolResult:
@@ -1576,8 +1424,8 @@ class MooTDX2Client:
             quote = quote_df.iloc[0].to_dict() if len(quote_df) > 0 else None
 
             # 2. K线（离线 - Reader）
-            from mootdx.reader import Reader
-            tdxdir = self.config.settings.tdxdir if self.config.settings else ""
+            from mootdx2.reader import Reader
+            tdxdir = self._get_tdxdir()
             reader = Reader.factory(market="std", tdxdir=tdxdir)
             daily_df = reader.daily(symbol=code)
             kline_list = daily_df.tail(kline_count).to_dict(orient="records") if daily_df is not None and len(daily_df) > 0 else []
