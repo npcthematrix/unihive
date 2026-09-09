@@ -5,7 +5,28 @@ from pathlib import Path
 
 import yaml
 
-_GENERATED_FILENAMES = ["tools_tdx_quant.yaml", "tools_mootdx2.yaml"]
+from ..utils.env_utils import env_flag
+
+_GENERATED_FILENAMES = [
+    "tools_tdx_quant.yaml",
+    "tools_mootdx2.yaml",
+    "tools_omni.yaml",
+    "tools_ths.yaml",
+]
+
+
+def filter_specs_by_env(specs: list[dict]) -> list[dict]:
+    """Drop specs gated by ``requires_env`` when that env var is not truthy.
+
+    Gate evaluated at load time only — there is deliberately no runtime
+    toggle; a disabled spec never reaches tool registration nor the
+    upstream_tool_mapping merge.
+    """
+    return [
+        spec
+        for spec in specs
+        if not spec.get("requires_env") or env_flag(spec["requires_env"])
+    ]
 
 
 def load_all_tools(config_path: Path, config: dict) -> list[dict]:
@@ -17,7 +38,7 @@ def load_all_tools(config_path: Path, config: dict) -> list[dict]:
 
     Mutates ``config`` in place. Returns the merged tool-spec list.
     """
-    tools: list[dict] = list(config.get("tools", []) or [])
+    tools: list[dict] = filter_specs_by_env(list(config.get("tools", []) or []))
     top_mapping = config.setdefault("upstream_tool_mapping", {})
     base_dir = config_path.parent.resolve()
     for filename in _GENERATED_FILENAMES:
@@ -29,7 +50,7 @@ def load_all_tools(config_path: Path, config: dict) -> list[dict]:
             if candidate.exists():
                 with candidate.open(encoding="utf-8") as f:
                     gen_cfg = yaml.safe_load(f) or {}
-                gen_tools = list(gen_cfg.get("tools", []) or [])
+                gen_tools = filter_specs_by_env(list(gen_cfg.get("tools", []) or []))
                 tools.extend(gen_tools)
                 for spec in gen_tools:
                     rk = spec.get("routing")

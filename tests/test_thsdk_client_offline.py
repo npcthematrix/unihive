@@ -232,6 +232,31 @@ async def test_rate_limited_classification(guest_env, fake_mod):
     assert result.error_detail["recoverable"] is True
 
 
+async def test_watchlist_groups_gbk_decode(guest_env, fake_mod):
+    """M3: GBK 编码的分组名应自动解码为 UTF-8 并产生 warnings。"""
+    fake_mod.get_account_watchlist_groups.return_value = {
+        "groups": {
+            "35": {"id": 35, "name": "科技股".encode("gbk")},
+            "36": {"id": 36, "name": "消费".encode("gbk")},
+        },
+        "group_order": [35, 36],
+        "group_order_version": 2,
+    }
+    client = await _started(fake_mod)
+
+    result = await client.call_tool("ths_get_account_watchlist_groups", {})
+    assert result.success is True
+    data = result.data
+
+    # 验证 GBK 解码成功
+    assert data["groups"]["35"]["name"] == "科技股"
+    assert data["groups"]["36"]["name"] == "消费"
+
+    # 验证 warnings 字段存在
+    assert "_warnings" in data
+    assert len(data["_warnings"]) >= 1
+
+
 # ---------- 写门控 / confirm ----------
 
 async def test_write_blocked_when_switch_off(guest_env, fake_mod):
@@ -366,6 +391,14 @@ async def test_write_tool_session_expiry_no_retry(
     assert fake_mod.replace_account_watchlist_securities.call_count == 1
     # 后台 best-effort 重登：让后续只读调用能继续（不直接 fail 在 auth-check）
     assert fake_mod.auth.call_count == 2
+
+
+async def test_resolve_codes_empty_raises(monkeypatch, guest_env, fake_mod):
+    """M4: 空 securities 列表应早失败，避免调用 thsdk 产生不必要的网络开销。"""
+    client = await _started(fake_mod)
+
+    with pytest.raises(ValueError, match="securities 列表不能为空"):
+        await client._resolve_codes([])
 
 
 # ---------- YAML 加载期门控 ----------

@@ -90,6 +90,92 @@ def collect_thscodes(obj: Any) -> list[str]:
 
 
 
+def _decode_gbk_bytes(obj: Any) -> tuple[Any, bool]:
+    """Recursively decode GBK-encoded bytes to UTF-8 strings.
+
+    Returns (decoded_obj, had_warnings) tuple. The warnings flag indicates
+    whether any GBK decoding was performed.
+    """
+    had_warnings = False
+
+    if obj is None:
+        return None, False
+
+    if isinstance(obj, bytes):
+        try:
+            # Directly decode GBK to UTF-8
+            decoded = obj.decode("gbk")
+            return decoded, True
+        except UnicodeDecodeError:
+            return obj, False
+
+    if isinstance(obj, dict):
+        result = {}
+        for k, v in obj.items():
+            decoded_v, w = _decode_gbk_bytes(v)
+            had_warnings = had_warnings or w
+            result[k] = decoded_v
+        return result, had_warnings
+
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        result = []
+        for item in obj:
+            decoded_item, w = _decode_gbk_bytes(item)
+            had_warnings = had_warnings or w
+            result.append(decoded_item)
+        return type(obj)(result) if isinstance(obj, (tuple, set, frozenset)) else result, had_warnings
+
+    return obj, had_warnings
+
+
+def _decode_gbk_str(obj: Any) -> tuple[Any, list[str]]:
+    """Recursively decode GBK-encoded strings back to UTF-8.
+
+    json_safe converts bytes to str representations (e.g., "b'\\xbf\\xc6...'"),
+    so we need to detect those patterns and decode them back to UTF-8.
+
+    Returns (decoded_obj, warnings) tuple.
+    """
+    warnings: list[str] = []
+
+    if obj is None:
+        return None, []
+
+    # Detect str that looks like GBK-encoded bytes: b'\\x..\\x..'
+    if isinstance(obj, str):
+        if obj.startswith("b'") and obj.endswith("'"):
+            byte_str = obj[2:-1]  # Remove b' and '
+            try:
+                # Reconstruct bytes from hex escapes
+                byte_str = byte_str.replace("\\x", "").replace("'", "")
+                if len(byte_str) % 2 == 0:
+                    # Convert hex string back to bytes
+                    byte_data = bytes.fromhex(byte_str)
+                    decoded = byte_data.decode("gbk")
+                    return decoded, ["decoded GBK string"]
+            except (ValueError, UnicodeDecodeError):
+                pass
+        return obj, []
+
+    if isinstance(obj, dict):
+        result = {}
+        for k, v in obj.items():
+            decoded_v, w = _decode_gbk_str(v)
+            warnings.extend(w)
+            result[k] = decoded_v
+        return result, warnings
+
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        result = []
+        for item in obj:
+            decoded_item, w = _decode_gbk_str(item)
+            warnings.extend(w)
+            result.append(decoded_item)
+        return type(obj)(result) if isinstance(obj, (tuple, set, frozenset)) else result, warnings
+
+    return obj, warnings
+
+
 def json_safe(obj: Any) -> Any:
     """把 thsdk 返回（DataFrame/dict/标量/numpy 类型/datetime）转成 JSON 安全对象。
 
@@ -345,8 +431,25 @@ class ThsdkClient:
         )
         return json_safe(raw)
 
+    async def _call_with_gbk_decode(self, fn: Callable, *args: Any, **kwargs: Any) -> tuple[Any, list[str]]:
+        """Like _call but also handles GBK decoding for watchlist group names.
+
+        Returns (result, warnings) tuple.
+        """
+        loop = asyncio.get_running_loop()
+        raw = await self._throttle.run(
+            loop, lambda: fn(*args, **kwargs), self.config.call_timeout_sec
+        )
+        # M3: 先对 raw 数据做 GBK 解码（处理 bytes），再 json_safe
+        decoded, had_warnings = _decode_gbk_bytes(raw)
+        result = json_safe(decoded)
+        warnings = ["GBK name decoded to UTF-8"] if had_warnings else []
+        return result, warnings
+
     async def _resolve_codes(self, codes: list[str]) -> list[str]:
         """短代码先经 complete_ths_code 补全；返回去重后的完整 THSCODE 列表。"""
+        if not codes:
+            raise ValueError("securities 列表不能为空")
         complete = [c.strip() for c in codes if is_full_thscode(c)]
         short = [c.strip() for c in codes if not is_full_thscode(c)]
         if short:
@@ -380,12 +483,19 @@ class ThsdkClient:
         return await self._call(self._mod.get_account_watchlist)
 
     async def _tool_ths_get_account_watchlist_groups(self, p: dict) -> Any:
-        return await self._call(self._mod.get_account_watchlist_groups)
+        result, warnings = await self._call_with_gbk_decode(
+            self._mod.get_account_watchlist_groups
+        )
+        if warnings:
+            result["_warnings"] = warnings
+        return result
 
     async def _tool_ths_get_all_watchlist(self, p: dict) -> Any:
         """合并主自选(group_id=0)与分组(group_id=35+)为一个统一视图。"""
         wl = await self._call(self._mod.get_account_watchlist)
-        groups = await self._call(self._mod.get_account_watchlist_groups)
+        groups, warnings = await self._call_with_gbk_decode(
+            self._mod.get_account_watchlist_groups
+        )
 
         # 构建 group_id=0 的"默认分组"（主自选）
         default_group = {
@@ -401,16 +511,21 @@ class ThsdkClient:
             for gid, gdata in groups["groups"].items():
                 all_groups[gid] = gdata
 
-        return {
+        result = {
             "version": groups.get("group_order_version"),
             "group_order": [0] + groups.get("group_order", []),
             "groups": all_groups,
             "main_watchlist": {
                 "count": wl.get("count"),
-                "modified_at": wl.get("modified_at"),
-                "source_securities": wl.get("source_securities"),
+                "securities": wl.get("securities", []),
+                "version": wl.get("version"),
             },
         }
+
+        if warnings:
+            result["_warnings"] = warnings
+
+        return result
 
     async def _tool_ths_search_symbols(self, p: dict) -> Any:
         return await self._call(

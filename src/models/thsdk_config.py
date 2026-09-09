@@ -8,19 +8,11 @@
 from dataclasses import dataclass
 from typing import Any
 
-# 接受的真值（不区分大小写），与需求书约定一致
-_TRUTHY = frozenset({"true", "1", "yes", "on"})
+from ..utils.env_utils import env_flag
 
 WRITE_ENV_FLAG = "ALLOW_WATCHLIST_WRITE"
 USERNAME_ENV = "THS_USERNAME"
 PASSWORD_ENV = "THS_PASSWORD"
-
-
-def env_flag(name: str) -> bool:
-    """读取布尔型环境变量：仅 true/1/yes/on（不区分大小写）为真。"""
-    import os
-
-    return os.getenv(name, "").strip().lower() in _TRUTHY
 
 
 @dataclass
