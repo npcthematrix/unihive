@@ -331,8 +331,107 @@ print(match.data)</pre>
                     <h2>AI接入指南</h2>
                 </div>
                 <div class="onboarding-content">
-                    <!-- 用户提供的提示词内容将放在这里 -->
-                    <p>TODO: 用户尚未提供提示词内容</p>
+                    <h3 id="sec-ai-quickstart">1. 快速开始</h3>
+                    <p>UniHive MCP 是金融数据统一网关，支持 HERMES、CODEX、CLAUDE CODE 等 AI Agent 通过 HTTP MCP 协议接入，获取通达信、同花顺等数据源的实时行情、历史K线、财务数据、板块数据等。</p>
+
+                    <h4>1.1 配置 MCP Server</h4>
+                    <p>在你的 Agent 配置中添加 MCP Server：</p>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>{
+  "mcpServers": {
+    "unihive": {
+      "url": "http://127.0.0.1:18080/mcp"
+    }
+  }
+}</pre>
+                    </div>
+
+                    <h4>1.2 调用示例</h4>
+                    <p>使用 fastmcp 客户端调用：</p>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre>from fastmcp import Client
+
+async def get_stock_price():
+    async with Client("http://127.0.0.1:18080/mcp") as client:
+        # 实时行情
+        result = await client.call_tool(
+            "a_share_prices_snapshot",
+            {"thscodes": "600519.SH,000001.SZ"}
+        )
+        return result.data
+
+asyncio.run(get_stock_price())</pre>
+                    </div>
+
+                    <h3 id="sec-ai-patterns">2. 调用模式</h3>
+
+                    <h4>2.1 股票代码格式</h4>
+                    <p>使用 THS 格式：<code>600519.SH</code>（上海）、<code>000001.SZ</code>（深圳）。系统会自动处理与 TDX 格式（<code>sh600519</code>）的转换。</p>
+
+                    <h4>2.2 常用调用模式</h4>
+                    <div class="code-block">
+                        <button class="copy-btn">复制</button>
+                        <pre># 实时行情
+await client.call_tool("a_share_prices_snapshot", {"thscodes": "600519.SH"})
+
+# 历史K线
+await client.call_tool("a_share_prices_historical", {
+    "thscode": "600519.SH",
+    "start_date": "2026-01-01",
+    "end_date": "2026-09-01"
+})
+
+# 搜索股票
+await client.call_tool("search_stock_local", {"keyword": "茅台"})
+
+# 板块成分股
+await client.call_tool("a_share_index_constituents", {"thscode": "886042.TI"})
+
+# 基金数据
+await client.call_tool("fund_profile_detail", {"thscode": "000001.OF"})
+
+# 交易日历
+await client.call_tool("a_share_calendar_trading_days", {"date": "2026-09-01"})</pre>
+                    </div>
+
+                    <h3 id="sec-ai-tools">3. 工具清单</h3>
+
+                    <h4>3.1 A 股行情（fuyao）</h4>
+                    <ul>
+                        <li><code>a_share_prices_snapshot</code> - 实时行情快照</li>
+                        <li><code>a_share_prices_historical</code> - 历史K线</li>
+                        <li><code>a_share_calendar_trading_days</code> - 交易日历</li>
+                        <li><code>a_share_auction_snapshot</code> - 集合竞价快照</li>
+                        <li><code>a_share_special_data_*</code> - 特殊数据（龙虎榜、飙升榜等）</li>
+                    </ul>
+
+                    <h4>3.2 指数与板块（fuyao）</h4>
+                    <ul>
+                        <li><code>a_share_index_catalog</code> - 指数/板块目录</li>
+                        <li><code>a_share_index_constituents</code> - 指数成分股</li>
+                        <li><code>a_share_index_prices_snapshot</code> - 指数行情</li>
+                        <li><code>a_share_index_prices_historical</code> - 指数历史K线</li>
+                    </ul>
+
+                    <h4>3.3 基金数据（fuyao）</h4>
+                    <ul>
+                        <li><code>fund_profile_detail</code> - 基金基础资料</li>
+                        <li><code>fund_portfolio_holdings</code> - 基金持仓</li>
+                        <li><code>fund_performance_returns</code> - 基金收益</li>
+                        <li><code>fund_holders_detail</code> - 持有人结构</li>
+                    </ul>
+
+                    <h4>3.4 搜索与标准化</h4>
+                    <ul>
+                        <li><code>search_stock_local</code> - 本地股票搜索</li>
+                        <li><code>normalize_stock_code</code> - 股票代码标准化</li>
+                    </ul>
+
+                    <div class="onboarding-section-meta">
+                        <strong>提示：</strong>完整工具列表（含参数说明）请查看 <strong>"MCP APIs"</strong> 标签页。
+                    </div>
                 </div>
             </div>
         </div>
