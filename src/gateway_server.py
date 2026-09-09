@@ -34,9 +34,29 @@ from .api.upstream_client import UpstreamClient, UpstreamConfig
 from .api.fuyao_client import FuyaoClient, FuyaoConfig
 from .api.mootdx2_client import MooTDX2Client, MooTDX2Config
 from .api.tdx_quant_client import TdxQuantClient
+from .api.omni_client import OmniClient, OmniConfig
 from .models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
 
 logger = logging.getLogger(__name__)
+
+
+# 同步日志里可能带回栈/路径/token, 写库前脱敏.
+# 规则: Windows 绝对路径 → [PATH], 长 token (eyJ/sk-/hex32+) → [TOKEN], 单行超 500 字符截断.
+import re as _re
+
+# 非 raw 字符串: \\ 在 regex 里就是字面反斜杠
+_PATH_RE = _re.compile("[A-Za-z]:[\\\\/](?:[^\\s\\/:|*?\"<>]+[\\\\/])+[^\\s\\/:|*?\"<>]+")
+_TOKEN_RE = _re.compile(r"\b(?:eyJ[A-Za-z0-9_.-]{20,}|sk-[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b")
+
+
+def _sanitize_sync_message(msg: str) -> str:
+    if not msg:
+        return ""
+    s = _PATH_RE.sub("[PATH]", msg)
+    s = _TOKEN_RE.sub("[TOKEN]", s)
+    if len(s) > 500:
+        s = s[:497] + "..."
+    return s
 
 
 def _read_gateway_version() -> str:
@@ -322,11 +342,26 @@ class GatewayServer:
                     client = TdxQuantClient(tdx_quant_cfg)
                 elif cfg.get("type") == "mootdx2":
                     # MooTDX2 客户端
+                    from .models.mootdx2_config import MooTDX2Settings
+
+                    # tdxdir 为空时让 mootdx2 自动探测 C:/new_tdx
+                    mootdx2_settings = MooTDX2Settings(
+                        market=cfg.get("market", "std"),
+                        tdxdir=cfg.get("tdxdir", ""),
+                    )
                     mootdx2_cfg = MooTDX2Config(
                         name=name,
                         market=cfg.get("market", "std"),
+                        settings=mootdx2_settings,
                     )
                     client = MooTDX2Client(mootdx2_cfg)
+                elif cfg.get("type") == "omni":
+                    # OMNIDATA 板块数据客户端
+                    omni_cfg = OmniConfig(
+                        name=name,
+                        db_path=cfg.get("db_path", "./data/board.db"),
+                    )
+                    client = OmniClient(omni_cfg)
                 else:
                     # stdio MCP 客户端
                     upstream_cfg = UpstreamConfig(
@@ -740,6 +775,278 @@ class GatewayServer:
         async def _status_api(req: Request):
             return JSONResponse(_ca.get_upstream_status())
 
+        async def _omni_api(req: Request):
+            """OMNIDATA 板块数据 API"""
+            import sqlite3
+            from pathlib import Path
+
+            db_path = Path("./data/board.db")
+            if not db_path.exists():
+                return JSONResponse({"error": "数据库未初始化，请先运行同步脚本"}, status_code=404)
+
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            try:
+                # 获取统计
+                cursor = conn.execute("""
+                    SELECT source, board_type, COUNT(*) as sector_count, SUM(stock_count) as total_stocks
+                    FROM sectors GROUP BY source, board_type
+                """)
+                stats = [dict(row) for row in cursor.fetchall()]
+
+                # 获取最近同步记录
+                cursor = conn.execute("""
+                    SELECT * FROM sector_sync_log ORDER BY start_time DESC LIMIT 10
+                """)
+                logs = [dict(row) for row in cursor.fetchall()]
+
+                return JSONResponse({
+                    "stats": stats,
+                    "recent_logs": logs,
+                })
+            finally:
+                conn.close()
+
+        async def _omni_sync_api(req: Request):
+            """触发板块数据同步"""
+            import sqlite3
+            from pathlib import Path
+            import asyncio
+            import subprocess
+            import json
+
+            try:
+                body = await req.json()
+            except Exception:
+                body = {}
+            source = body.get("source", "all")
+            board_type = body.get("board_type", "all")
+
+            # 本次同步实际写入板块数 (record_count); 0 表示未知
+            inserted_count = 0
+
+            # 记录同步开始
+            db_path = Path("./data/board.db")
+            conn = sqlite3.connect(str(db_path))
+            try:
+                cursor = conn.execute("""
+                    INSERT INTO sector_sync_log (source, board_type, status, message, start_time)
+                    VALUES (?, ?, 'running', '同步中...', datetime('now'))
+                """, (source, board_type))
+                sync_log_id = cursor.lastrowid
+                conn.commit()
+            finally:
+                conn.close()
+
+            # TDX 数据源：直接在网关内调用 tdx_quant
+            if source in ("TDX", "tdxquant", "tqquant", "all"):
+                try:
+                    tdx_client = self.upstreams.get("tdx_quant")
+                    if not tdx_client:
+                        raise Exception("tdx_quant 客户端未初始化")
+
+                    result = await tdx_client.call_tool("get_sector_list", {"list_type": 1})
+                    if not result.success or not result.data:
+                        raise Exception(f"获取板块列表失败: {result.error if result else 'unknown'}")
+
+                    sectors = result.data if isinstance(result.data, list) else []
+                    if not sectors:
+                        raise Exception("板块列表为空")
+
+                    # 分类存储
+                    industry_sectors = []
+                    concept_sectors = []
+                    for item in sectors:
+                        code = item.get("Code", "") or item.get("code", "")
+                        name = item.get("Name", "") or item.get("name", "")
+                        if not code or not name:
+                            continue
+                        # 881xxx = 行业板块, 880xxx = 概念/地域板块
+                        if code.startswith("881"):
+                            industry_sectors.append({"code": code, "name": name})
+                        else:
+                            concept_sectors.append({"code": code, "name": name})
+
+                    conn = sqlite3.connect(str(db_path))
+                    total_sectors = 0
+                    total_stocks = 0
+                    try:
+                        for sector in industry_sectors + concept_sectors:
+                            code = sector["code"]
+                            name = sector["name"]
+                            bt = "industry" if code.startswith("881") else "concept"
+
+                            stocks_result = await tdx_client.call_tool(
+                                "get_stock_list_in_sector", {"block_code": code, "list_type": 1}
+                            )
+                            stocks = stocks_result.data if stocks_result and stocks_result.success and stocks_result.data else []
+                            stock_count = len(stocks)
+
+                            cursor = conn.execute(
+                                "INSERT INTO sectors (source, board_type, code, name, stock_count) VALUES (?, ?, ?, ?, ?)",
+                                ("TDX", bt, code, name, stock_count)
+                            )
+                            sector_id = cursor.lastrowid
+
+                            for rank, stock in enumerate(stocks, 1):
+                                # TQ list_type=1 返回 [{'Code':'...','Name':'...'}]
+                                # TQ list_type=0 返回 ['000552.SZ', ...]
+                                if isinstance(stock, dict):
+                                    stock_code_raw = str(stock.get("Code", "") or stock.get("code", ""))
+                                    stock_name = str(stock.get("Name", "") or stock.get("name", ""))
+                                elif isinstance(stock, (list, tuple)):
+                                    stock_code_raw = str(stock[0]) if len(stock) > 0 else ""
+                                    stock_name = str(stock[1]) if len(stock) > 1 else ""
+                                else:
+                                    stock_code_raw = str(stock)
+                                    stock_name = ""
+                                # 去掉 .SH/.SZ 后缀
+                                stock_code = stock_code_raw.replace(".SH", "").replace(".SZ", "").replace(".sh", "").replace(".sz", "").strip()
+                                if not stock_code:
+                                    continue
+                                try:
+                                    conn.execute(
+                                        "INSERT INTO sector_stocks (sector_id, stock_code, stock_name, rank) VALUES (?, ?, ?, ?)",
+                                        (sector_id, stock_code, stock_name, rank)
+                                    )
+                                except sqlite3.IntegrityError:
+                                    pass
+
+                            total_sectors += 1
+                            total_stocks += stock_count
+
+                        conn.commit()
+                        status = "success"
+                        inserted_count = total_sectors
+                        message = f"Synced {total_sectors} sectors, {total_stocks} stocks"
+                    finally:
+                        conn.close()
+
+                except Exception as e:
+                    status = "failed"
+                    message = str(e)
+            else:
+                # 其他数据源使用子进程方式
+                cmd = [sys.executable, "-m", "src.sync.board_sync", "--source", source]
+                if board_type != "all":
+                    cmd.extend(["--type", board_type])
+                cmd.append("--full")
+
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    success = result.returncode == 0
+                    status = "success" if success else "failed"
+                    message = result.stdout[-500:] if result.stdout else result.stderr[-500:]
+                except subprocess.TimeoutExpired:
+                    status = "failed"
+                    message = "同步超时 (5分钟)"
+                except Exception as e:
+                    status = "failed"
+                    message = str(e)
+
+            # 更新同步记录
+            message = _sanitize_sync_message(message)
+            conn = sqlite3.connect(str(db_path))
+            try:
+                conn.execute("""
+                    UPDATE sector_sync_log
+                    SET status = ?, message = ?, end_time = datetime('now'),
+                        record_count = ?
+                    WHERE id = ?
+                """, (status, message, inserted_count, sync_log_id))
+                conn.commit()
+            finally:
+                conn.close()
+
+            return JSONResponse({
+                "status": status,
+                "message": message,
+                "log_id": sync_log_id,
+            })
+
+        async def _omni_query_api(req: Request):
+            """查询板块列表（支持分页）"""
+            import sqlite3
+            from pathlib import Path
+
+            db_path = Path("./data/board.db")
+            if not db_path.exists():
+                return JSONResponse({"error": "数据库未初始化"}, status_code=404)
+
+            # 获取查询参数
+            source = req.query_params.get("source", "")
+            board_type = req.query_params.get("board_type", "")
+            keyword = req.query_params.get("keyword", "")
+            page = max(1, int(req.query_params.get("page", 1)))
+            page_size = min(int(req.query_params.get("page_size", 50)), 100)
+            offset = (page - 1) * page_size
+
+            # source 别名映射: 前端统一用 tqquant, 但网关内 sync 写入数据库的字段
+            # 是 "TDX" (历史兼容), 子进程 board_sync 写 "tqquant". 兼容两者.
+            source_aliases = {"tqquant": ("TDX", "tqquant")}
+
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            try:
+                # 构建查询条件
+                conditions = []
+                params = []
+                if source:
+                    aliases = source_aliases.get(source, (source,))
+                    if len(aliases) == 1:
+                        conditions.append("source = ?")
+                        params.append(aliases[0])
+                    else:
+                        placeholders = " OR ".join(["source = ?"] * len(aliases))
+                        conditions.append(f"({placeholders})")
+                        params.extend(aliases)
+                if board_type:
+                    conditions.append("board_type = ?")
+                    params.append(board_type)
+                if keyword:
+                    conditions.append("(name LIKE ? OR code LIKE ?)")
+                    params.extend([f"%{keyword}%", f"%{keyword}%"])
+
+                where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+                # 查询总数
+                cursor = conn.execute(f"SELECT COUNT(*) as cnt FROM sectors WHERE {where_clause}", params)
+                total_count = cursor.fetchone()["cnt"]
+
+                # 查询板块列表（分页）
+                cursor = conn.execute(f"""
+                    SELECT id, source, board_type, code, name, stock_count, update_time
+                    FROM sectors
+                    WHERE {where_clause}
+                    ORDER BY name
+                    LIMIT ? OFFSET ?
+                """, params + [page_size, offset])
+                sectors = [dict(row) for row in cursor.fetchall()]
+
+                # 如果有关键词，也查询成分股
+                stocks = []
+                if keyword and sectors:
+                    cursor = conn.execute(f"""
+                        SELECT ss.stock_code, ss.stock_name, ss.rank, s.name as sector_name, s.code as sector_code
+                        FROM sector_stocks ss
+                        JOIN sectors s ON ss.sector_id = s.id
+                        WHERE ss.stock_name LIKE ? OR ss.stock_code LIKE ?
+                        ORDER BY s.name, ss.rank
+                        LIMIT 50
+                    """, (f"%{keyword}%", f"%{keyword}%"))
+                    stocks = [dict(row) for row in cursor.fetchall()]
+
+                return JSONResponse({
+                    "sectors": sectors,
+                    "stocks": stocks,
+                    "total": len(sectors),
+                    "total_count": total_count,
+                    "page": page,
+                    "page_size": page_size,
+                })
+            finally:
+                conn.close()
+
         async def _interfaces_api(req: Request):
             return JSONResponse(_ca.get_interfaces())
 
@@ -820,6 +1127,9 @@ class GatewayServer:
                 Mount("/static", StaticFiles(directory="static", html=False)),
                 Route("/", _index_route),
                 Route("/api/status", _status_api),
+                Route("/api/omni", _omni_api),
+                Route("/api/omni/sync", _omni_sync_api, methods=["POST"]),
+                Route("/api/omni/query", _omni_query_api),
                 Route("/api/interfaces", _interfaces_api),
                 Route("/api/config", _config_api),
                 Route("/health", _health_api),
