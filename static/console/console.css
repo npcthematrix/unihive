@@ -291,7 +291,7 @@ mark.ifs-hl { background: #fef08a; color: inherit; padding: 0 1px; border-radius
 /* ===== Cache ===== */
 .cache-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 .cache-hitrate-card { grid-column: span 2; }
-@media (max-width: 900px) { .cache-grid { grid-template-columns: 1fr 1fr; } .cache-hitrate-card { grid-column: 1 / -1; } .ifs-table td.col-source, .ifs-table th.col-source { display: none; } .ifs-table th:first-child, .ifs-table td:first-child { width: 35% !important; } }
+@media (max-width: 900px) { .cache-grid { grid-template-columns: 1fr 1fr; } .cache-hitrate-card { grid-column: 1 / -1; } }
 .cache-hitrate-card { background: linear-gradient(135deg, #f0f9ff 0%, #ecfeff 100%); border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .cache-hitrate-head { display: flex; justify-content: space-between; align-items: baseline; }
 .cache-hitrate-value { font-size: 2rem; font-weight: 700; color: #0c4a6e; font-variant-numeric: tabular-nums; line-height: 1; }
@@ -325,13 +325,16 @@ mark.ifs-hl { background: #fef08a; color: inherit; padding: 0 1px; border-radius
     .ifs-nav-item { white-space: nowrap; border-left: none; border-bottom: 3px solid transparent; }
     .ifs-nav-item.active { border-bottom-color: var(--primary); }
     .ifs-content { padding-left: 0; padding-top: 12px; }
+    /* .ifs-table 在 768px 以下 (sidebar 折叠为横向 nav) 隐藏数据源列 + 收紧首列 */
+    .ifs-table td.col-source, .ifs-table th.col-source { display: none; }
+    .ifs-table th:first-child, .ifs-table td:first-child { width: 35% !important; }
 }
 
 /* 接入指南 */
 .onboarding-nav {
     position: sticky;
-    top: 0;
-    z-index: 10;
+    top: 56px;
+    z-index: 9;
     background: var(--card-bg);
     padding: 12px 20px;
     margin: -20px -20px 20px -20px;
@@ -472,7 +475,9 @@ button:focus-visible { outline-offset: 2px; }
     .ifs-copy-all, .cfg-search-wrap, .cfg-section-toggle, .cfg-env-row,
     .status-summary { display: none !important; }
     .panel { display: block !important; }
-    /* ===== 工具清单来源切换 ===== */
+}
+
+/* ===== 工具清单来源切换 ===== */
 .inv-raw-toggle { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; cursor: pointer; padding: 4px 8px; border-radius: 4px; color: var(--text-secondary); border: 1px solid var(--border); transition: all 120ms; }
 .inv-raw-toggle:hover { background: var(--bg); color: var(--text); }
 .inv-raw-toggle input { cursor: pointer; }
@@ -509,8 +514,8 @@ button:focus-visible { outline-offset: 2px; }
 .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--text); }
 .stat-unit { font-size: 0.75rem; color: var(--text-secondary); }
 
-.omni-results { background: var(--bg); border-radius: 8px; padding: 16px; min-height: 80px; }
-.omni-hint { font-size: 0.875rem; color: var(--text-secondary); text-align: center; padding: 20px; }
+.omni-results { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-height: 200px; }
+.omni-hint { font-size: 0.875rem; color: var(--text-secondary); text-align: center; padding: 40px 20px; }
 .sector-list { display: flex; flex-direction: column; gap: 8px; }
 .sector-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--card-bg); border-radius: 6px; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; }
 .sector-item:hover { border-color: var(--primary); background: var(--primary-soft); }
@@ -533,7 +538,7 @@ button:focus-visible { outline-offset: 2px; }
 
 /* OMNI 板块数据子标签页 */
 .omni-subtabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-.omni-subtab { padding: 8px 16px; border: 0; background: transparent; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: all 120ms ease; }
+.omni-subtab { padding: 8px 16px; border: 0; background: transparent; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; transition: all 120ms ease; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; min-width: 100px; justify-content: center; }
 .omni-subtab:hover { color: var(--text); }
 .omni-subtab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
 
@@ -548,7 +553,58 @@ button:focus-visible { outline-offset: 2px; }
 
 /* 同步控制 */
 .omni-sync-controls { margin-bottom: 16px; }
-.omni-sync-controls .form-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--bg); padding: 16px; border-radius: 8px; }
+.omni-sync-controls .form-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--card-bg); padding: 16px; border-radius: 8px; border: 1px solid var(--border); }
 .omni-sync-controls label { font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
-.omni-sync-controls select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 120px; }
-.omni-sync-status { margin-bottom: 20px; }
+.omni-sync-controls select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 140px; }
+.omni-sync-status { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-height: 100px; }
+.omni-sync-status .omni-hint { padding: 20px; }
+
+/* OMNI status 颜色 (替代 inline style) */
+.omni-status-success { color: var(--success); font-weight: 600; }
+.omni-status-failed { color: var(--danger); font-weight: 600; }
+.omni-status-running { color: var(--warning); font-weight: 600; }
+.omni-status-default { color: #666; }
+
+/* OMNI 反馈消息 (替代纯 hint 文本, 让用户能区分初始状态和查询结果) */
+.omni-feedback { padding: 14px 16px; border-radius: 6px; font-size: 0.875rem; margin-bottom: 8px; border-left: 3px solid; background: var(--card-bg); }
+.omni-feedback-info { background: #eff6ff; border-left-color: #3b82f6; color: #1e40af; }
+.omni-feedback-warn { background: #fef3c7; border-left-color: #f59e0b; color: #92400e; }
+.omni-feedback-error { background: #fee2e2; border-left-color: #ef4444; color: #991b1b; }
+.omni-feedback-empty { background: #f3f4f6; border-left-color: #9ca3af; color: #4b5563; }
+.omni-feedback-meta { font-size: 0.75rem; color: #6b7280; margin-left: 6px; font-weight: normal; }
+
+/* OMNI 结果头 */
+.omni-results-header { padding: 8px 4px 12px; font-size: 0.875rem; color: var(--text); border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.omni-results-header strong { color: var(--primary); font-weight: 600; }
+
+/* OMNI 分页 */
+.omni-pagination { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px 0 8px; border-top: 1px solid var(--border); margin-top: 12px; }
+.omni-page-btn { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 4px 12px; font-size: 0.8125rem; color: var(--text); cursor: pointer; transition: all 0.15s; }
+.omni-page-btn:hover:not([disabled]) { border-color: var(--primary); color: var(--primary); }
+.omni-page-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.omni-page-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.omni-page-numbers { display: flex; gap: 4px; }
+.omni-page-ellipsis { color: var(--text-secondary); padding: 0 4px; }
+.omni-page-info { font-size: 0.75rem; color: var(--text-secondary); margin-left: 12px; }
+
+/* OMNI 板块表格 */
+.omni-sector-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.omni-sector-table th { text-align: left; padding: 10px 12px; background: var(--bg); border-bottom: 2px solid var(--border); font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+.omni-sector-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.omni-sector-table tr.sector-item:hover { background: var(--bg); cursor: pointer; }
+.omni-sector-table .sector-name { font-weight: 500; }
+.omni-sector-table .sector-code { font-family: monospace; color: var(--text-secondary); }
+.omni-sector-table .sector-count { text-align: right; font-weight: 500; color: var(--primary); }
+.omni-sector-table .sector-source { color: var(--text-secondary); font-size: 0.75rem; }
+.omni-sector-table .sector-update { color: var(--text-secondary); font-size: 0.75rem; white-space: nowrap; }
+.omni-sector-table .sector-update { color: var(--text-secondary); font-size: 0.75rem; }
+.sector-type-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.6875rem; background: var(--bg); border: 1px solid var(--border); }
+.sector-type-badge:empty, .sector-type-badge:not(:empty) { background: #e0f2fe; border-color: #bae6fd; color: #0369a1; }
+
+/* Cache 命中率条颜色 (替代 inline style) */
+.cache-hitrate-fill-high { background: #10b981; }
+.cache-hitrate-fill-mid { background: #f59e0b; }
+.cache-hitrate-fill-low { background: #ef4444; }
+
+/* 详情行默认隐藏 (替代 inline style="display:none") */
+.ifs-detail-row-hidden { display: none; }

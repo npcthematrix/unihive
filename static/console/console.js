@@ -58,6 +58,8 @@
     let searchDebounceTimer = null;
     let omniStatsLoaded = false;
     let _expandedTools = new Set();
+    let activePanel = 'interfaces';
+    let _omniSyncInFlight = false;
 
     /* ===== Helpers ===== */
     function escapeHtml(s) {
@@ -377,6 +379,7 @@
         tab.classList.add('active');
         tab.setAttribute('aria-selected', 'true');
         document.getElementById(panelId).classList.add('active');
+        activePanel = panelId;
         if (panelId === 'status') {
             const age = Math.floor(Date.now() / 1000) - (lastStatusFetch || 0);
             if (age > STALE_THRESHOLD_SEC) loadStatus(false);
@@ -1166,6 +1169,8 @@
             setActiveGroup(btn.dataset.group);
         });
         document.addEventListener('keydown', (e) => {
+            // / 和 ArrowUp/Down 是 interfaces 面板的快捷键, 离开该面板不再生效
+            if (activePanel !== 'interfaces') return;
             const tag = (e.target.tagName || '').toLowerCase();
             const inField = tag === 'input' || tag === 'textarea';
             if (e.key === '/' && !inField) {
@@ -1321,17 +1326,16 @@
         const logsEl = document.getElementById('omni-log-list');
         const refreshEl = document.getElementById('omni-last-refresh');
         try {
-            const r = await fetch('/api/omni');
-            if (!r.ok) {
-                if (statsEl) statsEl.innerHTML = '<p class="omni-hint">数据库未初始化，请先同步</p>';
-                return;
-            }
-            const d = await r.json();
+            const d = await fetchJSON('/api/omni', { silent: true });
             if (statsEl) statsEl.innerHTML = omniRenderStats(d.stats);
             if (logsEl) logsEl.innerHTML = omniRenderLogs(d.recent_logs);
             if (refreshEl) refreshEl.textContent = new Date().toLocaleTimeString();
         } catch (e) {
-            if (statsEl) statsEl.innerHTML = '<p class="omni-hint">加载失败: ' + escapeHtml(e.message) + '</p>';
+            // fetchJSON 已把后端错误体塞到 message 里; 网络失败是 TypeError, 后端 4xx/5xx 走 e.status
+            const hint = e.status === 404 || e.status === 503
+                ? '数据库未初始化，请先同步'
+                : `加载失败: ${e.message}`;
+            if (statsEl) statsEl.innerHTML = '<p class="omni-hint">' + escapeHtml(hint) + '</p>';
         }
     }
 
@@ -1432,34 +1436,20 @@
                     </tbody>
                 </table>`;
             resultsDiv.innerHTML = header + list + pagination;
-
-            // 分页事件
-            resultsDiv.querySelectorAll('.omni-page-btn:not([disabled])').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const newPage = parseInt(btn.dataset.page, 10);
-                    if (newPage && newPage !== _omniQueryState.page) {
-                        omniQuerySectors(newPage);
-                    }
-                });
-            });
-
-            // TODO: 板块点击 → 成分股弹窗
-            resultsDiv.querySelectorAll('.sector-item').forEach(item => {
-                item.addEventListener('click', () => {
-                    console.log('sector clicked:', item.dataset.id);
-                });
-            });
+            // 分页与板块行的点击由 wireOmni 里的事件委托统一处理 (避免每次重渲 forEach addEventListener)
         } catch (e) {
             resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-error">✕ 查询异常：' + escapeHtml(e.message) + '</div>';
         }
     }
 
     async function omniSync() {
+        if (_omniSyncInFlight) return;
         const btn = document.getElementById('omni-sync-btn');
         const statusEl = document.getElementById('omni-sync-status');
         const source = document.getElementById('omni-sync-source').value;
         const boardType = document.getElementById('omni-sync-type').value;
         if (!btn) return;
+        _omniSyncInFlight = true;
         btn.disabled = true;
         btn.textContent = '同步中...';
         if (statusEl) statusEl.innerHTML = '<div class="omni-feedback omni-feedback-info">⏳ 同步中… <span class="omni-feedback-meta">(同步可能持续数十秒, 请勿关闭页面)</span></div>';
@@ -1481,9 +1471,11 @@
         } catch (e) {
             showToast('同步失败: ' + e.message, 'error');
             if (statusEl) statusEl.innerHTML = `<div class="omni-feedback omni-feedback-error">✕ 同步异常 <span class="omni-feedback-meta">${escapeHtml(e.message)}</span></div>`;
+        } finally {
+            _omniSyncInFlight = false;
+            btn.disabled = false;
+            btn.textContent = '立即同步';
         }
-        btn.disabled = false;
-        btn.textContent = '立即同步';
         omniLoadStats();
     }
 
@@ -1516,6 +1508,26 @@
         if (refreshBtn) refreshBtn.addEventListener('click', omniLoadStats);
         const syncBtn = document.getElementById('omni-sync-btn');
         if (syncBtn) syncBtn.addEventListener('click', omniSync);
+
+        // OMNI 结果区事件委托: 分页按钮 + 板块行点击 (避免 omniQuerySectors 每次重渲 forEach addEventListener)
+        const resultsDiv = document.getElementById('omni-results');
+        if (resultsDiv) {
+            resultsDiv.addEventListener('click', (e) => {
+                const pageBtn = e.target.closest('.omni-page-btn:not([disabled])');
+                if (pageBtn) {
+                    const newPage = parseInt(pageBtn.dataset.page, 10);
+                    if (newPage && newPage !== _omniQueryState.page) {
+                        omniQuerySectors(newPage);
+                    }
+                    return;
+                }
+                const sectorRow = e.target.closest('tr.sector-item');
+                if (sectorRow) {
+                    // TODO: 板块点击 → 成分股弹窗
+                    console.log('sector clicked:', sectorRow.dataset.id);
+                }
+            });
+        }
         // 首屏不再预加载, 改为首次切到 OMNI 标签页时触发 (activatePanel 内)
     }
 
