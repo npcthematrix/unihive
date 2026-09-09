@@ -1,0 +1,156 @@
+# OMNIDATA 板块数据 MCP 工具定义
+
+tools:
+  - name: omni_list_sectors
+    description: |-
+      【板块列表】查询板块清单（行业板块/概念板块）。
+
+      【使用场景】
+      - 用户问"有哪些行业板块/概念板块"时调用
+      - 板块热点追踪前置步骤
+
+      【参数说明】
+      - source (可选): 数据源，默认 all。可选 fuyao / TDX / all
+      - board_type (可选): 板块类型，默认 all。可选 industry / concept / region / style / all
+      - keyword (可选): 模糊搜索关键词，匹配板块名称或代码
+
+      【数据源】本地 SQLite 数据库（同步自 fuyao ths-index）
+
+      【返回示例】
+      成功: {"success": true, "data": [{"code": "886042", "name": "芯片概念", "source": "fuyao", "board_type": "concept", "stock_count": 156}], "source": "omni"}
+      空数据: {"success": true, "data": []}
+    routing: omni_list_sectors
+    upstream_tool_mapping:
+      omni: omni_list_sectors
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: source
+        type: str
+        required: false
+        description: 数据源，默认 all。可选 fuyao / TDX / all
+      - name: board_type
+        type: str
+        required: false
+        description: 板块类型，默认 all。可选 industry / concept / region / style / all
+      - name: keyword
+        type: str
+        required: false
+        description: 模糊搜索关键词
+
+  - name: omni_get_sector_stocks
+    description: |-
+      【板块成分股】查询指定板块包含的所有成分股。
+
+      【使用场景】
+      - 用户问"芯片概念有哪些股票"时调用
+      - 板块内股票筛选、批量行情前置步骤
+
+      【参数说明】
+      - sector_code (可选): 板块代码（6位数字），如 '886042'
+      - sector_name (可选): 板块名称（中文），如 '芯片概念'
+      - source (可选): 数据源，默认 all
+
+      【注意】sector_code 和 sector_name 至少提供一个
+
+      【数据源】本地 SQLite 数据库
+
+      【返回示例】
+      成功: {"success": true, "data": [{"stock_code": "600519", "stock_name": "贵州茅台", "rank": 1}, ...], "source": "omni"}
+    routing: omni_get_sector_stocks
+    upstream_tool_mapping:
+      omni: omni_get_sector_stocks
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: sector_code
+        type: str
+        required: false
+        description: 板块代码（6位数字），如 '886042'
+      - name: sector_name
+        type: str
+        required: false
+        description: 板块名称（中文），如 '芯片概念'
+      - name: source
+        type: str
+        required: false
+        description: 数据源，默认 all
+
+  - name: omni_get_stock_sectors
+    description: |-
+      【个股所属板块】查询指定股票所属的所有板块（行业 + 概念聚合）。
+
+      【使用场景】
+      - 用户问"贵州茅台属于哪些板块"时调用
+      - 主题投资筛选、交叉板块股票查找
+
+      【参数说明】
+      - stock_code (必填): 股票代码，支持格式：
+        - 6位纯数字：600519
+        - 带交易所后缀：600519.SH / 000001.SZ
+
+      【数据源】本地 SQLite 数据库
+
+      【返回示例】
+      成功: {"success": true, "data": [{"source": "fuyao", "board_type": "industry", "code": "880311", "name": "白酒板块"}, {"source": "fuyao", "board_type": "concept", "code": "886042", "name": "芯片概念"}], "source": "omni"}
+      空数据: {"success": true, "data": []}（该股票无板块归属是正常数据）
+    routing: omni_get_stock_sectors
+    upstream_tool_mapping:
+      omni: omni_get_stock_sectors
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: stock_code
+        type: str
+        required: true
+        description: 股票代码，支持 6 位数字或带后缀（600519.SH）
+
+  - name: omni_search_board
+    description: |-
+      【板块搜索】模糊搜索板块（名称或代码）。
+
+      【使用场景】
+      - 用户搜索特定板块时调用
+      - 自动补全板块名称
+
+      【参数说明】
+      - keyword (必填): 搜索关键词
+
+      【数据源】本地 SQLite 数据库
+
+      【返回示例】
+      成功: {"success": true, "data": [{"code": "886042", "name": "芯片概念", "board_type": "concept", "stock_count": 156}, ...], "source": "omni"}
+    routing: omni_search_board
+    upstream_tool_mapping:
+      omni: omni_search_board
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: keyword
+        type: str
+        required: true
+        description: 搜索关键词（匹配板块名称或代码）
+
+  - name: omni_get_sync_status
+    description: |-
+      【同步状态】查询板块数据的同步状态和统计信息。
+
+      【使用场景】
+      - 查看最近同步时间
+      - 确认数据是否最新
+
+      【数据源】本地 SQLite 数据库
+
+      【返回示例】
+      成功: {"success": true, "data": {"recent_logs": [...], "stats": [{"source": "fuyao", "board_type": "concept", "sector_count": 500, "total_stocks": 5000}]}, "source": "omni"}
+    routing: omni_get_sync_status
+    upstream_tool_mapping:
+      omni: omni_get_sync_status
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params: []
