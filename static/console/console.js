@@ -15,7 +15,7 @@
 
     /* ===== Constants ===== */
     const STALE_THRESHOLD_SEC = 30;
-    const CFG_TABLE_COLSPANS = { ups: 4, upstreams: 7, mapping: 2, tools: 5, cache: 3 };
+    const CFG_TABLE_COLSPANS = { ups: 5, upstreams: 7, mapping: 2, tools: 5, cache: 3 };
     const STATUS_TEXT = { online: '在线', degraded: '降级', offline: '离线', configured: '就绪', disabled: '已禁用', unknown: '未知' };
     const STATUS_BUCKET = { online: 'good', degraded: 'warn', offline: 'bad', configured: 'idle', disabled: 'idle', unknown: 'bad' };
     const STATUS_ORDER = { online: 0, degraded: 1, configured: 2, offline: 3, disabled: 4, unknown: 5 };
@@ -56,6 +56,8 @@
     let _cfgUpstreamsSearch = '';
     let _cfgCache = null;
     let searchDebounceTimer = null;
+    let omniStatsLoaded = false;
+    let _expandedTools = new Set();
 
     /* ===== Helpers ===== */
     function escapeHtml(s) {
@@ -103,7 +105,10 @@
      */
     async function fetchJSON(url, opts) {
         const silent = !!(opts && opts.silent);
-        const resp = await fetch(url);
+        const fetchOpts = { method: (opts && opts.method) || 'GET' };
+        if (opts && opts.headers) fetchOpts.headers = opts.headers;
+        if (opts && opts.body !== undefined) fetchOpts.body = opts.body;
+        const resp = await fetch(url, fetchOpts);
         if (!resp.ok) {
             let detail = '';
             try {
@@ -218,7 +223,7 @@
                 if (u.latency_ms > 3000) cls = 'bad';
                 latHtml = `<span class="latency-cell ${cls}">${u.latency_ms}<span style="opacity:.6">ms</span></span>`;
             }
-            const errHtml = u.last_error ? `<button type="button" class="err-icon" data-error="${escapeHtml(u.last_error)}" title="${escapeHtml(u.last_error)} (点击复制)">!</button>` : '<span style="color:var(--text-secondary);opacity:.3">—</span>';
+            const errHtml = u.last_error ? `<button type="button" class="err-icon" data-error="${escapeHtml(u.last_error)}" title="${escapeHtml(u.last_error)} (点击复制)" aria-label="复制错误信息">!</button>` : '<span style="color:var(--text-secondary);opacity:.3">—</span>';
             return `<tr>
                 <td><span class="ups-name">${UPSTREAM_DISPLAY_NAME[u._name] || escapeHtml(u._name)}</span></td>
                 <td><span class="type-pill">${escapeHtml(tp)}</span></td>
@@ -266,8 +271,8 @@
         if (total > 0 && cache.hit_rate != null) {
             const pct = cache.hit_rate * 100;
             hitrateEl.textContent = pct.toFixed(1) + '%';
-            const color = pct > 70 ? '#10b981' : pct > 40 ? '#f59e0b' : '#ef4444';
-            hitrateBar.innerHTML = `<div class="cache-hitrate-fill" style="width:${pct}%;background:${color}"></div>`;
+            const tier = pct > 70 ? 'high' : pct > 40 ? 'mid' : 'low';
+            hitrateBar.innerHTML = `<div class="cache-hitrate-fill cache-hitrate-fill-${tier}" style="width:${pct}%"></div>`;
             hintEl.textContent = `共 ${total} 次请求`;
         } else {
             hitrateEl.textContent = '—';
@@ -384,6 +389,10 @@
             if (list && (list.children.length === 0 || list.querySelector('.loading-state'))) {
                 loadOnboarding();
             }
+        }
+        if (panelId === 'omni' && !omniStatsLoaded) {
+            omniStatsLoaded = true;
+            omniLoadStats();
         }
     }
 
@@ -519,9 +528,9 @@
             const paramsDisplay = moreCount > 0 ? highlight(paramNames.slice(0, 3).join(', '), searchQuery) + ` <span class="params-more">+${moreCount} more</span>` : (paramNames.length > 0 ? highlight(paramNames.join(', '), searchQuery) : '');
             const sourceCell = activeGroup === ALL_KEY ? '' : `<td><button type="button" class="chain chain-link" data-source="${escapeHtml(t.source || '')}" title="跳转到该上游分组">${escapeHtml(t.source || '-')} →</button></td>`;
             const detailBody = buildDetailBody(t);
-            return `<tr data-tool="${escapeHtml(t.name)}"><td><span class="tool-name">${highlight(t.name, searchQuery)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td><td><div class="tool-desc">${highlight(t.description || '-', searchQuery)}</div>${paramsDisplay ? `<div class="tool-params">${paramsDisplay}</div>` : ''}</td>${sourceCell}<td><div class="row-actions"><button class="row-action-btn copy-name" data-name="${escapeHtml(t.name)}">复制</button><button class="row-action-btn toggle-detail" data-idx="${i}">详情</button></div></td></tr>${detailBody ? `<tr class="ifs-detail-row" data-detail-for="${escapeHtml(t.name)}"><td colspan="${activeGroup === ALL_KEY ? 3 : 4}">${detailBody}</td></tr>` : ''}`;
+            return `<tr data-tool="${escapeHtml(t.name)}"><td><span class="tool-name">${highlight(t.name, searchQuery)}</span>${badges.length ? '<div class="tool-meta-cell">' + badges.join('') + '</div>' : ''}</td><td><div class="tool-desc">${highlight(t.description || '-', searchQuery)}</div>${paramsDisplay ? `<div class="tool-params">${paramsDisplay}</div>` : ''}</td>${sourceCell}<td><div class="row-actions"><button class="row-action-btn copy-name" data-name="${escapeHtml(t.name)}">复制</button><button class="row-action-btn toggle-detail" data-idx="${i}" data-tool="${escapeHtml(t.name)}" ${!detailBody ? 'disabled' : ''}>详情</button></div></td></tr>${detailBody ? `<tr class="ifs-detail-row${_expandedTools.has(t.name) ? '' : ' ifs-detail-row-hidden'}" data-detail-for="${escapeHtml(t.name)}"><td colspan="${activeGroup === ALL_KEY ? 3 : 4}">${detailBody}</td></tr>` : ''}`;
         }).join('');
-        root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)}</h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><div class="ifs-table-wrap"><table class="ifs-table"><caption style="position:absolute;width:1px;height:1px;clip:rect(0,0,0,0);overflow:hidden">${escapeHtml(meta.title)} MCP APIs</caption><thead><tr>${headerHtml}</tr></thead><tbody>${rows}</tbody></table></div>`;
+        root.innerHTML = `<div class="ifs-content-header"><h3>${escapeHtml(meta.title)}</h3><div class="ifs-content-meta">${tools.length} 个工具</div></div><div class="ifs-table-wrap"><table class="ifs-table"><caption class="visually-hidden">${escapeHtml(meta.title)} MCP APIs</caption><thead><tr>${headerHtml}</tr></thead><tbody>${rows}</tbody></table></div>`;
     }
 
     function buildDetailBody(t) {
@@ -1124,11 +1133,14 @@
             if (copyBtn) { copyText(copyBtn.dataset.name, copyBtn); return; }
             const detailBtn = e.target.closest('.toggle-detail');
             if (detailBtn) {
-                const tr = document.querySelector(`tr[data-detail-for="${CSS.escape(detailBtn.closest('tr').dataset.tool)}"]`);
+                const toolName = detailBtn.closest('tr')?.dataset?.tool;
+                if (!toolName) return;
+                const tr = document.querySelector(`.ifs-detail-row[data-detail-for="${CSS.escape(toolName)}"]`);
                 if (tr) {
-                    const show = tr.style.display === 'none';
-                    tr.style.display = show ? '' : 'none';
-                    detailBtn.textContent = show ? '收起' : '详情';
+                    const isHidden = tr.classList.toggle('ifs-detail-row-hidden');
+                    if (isHidden) _expandedTools.delete(toolName);
+                    else _expandedTools.add(toolName);
+                    detailBtn.textContent = isHidden ? '详情' : '收起';
                 }
                 return;
             }
@@ -1265,6 +1277,248 @@
         });
     }
 
+    /* ===== OMNI panel (板块数据) ===== */
+    const OMNI_STATUS_COLOR = { success: 'var(--success)', failed: 'var(--danger)', running: 'var(--warning)' };
+
+    function omniFmtTime(s) {
+        if (!s) return '-';
+        return String(s).replace('T', ' ').substring(0, 19);
+    }
+
+    function omniFmtStatus(s) {
+        const cls = OMNI_STATUS_COLOR[s] ? `omni-status-${s}` : 'omni-status-default';
+        return `<span class="${cls}">${escapeHtml(s)}</span>`;
+    }
+
+    function omniRenderStats(stats) {
+        if (!stats || stats.length === 0) return '<p class="omni-hint">暂无数据，请先同步</p>';
+        return stats.map(s => `
+            <div class="stat-card">
+                <div class="stat-label">${escapeHtml(s.source)} / ${escapeHtml(s.board_type)}</div>
+                <div class="stat-value">${Number(s.sector_count) || 0}</div>
+                <div class="stat-unit">板块</div>
+                <div class="stat-value">${Number(s.total_stocks) || 0}</div>
+                <div class="stat-unit">股票</div>
+            </div>
+        `).join('');
+    }
+
+    function omniRenderLogs(logs) {
+        if (!logs || logs.length === 0) return '<p class="omni-hint">暂无同步记录</p>';
+        return logs.map(l => `
+            <div class="log-item">
+                <span class="log-time">${escapeHtml(omniFmtTime(l.start_time))}</span>
+                <span class="log-source">${escapeHtml(l.source)}</span>
+                <span class="log-type">${escapeHtml(l.board_type)}</span>
+                <span class="log-status">${omniFmtStatus(l.status)}</span>
+                <span class="log-count">${Number(l.record_count) || 0}条</span>
+            </div>
+        `).join('');
+    }
+
+    async function omniLoadStats() {
+        const statsEl = document.getElementById('omni-stats');
+        const logsEl = document.getElementById('omni-log-list');
+        const refreshEl = document.getElementById('omni-last-refresh');
+        try {
+            const r = await fetch('/api/omni');
+            if (!r.ok) {
+                if (statsEl) statsEl.innerHTML = '<p class="omni-hint">数据库未初始化，请先同步</p>';
+                return;
+            }
+            const d = await r.json();
+            if (statsEl) statsEl.innerHTML = omniRenderStats(d.stats);
+            if (logsEl) logsEl.innerHTML = omniRenderLogs(d.recent_logs);
+            if (refreshEl) refreshEl.textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+            if (statsEl) statsEl.innerHTML = '<p class="omni-hint">加载失败: ' + escapeHtml(e.message) + '</p>';
+        }
+    }
+
+    /* ===== OMNI pagination state ===== */
+    let _omniQueryState = {
+        source: '',
+        boardType: '',
+        keyword: '',
+        page: 1,
+        pageSize: 50,
+        totalCount: 0
+    };
+
+    function omniRenderPagination(page, pageSize, totalCount) {
+        const totalPages = Math.ceil(totalCount / pageSize);
+        if (totalPages <= 1) return '';
+        const pages = [];
+        const maxVisible = 5;
+        let start = Math.max(1, page - Math.floor(maxVisible / 2));
+        let end = Math.min(totalPages, start + maxVisible - 1);
+        if (end - start + 1 < maxVisible) start = Math.max(1, end - maxVisible + 1);
+
+        if (start > 1) pages.push('<button class="omni-page-btn" data-page="1">1</button>');
+        if (start > 2) pages.push('<span class="omni-page-ellipsis">...</span>');
+        for (let i = start; i <= end; i++) {
+            pages.push(`<button class="omni-page-btn${i === page ? ' active' : ''}" data-page="${i}">${i}</button>`);
+        }
+        if (end < totalPages - 1) pages.push('<span class="omni-page-ellipsis">...</span>');
+        if (end < totalPages) pages.push(`<button class="omni-page-btn" data-page="${totalPages}">${totalPages}</button>`);
+
+        const prevDisabled = page <= 1 ? ' disabled' : '';
+        const nextDisabled = page >= totalPages ? ' disabled' : '';
+
+        return `
+            <div class="omni-pagination">
+                <button class="omni-page-btn" data-page="${page - 1}"${prevDisabled}>上一页</button>
+                <div class="omni-page-numbers">${pages.join('')}</div>
+                <button class="omni-page-btn" data-page="${page + 1}"${nextDisabled}>下一页</button>
+                <span class="omni-page-info">第 ${page} / ${totalPages} 页 (共 ${totalCount} 条)</span>
+            </div>`;
+    }
+
+    async function omniQuerySectors(page = 1) {
+        const source = document.getElementById('omni-query-source').value;
+        const boardType = document.getElementById('omni-query-type').value;
+        const keyword = document.getElementById('omni-keyword').value.trim();
+        const resultsDiv = document.getElementById('omni-results');
+
+        // 保存查询状态
+        _omniQueryState = { source, boardType, keyword, page, pageSize: 50, totalCount: 0 };
+
+        resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-info">⏳ 查询中…</div>';
+
+        try {
+            const params = new URLSearchParams();
+            if (source) params.append('source', source);
+            if (boardType) params.append('board_type', boardType);
+            if (keyword) params.append('keyword', keyword);
+            params.append('page', page);
+            params.append('page_size', 50);
+
+            const d = await fetchJSON('/api/omni/query?' + params.toString(), { silent: true });
+
+            const queryDesc = [source && `数据源=${source}`, boardType && `类型=${boardType}`, keyword && `关键词="${keyword}"`].filter(Boolean).join(', ') || '(无筛选)';
+
+            if (!d.sectors || d.sectors.length === 0) {
+                resultsDiv.innerHTML = `<div class="omni-feedback omni-feedback-empty">○ 未找到匹配的板块 <span class="omni-feedback-meta">[${escapeHtml(queryDesc)}]</span></div>`;
+                return;
+            }
+
+            _omniQueryState.totalCount = d.total_count || d.sectors.length;
+            const pagination = omniRenderPagination(d.page || page, d.page_size || 50, _omniQueryState.totalCount);
+
+            const header = `<div class="omni-results-header">找到 <strong>${_omniQueryState.totalCount}</strong> 个板块 <span class="omni-feedback-meta">[${escapeHtml(queryDesc)}]</span></div>`;
+            const list = `
+                <table class="omni-sector-table">
+                    <thead>
+                        <tr>
+                            <th>板块名称</th>
+                            <th>代码</th>
+                            <th>类型</th>
+                            <th>成分股数量</th>
+                            <th>数据源</th>
+                            <th>更新时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${d.sectors.map(s => `
+                            <tr class="sector-item" data-id="${escapeHtml(String(s.id))}">
+                                <td class="sector-name">${escapeHtml(s.name)}</td>
+                                <td class="sector-code">${escapeHtml(s.code)}</td>
+                                <td><span class="sector-type-badge">${escapeHtml(s.board_type)}</span></td>
+                                <td class="sector-count">${Number(s.stock_count) || 0}</td>
+                                <td class="sector-source">${escapeHtml(s.source)}</td>
+                                <td class="sector-update">${s.update_time ? escapeHtml(s.update_time.slice(0, 10)) : '-'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>`;
+            resultsDiv.innerHTML = header + list + pagination;
+
+            // 分页事件
+            resultsDiv.querySelectorAll('.omni-page-btn:not([disabled])').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const newPage = parseInt(btn.dataset.page, 10);
+                    if (newPage && newPage !== _omniQueryState.page) {
+                        omniQuerySectors(newPage);
+                    }
+                });
+            });
+
+            // TODO: 板块点击 → 成分股弹窗
+            resultsDiv.querySelectorAll('.sector-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    console.log('sector clicked:', item.dataset.id);
+                });
+            });
+        } catch (e) {
+            resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-error">✕ 查询异常：' + escapeHtml(e.message) + '</div>';
+        }
+    }
+
+    async function omniSync() {
+        const btn = document.getElementById('omni-sync-btn');
+        const statusEl = document.getElementById('omni-sync-status');
+        const source = document.getElementById('omni-sync-source').value;
+        const boardType = document.getElementById('omni-sync-type').value;
+        if (!btn) return;
+        btn.disabled = true;
+        btn.textContent = '同步中...';
+        if (statusEl) statusEl.innerHTML = '<div class="omni-feedback omni-feedback-info">⏳ 同步中… <span class="omni-feedback-meta">(同步可能持续数十秒, 请勿关闭页面)</span></div>';
+        try {
+            const d = await fetchJSON('/api/omni/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source, board_type: boardType }),
+                silent: true,
+            });
+            if (d.status === 'success') {
+                showToast('同步成功: ' + (d.message || ''), 'success');
+                if (statusEl) statusEl.innerHTML = `<div class="omni-feedback omni-feedback-info">✓ 同步完成 <span class="omni-feedback-meta">${escapeHtml(d.message || '')}</span></div>`;
+            } else {
+                const msg = (d.message || '未知错误').substring(0, 200);
+                showToast('同步失败: ' + msg, 'error');
+                if (statusEl) statusEl.innerHTML = `<div class="omni-feedback omni-feedback-error">✕ 同步失败 <span class="omni-feedback-meta">${escapeHtml(msg)}</span></div>`;
+            }
+        } catch (e) {
+            showToast('同步失败: ' + e.message, 'error');
+            if (statusEl) statusEl.innerHTML = `<div class="omni-feedback omni-feedback-error">✕ 同步异常 <span class="omni-feedback-meta">${escapeHtml(e.message)}</span></div>`;
+        }
+        btn.disabled = false;
+        btn.textContent = '立即同步';
+        omniLoadStats();
+    }
+
+    function wireOmni() {
+        // 子标签页切换
+        document.querySelectorAll('.omni-subtab').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.omni;
+                document.querySelectorAll('.omni-subtab').forEach(t => t.classList.remove('active'));
+                btn.classList.add('active');
+                document.querySelectorAll('.omni-panel').forEach(p => p.classList.remove('active'));
+                const panel = document.querySelector('[data-omni-panel="' + tab + '"]');
+                if (panel) panel.classList.add('active');
+            });
+        });
+
+        // 按钮绑定
+        const queryBtn = document.getElementById('omni-query-btn');
+        if (queryBtn) queryBtn.addEventListener('click', () => omniQuerySectors(1));
+        const keywordInput = document.getElementById('omni-keyword');
+        if (keywordInput) {
+            keywordInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    omniQuerySectors(1);
+                }
+            });
+        }
+        const refreshBtn = document.getElementById('omni-refresh-btn');
+        if (refreshBtn) refreshBtn.addEventListener('click', omniLoadStats);
+        const syncBtn = document.getElementById('omni-sync-btn');
+        if (syncBtn) syncBtn.addEventListener('click', omniSync);
+        // 首屏不再预加载, 改为首次切到 OMNI 标签页时触发 (activatePanel 内)
+    }
+
     function init() {
         wireTabs();
         wireStatus();
@@ -1272,6 +1526,7 @@
         wireConfig();
         wireOnboarding();
         wireGlobalActions();
+        wireOmni();
 
         if (document.getElementById('auto-refresh').checked) startAutoRefresh();
         const initialActivePanel = document.querySelector('.panel.active')?.id;
