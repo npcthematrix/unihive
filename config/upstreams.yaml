@@ -10,7 +10,7 @@ upstreams:
     description: "MooTDX2 行情接口"
     type: "mootdx2"
     market: "std"
-    tdxdir: ""  # 通达信本地路径，空则自动探索
+    tdxdir: "c:/new_tdx64"  # 通达信本地路径，空则自动探索
     capabilities:
       - market_data
       - realtime_quote
@@ -112,6 +112,29 @@ upstreams:
       - fund_holders
       - fund_snapshot
       - fund_history
+
+  omni:
+    enabled: true
+    description: "OMNIDATA 板块数据: 从 SQLite 读取行业/概念板块数据，需先运行同步脚本"
+    type: "omni"
+    db_path: "./data/board.db"
+    capabilities:
+      - board_data
+
+  thsdk:
+    enabled: true
+    description: "同花顺 thsdk (社区 panghu11033/thsdk 包): 游客/账号登录, 16 只读工具常驻；自选写工具仅 ALLOW_WATCHLIST_WRITE=true 时注册"
+    type: "thsdk"
+    call_timeout_sec: 30
+    throttle_ms: 60
+    capabilities:
+      - market_data
+      - realtime_quote
+      - daily_bar
+      - tick
+      - wencai
+      - news
+      - watchlist
 
 # 上游 tool 映射 (gateway_tool -> {upstream_name: upstream_tool_name})
 # 是 routing 链之外的另一种声明方式：当某 gateway_tool 没有 routing chain，

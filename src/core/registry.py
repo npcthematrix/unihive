@@ -166,7 +166,11 @@ def register_tools_from_config(
     registered: list[str] = []
     for spec in specs:
         fn = build_tool_function(spec, server)
-        server.mcp.tool()(fn)
+        annotations = spec.get("annotations")
+        if annotations:
+            server.mcp.tool(annotations=annotations)(fn)
+        else:
+            server.mcp.tool()(fn)
         registered.append(spec["name"])
     return registered
 

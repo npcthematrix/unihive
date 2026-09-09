@@ -1,0 +1,451 @@
+# THSDK 上游（社区 thsdk 包，panghu11033/thsdk）工具定义
+# 完整 THSCODE 格式：USHA600519（4 位市场前缀 + 6 位代码）、USZA300033。
+# 只有短代码或名称时先调 ths_search_symbols / ths_complete_ths_code。
+# 写工具通过 requires_env: ALLOW_WATCHLIST_WRITE 在加载期决定是否注册（无运行时后门）。
+
+tools:
+  # ========== 认证与账户只读 ==========
+
+  - name: ths_auth_status
+    description: |-
+      【登录状态】返回当前 THSDK 是否已登录、登录方式（credentials=账号密码 / guest=游客临时会话）、写开关状态。不暴露任何凭证。
+      返回: {"authenticated": bool, "auth_mode": "credentials"|"guest", "guest": bool, "watchlist_write_enabled": bool}
+    routing: ths_auth_status
+    upstream_tool_mapping:
+      thsdk: ths_auth_status
+    cache_ttl_key:
+    data_source_type: online
+    dangerous: false
+    params: []
+
+  - name: ths_account_permissions
+    description: |-
+      【账号权限】查询当前同花顺账号的数据权限（游客/正式账号可能不同）。不暴露凭证。
+      【返回】运行组件解码后的权限信息对象；游客账号可能提示权限受限，此时请配置 THS_USERNAME/THS_PASSWORD。
+    routing: ths_account_permissions
+    upstream_tool_mapping:
+      thsdk: ths_account_permissions
+    cache_ttl_key:
+    data_source_type: online
+    dangerous: false
+    params: []
+
+  - name: ths_get_account_watchlist
+    description: |-
+      【我的自选】查询当前账号的自选股快照，含证券列表与版本号 version
+      （整体替换自选 ths_replace_account_watchlist_securities 需要按版本提交乐观锁）。
+      【返回】账户自选快照对象（证券列表、版本信息）。账号数据不缓存。
+    routing: ths_get_account_watchlist
+    upstream_tool_mapping:
+      thsdk: ths_get_account_watchlist
+    cache_ttl_key:
+    data_source_type: online
+    dangerous: false
+    params: []
+
+  - name: ths_get_account_watchlist_groups
+    description: |-
+      【我的自选分组】查询当前账号的全部分组及各分组内证券（含自定义组的 group_id/name）。
+      【返回】分组列表对象；写分组工具以 group_id 定位分组。
+    routing: ths_get_account_watchlist_groups
+    upstream_tool_mapping:
+      thsdk: ths_get_account_watchlist_groups
+    cache_ttl_key:
+    data_source_type: online
+    dangerous: false
+    params: []
+
+  - name: ths_get_all_watchlist
+    description: |-
+      【全部自选（含分组）】合并查询"主自选"与"自选分组"。主自选以 group_id=0 呈现，分组以 group_id=35+ 呈现。
+      【返回】分组列表，含 group_id=0 的"默认分组"（主自选23只）与 group_id=35+ 的自定义分组。
+      【适用场景】需要同时查看主自选与分组时调用一次即可，无需分别调用 ths_get_account_watchlist 与 ths_get_account_watchlist_groups。
+    routing: ths_get_all_watchlist
+    upstream_tool_mapping:
+      thsdk: ths_get_all_watchlist
+    cache_ttl_key:
+    data_source_type: online
+    dangerous: false
+    params: []
+
+  # ========== 证券发现 ==========
+
+  - name: ths_search_symbols
+    description: |-
+      【证券搜索】按代码/拼音缩写/中文名称搜索证券，返回候选的完整 THSCODE、名称与市场。
+      【参数】
+      - pattern (必填): 关键词，如 '600519' / 'gzmt' / '茅台'
+      - market (可选): 限定市场前缀，如 USHA / USZA
+      【注意】仅传短代码或名称时，必须先用本工具或 ths_complete_ths_code 拿到完整 THSCODE 再查行情/写自选。
+    routing: ths_search_symbols
+    upstream_tool_mapping:
+      thsdk: ths_search_symbols
+    cache_ttl_key:
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: pattern, type: str, required: true, description: "搜索关键词：代码/拼音/中文名，如 600519 / gzmt / 茅台"}
+      - {name: market, type: str, required: false, description: "市场前缀过滤，如 USHA / USZA，省略搜全部市场"}
+
+  - name: ths_complete_ths_code
+    description: |-
+      【短代码补全】把一个或多个短代码（如 300033、600519）批量解析为完整 THSCODE（如 USZA300033、USHA600519）。
+      【参数】codes (必填): 短代码数组，如 ["600519", "300033"]
+      【返回】补全结果（表格或映射形态以 thsdk 返回为准），从中取完整代码。
+    routing: ths_complete_ths_code
+    upstream_tool_mapping:
+      thsdk: ths_complete_ths_code
+    cache_ttl_key:
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: codes, type: "List[str]", required: true, description: "短代码数组，如 ['600519','300033']"}
+
+  # ========== 行情与基本面 ==========
+
+  - name: ths_get_price
+    description: |-
+      【K线-参数版】查询单只证券的 K 线，返回 records 数组，时间字段为 ISO 字符串。
+      【参数】
+      - security (必填): 完整 THSCODE，如 USHA600519
+      - frequency (可选): 周期，默认 daily；可选 1m/5m/15m/30m/60m/120m/daily/weekly/monthly
+      - count (可选): 最近 N 根，默认 20；与 start_date/end_date 互斥
+      - fq (可选): 复权 pre=前复权(默认) / post=后复权 / none=不复权
+      - start_date, end_date (可选): 日期范围 yyyy-MM-dd（必须成对，仅日/周/月线支持）
+      【注意】count 与日期范围二选一；分钟线只能用 count。
+    routing: ths_get_price
+    upstream_tool_mapping:
+      thsdk: ths_get_price
+    cache_ttl_key: historical
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
+      - {name: frequency, type: str, required: false, enum: ["1m", "5m", "15m", "30m", "60m", "120m", "daily", "weekly", "monthly"], description: "K 线周期，默认 daily"}
+      - {name: count, type: int, required: false, description: "最近 N 根 K 线，默认 20；与日期范围互斥"}
+      - {name: fq, type: str, required: false, enum: ["pre", "post", "none"], description: "复权：pre=前复权(默认) / post=后复权 / none=不复权"}
+      - {name: start_date, type: str, required: false, description: "起始日期 yyyy-MM-dd，必须与 end_date 成对"}
+      - {name: end_date, type: str, required: false, description: "结束日期 yyyy-MM-dd，必须与 start_date 成对"}
+
+  - name: ths_klines
+    description: |-
+      【K线-传统参数名】与 ths_get_price 等价的传统写法：interval/adjust/count。
+      【参数】
+      - security (必填): 完整 THSCODE
+      - interval (可选): 周期，默认 day，可选 1m/5m/15m/30m/60m/120m/day/week/month
+      - count (可选): 条数，默认 20；与 start_time/end_time 互斥
+      - adjust (可选): 复权，省略或 none=不复权 / pre=前复权 / post=后复权
+      - start_time, end_time (可选): yyyy-MM-dd 成对使用
+    routing: ths_klines
+    upstream_tool_mapping:
+      thsdk: ths_klines
+    cache_ttl_key: historical
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
+      - {name: interval, type: str, required: false, enum: ["1m", "5m", "15m", "30m", "60m", "120m", "day", "week", "month"], description: "周期，默认 day"}
+      - {name: count, type: int, required: false, description: "条数，默认 20"}
+      - {name: adjust, type: str, required: false, enum: ["none", "pre", "post"], description: "复权：省略=不复权 / pre=前复权 / post=后复权"}
+      - {name: start_time, type: str, required: false, description: "起始日期 yyyy-MM-dd，与 end_time 成对"}
+      - {name: end_time, type: str, required: false, description: "结束日期 yyyy-MM-dd，与 start_time 成对"}
+
+  - name: ths_intraday_data
+    description: |-
+      【分时】查询指定证券当天或指定交易日的分时走势。
+      【参数】
+      - security (必填): 完整 THSCODE
+      - date (可选): 交易日 yyyy-MM-dd，省略=当天
+    routing: ths_intraday_data
+    upstream_tool_mapping:
+      thsdk: ths_intraday_data
+    cache_ttl_key: realtime_quote
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
+      - {name: date, type: str, required: false, description: "交易日 yyyy-MM-dd，省略查当天"}
+
+  - name: ths_depth
+    description: |-
+      【五档盘口】查询一只或多只证券的五档买卖盘，按档位展开。
+      【参数】securities (必填): 完整 THSCODE 数组，如 ["USHA600519", "USZA300033"]
+    routing: ths_depth
+    upstream_tool_mapping:
+      thsdk: ths_depth
+    cache_ttl_key: realtime_quote
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: securities, type: "List[str]", required: true, description: "完整 THSCODE 数组，如 ['USHA600519','USZA300033']"}
+
+  - name: ths_tick_level1
+    description: |-
+      【逐笔成交(L1)】按最近条数或时间范围查询普通逐笔成交（非 Level-2）。
+      【参数】
+      - security (必填): 完整 THSCODE
+      - count (可选): 最近条数，默认 100
+      - start_time, end_time (可选): 时间范围 yyyy-MM-dd
+    routing: ths_tick_level1
+    upstream_tool_mapping:
+      thsdk: ths_tick_level1
+    cache_ttl_key: realtime_quote
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
+      - {name: count, type: int, required: false, description: "最近条数，默认 100"}
+      - {name: start_time, type: str, required: false, description: "起始时间 yyyy-MM-dd"}
+      - {name: end_time, type: str, required: false, description: "结束时间 yyyy-MM-dd"}
+
+  - name: ths_corporate_action
+    description: |-
+      【公司行为】查询证券的分红、送转、配股与除权除息记录。
+      【参数】
+      - security (必填): 完整 THSCODE
+      - count (可选): 最近条数，默认 100
+    routing: ths_corporate_action
+    upstream_tool_mapping:
+      thsdk: ths_corporate_action
+    cache_ttl_key: historical
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
+      - {name: count, type: int, required: false, description: "最近条数，默认 100"}
+
+  # ========== 问财、板块、资讯 ==========
+
+  - name: ths_wencai_nlp
+    description: |-
+      【问财自然语言选股】把自然语言条件（如"市盈率小于20，净利润增长率大于20%"）解析为证券池，动态字段展开为表格列。
+      【参数】
+      - query (必填): 自然语言选股条件
+      - limit (可选): 返回条数，默认 50
+      - market (可选): 市场前缀，如 USHA / USZA，省略不限制
+    routing: ths_wencai_nlp
+    upstream_tool_mapping:
+      thsdk: ths_wencai_nlp
+    cache_ttl_key: special_data
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: query, type: str, required: true, description: "问财自然语言条件，如 市盈率小于20且净利润增长率大于20%"}
+      - {name: limit, type: int, required: false, description: "返回条数，默认 50"}
+      - {name: market, type: str, required: false, description: "市场前缀，如 USHA / USZA，省略不限制"}
+
+  - name: ths_news
+    description: |-
+      【7x24 快讯】分页查询同花顺 7x24 全球快讯。
+      【参数】
+      - page (可选): 页码，默认 1
+      - page_size (可选): 每页条数，默认 20
+      - tag (可选): 分类标签，省略为全部
+    routing: ths_news
+    upstream_tool_mapping:
+      thsdk: ths_news
+    cache_ttl_key: special_data
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: page, type: int, required: false, description: "页码，默认 1"}
+      - {name: page_size, type: int, required: false, description: "每页条数，默认 20"}
+      - {name: tag, type: str, required: false, description: "分类标签，省略为全部"}
+
+  - name: ths_block_constituents
+    description: |-
+      【板块成分】按板块 ID 或名称（如 沪深300）查询成分证券。
+      【参数】
+      - block (必填): 板块 ID（整数）或名称
+      - start (可选): 偏移量，默认 0
+      - count (可选): 条数，默认 50
+    routing: ths_block_constituents
+    upstream_tool_mapping:
+      thsdk: ths_block_constituents
+    cache_ttl_key: ticker_list
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: block, type: str, required: true, description: "板块 ID 或名称，如 沪深300"}
+      - {name: start, type: int, required: false, description: "偏移量，默认 0"}
+      - {name: count, type: int, required: false, description: "条数，默认 50"}
+
+  - name: ths_market_securities
+    description: |-
+      【市场证券分页】分页列出指定市场中的证券。
+      【参数】
+      - market (必填): 市场前缀，如 USHA / USZA
+      - page (可选): 页码，默认 1
+      - page_size (可选): 每页条数，默认 100
+    routing: ths_market_securities
+    upstream_tool_mapping:
+      thsdk: ths_market_securities
+    cache_ttl_key: ticker_list
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: market, type: str, required: true, description: "市场前缀，如 USHA / USZA"}
+      - {name: page, type: int, required: false, description: "页码，默认 1"}
+      - {name: page_size, type: int, required: false, description: "每页条数，默认 100"}
+
+  # ========== 账号自选写操作（仅 ALLOW_WATCHLIST_WRITE=true 时注册） ==========
+
+  - name: ths_add_account_watchlist_securities
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      向账号自选股末尾（或置顶）追加证券。证券尽量传完整 THSCODE；短代码会先自动补全。
+    routing: ths_add_account_watchlist_securities
+    upstream_tool_mapping:
+      thsdk: ths_add_account_watchlist_securities
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: securities, type: "List[str]", required: true, description: "完整 THSCODE 数组，如 ['USHA600519']；短代码自动补全"}
+      - {name: add_to_front, type: bool, required: false, description: "是否置顶添加，默认 false"}
+
+  - name: ths_remove_account_watchlist_securities
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      从账号自选股移除证券。
+    routing: ths_remove_account_watchlist_securities
+    upstream_tool_mapping:
+      thsdk: ths_remove_account_watchlist_securities
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: securities, type: "List[str]", required: true, description: "完整 THSCODE 数组；短代码自动补全"}
+
+  - name: ths_replace_account_watchlist_securities
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      按版本号整体替换账号自选股（全量覆盖）。先调 ths_get_account_watchlist 取当前 version，且必须 confirm=true。
+    routing: ths_replace_account_watchlist_securities
+    upstream_tool_mapping:
+      thsdk: ths_replace_account_watchlist_securities
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: securities, type: "List[str]", required: true, description: "替换后的完整 THSCODE 数组；短代码自动补全"}
+      - {name: version, type: int, required: true, description: "自选版本号，取自 ths_get_account_watchlist，乐观锁"}
+      - {name: confirm, type: bool, required: true, description: "必须显式传 true 才执行，默认拒绝"}
+
+  - name: ths_clear_account_watchlist
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      清空当前账号的全部自选股，必须 confirm=true。
+    routing: ths_clear_account_watchlist
+    upstream_tool_mapping:
+      thsdk: ths_clear_account_watchlist
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: confirm, type: bool, required: true, description: "必须显式传 true 才执行，默认拒绝"}
+
+  - name: ths_create_account_watchlist_group
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      创建一个新的自选分组，可同时带入初始证券。
+    routing: ths_create_account_watchlist_group
+    upstream_tool_mapping:
+      thsdk: ths_create_account_watchlist_group
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: name, type: str, required: true, description: "新分组名称"}
+      - {name: securities, type: "List[str]", required: false, description: "初始证券完整 THSCODE 数组；短代码自动补全"}
+
+  - name: ths_delete_account_watchlist_group
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      删除指定自选分组（组内证券关联一并删除），必须 confirm=true。group_id 取自 ths_get_account_watchlist_groups。
+    routing: ths_delete_account_watchlist_group
+    upstream_tool_mapping:
+      thsdk: ths_delete_account_watchlist_group
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: group_id, type: int, required: true, description: "分组 ID，取自 ths_get_account_watchlist_groups"}
+      - {name: confirm, type: bool, required: true, description: "必须显式传 true 才执行，默认拒绝"}
+
+  - name: ths_rename_account_watchlist_group
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      重命名指定自选分组。
+    routing: ths_rename_account_watchlist_group
+    upstream_tool_mapping:
+      thsdk: ths_rename_account_watchlist_group
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: group_id, type: int, required: true, description: "分组 ID"}
+      - {name: name, type: str, required: true, description: "新分组名称"}
+
+  - name: ths_add_account_watchlist_group_securities
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      向指定分组追加证券。
+    routing: ths_add_account_watchlist_group_securities
+    upstream_tool_mapping:
+      thsdk: ths_add_account_watchlist_group_securities
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: group_id, type: int, required: true, description: "分组 ID"}
+      - {name: securities, type: "List[str]", required: true, description: "完整 THSCODE 数组；短代码自动补全"}
+
+  - name: ths_remove_account_watchlist_group_securities
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      从指定分组移除证券。
+    routing: ths_remove_account_watchlist_group_securities
+    upstream_tool_mapping:
+      thsdk: ths_remove_account_watchlist_group_securities
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: group_id, type: int, required: true, description: "分组 ID"}
+      - {name: securities, type: "List[str]", required: true, description: "完整 THSCODE 数组；短代码自动补全"}
+
+  - name: ths_replace_account_watchlist_group_securities
+    description: |-
+      [DANGEROUS WRITE] 此操作会修改同花顺账号自选数据，不可撤销或难以撤销。调用前必须确认用户意图。
+      整体替换指定分组内证券（全量覆盖），必须 confirm=true。
+    routing: ths_replace_account_watchlist_group_securities
+    upstream_tool_mapping:
+      thsdk: ths_replace_account_watchlist_group_securities
+    requires_env: ALLOW_WATCHLIST_WRITE
+    dangerous: true
+    annotations: {read_only_hint: false, destructive_hint: true}
+    cache_ttl_key:
+    data_source_type: online
+    params:
+      - {name: group_id, type: int, required: true, description: "分组 ID"}
+      - {name: securities, type: "List[str]", required: true, description: "替换后的完整 THSCODE 数组；短代码自动补全"}
+      - {name: confirm, type: bool, required: true, description: "必须显式传 true 才执行，默认拒绝"}
