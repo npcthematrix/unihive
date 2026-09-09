@@ -262,8 +262,8 @@ async def main():
 
         # 2) 调用实时行情（任意上游的 tool 都能这样调）
         quote = await client.call_tool(
-            "get_realtime_quote",
-            {"symbol": "sh600519"}
+            "a_share_prices_snapshot",
+            {"thscodes": "600519.SH"}
         )
         print(quote.data)
 
@@ -274,8 +274,8 @@ asyncio.run(main())</pre>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
                         <pre>bar = await client.call_tool(
-    "get_daily_bar",
-    {"symbol": "sh600519", "start_date": "20260101", "end_date": "20260301"}
+    "a_share_prices_historical",
+    {"thscode": "600519.SH", "start_date": "2026-01-01", "end_date": "2026-03-01"}
 )
 print(bar.data)</pre>
                     </div>
@@ -284,7 +284,7 @@ print(bar.data)</pre>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
                         <pre>match = await client.call_tool(
-    "search_stock",
+    "search_stock_local",
     {"keyword": "茅台"}
 )
 print(match.data)</pre>
@@ -326,13 +326,14 @@ print(match.data)</pre>
             </div>
         </div>
         <div id="omni" class="panel">
-            <div class="card-toolbar">
-                <h2>OMNI板块管理</h2>
-                <div class="toolbar-actions">
-                    <span class="last-refresh" id="omni-last-refresh" aria-live="polite">从未刷新</span>
-                    <button class="btn-secondary" id="omni-refresh-btn" title="刷新数据">↻ 刷新</button>
+            <div class="card">
+                <div class="card-toolbar">
+                    <h2>OMNI板块管理</h2>
+                    <div class="toolbar-actions">
+                        <span class="last-refresh" id="omni-last-refresh" aria-live="polite">从未刷新</span>
+                        <button class="btn-secondary" id="omni-refresh-btn" title="刷新数据">↻ 刷新</button>
+                    </div>
                 </div>
-            </div>
 
             <!-- 子标签页导航 (顺序: 概览 → 浏览 → 管理, 符合用户从读到写的操作路径) -->
             <div class="omni-subtabs subtabs" id="omni-subtabs" role="tablist" aria-label="OMNI 子标签">
@@ -365,6 +366,7 @@ print(match.data)</pre>
                     <select id="omni-query-source" title="数据源">
                         <option value="">全部数据源</option>
                         <option value="fuyao">Fuyao</option>
+                        <option value="TDX">TDX</option>
                         <option value="tqquant">TDX-QUANT</option>
                     </select>
                     <select id="omni-query-type" title="板块类型">
@@ -393,6 +395,7 @@ print(match.data)</pre>
                         <select id="omni-sync-source">
                             <option value="all">全部</option>
                             <option value="fuyao">Fuyao (同花顺)</option>
+                            <option value="TDX">TDX (通达信)</option>
                             <option value="tqquant" selected>TDX-QUANT</option>
                         </select>
                         <label>板块类型：</label>
@@ -411,6 +414,7 @@ print(match.data)</pre>
                         <p class="omni-hint">暂无同步记录</p>
                     </div>
                 </div>
+            </div>
             </div>
         </div>
     </div>
@@ -432,7 +436,7 @@ print(match.data)</pre>
             </div>
         </div>
 
-        <script src="/static/console/console.js?v=20260909-4" defer></script>
+        <script src="/static/console/console.js?v=20260909-5" defer></script>
 
 </body>
 </html>

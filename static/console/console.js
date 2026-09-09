@@ -1333,15 +1333,28 @@
         `).join('');
     }
 
+    /* OMNI 单次 fetch + single-flight (refresh btn 同时调 omniLoadStats 和
+       omniLoadSyncTab, 共享一个 in-flight promise 避免重复请求) */
+    let _omniInflight = null;
+    async function omniFetchStats() {
+        if (!_omniInflight) {
+            _omniInflight = fetchJSON('/api/omni', { silent: true })
+                .finally(() => { _omniInflight = null; });
+        }
+        return _omniInflight;
+    }
+
     async function omniLoadStats() {
         const statsEl = document.getElementById('omni-stats');
         const logsEl = document.getElementById('omni-log-list');
         const refreshEl = document.getElementById('omni-last-refresh');
         try {
-            const d = await fetchJSON('/api/omni', { silent: true });
+            const d = await omniFetchStats();
             if (statsEl) statsEl.innerHTML = omniRenderStats(d.stats);
             if (logsEl) logsEl.innerHTML = omniRenderLogs(d.recent_logs);
             if (refreshEl) refreshEl.textContent = new Date().toLocaleTimeString();
+            // 同步刷新 sync tab (如果已经访问过, 否则让它首次访问时自己 fetch)
+            if (_syncTabLoaded) omniRenderSyncTab(d);
         } catch (e) {
             // fetchJSON 已把后端错误体塞到 message 里; 网络失败是 TypeError, 后端 4xx/5xx 走 e.status
             const hint = e.status === 404 || e.status === 503
@@ -1493,14 +1506,21 @@
     }
 
     /* ===== OMNI 同步管理 tab 自渲染 (上次同步概览 + 最近历史) ===== */
+    let _syncTabLoaded = false;
+    function omniRenderSyncTab(d) {
+        const lastEl = document.getElementById('omni-last-sync');
+        const historyEl = document.getElementById('omni-sync-history-list');
+        if (lastEl) lastEl.innerHTML = omniRenderLastSync(d.recent_logs);
+        if (historyEl) historyEl.innerHTML = omniRenderRecentHistory(d.recent_logs, 3);
+    }
     async function omniLoadSyncTab() {
+        _syncTabLoaded = true;
         const lastEl = document.getElementById('omni-last-sync');
         const historyEl = document.getElementById('omni-sync-history-list');
         if (!lastEl && !historyEl) return;
         try {
-            const d = await fetchJSON('/api/omni', { silent: true });
-            if (lastEl) lastEl.innerHTML = omniRenderLastSync(d.recent_logs);
-            if (historyEl) historyEl.innerHTML = omniRenderRecentHistory(d.recent_logs, 3);
+            const d = await omniFetchStats();
+            omniRenderSyncTab(d);
         } catch (e) {
             if (lastEl) lastEl.innerHTML = '<div class="omni-hint">加载失败</div>';
         }
