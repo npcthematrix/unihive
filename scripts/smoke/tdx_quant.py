@@ -8,10 +8,10 @@
   3. TdxW.exe 已启动并登录
 
 使用：
-  python scripts/smoke_tdx_quant.py                     # 默认探活 + 1 个查询
-  python scripts/smoke_tdx_quant.py get_market_data    # 调用指定工具
-  python scripts/smoke_tdx_quant.py --list              # 列出 54 个生成工具
-  python scripts/smoke_tdx_quant.py --args code=000001  # 传参
+  python scripts/smoke/tdx_quant.py                     # 默认探活 + 1 个查询
+  python scripts/smoke/tdx_quant.py get_market_data    # 调用指定工具
+  python scripts/smoke/tdx_quant.py --list              # 列出 54 个生成工具
+  python scripts/smoke/tdx_quant.py --args code=000001  # 传参
 
 退出码：
   0  成功
@@ -141,7 +141,7 @@ async def main_async(args: argparse.Namespace) -> int:
                 return 3
         else:
             print("\n[skip] no --tool specified; probe-only smoke test complete.")
-            print("       Try: python scripts/smoke_tdx_quant.py get_market_data --args code=000001")
+            print("       Try: python scripts/smoke/tdx_quant.py get_market_data --args code=000001")
         return 0
     finally:
         await client.stop()

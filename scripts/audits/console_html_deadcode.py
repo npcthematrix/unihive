@@ -1,6 +1,6 @@
 """Audit console.html for dead code: unused CSS classes, unused JS functions.
 
-Run: python scripts/audit_console_unused.py
+Run: python scripts/audits/console_html_deadcode.py
 """
 import re
 from pathlib import Path

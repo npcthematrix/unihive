@@ -172,13 +172,12 @@
                     <h4>1.1 启动网关</h4>
                     <p>网关默认以 <strong>HTTP 模式</strong>启动（推荐），同时也支持 STDIO 模式。在项目根目录下运行：</p>
                     <div class="onboarding-toolbox">
-                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_all.ps1">复制 HTTP 启动命令</button>
-                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_console.ps1">复制仅控制台命令</button>
+                        <button class="btn-secondary" data-copy-cmd=".\scripts\start_gateway.ps1">复制 HTTP 启动命令</button>
                         <button class="btn-secondary" data-copy-cmd="python -m src.gateway_server --transport stdio">复制 STDIO 启动命令</button>
                     </div>
                     <div class="code-block">
                         <button class="copy-btn">复制</button>
-                        <pre>.\scripts\start_all.ps1</pre>
+                        <pre>.\scripts\start_gateway.ps1</pre>
                     </div>
                     <p>启动后，控制台和 HTTP 网关共用端口 <code>http://127.0.0.1:18080</code>（MCP 接口在 <code>/mcp</code> 子路径下）。</p>
 
