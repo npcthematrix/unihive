@@ -86,6 +86,7 @@ tr:hover { background: #f8f9fa; }
 .cfg-search-clear:hover { background: var(--border); color: var(--text); }
 .cfg-search-wrap { position: relative; display: inline-block; }
 .cfg-search-wrap.has-value .cfg-search-clear { display: flex; }
+.cfg-empty { padding: 24px 16px; text-align: center; color: var(--text-secondary); font-size: 0.85rem; background: var(--card-bg); border: 1px dashed var(--border); border-radius: 6px; margin-top: 8px; }
 .cfg-panel { display: none; }
 .cfg-panel.active { display: block; }
 .cfg-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
@@ -224,6 +225,7 @@ mark.ifs-hl { background: #fef08a; color: inherit; padding: 0 1px; border-radius
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text); color: white; padding: 8px 16px; border-radius: 6px; font-size: 0.85rem; opacity: 0; transition: opacity 200ms ease, transform 200ms ease; pointer-events: none; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.toast-error { background: var(--danger); }
+.toast.toast-warn { background: var(--warning); color: #1a1a1a; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
 .badge-dangerous { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
 .badge-cache { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
@@ -622,10 +624,19 @@ button:focus-visible { outline-offset: 2px; }
 .omni-page-ellipsis { color: var(--text-secondary); padding: 0 4px; }
 .omni-page-info { font-size: 0.75rem; color: var(--text-secondary); margin-left: 12px; }
 
-/* OMNI 板块表格 */
-.omni-sector-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
-.omni-sector-table th { text-align: left; padding: 10px 12px; background: var(--bg); border-bottom: 2px solid var(--border); font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
-.omni-sector-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+/* OMNI 板块表格 - 使用 grid 替代 table */
+.omni-sector-table { width: 100%; font-size: 0.8125rem; border-collapse: separate; border-spacing: 0; }
+.omni-sector-table thead { display: table; width: 100%; table-layout: fixed; }
+.omni-sector-table tbody { display: table; width: 100%; table-layout: fixed; }
+.omni-sector-table tr { display: table-row; }
+.omni-sector-table th { display: table-cell; text-align: left; padding: 10px 12px; background: var(--bg); border-bottom: 2px solid var(--border); font-weight: 600; color: var(--text-secondary); white-space: nowrap; box-sizing: border-box; }
+.omni-sector-table td { display: table-cell; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
+.omni-sector-table th:nth-child(1), .omni-sector-table td:nth-child(1) { width: 30%; }
+.omni-sector-table th:nth-child(2), .omni-sector-table td:nth-child(2) { width: 12%; }
+.omni-sector-table th:nth-child(3), .omni-sector-table td:nth-child(3) { width: 10%; }
+.omni-sector-table th:nth-child(4), .omni-sector-table td:nth-child(4) { width: 12%; }
+.omni-sector-table th:nth-child(5), .omni-sector-table td:nth-child(5) { width: 14%; }
+.omni-sector-table th:nth-child(6), .omni-sector-table td:nth-child(6) { width: 22%; }
 .omni-sector-table tr.sector-item:hover { background: var(--bg); cursor: pointer; }
 .omni-sector-table .sector-name { font-weight: 500; }
 .omni-sector-table .sector-code { font-family: monospace; color: var(--text-secondary); }

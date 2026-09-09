@@ -61,6 +61,7 @@
     let activePanel = 'interfaces';
     let _omniSyncInFlight = false;
     let _onboardingObserver = null;
+    let _currentFilteredToolNames = [];
 
     /* ===== Helpers ===== */
     function escapeHtml(s) {
@@ -76,9 +77,10 @@
             document.body.appendChild(t);
         }
         t.textContent = msg;
-        t.classList.remove('toast-error', 'toast-success');
+        t.classList.remove('toast-error', 'toast-success', 'toast-warn');
         if (variant === 'error') t.classList.add('toast-error');
         else if (variant === 'success') t.classList.add('toast-success');
+        else if (variant === 'warn') t.classList.add('toast-warn');
         t.classList.add('show');
         clearTimeout(t._hideTimer);
         t._hideTimer = setTimeout(() => t.classList.remove('show'), variant === 'error' ? 2800 : 1400);
@@ -250,7 +252,7 @@
         document.getElementById('cache-timestamp').textContent = cache && cache.timestamp ? formatTime(cache.timestamp) : '-';
         if (!cache || !cache.enabled) {
             enabledEl.className = 'mini-value off';
-            enabledEl.querySelector('.cache-enabled-text').textContent = '—';
+            enabledEl.querySelector('.cache-enabled-text').textContent = '停用';
             liveEl.textContent = '-';
             entriesEl.textContent = '-';
             sizeEl.textContent = '-';
@@ -262,7 +264,7 @@
             return;
         }
         enabledEl.className = 'mini-value on';
-        enabledEl.querySelector('.cache-enabled-text').textContent = '—';
+        enabledEl.querySelector('.cache-enabled-text').textContent = '启用';
         liveEl.textContent = cache.live_entries != null ? cache.live_entries : '-';
         entriesEl.textContent = cache.entries != null ? cache.entries : '-';
         sizeEl.textContent = (cache.db_size_mb || 0).toFixed(2) + ' MB';
@@ -313,10 +315,11 @@
 
     async function loadStatus(showLoading) {
         const refreshEl = document.getElementById('last-refresh');
+        const tbody = document.getElementById('upstreams-body');
         if (showLoading && refreshEl) refreshEl.classList.add('refreshing');
         if (showLoading) renderStatusSkeleton();
         try {
-            const data = await fetchJSON('/api/status');
+            const data = await fetchJSON('/api/status', { silent: true });
             statusUpstreams = Object.entries(data.upstreams || {}).map(([name, info]) => ({ _name: name, ...info }));
             Object.entries(data.upstreams || {}).forEach(([n, info]) => { upstreamDotStatus[n] = info.status; });
             renderStatusSummary(data.summary);
@@ -328,7 +331,17 @@
             updateLastRefresh();
         } catch (e) {
             console.error('Load status error:', e);
-            if (refreshEl) { refreshEl.textContent = '刷新失败'; refreshEl.classList.remove('refreshing'); }
+            if (refreshEl) {
+                refreshEl.textContent = `刷新失败 (${e.message || '未知错误'})`;
+                refreshEl.classList.add('refreshing-failed');
+                refreshEl.classList.remove('refreshing');
+            }
+            // 失败时把残留的 skeleton 替换成错误条, 避免永久转圈
+            if (tbody && tbody.querySelector('.skeleton')) {
+                tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon"><span class="status-icon status-icon-error">!</span></div><div class="empty-state-title">无法加载上游状态</div><div class="empty-state-hint">${escapeHtml(e.message || '请检查网关是否运行')}</div></div></td></tr>`;
+            }
+            // 失败后下次进入面板时强制重拉
+            lastStatusFetch = 0;
         } finally {
             if (refreshEl) refreshEl.classList.remove('refreshing');
         }
@@ -520,7 +533,7 @@
         const meta = activeGroup === ALL_KEY ? { title: '全部', key: '全部' } : { title: (GROUP_META[activeGroup] || { title: activeGroup }).title, key: activeGroup };
         const metaEl = document.getElementById('ifs-total-meta');
         if (metaEl) metaEl.textContent = `${meta.title} · ${tools.length} 个工具`;
-        window._currentFilteredToolNames = tools.map(t => t.name);
+        _currentFilteredToolNames = tools.map(t => t.name);
         const headerHtml = activeGroup === ALL_KEY
             ? '<th style="width:28%">接口</th><th>描述</th><th style="width:90px">操作</th>'
             : `<th style="width:28%">接口</th><th>描述</th><th style="width:14%" class="col-source">数据源</th><th style="width:90px">操作</th>`;
@@ -797,8 +810,7 @@
         root.querySelectorAll('[data-toggle-section]').forEach(hdr => {
             hdr.addEventListener('click', () => hdr.closest('.cfg-section').classList.toggle('collapsed'));
         });
-        // event delegation for cfg-expandable rows (替代 inline onclick)
-        root.addEventListener('click', onCfgPanelClick);
+        // 监听器只在 wireConfig() 一次性绑定到 cfg-panel-upstreams (这里不再 addEventListener)
     }
 
     function onCfgPanelClick(e) {
@@ -842,12 +854,14 @@
                         <tbody id="cfg-mapping-tbody">${allRowsHtml}</tbody>
                     </table>
                     <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:6px" id="cfg-mapping-count"></div>
+                    <div id="cfg-mapping-empty" class="cfg-empty" hidden>无匹配项</div>
                 </div>
             </div>`;
         const search = document.getElementById('cfg-search-mapping');
         const clear = document.getElementById('cfg-search-mapping-clear');
         const tbody = document.getElementById('cfg-mapping-tbody');
         const countEl = document.getElementById('cfg-mapping-count');
+        const emptyEl = document.getElementById('cfg-mapping-empty');
         const applyFilter = () => {
             const q = (search.value || '').trim().toLowerCase();
             const rows = tbody.querySelectorAll('tr[data-search]');
@@ -858,6 +872,7 @@
                 if (match) shown++;
             });
             countEl.textContent = q ? `显示 ${shown} / ${rows.length}` : '';
+            if (emptyEl) emptyEl.hidden = !(q && shown === 0);
             search.parentElement.classList.toggle('has-value', !!q);
         };
         search.addEventListener('input', applyFilter);
@@ -917,12 +932,14 @@
                         <tbody id="cfg-tools-tbody">${allRowsHtml}</tbody>
                     </table>
                     <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:6px" id="cfg-tools-count"></div>
+                    <div id="cfg-tools-empty" class="cfg-empty" hidden>无匹配项</div>
                 </div>
             </div>`;
         const search = document.getElementById('cfg-search-tools');
         const clear = document.getElementById('cfg-search-tools-clear');
         const tbody = document.getElementById('cfg-tools-tbody');
         const countEl = document.getElementById('cfg-tools-count');
+        const emptyEl = document.getElementById('cfg-tools-empty');
         const applyFilter = () => {
             const q = (search.value || '').trim().toLowerCase();
             const rows = tbody.querySelectorAll('tr[data-search]');
@@ -935,6 +952,7 @@
                 if (match) shown++;
             });
             countEl.textContent = q ? `显示 ${shown} / ${rows.length}` : '';
+            if (emptyEl) emptyEl.hidden = !(q && shown === 0);
             search.parentElement.classList.toggle('has-value', !!q);
         };
         search.addEventListener('input', applyFilter);
@@ -1036,7 +1054,8 @@
     function refreshAll() {
         loadStatus();
         loadInterfaces();
-        loadConfig();
+        // silent=true: init 时默认面板是 interfaces, config 面板未激活, 骨架屏是浪费
+        loadConfig(true);
     }
 
     /* ===== Onboarding ===== */
@@ -1167,7 +1186,7 @@
             if (retryBtn) { loadInterfaces(); return; }
         });
         document.getElementById('ifs-copy-all').addEventListener('click', (e) => {
-            const names = window._currentFilteredToolNames || [];
+            const names = _currentFilteredToolNames || [];
             if (!names.length) { showToast('暂无可复制的工具', 'error'); return; }
             copyText(names.join('\n'), e.currentTarget);
         });
@@ -1238,6 +1257,8 @@
             if (!_cfgCache) { showToast('尚未加载配置', 'error'); return; }
             await copyText(JSON.stringify(_cfgCache, null, 2), e.currentTarget);
         });
+        // cfg-expandable 行点击: 一次性绑到 root, 避免每次重渲重复注册
+        document.getElementById('cfg-panel-upstreams').addEventListener('click', onCfgPanelClick);
     }
 
     function wireOnboarding() {
@@ -1373,6 +1394,7 @@
         pageSize: 50,
         totalCount: 0
     };
+    let _omniQueryInFlight = false;
 
     function omniRenderPagination(page, pageSize, totalCount) {
         const totalPages = Math.ceil(totalCount / pageSize);
@@ -1403,14 +1425,33 @@
             </div>`;
     }
 
-    async function omniQuerySectors(page = 1) {
-        const source = document.getElementById('omni-query-source').value;
-        const boardType = document.getElementById('omni-query-type').value;
-        const keyword = document.getElementById('omni-keyword').value.trim();
+    /* omniQuerySectors(page, fromPagination)
+     *   - fromPagination=false (默认): 新查询, 从 DOM 读最新 source/boardType/keyword, 同步进 state
+     *   - fromPagination=true:         翻页, 用 state 里保存的筛选条件, 忽略 DOM 当前值
+     */
+    async function omniQuerySectors(page = 1, fromPagination = false) {
+        if (_omniQueryInFlight) {
+            showToast('查询已在进行中，请等待完成', 'warn');
+            return;
+        }
+        _omniQueryInFlight = true;
+        try {
+        let source, boardType, keyword;
+        if (fromPagination) {
+            source = _omniQueryState.source;
+            boardType = _omniQueryState.boardType;
+            keyword = _omniQueryState.keyword;
+        } else {
+            source = document.getElementById('omni-query-source').value;
+            boardType = document.getElementById('omni-query-type').value;
+            keyword = document.getElementById('omni-keyword').value.trim();
+            _omniQueryState.source = source;
+            _omniQueryState.boardType = boardType;
+            _omniQueryState.keyword = keyword;
+        }
+        _omniQueryState.page = page;
+        _omniQueryState.totalCount = 0;
         const resultsDiv = document.getElementById('omni-results');
-
-        // 保存查询状态
-        _omniQueryState = { source, boardType, keyword, page, pageSize: 50, totalCount: 0 };
 
         resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-info"><span class="status-icon status-icon-loading">⏳</span> 查询中…</div>';
 
@@ -1450,12 +1491,12 @@
                     <tbody>
                         ${d.sectors.map(s => `
                             <tr class="sector-item" data-id="${escapeHtml(String(s.id))}">
-                                <td class="sector-name">${escapeHtml(s.name)}</td>
-                                <td class="sector-code">${escapeHtml(s.code)}</td>
-                                <td><span class="sector-type-badge">${escapeHtml(s.board_type)}</span></td>
-                                <td class="sector-count">${Number(s.stock_count) || 0}</td>
-                                <td class="sector-source">${escapeHtml(s.source)}</td>
-                                <td class="sector-update">${s.update_time ? escapeHtml(s.update_time.slice(0, 10)) : '-'}</td>
+                                <td class="sector-name" style="display:table-cell !important;width:30% !important">${escapeHtml(s.name)}</td>
+                                <td class="sector-code" style="display:table-cell !important;width:12% !important">${escapeHtml(s.code)}</td>
+                                <td style="display:table-cell !important;width:10% !important"><span class="sector-type-badge">${escapeHtml(s.board_type)}</span></td>
+                                <td class="sector-count" style="display:table-cell !important;width:12% !important">${Number(s.stock_count) || 0}</td>
+                                <td class="sector-source" style="display:table-cell !important;width:14% !important">${escapeHtml(s.source)}</td>
+                                <td class="sector-update" style="display:table-cell !important;width:22% !important">${s.update_time ? escapeHtml(s.update_time.slice(0, 10)) : '-'}</td>
                             </tr>
                         `).join('')}
                     </tbody>
@@ -1464,6 +1505,9 @@
             // 分页与板块行的点击由 wireOmni 里的事件委托统一处理 (避免每次重渲 forEach addEventListener)
         } catch (e) {
             resultsDiv.innerHTML = '<div class="omni-feedback omni-feedback-error"><span class="status-icon status-icon-error">✕</span> 查询异常：' + escapeHtml(e.message) + '</div>';
+        }
+        } finally {
+            _omniQueryInFlight = false;
         }
     }
 
@@ -1584,13 +1628,13 @@
 
         // 按钮绑定
         const queryBtn = document.getElementById('omni-query-btn');
-        if (queryBtn) queryBtn.addEventListener('click', () => omniQuerySectors(1));
+        if (queryBtn) queryBtn.addEventListener('click', () => omniQuerySectors(1, false));
         const keywordInput = document.getElementById('omni-keyword');
         if (keywordInput) {
             keywordInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    omniQuerySectors(1);
+                    omniQuerySectors(1, false);
                 }
             });
         }
@@ -1607,7 +1651,7 @@
                 if (pageBtn) {
                     const newPage = parseInt(pageBtn.dataset.page, 10);
                     if (newPage && newPage !== _omniQueryState.page) {
-                        omniQuerySectors(newPage);
+                        omniQuerySectors(newPage, true);
                     }
                     return;
                 }
