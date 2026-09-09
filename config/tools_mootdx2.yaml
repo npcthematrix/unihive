@@ -615,124 +615,6 @@ tools:
         required: false
         description: 起始日期 YYYYMMDD
 
-  - name: get_sector_list_local
-    description: |-
-      【板块列表（本地文件）】读取板块清单。
-
-      【使用场景】
-      - 当用户问"有哪些行业板块 / 概念板块 / 地区板块"时调用
-      - 板块分析和热点追踪的前置步骤
-
-      【参数说明】
-      - sector_type (可选): 板块类型，默认 'industry'
-        - 'industry': 行业板块（block_ch.dat）
-        - 'concept':  概念板块（block_zs.dat）
-        - 'region':   地区板块（block_fd.dat）
-
-      【数据源】通达信客户端本地文件 {tdxdir}/vipdoc/block/block_*.dat
-
-      【返回示例】
-      成功: {"success": true, "data": [{"sector_name": "银行板块", "sector_type": "industry", "stock_count": 50}], "source": "mootdx2"}
-
-      【典型错误】
-      - tdx_not_installed: TDX 目录未配置
-      - tdx_sector_file_missing: 对应 block_*.dat 文件不存在
-      - invalid_param: sector_type 不在 industry/concept/region 内
-    routing: get_sector_list_local
-    upstream_tool_mapping:
-      mootdx2: get_sector_list_local
-    cache_ttl_key:
-    data_source_type: offline
-    dangerous: false
-    params:
-      - name: sector_type
-        type: str
-        required: false
-        description: 板块类型，默认 'industry'（行业）
-        enum:
-          - industry
-          - concept
-          - region
-
-  - name: get_sector_stocks_local
-    description: |-
-      【板块成分股】查询指定板块包含的所有成分股。
-
-      【使用场景】
-      - 用户问"银行板块有哪些股票"时调用
-      - 板块内股票筛选、批量行情前置步骤
-
-      【参数说明】
-      - sector_code (必填): 板块名称（中文），如 '银行板块'、'猪肉概念'
-        注意：TDX 本地文件只存板块名，不存数字板块代码
-      - sector_type (可选): 板块类型，默认 'industry'
-        'industry' / 'concept' / 'region'
-
-      【数据源】通达信客户端本地 {tdxdir}/vipdoc/block/block_*.dat
-
-      【返回示例】
-      成功: {"success": true, "data": [{"code": "600000", "market": "sh"}, ...], "source": "mootdx2"}
-
-      【典型错误】
-      - tdx_not_installed / tdx_sector_file_missing: TDX 环境问题
-      - sector_not_found: 板块名在文件中未找到
-    routing: get_sector_stocks_local
-    upstream_tool_mapping:
-      mootdx2: get_sector_stocks_local
-    cache_ttl_key:
-    data_source_type: offline
-    dangerous: false
-    params:
-      - name: sector_code
-        type: str
-        required: true
-        description: 板块名称（中文），如 '银行板块'
-      - name: sector_type
-        type: str
-        required: false
-        description: 板块类型，默认 industry
-        enum:
-          - industry
-          - concept
-          - region
-
-  - name: get_stock_sectors_local
-    description: |-
-      【个股所属板块】查询指定股票所属的所有板块（行业 + 概念 + 地区聚合）。
-
-      【使用场景】
-      - 用户问"浦发银行属于哪些板块"时调用
-      - 主题投资筛选、交叉板块股票查找
-
-      【参数说明】
-      - stock_code (必填): 股票代码，如 '600000'、'000001'
-        支持带市场前缀（sh600000）或纯 6 位代码
-
-      【数据源】通达信客户端本地 {tdxdir}/vipdoc/block/block_*.dat（聚合 3 种类型）
-
-      【返回示例】
-      成功: {"success": true, "data": [{"sector_name": "银行板块", "sector_type": "industry"}, ...], "source": "mootdx2"}
-      空数据: {"success": true, "data": []}（该股票无板块归属是正常数据）
-
-      【典型错误】
-      - stock_not_found: 股票代码不是 6 位数字
-      - tdx_not_installed: TDX 目录未配置
-    routing: get_stock_sectors_local
-    upstream_tool_mapping:
-      mootdx2: get_stock_sectors_local
-    cache_ttl_key:
-    data_source_type: offline
-    dangerous: false
-    params:
-      - name: stock_code
-        type: str
-        required: true
-        description: 股票代码，如 '600000'
-      - name: market
-        type: str
-        required: false
-        description: 市场，默认 'auto'（自动按代码前缀推断）
-
   - name: get_custom_sector_list
     description: |-
       【自定义板块列表】读取用户在 TDX 客户端维护的自定义板块（自选股分组）。
@@ -996,7 +878,7 @@ tools:
         required: false
         description: 日期（默认 '20191023'）
 
-  - name: search_stock
+  - name: search_stock_local
     description: |-
       【搜索股票（本地）】在本地 block 文件中模糊搜索股票。
 
@@ -1015,7 +897,7 @@ tools:
 
       【典型错误】
       - no_data: 未找到匹配股票
-    routing: search_stock
+    routing: search_stock_local
     upstream_tool_mapping:
       mootdx2: search_stock
     cache_ttl_key:
@@ -1219,7 +1101,7 @@ tools:
       失败: {"success": false, "error": "TDX 安装目录未配置"}
     routing: get_daily_local
     upstream_tool_mapping:
-      mootdx2: get_daily_local
+      mootdx2: get_daily
     cache_ttl_key:
     data_source_type: offline
     dangerous: false
@@ -1261,7 +1143,7 @@ tools:
       - suffix='5': {tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
     routing: get_minute_local
     upstream_tool_mapping:
-      mootdx2: get_minute_local
+      mootdx2: get_minute
     cache_ttl_key:
     data_source_type: offline
     dangerous: false
@@ -1290,7 +1172,7 @@ tools:
 
       【使用场景】
       - 历史分时数据回放
-      - 与 get_minute_local suffix='5' 等价（相同数据源 fzline/*.lc5）
+      - 与 get_minute suffix='5' 等价（相同数据源 fzline/*.lc5）
 
       【参数说明】
       - code (必填): 股票代码（6 位数字）
@@ -1298,7 +1180,7 @@ tools:
       【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
     routing: get_fzline_local
     upstream_tool_mapping:
-      mootdx2: get_fzline_local
+      mootdx2: get_fzline
     cache_ttl_key:
     data_source_type: offline
     dangerous: false
