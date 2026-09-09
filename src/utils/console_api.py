@@ -4,6 +4,7 @@ Console HTTP API — 纯函数，无 HTTP 框架依赖。
 """
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
 import logging
@@ -21,13 +22,29 @@ from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
-CONSOLE_HTML_PATH = "console.html"
-GATEWAY_CONFIG_PATH = "config/upstreams.yaml"
-CACHE_DB_PATH = "logs/cache.db"
+# 项目根目录
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+CONSOLE_HTML_PATH = str(_PROJECT_ROOT / "console.html")
+GATEWAY_CONFIG_PATH = str(_PROJECT_ROOT / "config" / "upstreams.yaml")
+CACHE_DB_PATH = str(_PROJECT_ROOT / "logs" / "cache.db")
 
 # 从配置文件读取，避免硬编码
 _GW_CFG: dict | None = None
 _INJECTED: bool = False
+
+# OmniClient instance (injected by gateway_server)
+_OMNI_CLIENT: "OmniClient | None" = None
+
+
+def set_omni_client(client: "OmniClient | None") -> None:
+    """GatewayServer injects OmniClient after initialization."""
+    global _OMNI_CLIENT
+    _OMNI_CLIENT = client
+
+
+def _omni() -> "OmniClient | None":
+    return _OMNI_CLIENT
 
 
 def set_config(config: dict) -> None:
@@ -523,3 +540,118 @@ def get_health() -> dict:
         "gateway_reachable": reachable,
         "timestamp": int(time.time()),
     }
+
+
+# ---------------------------------------------------------------------------
+# OMNI Board Sync API
+# ---------------------------------------------------------------------------
+
+
+def get_omni_stats() -> dict[str, Any]:
+    """Get stats + recent logs."""
+    omni = _omni()
+    if omni is None:
+        return {"status": "failed", "message": "OMNI 客户端未初始化", "stats": [], "recent_logs": []}
+    return {
+        "status": "ok",
+        "stats": omni.get_stats(),
+        "recent_logs": omni.get_recent_logs(limit=10),
+    }
+
+
+def query_omni_sectors(
+    source: str = "",
+    board_type: str = "",
+    keyword: str = "",
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """Query sectors with pagination."""
+    omni = _omni()
+    if omni is None:
+        return {"status": "failed", "message": "OMNI 客户端未初始化", "sectors": [], "total": 0, "total_count": 0}
+    return omni.query_sectors(source, board_type, keyword, page, page_size)
+
+
+async def run_omni_sync(source: str = "all", board_type: str = "all") -> dict[str, Any]:
+    """Trigger sync with source whitelist validation."""
+    # Source whitelist (business boundary)
+    allowed_sources = {"all", "fuyao", "TDX", "tdxquant", "tqquant"}
+    if source not in allowed_sources:
+        return {"status": "failed", "message": f"不支持的数据源: {source}", "record_count": 0}
+
+    omni = _omni()
+    if omni is None:
+        return {"status": "failed", "message": "OMNI 客户端未初始化", "record_count": 0}
+
+    return await omni.run_sync(source, board_type)
+
+
+def get_omni_sector_stocks(
+    sector_id: str = "",
+    code: str = "",
+    source: str = "",
+) -> dict[str, Any]:
+    """Get stocks in a sector."""
+    omni = _omni()
+    if omni is None:
+        return {"status": "failed", "message": "OMNI 客户端未初始化"}
+
+    if not sector_id and not code:
+        return {"status": "failed", "message": "sector_id 或 code 必填"}
+
+    try:
+        result = omni.get_sector_stocks(
+            sector_id=int(sector_id) if sector_id else None,
+            sector_code=code or None,
+            source=source or None,
+        )
+    except ValueError as e:
+        return {"status": "failed", "message": str(e)}
+
+    if result is None:
+        return {"status": "failed", "message": f"未找到板块: code={code} source={source}"}
+    return result
+
+
+def build_omni_routes() -> list:
+    """Build OMNI routes for gateway to mount."""
+    from starlette.routing import Route
+    from starlette.responses import JSONResponse
+    from starlette.requests import Request
+
+    async def omni_stats_api(req: Request):
+        return JSONResponse(get_omni_stats())
+
+    async def omni_query_api(req: Request):
+        params = req.query_params
+        return JSONResponse(query_omni_sectors(
+            source=params.get("source", ""),
+            board_type=params.get("board_type", ""),
+            keyword=params.get("keyword", ""),
+            page=int(params.get("page", 1)),
+            page_size=int(params.get("page_size", 50)),
+        ))
+
+    async def omni_sync_api(req: Request):
+        body = await req.json()
+        result = await run_omni_sync(
+            source=body.get("source", "all"),
+            board_type=body.get("board_type", "all"),
+        )
+        return JSONResponse(result)
+
+    async def omni_sector_stocks_api(req: Request):
+        params = req.query_params
+        return JSONResponse(get_omni_sector_stocks(
+            sector_id=params.get("sector_id", ""),
+            code=params.get("code", ""),
+            source=params.get("source", ""),
+        ))
+
+    return [
+        Route("/api/omni", omni_stats_api),
+        Route("/api/omni/sync", omni_sync_api, methods=["POST"]),
+        Route("/api/omni/query", omni_query_api),
+        Route("/api/omni/sector-stocks", omni_sector_stocks_api),
+    ]
