@@ -6,7 +6,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
     <link rel="icon" href="data:,">
     <title>UniHive Console</title>
-    <link rel="stylesheet" href="/static/console/console.css?v=20260909-2">
+    <link rel="stylesheet" href="/static/console/console.css?v=20260909-11">
 </head>
 <body>
     <div class="container">
@@ -17,7 +17,8 @@
             <button class="tab" data-panel="status" role="tab" aria-selected="false" aria-controls="status">上游状态</button>
             <button class="tab active" data-panel="interfaces" role="tab" aria-selected="true" aria-controls="interfaces">MCP APIs</button>
             <button class="tab" data-panel="config" role="tab" aria-selected="false" aria-controls="config">配置信息</button>
-            <button class="tab" data-panel="onboarding" role="tab" aria-selected="false" aria-controls="onboarding">接入指南</button>
+            <button class="tab" data-panel="onboarding" role="tab" aria-selected="false" aria-controls="onboarding">人工接入指南</button>
+            <button class="tab" data-panel="ai-onboarding" role="tab" aria-selected="false" aria-controls="ai-onboarding">AI接入指南</button>
             <button class="tab" data-panel="omni" role="tab" aria-selected="false" aria-controls="omni">OMNI板块管理</button>
         </div>
         <div id="status" class="panel">
@@ -324,6 +325,17 @@ print(match.data)</pre>
                 </div>
             </div>
         </div>
+        <div id="ai-onboarding" class="panel">
+            <div class="card">
+                <div class="card-toolbar">
+                    <h2>AI接入指南</h2>
+                </div>
+                <div class="onboarding-content">
+                    <!-- 用户提供的提示词内容将放在这里 -->
+                    <p>TODO: 用户尚未提供提示词内容</p>
+                </div>
+            </div>
+        </div>
         <div id="omni" class="panel">
             <div class="card">
                 <div class="card-toolbar">
@@ -435,7 +447,7 @@ print(match.data)</pre>
             </div>
         </div>
 
-        <script src="/static/console/console.js?v=20260909-5" defer></script>
+        <script src="/static/console/console.js?v=20260909-9" defer></script>
 
 </body>
 </html>
