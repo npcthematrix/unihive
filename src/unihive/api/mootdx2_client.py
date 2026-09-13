@@ -297,7 +297,46 @@ class MooTDX2Client:
         return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def start(self):
-        self._status = UpstreamStatus.HEALTHY
+        """MED-2 (2026-09-14 round 8 audit): 启动时跑一次轻量连通性探测,
+        避免 TDX 不可达时仍报 HEALTHY, 首次请求才报错。探测失败设 DEGRADED
+        (留 UNAVAILABLE 给"明确不可用"场景, DEGRADED 表示"探测未通但保留余地
+        让健康检查后续重试")。探测 2.5s 超时, 不阻塞启动。"""
+        try:
+            ok = await asyncio.wait_for(
+                self._probe_startup_once(),
+                timeout=2.5,
+            )
+            if ok:
+                self._status = UpstreamStatus.HEALTHY
+                logger.info(f"{self.name}: startup connectivity probe OK")
+            else:
+                self._status = UpstreamStatus.DEGRADED
+                logger.warning(
+                    f"{self.name}: startup probe returned empty; "
+                    f"status=DEGRADED. Check TDX server reachable."
+                )
+        except asyncio.TimeoutError:
+            self._status = UpstreamStatus.DEGRADED
+            logger.warning(
+                f"{self.name}: startup probe timed out after 2.5s; "
+                f"status=DEGRADED. Check TDX server reachable."
+            )
+        except Exception as e:
+            self._status = UpstreamStatus.DEGRADED
+            logger.warning(
+                f"{self.name}: startup probe failed ({type(e).__name__}: {e}); "
+                f"status=DEGRADED. Check TDX server reachable."
+            )
+
+    async def _probe_startup_once(self) -> bool:
+        """在 blocking pool 跑一次最小 quotes 调用, 返回是否拿到数据。"""
+
+        def _do_probe():
+            q = self._get_quotes()
+            df = q.quotes(symbols=["000001"])
+            return df is not None and len(df) > 0
+
+        return await asyncio.to_thread(_do_probe)
 
     async def stop(self):
         self._status = UpstreamStatus.UNKNOWN

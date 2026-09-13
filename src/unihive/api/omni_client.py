@@ -1,6 +1,7 @@
 """OMNIDATA 上游客户端 - 从本地 SQLite 读取板块数据"""
 
 import asyncio
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass, field
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from .upstream_client import ToolResult, UpstreamClient, UpstreamStatus
+
+logger = logging.getLogger(__name__)
 
 
 # Timeout for sync operations (seconds)
@@ -326,12 +329,23 @@ class OmniClient:
         return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def start(self) -> bool:
-        """初始化客户端"""
+        """初始化客户端。
+
+        MED-3 (2026-09-14 round 8 audit): DB 文件缺失时, 此上游完全无数据可返,
+        设为 UNAVAILABLE (而非 DEGRADED), 配合 is_available=False 让 router 跳过
+        fallback, 也避免 console status 误显示"degraded 但可用"。DEGRADED 留给
+        "部分可用" 场景 (DB 有但同步未跑完整)。
+        """
         db_path = Path(self._db_path)
         if db_path.exists():
             self._status = UpstreamStatus.HEALTHY
         else:
-            self._status = UpstreamStatus.DEGRADED
+            self._status = UpstreamStatus.UNAVAILABLE
+            logger.warning(
+                f"OmniClient: board data DB not found at {db_path}; "
+                f"status=UNAVAILABLE. Run `python -m src.unihive.sync.board_sync` "
+                f"to populate."
+            )
         return True
 
     async def stop(self) -> None:

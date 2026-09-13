@@ -117,9 +117,15 @@ class Router:
                 chain = list(self.upstream_tool_mapping.get(gateway_tool, {}).keys())
 
         if not chain:
+            # MED-1 (2026-09-14 round 8 audit): 错误消息带上排查指引,
+            # 让上游 config 作者无需查代码就知道去 upstreams.yaml 配 routing 段。
             return RouteResult(
                 success=False,
-                error=f"No routing chain defined for {gateway_tool}",
+                error=(
+                    f"No routing chain defined for {gateway_tool}; "
+                    f"check config/upstreams.yaml routing section "
+                    f"and ensure the tool has a chain list."
+                ),
             )
 
         # 获取上游工具映射
