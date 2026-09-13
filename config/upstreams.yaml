@@ -1,8 +1,5 @@
 # UniHive MCP Gateway 配置
 # 聚合多个金融数据 MCP Server
-#
-# Fuyao 接口参数说明：详见 docs/fuyao-api-params.md
-# AI 调用前请先查阅该文档，了解各参数的含义、枚举值和约束。
 
 # 缓存策略：只缓存"远程 HTTP 同花顺源(fuyao_*)"的非实时响应。
 #   - 实时行情(realtime_quote) 不缓存：行情要最新，且本地终端获取已足够快。
@@ -234,7 +231,6 @@ routing: {}
 # 对外暴露的工具清单
 # 由 registry.py 解析后自动注册为 FastMCP tool
 # MooTDX2 工具已移至 config/tools_mootdx2.yaml
-# Fuyao 参数语义说明：详见 docs/fuyao-api-params.md
 tools:
   # === Fuyao a-share (21) ===
   - {name: a_share_prices_snapshot, description: "A 股全市场快照", routing: a_share_prices_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，如 '600519.SH,000001.SZ'。省略则遍历全市场分页返回。"}, {name: limit, type: int, required: false, description: "分页大小，省略 thscodes 时生效（默认 100）"}, {name: offset, type: int, required: false, description: "分页偏移，省略 thscodes 时生效（默认 0）"}], cache_ttl_key: realtime_quote, data_source_type: online}

@@ -43,9 +43,7 @@ unihive/
 │   ├── start_gateway.ps1        # 启动网关 (HTTP 默认 :18080,或 stdio)
 │   ├── _load_env.ps1            # .env loader
 │   ├── healthcheck.py           # 健康检查
-│   ├── gen_tdx_quant_tools.py   # TdxQuant 工具清单生成
-│   ├── audits/                  # 单次审计 (归档)
-│   └── smoke/                   # 单次烟测 (归档)
+│   └── gen_tdx_quant_tools.py   # TdxQuant 工具清单生成
 ├── static/console/              # 控制台静态资源 (CSS / JS)
 ├── tests/                       # pytest 套件
 ├── docs/                        # ARCHITECTURE + known-limitations + handoffs
