@@ -1,6 +1,14 @@
-"""Bearer Token 鉴权中间件。
+"""[DEPRECATED — UNUSED] Bearer Token 鉴权中间件。
 
-包裹 ASGI app，对 MCP 入口强制校验 `Authorization: Bearer <token>`。
+MED-1 (2026-09-14 audit): 这个模块当前未被任何代码引用。控制台鉴权统一
+走 ``src.unihive.console_auth.ConsoleAuthMiddleware`` (cookie session),
+``/mcp`` 按项目约定保持开放 (见 feedback_no_sse_no_mcp_auth_console_auth)。
+
+PUBLIC_PATHS 写的是 ``("/health", "/", "/api/")`` — 把 ``/api/*`` 全公开,
+任何时候启用都会让 console_api 完全无鉴权, 与 console_auth 的保护范围
+直接冲突。绝不要在新代码里 import 此模块。如果未来真有 Bearer token
+需求, 应在 ``src/unihive/`` 下新建模块, 而不是启用这里的实现。
+
 健康检查、根路径和 /api/* 路径直接放行（控制台独立绑 127.0.0.1，不暴露外网）。
 """
 from __future__ import annotations

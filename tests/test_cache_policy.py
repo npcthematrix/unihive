@@ -312,7 +312,12 @@ class TestExecuteCachedEmptyDataGuard:
         assert server.router.calls == 1, "第二次应命中缓存"
         assert resp2["cache_hit"] is True
         assert resp2["data"] == {"v": 1}
-        assert resp2["hops"] == [], "命中响应 hops 是空（本次未路由）"
+        # LOW-4 (2026-09-14 audit): cache hit hops 现在给一个 cache sentinel
+        # (source='cache'), 让消费者看到响应走了缓存而非未配置 routing chain。
+        # 真实历史 hops 留在缓存里没意义, sentinel 已足够语义化。
+        assert len(resp2["hops"]) == 1
+        assert resp2["hops"][0]["source"] == "cache"
+        assert resp2["hops"][0]["tool_name"] == "hist_tool"
 
         await cache.close()
 

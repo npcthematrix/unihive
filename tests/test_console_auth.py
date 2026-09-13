@@ -11,6 +11,17 @@ from src.unihive.console_auth import (
 )
 
 
+_DEV_HASH = hash_password("devpass")
+_SECRET = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+
+def _creds(**overrides):
+    """Build a console_cfg dict with password_hash (MED-6 requires hash)."""
+    cfg = {"username": "admin", "password_hash": _DEV_HASH, "session_secret": _SECRET}
+    cfg.update(overrides)
+    return cfg
+
+
 class TestPasswordHashing:
     """Test password hashing functions."""
 
@@ -33,6 +44,42 @@ class TestPasswordHashing:
         assert verify_password("any", "not-enough-parts") is False
 
 
+class TestSetupRejectsPlaintext:
+    """MED-6: setup_console_auth must refuse plaintext passwords."""
+
+    def test_setup_rejects_plaintext_password(self):
+        app = Starlette()
+        with pytest.raises(ValueError, match="password_hash"):
+            setup_console_auth(app, {
+                "username": "admin",
+                "password": "devpass",
+                "session_secret": _SECRET,
+            })
+
+    def test_setup_rejects_missing_password_hash(self):
+        app = Starlette()
+        with pytest.raises(ValueError, match="password_hash"):
+            setup_console_auth(app, {
+                "username": "admin",
+                "session_secret": _SECRET,
+            })
+
+    def test_setup_rejects_short_session_secret(self):
+        app = Starlette()
+        with pytest.raises(ValueError, match="session_secret"):
+            setup_console_auth(app, {
+                "username": "admin",
+                "password_hash": _DEV_HASH,
+                "session_secret": "tooshort",
+            })
+
+    def test_setup_accepts_password_hash(self):
+        app = Starlette()
+        setup_console_auth(app, _creds())
+        assert app.state.console_auth_config["password_hash"] == _DEV_HASH
+        assert "password" not in app.state.console_auth_config
+
+
 class TestLoginPage:
     """Test login page endpoint."""
 
@@ -45,11 +92,7 @@ class TestLoginPage:
             self.app,
             cookies={"unihive_console": "invalid"}
         )
-        setup_console_auth(self.app, {
-            "username": "admin",
-            "password": "devpass",
-            "session_secret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        })
+        setup_console_auth(self.app, _creds())
 
     def test_login_get_returns_html_form(self):
         """GET /login -> 200 + form."""
@@ -67,11 +110,7 @@ class TestLoginFlow:
         self.app.add_route("/api/status", lambda r: JSONResponse({"status": "ok"}))
 
         self.client = TestClient(self.app)
-        setup_console_auth(self.app, {
-            "username": "admin",
-            "password": "devpass",
-            "session_secret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        })
+        setup_console_auth(self.app, _creds())
 
     def test_login_post_valid_sets_session(self):
         """POST correct creds -> 303 + Set-Cookie."""
@@ -101,11 +140,7 @@ class TestAuthMiddleware:
         self.app.add_route("/", lambda r: PlainTextResponse("hello"))
 
         self.client = TestClient(self.app)
-        setup_console_auth(self.app, {
-            "username": "admin",
-            "password": "devpass",
-            "session_secret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        })
+        setup_console_auth(self.app, _creds())
 
     def test_auth_middleware_blocks_api_when_unauthenticated(self):
         """GET /api/status (no cookie) -> 401 JSON."""
@@ -151,11 +186,7 @@ class TestLogout:
         self.app.add_route("/api/status", lambda r: JSONResponse({"status": "ok"}))
 
         self.client = TestClient(self.app)
-        setup_console_auth(self.app, {
-            "username": "admin",
-            "password": "devpass",
-            "session_secret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        })
+        setup_console_auth(self.app, _creds())
 
     def test_logout_clears_session(self):
         """POST /logout + then GET /api -> 401."""
@@ -182,11 +213,7 @@ class TestSessionPersistence:
         self.app.add_route("/api/status", lambda r: JSONResponse({"status": "ok"}))
 
         self.client = TestClient(self.app)
-        setup_console_auth(self.app, {
-            "username": "admin",
-            "password": "devpass",
-            "session_secret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        })
+        setup_console_auth(self.app, _creds())
 
     def test_session_persists_across_requests(self):
         """Login -> 2x /api -> both 200."""

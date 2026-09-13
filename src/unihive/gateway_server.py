@@ -123,23 +123,47 @@ def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, s
     logs ``reason`` at WARNING level and continues without auth; when cfg is
     not None, caller passes it to ``setup_console_auth`` on the inner app.
 
-    Config priority (first found wins):
+    Config priority (first source with a non-empty console section wins):
       1. config/config.yaml (console section)
-      2. config/upstreams.yaml (console section)
-      3. Environment variables
+      2. config/upstreams.yaml (console section) — passed in via ``config``
+      3. Environment variables (UNIHIVE_CONSOLE_USER / _PASSWORD / _SESSION_SECRET)
+
+    Each source is parsed independently: if a source declares a console
+    section, we use *that* source's values verbatim — we don't merge across
+    sources (that previously caused partial-config footguns where username
+    came from yaml and password came from env, leaving setup_console_auth
+    with no way to validate). The reason returned tells the caller exactly
+    which field(s) are missing when the source is partial.
 
     config.yaml fields:
       console.username
       console.password / console.password_hash
       console.session_secret
     """
-    # Try config.yaml first
-    username = None
-    password = None
-    password_hash = None
-    secret = None
 
-    # Load config.yaml if it exists
+    def _extract_console(console_cfg: dict) -> dict:
+        """Return normalized console sub-config (each field None if unset)."""
+        return {
+            "username": (console_cfg.get("username") or "").strip() or None,
+            "password": (console_cfg.get("password") or "").strip() or None,
+            "password_hash": (console_cfg.get("password_hash") or "").strip() or None,
+            "secret": (console_cfg.get("session_secret") or "").strip() or None,
+        }
+
+    def _missing_fields_message(fields: dict, source: str) -> str:
+        missing = [k for k, v in fields.items() if not v]
+        return f"partial console config from {source}: missing {', '.join(missing)}"
+
+    def _build_cfg(fields: dict) -> dict:
+        # Prefer password_hash over plaintext password.
+        cfg = {"username": fields["username"], "session_secret": fields["secret"]}
+        if fields["password_hash"]:
+            cfg["password_hash"] = fields["password_hash"]
+        else:
+            cfg["password"] = fields["password"]
+        return cfg
+
+    # 1. config/config.yaml (standalone, runtime console config)
     config_yaml_path = Path(__file__).resolve().parent.parent.parent / "config" / "config.yaml"
     if config_yaml_path.exists():
         try:
@@ -147,62 +171,38 @@ def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, s
                 config_yaml = yaml.safe_load(f) or {}
             console_cfg = config_yaml.get("console", {})
             if console_cfg:
-                username = console_cfg.get("username", "").strip() if console_cfg.get("username") else None
-                password = console_cfg.get("password", "").strip() if console_cfg.get("password") else None
-                password_hash = console_cfg.get("password_hash", "").strip() if console_cfg.get("password_hash") else None
-                secret = console_cfg.get("session_secret", "").strip() if console_cfg.get("session_secret") else None
+                fields = _extract_console(console_cfg)
+                if any(fields.values()):
+                    has_creds = bool(fields["password"] or fields["password_hash"])
+                    if not has_creds or not fields["username"] or not fields["secret"]:
+                        return None, _missing_fields_message(fields, "config/config.yaml")
+                    if len(fields["secret"]) < 32:
+                        return None, (
+                            "config/config.yaml: session_secret must be at least "
+                            "32 characters"
+                        )
+                    return _build_cfg(fields), "ok"
         except Exception as e:
             logger.warning(f"Failed to load config.yaml: {e}")
 
-    # Fallback to upstreams.yaml config
-    if not username and config:
+    # 2. config/upstreams.yaml (passed in as ``config``).
+    if config:
         console_cfg = config.get("console", {})
         if console_cfg:
-            username = console_cfg.get("username", "").strip() if console_cfg.get("username") else None
-            password = console_cfg.get("password", "").strip() if console_cfg.get("password") else None
-            password_hash = console_cfg.get("password_hash", "").strip() if console_cfg.get("password_hash") else None
-            secret = console_cfg.get("session_secret", "").strip() if console_cfg.get("session_secret") else None
+            fields = _extract_console(console_cfg)
+            if any(fields.values()):
+                has_creds = bool(fields["password"] or fields["password_hash"])
+                if not has_creds or not fields["username"] or not fields["secret"]:
+                    return None, _missing_fields_message(fields, "config/upstreams.yaml")
+                if len(fields["secret"]) < 32:
+                    return None, (
+                        "config/upstreams.yaml: session_secret must be at least "
+                        "32 characters"
+                    )
+                return _build_cfg(fields), "ok"
 
-    # Final fallback: env vars (via dedicated helper so the env-only
-    # behaviour is testable in isolation).
-    if not username:
-        env_cfg, env_reason = _console_auth_config_from_env()
-        if env_cfg is not None:
-            return env_cfg, env_reason
-        # If env vars also missing/disabled, surface env reason only when
-        # nothing was set anywhere — otherwise the config.yaml or
-        # upstreams.yaml partial-config reason is more informative.
-        if not (username or password or password_hash or secret):
-            return None, env_reason
-        # partial config from yaml
-        if not username or not secret:
-            return None, env_reason
-        if not (password or password_hash):
-            return None, env_reason
-
-    # Either password or password_hash must be set
-    has_password = bool(password)
-    has_password_hash = bool(password_hash)
-    if not (has_password or has_password_hash):
-        return None, "no console auth configured; console is open"
-    if not username or not secret:
-        return None, "no console auth configured; console is open"
-
-    # Build config dict - prefer password_hash, fallback to password
-    cfg = {"username": username, "session_secret": secret}
-    if password_hash:
-        cfg["password_hash"] = password_hash
-    else:
-        cfg["password"] = password
-
-    if len(secret) < 32:
-        return None, (
-            "session_secret must be at least 32 characters "
-            "(setup_console_auth enforces this; refusing to enable with a "
-            "weak secret)."
-        )
-
-    return cfg, "ok"
+    # 3. Environment variables — helper handles partial-config + length checks.
+    return _console_auth_config_from_env()
 
 
 class GatewayServer:
@@ -551,10 +551,24 @@ class GatewayServer:
                 key = cache_strategy.cache_key(name, params)
                 cached = await self.cache.get(key)
                 if cached is not None:
-                    # hops 不在缓存里；命中时给一个标记。不可变拷贝避免污染持久化对象。
+                    # LOW-4 (2026-09-14 audit): hops 不进缓存 (写时清空),
+                    # 命中时给一个 cache sentinel hop 让消费者看到响应走了
+                    # 缓存而非未配置 routing chain。不可变拷贝避免污染持久化对象。
                     self.cache.record_hit()
                     logger.info(f"[{name}] cache hit (key={key})")
-                    return {**cached, "hops": cached.get("hops", []), "cache_hit": True}
+                    return {
+                        **cached,
+                        "hops": [
+                            {
+                                "source": "cache",
+                                "tool_name": name,
+                                "duration_ms": 0,
+                                "success": True,
+                                "error": None,
+                            }
+                        ],
+                        "cache_hit": True,
+                    }
 
             if tracks_stats and not can_cache:
                 # 计 miss 但不走单飞：例如实时 key、链上无远程 fuyao 源。
@@ -965,17 +979,20 @@ class GatewayServer:
         try:
             _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                _probe.bind((host, port))
-            except OSError as e:
+                try:
+                    _probe.bind((host, port))
+                except OSError as e:
+                    if e.errno in (98, 10048) or "address already in use" in str(e).lower():
+                        print(
+                            f"error: cannot bind {host}:{port} — port already in use",
+                            file=sys.stderr,
+                        )
+                        sys.exit(2)
+                    raise
+            finally:
+                # Always release the probe fd regardless of bind outcome
+                # (including non-errno-98 OSError paths that re-raise).
                 _probe.close()
-                if e.errno in (98, 10048) or "address already in use" in str(e).lower():
-                    print(
-                        f"error: cannot bind {host}:{port} — port already in use",
-                        file=sys.stderr,
-                    )
-                    sys.exit(2)
-                raise
-            _probe.close()
 
             await uvicorn.Server(config).serve()
         finally:
@@ -991,6 +1008,9 @@ class GatewayServer:
         # 一次保持一致 (避免隐式依赖 __init__ 的局部变量)。
         from .utils import console_api as _ca
         _ca.set_omni_client(None)
+        # LOW-1 (2026-09-14 audit): 显式关掉 probe executor, 不依赖 atexit
+        # (stdio transport 下 atexit 不保证触发)。
+        _ca._shutdown_probe_executor()
 
         # 等待在途请求完成（最多 10 秒）
         wait_start = time.time()

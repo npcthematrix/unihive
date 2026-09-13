@@ -138,17 +138,18 @@ async def login_post(request: Request) -> HTMLResponse:
     stored_password = cfg.get("password")
     stored_hash = cfg.get("password_hash")
 
-    # Verify credentials
-    # M1 (2026-09-08 6th-round audit): use hmac.compare_digest for the
-    # plaintext password branch — `==` leaks character-by-character
-    # match timing. Username also uses compare_digest (both sides are
-    # equally attacker-controlled).
+    # Verify credentials.
+    # MED-6 (2026-09-14 audit): plaintext password branch removed —
+    # setup_console_auth now requires password_hash. We keep the
+    # stored_password fallback here only to support legacy callers that
+    # bypassed setup_console_auth (e.g. tests constructing the middleware
+    # directly); setup_console_auth itself never accepts plaintext.
     valid = False
-    if stored_password and hmac.compare_digest(
+    if stored_hash and verify_password(password, stored_hash):
+        valid = True
+    elif stored_password and hmac.compare_digest(
         password.encode("utf-8"), stored_password.encode("utf-8")
     ):
-        valid = True
-    elif stored_hash and verify_password(password, stored_hash):
         valid = True
 
     if not valid or not hmac.compare_digest(
@@ -174,14 +175,44 @@ def setup_console_auth(app: Starlette, console_cfg: dict) -> None:
 
     Args:
         app: Starlette application
-        console_cfg: Console configuration dict with username, password/password_hash, session_secret
+        console_cfg: Console configuration dict with username, password_hash, session_secret
+
+    Note:
+        Only ``password_hash`` is accepted. Plaintext ``password`` is
+        rejected at setup time so credentials never sit in process memory
+        longer than necessary (the hash is what gets persisted to
+        ``app.state`` and compared on every login).
+
+        Generate a hash with::
+
+            from src.unihive.console_auth import hash_password
+            print(hash_password("your-password"))
     """
     secret_key = console_cfg.get("session_secret")
     if not secret_key or len(secret_key) < 32:
         raise ValueError("session_secret must be at least 32 characters")
 
-    # Store config on app for access in routes
-    app.state.console_auth_config = console_cfg
+    if not console_cfg.get("password_hash"):
+        raise ValueError(
+            "console config requires password_hash (PBKDF2 format). "
+            "Plaintext password is no longer accepted to avoid keeping "
+            "credentials in memory. Generate one with hash_password()."
+        )
+    if "password" in console_cfg:
+        # Refuse any plaintext password that snuck in — fail loud so callers
+        # don't think the plaintext is being honored.
+        raise ValueError(
+            "console config must not include plaintext 'password' — "
+            "use 'password_hash' (PBKDF2) instead."
+        )
+
+    # Store ONLY the hash on app.state so debug dumps / introspection can't
+    # surface a plaintext password.
+    app.state.console_auth_config = {
+        "username": console_cfg.get("username", "admin"),
+        "password_hash": console_cfg["password_hash"],
+        "session_secret": secret_key,
+    }
 
     # Add auth middleware first (inner - runs after session is populated)
     app.add_middleware(ConsoleAuthMiddleware)

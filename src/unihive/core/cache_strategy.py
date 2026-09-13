@@ -22,13 +22,6 @@ def ttl_for(config: dict, ttl_key: str) -> int | None:
     return ttl.get(ttl_key)
 
 
-def is_cacheable_source(source: str | None) -> bool:
-    """缓存策略：仅缓存 FUYAO 和 MooTDX2 在线接口。"""
-    if not source:
-        return False
-    return source.startswith("fuyao_") or source == "mootdx2"
-
-
 def is_fuyao_source(source: str | None) -> bool:
     """是否远程同花顺 HTTP 源：仅以 fuyao_ 开头（myfuyao_xx 不算）。
 
@@ -43,13 +36,6 @@ def is_fuyao_source(source: str | None) -> bool:
 def is_realtime_ttl(ttl_key: str | None) -> bool:
     """实时行情不缓存：行情要求最新，且本地终端获取本身足够快。"""
     return ttl_key == "realtime_quote"
-
-
-def is_cacheable_data_source(data_source_type: str | None) -> bool:
-    """仅在线数据源可缓存，离线和混合类型不缓存。"""
-    if not data_source_type:
-        return False
-    return data_source_type == "online"
 
 
 def chain_has_remote_http(chain: list[str] | None) -> bool:

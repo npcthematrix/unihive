@@ -139,6 +139,13 @@ class Cache:
                 await session.execute(text("""
                     CREATE INDEX IF NOT EXISTS idx_expires_at ON cache(expires_at)
                 """))
+                # MED-3 (2026-09-14 audit): created_at 索引让 cleanup_expired
+                # 触发 LRU eviction 时的 SELECT key, created_at ... ORDER BY
+                # created_at ASC LIMIT N 走索引 (免全表 scan+sort)。max_entries
+                # 触发频率越高收益越大。
+                await session.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_created_at ON cache(created_at)
+                """))
                 # WAL 模式: 解决 console (同步 sqlite3) 与 gateway (aiosqlite)
                 # 同时读写同一 cache.db 时的 "database is locked" 问题。
                 await session.execute(text("PRAGMA journal_mode=WAL"))
@@ -321,20 +328,28 @@ class Cache:
                     if count > max_entries:
                         target = int(max_entries * 0.9)
                         evict_n = count - target
-                        # 真 LRU (2026-09-08 refactor): 进程本地 dict 持有
-                        # 最近访问时间戳, 热路径 (get/set) 都是 O(1) 写,
-                        # 零磁盘 I/O。evict 时把 SQL 的 created_at 与 dict 的
-                        # 最近访问时间合并: 进程重启后 dict 为空, 平滑退化到
-                        # created_at (跟 refactor 前 FIFO 行为一致, 无回归)。
+                        # MED-3 (2026-09-14 audit): LIMIT N ORDER BY created_at
+                        # 走 idx_created_at 索引, 不再 SELECT 全表。SQL 拿
+                        # "created_at 升序的前 evict_n + buffer 行" 当候选
+                        # (buffer=evict_n*0.5 防 _access_times 里某些行的
+                        # 真实 LRU 时间比候选新, 把它们错杀), Python 侧用
+                        # _access_times dict 合并后重新排序, 取最旧的
+                        # evict_n 行。
+                        buffer = max(evict_n // 2, 100)
+                        fetch_n = evict_n + buffer
                         rows_result = await session.execute(
-                            text("SELECT key, created_at FROM cache")
+                            text(
+                                "SELECT key, created_at FROM cache "
+                                "ORDER BY created_at ASC LIMIT :n"
+                            ),
+                            {"n": fetch_n},
                         )
-                        entries = [
+                        candidates = [
                             (self._access_times.get(key, created_at), key)
                             for key, created_at in rows_result.fetchall()
                         ]
-                        entries.sort()
-                        evict_keys = [key for _, key in entries[:evict_n]]
+                        candidates.sort()
+                        evict_keys = [key for _, key in candidates[:evict_n]]
                         if evict_keys:
                             stmt = text(
                                 "DELETE FROM cache WHERE key IN :keys"

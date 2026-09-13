@@ -144,10 +144,21 @@ def _mask_config_secrets(node: Any) -> Any:
 def load_config() -> dict:
     """加载并脱敏 config。复用 config_loader 解析 ${VAR} 占位符.
 
-    不缓存: tool_loader.load_all_tools 会回写 upstream_tool_mapping, 缓存会让
-    写回跨调用泄漏到 /api/config 返回值。下游 get_interfaces 自己有 5s 缓存,
-    这里没必要再缓存。
+    HIGH-3 (2026-09-14 audit): 当 GatewayServer 已通过 ``set_config()``
+    注入过 ``_GW_CFG`` 时, 优先复用注入的 config — 它已经跑过
+    ``load_all_tools`` 的 mutation (回写了 upstream_tool_mapping), 与
+    router / interfaces / mcp-tools-list 的视图一致; 否则每次重新读盘
+    会拿到一份"未 mutation"的 mapping, 与运行态不一致。
+
+    不缓存: mutation 是不可重入的 (load_all_tools 写回 upstream_tool_mapping),
+    缓存会让 mutation 跨调用泄漏到 /api/config 返回值。下游 get_interfaces
+    自己有 5s 缓存, 这里没必要再缓存。
     """
+    # 1. 优先复用 GatewayServer 注入的 config (运行态 + mutation 完整)
+    if _INJECTED and _GW_CFG is not None:
+        return _mask_config_secrets({**_GW_CFG})
+
+    # 2. Standalone 模式 (无 gateway server): 从盘上重新加载
     config_path = Path(GATEWAY_CONFIG_PATH)
     if not config_path.exists():
         return {}
@@ -236,7 +247,16 @@ def get_cache_stats() -> dict:
 # Upstream probing
 # ---------------------------------------------------------------------------
 
+import threading
+
 _probe_cache: TTLCache = TTLCache(maxsize=256, ttl=5.0)
+# LOW-5 (2026-09-14 audit): 同 key 并发折叠。get_upstream_status 给每个
+# upstream 都 submit 一次 _probe_upstream, 启动瞬间 N 个 worker 同时探活
+# 会触发上游 429。in-flight dict 让同 (name, type, base_url) 只跑一次,
+# 其他 worker 等结果 (leader 写完 _probe_cache 后 set event)。Event + lock
+# 跨线程同步 (follower 在不同 worker 里 wait)。
+_probe_in_flight: dict[tuple, threading.Event] = {}
+_probe_in_flight_lock = threading.Lock()
 _PROBE_ERROR_MAX_CHARS = 200
 _PROBE_TIMEOUT = httpx.Timeout(connect=2.0, read=3.0, write=2.0, pool=2.0)
 
@@ -250,6 +270,49 @@ def _probe_upstream(name: str, cfg: dict) -> dict:
     if payload is not None:
         return payload
 
+    # LOW-5: 同 key 已在跑 -> 等结果而非新起一个网络请求
+    is_leader = False
+    wait_event: threading.Event | None = None
+    with _probe_in_flight_lock:
+        existing = _probe_in_flight.get(cache_key)
+        if existing is not None:
+            wait_event = existing
+        else:
+            wait_event = threading.Event()
+            _probe_in_flight[cache_key] = wait_event
+            is_leader = True
+
+    if not is_leader:
+        # follower: 等 leader 完成, 取它写入 _probe_cache 的结果
+        assert wait_event is not None
+        wait_event.wait(timeout=_PROBE_TIMEOUT.connect + _PROBE_TIMEOUT.read + 2.0)
+        cached_after = _probe_cache.get(cache_key)
+        if cached_after is not None:
+            return cached_after
+        # leader 失败 / 超时: 返回兜底, 不让 follower 永远等
+        return {
+            "enabled": cfg.get("enabled", False),
+            "type": upstream_type,
+            "description": cfg.get("description", ""),
+            "status": "unknown",
+            "latency_ms": None,
+            "last_error": "probe coalesce timeout",
+        }
+
+    # leader: 真正跑探活
+    try:
+        result = _do_probe(upstream_type, base_url, cfg)
+        _probe_cache[cache_key] = result
+        return result
+    finally:
+        # 唤醒 follower + 清理 in-flight
+        with _probe_in_flight_lock:
+            _probe_in_flight.pop(cache_key, None)
+        wait_event.set()
+
+
+def _do_probe(upstream_type: str, base_url: str, cfg: dict) -> dict:
+    """执行单次 upstream 探活。LOW-5 抽出便于 leader/follower 共享。"""
     result = {
         "enabled": cfg.get("enabled", False),
         "type": upstream_type,
@@ -298,8 +361,6 @@ def _probe_upstream(name: str, cfg: dict) -> dict:
             result["last_error"] = str(e)[:_PROBE_ERROR_MAX_CHARS]
     else:
         result["status"] = "configured" if cfg.get("enabled") else "disabled"
-
-    _probe_cache[cache_key] = result
     return result
 
 
@@ -307,13 +368,19 @@ _probe_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="upstream
 
 
 def _shutdown_probe_executor() -> None:
-    """进程退出时关掉 probe executor, 避免 worker 线程泄漏。"""
+    """进程退出时关掉 probe executor, 避免 worker 线程泄漏。
+
+    LOW-1 (2026-09-14 audit): 之前挂在 atexit 上, 但 stdio transport
+    下 FastMCP 可能拦截退出流程, atexit 不保证触发。GatewayServer.stop()
+    现在显式调一次, 保证 worker 线程在正常退出路径下被关掉。
+    """
     try:
         _probe_executor.shutdown(wait=False, cancel_futures=True)
     except Exception:
         pass
 
 
+# 保留 atexit 兜底: standalone 使用 (无 gateway_server) 仍依赖它。
 atexit.register(_shutdown_probe_executor)
 
 

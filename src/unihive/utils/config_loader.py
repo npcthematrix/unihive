@@ -151,4 +151,19 @@ def validate_config(config: dict) -> list[str]:
         else:
             errors.append(f"upstream {name!r} unknown type: {cfg.get('type')!r}")
 
+    # LOW-3 (2026-09-14 audit): console 段校验。
+    # 与运行时 _get_console_auth_config 形成两道防线 — 这里抓明显缺字段,
+    # 运行时抓跨源 partial-config 的细粒度组合。运行时是 source of truth。
+    console = config.get("console") or {}
+    if console:
+        if not (console.get("username") or "").strip():
+            errors.append("console.username missing")
+        if not (console.get("password") or console.get("password_hash")):
+            errors.append("console.password or console.password_hash required")
+        secret = (console.get("session_secret") or "").strip()
+        if not secret:
+            errors.append("console.session_secret required")
+        elif len(secret) < 32:
+            errors.append("console.session_secret must be at least 32 characters")
+
     return errors
