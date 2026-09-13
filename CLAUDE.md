@@ -7,31 +7,32 @@
 ```
 unihive/
 ├── src/
-│   ├── api/                     # 上游数据源 client
-│   │   ├── mootdx2_client.py    # 通达信 (本地 TCP, MooTDX2 封装)
-│   │   ├── tdx_quant_client.py  # 通达信量化终端 (in-process tqcenter)
-│   │   ├── fuyao_client.py      # 同花顺 aicubes.cn (HTTP MCP, 4 个端点)
-│   │   └── omni_client.py       # OMNIDATA (本地 SQLite)
-│   ├── core/                    # 路由 + 注册 + 工厂
-│   │   ├── router.py            # 上游优先级链 + 降级
-│   │   ├── registry.py          # 工具注册表
-│   │   ├── tool_loader.py       # YAML → 工具加载
-│   │   ├── mcp_factory.py       # FastMCP 实例化 + capability 过滤
-│   │   ├── cache_strategy.py    # 缓存策略
-│   │   ├── normalizer.py        # 股票代码标准化
-│   │   └── auth_middleware.py   # console auth 中间件
-│   ├── storage/
-│   │   └── cache.py             # SQLite 缓存 (SQLAlchemy + aiosqlite)
-│   ├── sync/
-│   │   └── board_sync.py        # OMNIDATA 板块数据同步脚本
-│   ├── utils/
-│   │   ├── config_loader.py     # YAML 配置加载
-│   │   ├── console_api.py       # 控制台 HTTP API (/api/*)
-│   │   └── log_config.py        # 日志配置
-│   ├── models/                  # 各上游的 dataclass + 异常
-│   ├── exceptions/
-│   ├── console_auth.py          # 控制台鉴权 (cookie-based, /api/* + console.html)
-│   └── gateway_server.py        # 入口 (HTTP+stdio 双模)
+│   └── unihive/                 # Python 包 (符合 PEP 721 src 布局)
+│       ├── api/                 # 上游数据源 client
+│       │   ├── mootdx2_client.py    # 通达信 (本地 TCP, MooTDX2 封装)
+│       │   ├── tdx_quant_client.py  # 通达信量化终端 (in-process tqcenter)
+│       │   ├── fuyao_client.py      # 同花顺 aicubes.cn (HTTP MCP, 4 个端点)
+│       │   └── omni_client.py       # OMNIDATA (本地 SQLite)
+│       ├── core/                # 路由 + 注册 + 工厂
+│       │   ├── router.py            # 上游优先级链 + 降级
+│       │   ├── registry.py          # 工具注册表
+│       │   ├── tool_loader.py       # YAML → 工具加载
+│       │   ├── mcp_factory.py       # FastMCP 实例化 + capability 过滤
+│       │   ├── cache_strategy.py    # 缓存策略
+│       │   ├── normalizer.py        # 股票代码标准化
+│       │   └── auth_middleware.py   # console auth 中间件
+│       ├── storage/
+│       │   └── cache.py             # SQLite 缓存 (SQLAlchemy + aiosqlite)
+│       ├── sync/
+│       │   └── board_sync.py        # OMNIDATA 板块数据同步脚本
+│       ├── utils/
+│       │   ├── config_loader.py     # YAML 配置加载
+│       │   ├── console_api.py       # 控制台 HTTP API (/api/*)
+│       │   └── log_config.py        # 日志配置
+│       ├── models/                  # 各上游的 dataclass + 异常
+│       ├── exceptions/
+│       ├── console_auth.py          # 控制台鉴权 (cookie-based, /api/* + console.html)
+│       └── gateway_server.py        # 入口 (HTTP+stdio 双模)
 ├── config/
 │   ├── upstreams.yaml           # 上游 + 路由 + 工具定义 (主配置)
 │   ├── tools_mootdx2.yaml       # MooTDX2 工具详情
@@ -60,7 +61,7 @@ unihive/
 | **mootdx2** | 通达信 | 本地 TCP (mootdx2 库) | 34 | 行情 / K线 / 板块,需本地 TDX 服务器 |
 | **tdx_quant** | 通达信量化终端 | 进程内 tqcenter.py | 54 | 行情 / 板块 / 交易日 / 财务 / 公式 / 交易 / 预警 |
 | **fuyao** | 同花顺 (aicubes.cn) | HTTP MCP,4 端点 | 67 | a-share(28) / a-share-index(7) / meta(2) / fund(30) |
-| **omni** | OMNIDATA | 本地 SQLite | 5 | 行业/概念板块,需 `src/sync/board_sync.py` 预同步 |
+| **omni** | OMNIDATA | 本地 SQLite | 5 | 行业/概念/地域/风格板块,数据源 THS(同花顺)/TDX(通达信),需 `src.unihive.sync.board_sync` 预同步 |
 
 合计 ~160 个工具,按路由优先级链分发:同一 gateway 工具可在多个上游配置降级路径(`config/upstreams.yaml` 的 `routing` 段)。
 
@@ -88,7 +89,7 @@ MCP 端点: http://127.0.0.1:18080/mcp
 - **鉴权范围**: `/api/*` + `console.html` 用 cookie session (见 `src/console_auth.py`)
 - **代码标准化**: `600519.SH` / `000001.SZ` (fuyao 格式) 与 `sh600519` (TDX 格式) 互转 (`src/core/normalizer.py`)
 - **缓存**: SQLite (`logs/cache.db`),按 `cache_ttl_key` 区分 TTL 档 (realtime_quote / historical / fundamentals / ...)
-- **板块数据**: OMNI 离线使用,先 `python -m src.sync.board_sync` 同步 `data/board.db`,再调 `omni_*` 工具
+- **板块数据**: OMNI 离线使用,先 `python -m src.unihive.sync.board_sync` 同步 `data/board.db`,再调 `omni_*` 工具
 
 ## 技术栈
 

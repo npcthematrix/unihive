@@ -6,8 +6,8 @@ import types
 import pytest
 from unittest.mock import MagicMock
 
-from src.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
-from src.tdx_quant_errors import TdxQuantErrorType
+from src.unihive.models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
+from src.unihive.exceptions.tdx_quant_errors import TdxQuantErrorType
 
 
 @pytest.fixture
@@ -44,8 +44,8 @@ def client_config():
 
 @pytest.mark.asyncio
 async def test_start_initializes_tq_singleton(client_config, mock_tq):
-    from src.tdx_quant_client import TdxQuantClient
-    from src.upstream_client import UpstreamStatus
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.upstream_client import UpstreamStatus
     c = TdxQuantClient(client_config)
     assert await c.start() is True
     assert c.status == UpstreamStatus.HEALTHY
@@ -54,8 +54,8 @@ async def test_start_initializes_tq_singleton(client_config, mock_tq):
 
 @pytest.mark.asyncio
 async def test_start_failure_marks_unavailable(client_config, mock_tq):
-    from src.tdx_quant_client import TdxQuantClient
-    from src.upstream_client import UpstreamStatus
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.upstream_client import UpstreamStatus
     mock_tq.initialize.side_effect = FileNotFoundError("no tqcenter")
     c = TdxQuantClient(client_config)
     assert await c.start() is False
@@ -64,8 +64,8 @@ async def test_start_failure_marks_unavailable(client_config, mock_tq):
 
 @pytest.mark.asyncio
 async def test_start_when_module_missing(client_config, monkeypatch):
-    from src.tdx_quant_client import TdxQuantClient
-    from src.upstream_client import UpstreamStatus
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.upstream_client import UpstreamStatus
     # 确保 tqcenter 不可导入：移除任何 fake tdx_root 的 sys.path 注入
     monkeypatch.setattr("sys.path", list(sys.path))
     c = TdxQuantClient(client_config)
@@ -76,7 +76,7 @@ async def test_start_when_module_missing(client_config, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_call_tool_returns_success_on_errorid_0(client_config, mock_tq):
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
     c = TdxQuantClient(client_config)
     await c.start()
     result = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
@@ -87,7 +87,7 @@ async def test_call_tool_returns_success_on_errorid_0(client_config, mock_tq):
 
 @pytest.mark.asyncio
 async def test_call_tool_returns_error_on_errorid_6(client_config, mock_tq):
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
     mock_tq.get_market_snapshot.return_value = {"ErrorId": "6", "ErrMsg": "disconnected"}
     c = TdxQuantClient(client_config)
     await c.start()
@@ -98,8 +98,8 @@ async def test_call_tool_returns_error_on_errorid_6(client_config, mock_tq):
 
 @pytest.mark.asyncio
 async def test_call_tool_when_unavailable_returns_error(client_config, mock_tq):
-    from src.tdx_quant_client import TdxQuantClient
-    from src.upstream_client import UpstreamStatus
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.upstream_client import UpstreamStatus
     mock_tq.initialize.side_effect = FileNotFoundError("no tqcenter")
     c = TdxQuantClient(client_config)
     await c.start()  # 失败但不抛
@@ -111,7 +111,7 @@ async def test_call_tool_when_unavailable_returns_error(client_config, mock_tq):
 
 @pytest.mark.asyncio
 async def test_health_loop_marks_disconnected_after_3(client_config, mock_tq):
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
     mock_tq.get_user_sector.return_value = {"ErrorId": "6"}
     c = TdxQuantClient(client_config)
     await c.start()
@@ -123,8 +123,8 @@ async def test_health_loop_marks_disconnected_after_3(client_config, mock_tq):
 
 @pytest.mark.asyncio
 async def test_stop_closes_tq_and_cancels_health_task(client_config, mock_tq):
-    from src.tdx_quant_client import TdxQuantClient
-    from src.upstream_client import UpstreamStatus
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.upstream_client import UpstreamStatus
     c = TdxQuantClient(client_config)
     await c.start()
     await c.stop()
@@ -134,7 +134,7 @@ async def test_stop_closes_tq_and_cancels_health_task(client_config, mock_tq):
 
 @pytest.mark.asyncio
 async def test_reconnect_lock_serializes(client_config, mock_tq):
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
     c = TdxQuantClient(client_config)
     await c.start()
     initial_count = mock_tq.initialize.call_count
@@ -156,7 +156,7 @@ async def test_stop_close_runs_in_executor_not_blocking_event_loop(client_config
     close 窗口内并发任务 0 tick; 若 run_in_executor, close 窗口内多次 tick。
     """
     import time
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
 
     close_started_at: list[float] = []
     close_finished_at: list[float] = []
@@ -202,7 +202,7 @@ async def test_stop_close_runs_in_executor_not_blocking_event_loop(client_config
 async def test_reconnect_close_runs_in_executor_not_blocking_event_loop(client_config):
     """HIGH2: _reconnect() 内的 tq.close() 也必须 run_in_executor."""
     import time
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
 
     close_started_at: list[float] = []
     close_finished_at: list[float] = []
@@ -245,7 +245,7 @@ async def test_reconnect_close_runs_in_executor_not_blocking_event_loop(client_c
 async def test_stop_waits_for_in_flight_reconnect_task(client_config):
     """MED4: in-flight _reconnect() task 必须被 stop() 等待, 不能被 tq.close()
     半路截断导致状态不一致 (reconnect 内部 close + initialize 序列被切)。"""
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
 
     c = TdxQuantClient(client_config)
 
@@ -291,7 +291,7 @@ async def test_stop_waits_for_in_flight_reconnect_task(client_config):
 @pytest.mark.asyncio
 async def test_strategy_id_uses_configured_value(monkeypatch, tmp_path):
     """配置里有 strategy_id 时, 必须用它, 不能用 __file__ 或 UUID."""
-    from src import tdx_quant_client as m
+    from src.unihive.api import tdx_quant_client as m
     monkeypatch.setattr(m, "_STRATEGY_ID_FILE", tmp_path / "strategy_id")
     cfg = TdxQuantConfig(
         name="tdx_quant",
@@ -301,7 +301,7 @@ async def test_strategy_id_uses_configured_value(monkeypatch, tmp_path):
             unavailable_threshold=10, call_timeout_sec=5,
         ),
     )
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
     c = TdxQuantClient(cfg)
     assert c._strategy_id == "my_custom_strategy"
     # 文件不应被创建
@@ -312,7 +312,7 @@ async def test_strategy_id_uses_configured_value(monkeypatch, tmp_path):
 async def test_strategy_id_generates_uuid_when_no_config_or_file(monkeypatch, tmp_path):
     """无配置 + 无持久化文件 → 生成 UUID 并写入文件."""
     import uuid as uuid_mod
-    from src import tdx_quant_client as m
+    from src.unihive.api import tdx_quant_client as m
     sf = tmp_path / "strategy_id"
     monkeypatch.setattr(m, "_STRATEGY_ID_FILE", sf)
     cfg = TdxQuantConfig(
@@ -323,7 +323,7 @@ async def test_strategy_id_generates_uuid_when_no_config_or_file(monkeypatch, tm
             unavailable_threshold=10, call_timeout_sec=5,
         ),
     )
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
     c = TdxQuantClient(cfg)
     # 必须是合法 UUID
     parsed = uuid_mod.UUID(c._strategy_id)
@@ -336,7 +336,7 @@ async def test_strategy_id_generates_uuid_when_no_config_or_file(monkeypatch, tm
 @pytest.mark.asyncio
 async def test_strategy_id_reuses_persisted_file(monkeypatch, tmp_path):
     """持久化文件存在时, 直接复用, 不再生成新 UUID."""
-    from src import tdx_quant_client as m
+    from src.unihive.api import tdx_quant_client as m
     sf = tmp_path / "strategy_id"
     sf.write_text("stable-id-12345", encoding="utf-8")
     monkeypatch.setattr(m, "_STRATEGY_ID_FILE", sf)
@@ -348,7 +348,7 @@ async def test_strategy_id_reuses_persisted_file(monkeypatch, tmp_path):
             unavailable_threshold=10, call_timeout_sec=5,
         ),
     )
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
     c = TdxQuantClient(cfg)
     assert c._strategy_id == "stable-id-12345"
 
@@ -357,7 +357,7 @@ async def test_strategy_id_reuses_persisted_file(monkeypatch, tmp_path):
 async def test_strategy_id_is_not_filepath(monkeypatch, tmp_path):
     """LOW7 主断言: 绝对不能用 __file__ 路径 (不稳定 + 暴露部署信息)."""
     import os
-    from src import tdx_quant_client as m
+    from src.unihive.api import tdx_quant_client as m
     sf = tmp_path / "strategy_id"
     monkeypatch.setattr(m, "_STRATEGY_ID_FILE", sf)
     cfg = TdxQuantConfig(
@@ -368,7 +368,7 @@ async def test_strategy_id_is_not_filepath(monkeypatch, tmp_path):
             unavailable_threshold=10, call_timeout_sec=5,
         ),
     )
-    from src.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
     c = TdxQuantClient(cfg)
     assert "\\" not in c._strategy_id and "/" not in c._strategy_id, (
         f"strategy_id 不应是路径: {c._strategy_id}"

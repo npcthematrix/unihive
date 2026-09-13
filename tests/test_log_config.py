@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from src.log_config import JsonFormatter, configure_logging
+from src.unihive.utils.log_config import JsonFormatter, configure_logging
 
 
 @pytest.fixture

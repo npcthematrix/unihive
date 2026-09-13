@@ -357,28 +357,53 @@ def parse_skill_md(text: str) -> list[dict]:
 
 # ---------- enum 提取 ----------
 
+# 说明文字里出现这些词，表示后面跟的是“示例 / 格式 / 默认值”，不是封闭取值集合
+_ENUM_EXAMPLE_MARKERS = ("如", "例如", "比如", "格式", "示例", "默认", "参考")
+
+# 路径 / URL / 表达式碎片 / 列表字面量都不可能是枚举值
+_ENUM_ATOM_BLOCKED_CHARS = "/\\:*()[]{}<>=!&|、，"
+
+
+def _clean_enum_atom(atom: str) -> str | None:
+    """规范化单个内联代码值；不是枚举候选时返回 None。"""
+    value = atom.strip()
+    # 文档常写作 `'1d'` / `"front"`，去掉包裹引号
+    while len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    if not value or " " in value:
+        return None
+    if any(ch in value for ch in _ENUM_ATOM_BLOCKED_CHARS):
+        return None
+    if value[0].isupper():
+        return None
+    if "_" in value and value.replace("_", "").islower():
+        return None
+    if value in ("Y", "N", "Yes", "No", "y", "n"):
+        return None
+    return value
+
+
 def extract_enum_from_description(desc: str) -> list[str] | None:
-    """从说明文字提取 `` 内联代码值作为 enum 候选。"""
+    """从说明文字提取真正的枚举取值。
+
+    只有“封闭取值集合”才应生成 enum。文档里的示例值 / 格式占位符
+    （如 `'600519.SH'`、`'YYYYMMDD'`、`'http://...'`）绝不能当成枚举，否则生成 Literal
+    后真实入参会被 pydantic 拒绝。
+    """
     if "`" not in desc:
         return None
-    atoms = re.findall(r"`([^`]+)`", desc)
-    if not atoms:
+    first = desc.find("`")
+    if any(marker in desc[:first] for marker in _ENUM_EXAMPLE_MARKERS):
         return None
     values: set[str] = set()
-    for atom in atoms:
-        if " " in atom:
-            continue
-        if re.search(r"[<>=!&|]", atom):
-            continue
-        if "_" in atom and atom.replace("_", "").islower():
-            continue
-        if atom[0].isupper():
-            continue
-        for v in atom.split("/"):
-            v = v.strip()
-            if v and v not in ("Y", "N", "Yes", "No", "y", "n"):
-                values.add(v)
-    return sorted(values) if values else None
+    for atom in re.findall(r"`([^`]+)`", desc):
+        value = _clean_enum_atom(atom)
+        if value:
+            values.add(value)
+    # 只有一个候选值几乎总是“默认值 / 示例”，不是枚举
+    if len(values) < 2:
+        return None
+    return sorted(values)
 
 
 # ---------- 构造 spec ----------

@@ -144,6 +144,10 @@ def validate_config(config: dict) -> list[str]:
         elif cfg.get("type") == "npx":
             if not cfg.get("command") and not cfg.get("package"):
                 errors.append(f"upstream {name!r} type=npx missing 'command' or 'package'")
+        elif cfg.get("type") == "omni":
+            pass  # OMNIDATA client, no extra fields required
+        elif cfg.get("type") == "thsdk":
+            pass  # THSDK client; credentials come from THS_USERNAME/THS_PASSWORD env
         else:
             errors.append(f"upstream {name!r} unknown type: {cfg.get('type')!r}")
 

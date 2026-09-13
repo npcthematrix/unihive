@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from src.core import cache_strategy
+from src.unihive.core import cache_strategy
 
 
 class TestExecuteCachedEmptyDataGuard:
@@ -14,8 +14,8 @@ class TestExecuteCachedEmptyDataGuard:
 
     async def test_empty_data_response_is_not_cached(self, tmp_path, gateway_server_minimal):
         from dataclasses import dataclass
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -71,8 +71,8 @@ class TestExecuteCachedEmptyDataGuard:
 
     async def test_non_empty_data_response_is_cached(self, tmp_path, gateway_server_minimal):
         """对照测试：data 非空时正常缓存。"""
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -104,18 +104,22 @@ class TestExecuteCachedEmptyDataGuard:
         server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
-        server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
+        # 非实时 key + 候选链含远程 fuyao 源才走缓存
+        server.config = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"hist_tool": {"fuyao_ashare": "x"}},
+        }
 
         resp = await server._execute_cached(
-            "a_share_prices_snapshot",
+            "hist_tool",
             {"thscodes": "600000.SH"},
-            route_key="a_share_prices_snapshot",
-            ttl_key="realtime_quote",
+            route_key="hist_tool",
+            ttl_key="historical",
         )
 
         assert resp["success"] is True
         assert resp["data"] == {"close": 100.0}
-        key = cache_strategy.cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
+        key = cache_strategy.cache_key("hist_tool", {"thscodes": "600000.SH"})
         cached = await cache.get(key)
         assert cached is not None, "data 非空的 FUYAO 成功响应应被缓存"
         assert cached["data"] == {"close": 100.0}
@@ -125,8 +129,8 @@ class TestExecuteCachedEmptyDataGuard:
     async def test_miss_response_includes_cache_hit_false(self, tmp_path, gateway_server_minimal):
         """Regression #4: miss 路径必须设 cache_hit=False。
         让消费者区分"缓存端点本次 miss"与"无缓存端点"。"""
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -168,8 +172,8 @@ class TestExecuteCachedEmptyDataGuard:
         hops 仍是请求级元数据（不进缓存），但消费者拿得到。
         debug 日志也记录一份。"""
         import logging
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -206,9 +210,12 @@ class TestExecuteCachedEmptyDataGuard:
         server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
-        server.config = {"cache": {"ttl": {"search": 300}}}
+        server.config = {
+            "cache": {"ttl": {"search": 300}},
+            "upstream_tool_mapping": {"search_stock": {"fuyao_meta": "x", "tdx_local": "y"}},
+        }
 
-        with caplog.at_level(logging.DEBUG, logger="src.gateway_server"):
+        with caplog.at_level(logging.DEBUG, logger="src.unihive.gateway_server"):
             resp = await server._execute_cached(
                 "search_stock",
                 {"keyword": "茅台"},
@@ -231,8 +238,8 @@ class TestExecuteCachedEmptyDataGuard:
         """Regression #3+#4: 缓存里不应存 hops（请求级）和 cache_hit=True。
         命中的响应里由 _execute_cached 重算 cache_hit=True，
         hops 从缓存读时是 []（这次请求没有真实路由）。"""
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -273,31 +280,34 @@ class TestExecuteCachedEmptyDataGuard:
         server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
-        server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
+        server.config = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"hist_tool": {"fuyao_ashare": "x"}},
+        }
 
         # 第一次：miss → router 被调
         resp1 = await server._execute_cached(
-            "a_share_prices_snapshot",
+            "hist_tool",
             {"thscodes": "600000.SH"},
-            route_key="a_share_prices_snapshot",
-            ttl_key="realtime_quote",
+            route_key="hist_tool",
+            ttl_key="historical",
         )
         assert server.router.calls == 1
         assert resp1["cache_hit"] is False
         assert resp1["data"] == {"v": 1}
 
         # 缓存里不应有 hops 和 cache_hit=True
-        key = cache_strategy.cache_key("a_share_prices_snapshot", {"thscodes": "600000.SH"})
+        key = cache_strategy.cache_key("hist_tool", {"thscodes": "600000.SH"})
         cached = await cache.get(key)
         assert cached["hops"] == [], "缓存里 hops 必须是空"
         assert "cache_hit" not in cached, "缓存里不应预存 cache_hit 字段"
 
         # 第二次：命中 → router 不被调
         resp2 = await server._execute_cached(
-            "a_share_prices_snapshot",
+            "hist_tool",
             {"thscodes": "600000.SH"},
-            route_key="a_share_prices_snapshot",
-            ttl_key="realtime_quote",
+            route_key="hist_tool",
+            ttl_key="historical",
         )
         assert server.router.calls == 1, "第二次应命中缓存"
         assert resp2["cache_hit"] is True
@@ -312,7 +322,7 @@ class TestCleanupExpiredLru:
     之前 max_entries=10000 是死配置，cache.db 会无界增长。"""
 
     async def _make_cache(self, tmp_path, max_entries=10):
-        from src.storage.cache import Cache, CacheConfig
+        from src.unihive.storage.cache import Cache, CacheConfig
         cache = Cache(CacheConfig(
             enabled=True,
             db_path=str(tmp_path / "cache.db"),
@@ -463,8 +473,8 @@ class TestExecuteCachedStatsAccounting:
     cache_stats.json 永远是 {hits:0, misses:0}."""
 
     async def test_miss_increments_miss_counter(self, tmp_path, gateway_server_minimal):
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -490,18 +500,21 @@ class TestExecuteCachedStatsAccounting:
         server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
-        server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
+        server.config = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"test_tool": {"fuyao_ashare": "x"}},
+        }
 
         # 第一次: miss
         resp1 = await server._execute_cached(
-            "test_tool", {"x": "1"}, route_key="test_tool", ttl_key="realtime_quote"
+            "test_tool", {"x": "1"}, route_key="test_tool", ttl_key="historical"
         )
         assert cache.misses == 1, f"miss 应=1, got {cache.misses}"
         assert cache.hits == 0
 
         # 第二次: hit
         resp2 = await server._execute_cached(
-            "test_tool", {"x": "1"}, route_key="test_tool", ttl_key="realtime_quote"
+            "test_tool", {"x": "1"}, route_key="test_tool", ttl_key="historical"
         )
         assert resp2["cache_hit"] is True
         assert cache.hits == 1, f"hit 应=1, got {cache.hits}"
@@ -512,8 +525,8 @@ class TestExecuteCachedStatsAccounting:
     async def test_non_caching_path_does_not_count(self, tmp_path, gateway_server_minimal):
         """can_cache=False (无 TTL 或 cache 禁用) 不应计入 hit/miss,
         否则运维误判缓存效果。"""
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -558,8 +571,8 @@ class TestExecuteCachedSingleFlight:
 
     async def test_concurrent_miss_only_routes_once(self, tmp_path, gateway_server_minimal):
         """5 个并发同 key miss → router 只调 1 次。"""
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -589,12 +602,15 @@ class TestExecuteCachedSingleFlight:
         server = gateway_server_minimal
         server.cache = cache
         server.router = FakeRouter()
-        server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
+        server.config = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"t": {"fuyao_ashare": "x"}},
+        }
 
         # 5 个并发同 key 请求
         results = await asyncio.gather(*[
             server._execute_cached(
-                "t", {"k": "v"}, route_key="t", ttl_key="realtime_quote"
+                "t", {"k": "v"}, route_key="t", ttl_key="historical"
             )
             for _ in range(5)
         ])
@@ -619,8 +635,8 @@ class TestExecuteCachedSingleFlight:
     ):
         """leader 完成 → in_flight dict 必须清掉, 否则下一次同 key 请求
         复用旧 future, 拿到错误结果。"""
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -677,7 +693,7 @@ class TestWalMode:
 
     async def test_wal_mode_is_active(self, tmp_path):
         """initialize 后 journal_mode 必须是 wal, 不是默认的 delete."""
-        from src.storage.cache import Cache, CacheConfig
+        from src.unihive.storage.cache import Cache, CacheConfig
         from sqlalchemy import text
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
@@ -700,7 +716,7 @@ class TestAsyncStatsPersistence:
     async def test_close_flushes_dirty_stats_to_disk(self, tmp_path):
         """close() 在 dirty events < STATS_FLUSH_INTERVAL 时也应刷盘。
         否则 gateway 进程重启会丢这批累积的计数。"""
-        from src.storage.cache import Cache, CacheConfig
+        from src.unihive.storage.cache import Cache, CacheConfig
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -727,7 +743,7 @@ class TestAsyncStatsPersistence:
         """越过 STATS_FLUSH_INTERVAL 时, record_hit/record_miss 必须
         通过 create_task 调度而不是阻塞同步调用。"""
         import json
-        from src.storage.cache import Cache, CacheConfig
+        from src.unihive.storage.cache import Cache, CacheConfig
 
         cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
         await cache.initialize()
@@ -752,4 +768,95 @@ class TestAsyncStatsPersistence:
             f"热路径 async flush 应已落盘, got {data}"
         )
 
+        await cache.close()
+
+
+class TestCacheScopePolicy:
+    """新缓存范围策略：
+    - 实时行情(realtime_quote) 不缓存
+    - 本地终端/本地库(mootdx2/tdx_quant/thsdk/omni) 不缓存
+    - 仅远程 fuyao_* 源在非实时 key 下缓存
+    """
+
+    async def _server(self, tmp_path, gateway_server_minimal, result_source, config):
+        from src.unihive.storage.cache import Cache, CacheConfig
+        cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "c.db")))
+        await cache.initialize()
+
+        @dataclass
+        class FakeResult:
+            success: bool = True
+            data: object = None
+            error: str | None = None
+            source: str | None = result_source
+            hops: list = None
+            def __post_init__(self):
+                if self.data is None:
+                    self.data = {"v": 1}
+                if self.hops is None:
+                    self.hops = []
+
+        class FakeRouter:
+            def __init__(self):
+                self.calls = 0
+            async def route(self, route_key, params):
+                self.calls += 1
+                return FakeResult()
+
+        server = gateway_server_minimal
+        server.cache = cache
+        server.router = FakeRouter()
+        server.config = config
+        return server, cache
+
+    async def test_realtime_quote_never_cached(self, tmp_path, gateway_server_minimal):
+        cfg = {
+            "cache": {"ttl": {"realtime_quote": 10}},
+            "upstream_tool_mapping": {"q": {"fuyao_ashare": "x"}},
+        }
+        server, cache = await self._server(tmp_path, gateway_server_minimal, "fuyao_ashare", cfg)
+        for _ in range(2):
+            await server._execute_cached("q", {"k": "v"}, route_key="q", ttl_key="realtime_quote")
+        # 实时行情：每次都路由，不缓存
+        assert server.router.calls == 2
+        assert cache.misses == 0 and cache.hits == 0
+        await cache.close()
+
+    async def test_local_source_not_cached(self, tmp_path, gateway_server_minimal):
+        """链上只有本地源时，即使配了 TTL 也不缓存。"""
+        cfg = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"k": {"mootdx2": "x", "tdx_quant": "y"}},
+        }
+        server, cache = await self._server(tmp_path, gateway_server_minimal, "mootdx2", cfg)
+        for _ in range(2):
+            await server._execute_cached("k", {"k": "v"}, route_key="k", ttl_key="historical")
+        assert server.router.calls == 2, "本地终端数据不应缓存"
+        await cache.close()
+
+    async def test_local_priority_does_not_pollute_fuyao_cache(
+        self, tmp_path, gateway_server_minimal
+    ):
+        """链上 [mootdx2, fuyao_ashare]，本地优先命中时，不能把本地结果写进 fuyao 缓存键。"""
+        cfg = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"k": {"mootdx2": "x", "fuyao_ashare": "y"}},
+        }
+        # 实际命中本地源
+        server, cache = await self._server(tmp_path, gateway_server_minimal, "mootdx2", cfg)
+        await server._execute_cached("k", {"k": "v"}, route_key="k", ttl_key="historical")
+        key = cache_strategy.cache_key("k", {"k": "v"})
+        assert await cache.get(key) is None, "本地命中结果不得写入缓存"
+        await cache.close()
+
+    async def test_fuyao_historical_cached(self, tmp_path, gateway_server_minimal):
+        cfg = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"k": {"fuyao_ashare": "x"}},
+        }
+        server, cache = await self._server(tmp_path, gateway_server_minimal, "fuyao_ashare", cfg)
+        await server._execute_cached("k", {"k": "v"}, route_key="k", ttl_key="historical")
+        r2 = await server._execute_cached("k", {"k": "v"}, route_key="k", ttl_key="historical")
+        assert server.router.calls == 1, "远程 fuyao 非实时响应应被缓存"
+        assert r2["cache_hit"] is True
         await cache.close()

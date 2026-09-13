@@ -51,7 +51,7 @@ def _build_app_like_serve_http(version: str):
     from fastmcp import FastMCP
     from starlette.routing import Mount
 
-    from src.core.mcp_factory import (
+    from src.unihive.core.mcp_factory import (
         NoSlashStarlette,
         make_mcp_path_canonicalizer,
     )
@@ -102,7 +102,7 @@ async def _live_app_with_capability_filter(version: str):
     from fastmcp import FastMCP
     from starlette.routing import Mount
 
-    from src.core.mcp_factory import (
+    from src.unihive.core.mcp_factory import (
         NoSlashStarlette,
         install_capability_filter,
         make_mcp_path_canonicalizer,

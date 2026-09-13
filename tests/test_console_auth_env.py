@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.gateway_server import _console_auth_config_from_env
+from src.unihive.gateway_server import _console_auth_config_from_env
 
 
 @pytest.fixture(autouse=True)

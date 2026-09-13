@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.config_loader import (
+from src.unihive.utils.config_loader import (
     load_config,
     resolve_env_vars,
     validate_config,

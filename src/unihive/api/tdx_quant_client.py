@@ -24,6 +24,7 @@ from ..exceptions.tdx_quant_errors import (
     translate_errorid,
 )
 from .upstream_client import ToolResult, UpstreamStatus
+from ..core.blocking_pool import get_blocking_executor
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ class TdxQuantClient:
                 # tq.close() 同步调 DLL, 在主线程跑会阻塞 event loop 0.5s+
                 # (HIGH2). executor 跑让其他 in-flight 请求继续调度。
                 await asyncio.get_event_loop().run_in_executor(
-                    None, self._tq.close
+                    get_blocking_executor(), self._tq.close
                 )
             except Exception as e:
                 logger.warning(f"[{self.name}] close warning: {e}")
@@ -184,7 +185,7 @@ class TdxQuantClient:
         try:
             result = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
-                    None,
+                    get_blocking_executor(),
                     lambda: getattr(self._tq, tool_name)(**arguments),
                 ),
                 timeout=self.config.settings.call_timeout_sec,
@@ -244,7 +245,7 @@ class TdxQuantClient:
             try:
                 result = await asyncio.wait_for(
                     asyncio.get_event_loop().run_in_executor(
-                        None, lambda: self._tq.get_user_sector()
+                        get_blocking_executor(), lambda: self._tq.get_user_sector()
                     ),
                     timeout=5.0,
                 )
@@ -280,7 +281,7 @@ class TdxQuantClient:
                 if self._tq:
                     # HIGH2: tq.close() 同步 DLL, 必须 run_in_executor
                     await asyncio.get_event_loop().run_in_executor(
-                        None, self._tq.close
+                        get_blocking_executor(), self._tq.close
                     )
             except Exception as e:
                 logger.warning(f"[{self.name}] close during reconnect: {e}")

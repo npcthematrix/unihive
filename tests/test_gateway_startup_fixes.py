@@ -23,7 +23,7 @@ class TestInitializeConcurrent:
 
     async def test_concurrent_initialize_calls_only_init_cache_once(self, tmp_path):
         """两个并发 initialize 调用, 内部 _do_initialize 只应跑一次."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -66,7 +66,7 @@ class TestInitializeConcurrent:
 class TestNullUpstreams:
     async def test_initialize_handles_null_upstreams(self, tmp_path):
         """YAML 里 `upstreams: null` 不能让 initialize() 抛 AttributeError."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -102,7 +102,7 @@ class TestUpstreamTimeoutIsolation:
 
     async def test_single_upstream_timeout_does_not_break_init(self, tmp_path):
         """场景: good 立刻成功, bad 卡死超过 timeout. 期望: init 不抛, 两者都被跟踪."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
         import src.gateway_server as gs
 
         server = GatewayServer.__new__(GatewayServer)
@@ -158,7 +158,7 @@ class TestUpstreamTimeoutIsolation:
     async def test_timed_out_upstream_logs_error_not_raises(self, tmp_path, caplog):
         """超时的 upstream 必须打 ERROR 日志, 不能悄无声息."""
         import logging
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
         import src.gateway_server as gs
 
         server = GatewayServer.__new__(GatewayServer)
@@ -212,7 +212,7 @@ class TestHealthCheckTimeout:
 
     async def test_slow_health_check_does_not_block_other_clients(self, tmp_path):
         """slow client 永远挂死, fast client 仍必须被 health_check 到."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -288,7 +288,7 @@ class TestGetHealthAggregation:
 
     async def _build_server_with_upstreams(self, statuses: dict[str, str]):
         """构造带 mock upstream 的 server. statuses: {name: status_value}."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {"upstreams": {}}
@@ -297,7 +297,7 @@ class TestGetHealthAggregation:
         server._running = False
         server._shutdown_event = asyncio.Event()
 
-        from src.upstream_client import UpstreamStatus
+        from src.unihive.api.upstream_client import UpstreamStatus
 
         for name, status_value in statuses.items():
             client_status = UpstreamStatus(status_value)
@@ -314,7 +314,7 @@ class TestGetHealthAggregation:
         return server
 
     async def test_all_healthy_returns_healthy(self):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = await self._build_server_with_upstreams(
             {"a": "healthy", "b": "healthy"}
@@ -326,7 +326,7 @@ class TestGetHealthAggregation:
         assert result["upstreams"]["b"] == "healthy"
 
     async def test_some_degraded_returns_degraded(self):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = await self._build_server_with_upstreams(
             {"a": "healthy", "b": "degraded"}
@@ -336,7 +336,7 @@ class TestGetHealthAggregation:
 
     async def test_some_unavailable_returns_degraded(self):
         """任一 upstream 不可用应反映到整体 health."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = await self._build_server_with_upstreams(
             {"a": "healthy", "b": "unavailable"}
@@ -345,7 +345,7 @@ class TestGetHealthAggregation:
         assert result["status"] == "degraded"
 
     async def test_all_unavailable_returns_unhealthy(self):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = await self._build_server_with_upstreams(
             {"a": "unavailable", "b": "unavailable"}
@@ -355,7 +355,7 @@ class TestGetHealthAggregation:
 
     async def test_no_upstreams_returns_healthy(self):
         """无 upstream 时不应误报 degraded."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = await self._build_server_with_upstreams({})
         result = GatewayServer.aggregate_health(server.upstreams)
@@ -367,7 +367,7 @@ class TestGetHealthAggregation:
 class TestConfigCLI:
     def test_config_flag_accepted_by_argparser(self):
         """`--config PATH` 必须被 argparse 接受并出现在 Namespace.config 里."""
-        from src.gateway_server import _build_arg_parser
+        from src.unihive.gateway_server import _build_arg_parser
 
         parser = _build_arg_parser()
         args = parser.parse_args(["--config", "/tmp/custom-upstreams.yaml"])
@@ -375,7 +375,7 @@ class TestConfigCLI:
 
     def test_config_flag_optional_defaults_none(self):
         """不传 --config 时, args.config 必须为 None (让默认值生效)."""
-        from src.gateway_server import _build_arg_parser
+        from src.unihive.gateway_server import _build_arg_parser
 
         parser = _build_arg_parser()
         args = parser.parse_args([])
@@ -435,7 +435,7 @@ class TestConsoleApiImportsDeduped:
     def test_serve_http_has_single_console_api_import(self):
         """serve_http 里只应出现一次 `from . import console_api` 形式导入."""
         import inspect
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         src = inspect.getsource(GatewayServer.serve_http)
         # `from . import console_api` 或 `from .console_api import` 应各最多一次

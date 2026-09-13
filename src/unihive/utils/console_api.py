@@ -22,8 +22,8 @@ from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
-# 项目根目录
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
+# 项目根目录 (src/unihive/utils/console_api.py 向上 4 层)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 CONSOLE_HTML_PATH = str(_PROJECT_ROOT / "console.html")
 GATEWAY_CONFIG_PATH = str(_PROJECT_ROOT / "config" / "upstreams.yaml")

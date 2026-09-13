@@ -163,16 +163,10 @@
 
 ### 板块代码
 - TDX 本地文件只存储中文板块名（`sector_name`），不存储数字板块代码
-- 调用方必须用中文板块名做 `get_sector_stocks_local` / `get_custom_sector_stocks` 的入参
+- 调用方必须用中文板块名做 `get_custom_sector_stocks` 的入参
 - 不能跨机器共享板块名（不同 TDX 客户端板块名一致但 ID 不一定一致）
 
 ### 自定义板块可用性
 - 完全依赖本机 TDX 客户端 + `T0002/blocknew/` 目录
 - 自定义板块名是用户个人标签，跨机器无意义
 - `blocknew.cfg` 格式由 TDX 客户端定义，本工具不验证内容合法性
-
-### 与 tdx_quant 的同名工具重复
-- `mootdx2.get_sector_list` 与 `tdx_quant.get_sector_list` 同名但语义不同：
-  - mootdx2: 读取本地 block_*.dat，按 sector_type (industry/concept/region) 过滤
-  - tdx_quant: 通过 tdx 服务端 list_type 拉取，含 cache
-- 控制台 `/api/interfaces` 会去重后保留其中一个；上游路由根据工具名分发

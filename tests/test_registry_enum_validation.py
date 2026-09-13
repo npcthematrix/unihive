@@ -6,7 +6,7 @@ from typing import Literal
 
 import pytest
 
-from src.registry import (
+from src.unihive.core.registry import (
     _annotation_for,
     _build_parameter,
     build_signature,

@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.gateway_server import _sanitize_sync_message
+from src.unihive.gateway_server import _sanitize_sync_message
 
 
 def test_path_windows():

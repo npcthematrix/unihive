@@ -28,8 +28,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import yaml  # noqa: E402
-from src.tdx_quant_client import TdxQuantClient  # noqa: E402
-from src.tdx_quant_config import TdxQuantConfig, TdxQuantSettings  # noqa: E402
+from src.unihive.tdx_quant_client import TdxQuantClient  # noqa: E402
+from src.unihive.tdx_quant_config import TdxQuantConfig, TdxQuantSettings  # noqa: E402
 
 
 def load_tdx_quant_config() -> tuple[TdxQuantConfig, dict]:

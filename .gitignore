@@ -10,6 +10,10 @@ __pycache__/
 .coverage
 htmlcov/
 
+# THSDK 登录会话文件（thsdk 包写入进程工作目录，内含账号会话，禁止提交）
+account.session
+*.session
+
 # Logs & runtime data
 logs/*.log
 logs/*.db

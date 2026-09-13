@@ -143,6 +143,9 @@ class Cache:
                 # 同时读写同一 cache.db 时的 "database is locked" 问题。
                 await session.execute(text("PRAGMA journal_mode=WAL"))
                 await session.execute(text("PRAGMA synchronous=NORMAL"))
+                # 性能优化: 页缓存 2MB，临时表放内存
+                await session.execute(text("PRAGMA cache_size=-2000"))
+                await session.execute(text("PRAGMA temp_store=MEMORY"))
                 await session.commit()
 
             self._initialized = True
@@ -167,40 +170,42 @@ class Cache:
             return None
 
     async def _get_impl(self, key: str) -> Any | None:
-        async with self._lock:
-            try:
-                async with self._session_factory() as session:
-                    result = await session.execute(
-                        text("SELECT value, expires_at FROM cache WHERE key = :key"),
-                        {"key": key}
-                    )
-                    row = result.fetchone()
+        # 读路径不持全局锁：aiosqlite 把所有语句投递到单连接线程串行执行，
+        # 读不会与底层写并发交错；WAL 也允许读写并发。这里去掉锁让热点 key
+        # 的并发读不再互相排队（热路径吞吐瓶颈）。LRU 簿记 _access_times 是
+        # 普通 dict，asyncio 单线程下赋值天然原子，无需加锁。
+        try:
+            async with self._session_factory() as session:
+                result = await session.execute(
+                    text("SELECT value, expires_at FROM cache WHERE key = :key"),
+                    {"key": key}
+                )
+                row = result.fetchone()
 
-                    if row is None:
-                        return None
+                if row is None:
+                    return None
 
-                    value_str, expires_at = row
+                value_str, expires_at = row
 
-                    # 检查是否过期
-                    if expires_at and expires_at < time.time():
-                        await session.execute(
-                            text("DELETE FROM cache WHERE key = :key"),
-                            {"key": key}
-                        )
-                        await session.commit()
-                        self._access_times.pop(key, None)
-                        return None
+                # 检查是否过期
+                if expires_at and expires_at < time.time():
+                    # 惰性删除走独立短事务（持锁），避免与 LRU cleanup 的 DELETE 竞争
+                    async with self._lock:
+                        async with self._session_factory() as del_session:
+                            await del_session.execute(
+                                text("DELETE FROM cache WHERE key = :key"),
+                                {"key": key}
+                            )
+                            await del_session.commit()
+                    self._access_times.pop(key, None)
+                    return None
 
-                    # LRU 簿记: 进程本地 dict 写, O(1), 零磁盘 I/O。
-                    # 不持久化 — 进程重启后 dict 为空, 行为平滑退化到 FIFO
-                    # (跟 refactor 前一致, 无回归)。
-                    self._access_times[key] = time.time()
+                self._access_times[key] = time.time()
+                return json.loads(value_str)
 
-                    return json.loads(value_str)
-
-            except Exception as e:
-                logger.error(f"Cache get error: {e}")
-                return None
+        except Exception as e:
+            logger.error(f"Cache get error: {e}")
+            return None
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """设置缓存值。 M1: 包 operation_timeout。"""

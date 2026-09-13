@@ -1,7 +1,7 @@
 """tests/test_tdx_quant_errors.py — TdxQuant 错误翻译层测试。"""
 import asyncio
 
-from src.tdx_quant_errors import (
+from src.unihive.exceptions.tdx_quant_errors import (
     TdxQuantError,
     TdxQuantErrorType,
     translate_errorid,

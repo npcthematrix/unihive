@@ -8,20 +8,20 @@ import pytest
 
 @pytest.fixture
 def client():
-    from src.mootdx2_client import MooTDX2Client, MooTDX2Config
+    from src.unihive.api.mootdx2_client import MooTDX2Client, MooTDX2Config
     return MooTDX2Client(MooTDX2Config(name="test", market="std"))
 
 
-# ========== get_daily_local ==========
+# ========== get_daily ==========
 
-def test_get_daily_local_tdxdir_empty(client):
+def test_get_daily_tdxdir_empty(client):
     """tdxdir empty → tdx_not_installed."""
-    r = asyncio.run(client.get_daily_local("600036"))
+    r = asyncio.run(client.get_daily("600036"))
     assert r.success is False
     assert r.error_detail["error_type"] == "tdx_not_installed"
 
 
-def test_get_daily_local_returns_records(client):
+def test_get_daily_returns_records(client):
     """Reader.daily returns DataFrame → list of {date, open, ...} records."""
     mock_df = pd.DataFrame({
         "open": [10.0, 10.5],
@@ -38,7 +38,7 @@ def test_get_daily_local_returns_records(client):
     mock_reader.daily.return_value = mock_df
 
     with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_daily_local("600036", adjust="qfq"))
+        r = asyncio.run(client.get_daily("600036", adjust="qfq"))
 
     assert r.success is True
     # reader.daily called with symbol='600036' (stripped of prefixes), adjust='qfq'
@@ -49,7 +49,7 @@ def test_get_daily_local_returns_records(client):
     assert r.data[0]["close"] == 10.6
 
 
-def test_get_daily_local_empty_result(client):
+def test_get_daily_empty_result(client):
     """Reader.daily returns None → success=True, data=None（业务无数据，非错误）."""
     client.config.settings = MagicMock()
     client.config.settings.tdxdir = "/fake/tdx"
@@ -57,14 +57,14 @@ def test_get_daily_local_empty_result(client):
     mock_reader.daily.return_value = None
 
     with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_daily_local("600036"))
+        r = asyncio.run(client.get_daily("600036"))
 
     assert r.success is True
     assert r.data is None
     assert "未找到" in r.error
 
 
-def test_get_daily_local_date_filter(client):
+def test_get_daily_date_filter(client):
     """start_date/end_date are passed but Reader doesn't filter → records still returned."""
     mock_df = pd.DataFrame(
         {"close": [10.0, 11.0, 12.0]},
@@ -77,7 +77,7 @@ def test_get_daily_local_date_filter(client):
 
     with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
         r = asyncio.run(
-            client.get_daily_local("600036", start_date="2024-01-03", end_date="2024-01-04")
+            client.get_daily("600036", start_date="2024-01-03", end_date="2024-01-04")
         )
 
     assert r.success is True
@@ -86,16 +86,16 @@ def test_get_daily_local_date_filter(client):
     assert r.data[1]["date"] == "2024-01-04"
 
 
-# ========== get_minute_local ==========
+# ========== get_minute ==========
 
-def test_get_minute_local_tdxdir_empty(client):
+def test_get_minute_tdxdir_empty(client):
     """tdxdir empty → tdx_not_installed."""
-    r = asyncio.run(client.get_minute_local("600036"))
+    r = asyncio.run(client.get_minute("600036"))
     assert r.success is False
     assert r.error_detail["error_type"] == "tdx_not_installed"
 
 
-def test_get_minute_local_suffix_1(client):
+def test_get_minute_suffix_1(client):
     """suffix='1' → Reader.minute(symbol, suffix=1)."""
     mock_df = pd.DataFrame(
         {"price": [10.5, 10.7], "vol": [100, 200]},
@@ -107,14 +107,14 @@ def test_get_minute_local_suffix_1(client):
     mock_reader.minute.return_value = mock_df
 
     with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_minute_local("600036", suffix="1"))
+        r = asyncio.run(client.get_minute("600036", suffix="1"))
 
     assert r.success is True
     assert mock_reader.minute.call_args.kwargs.get("suffix") == 1
     assert r.data[0]["datetime"].startswith("2024-01-02")
 
 
-def test_get_minute_local_suffix_5(client):
+def test_get_minute_suffix_5(client):
     """suffix='5' → Reader.minute(symbol, suffix=5)."""
     mock_df = pd.DataFrame({"price": [10.5]}, index=pd.to_datetime(["2024-01-02 09:35"]))
     client.config.settings = MagicMock()
@@ -123,22 +123,22 @@ def test_get_minute_local_suffix_5(client):
     mock_reader.minute.return_value = mock_df
 
     with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_minute_local("600036", suffix="5"))
+        r = asyncio.run(client.get_minute("600036", suffix="5"))
 
     assert r.success is True
     assert mock_reader.minute.call_args.kwargs.get("suffix") == 5
 
 
-# ========== get_fzline_local ==========
+# ========== get_fzline ==========
 
-def test_get_fzline_local_tdxdir_empty(client):
+def test_get_fzline_tdxdir_empty(client):
     """tdxdir empty → tdx_not_installed."""
-    r = asyncio.run(client.get_fzline_local("600036"))
+    r = asyncio.run(client.get_fzline("600036"))
     assert r.success is False
     assert r.error_detail["error_type"] == "tdx_not_installed"
 
 
-def test_get_fzline_local_returns_records(client):
+def test_get_fzline_returns_records(client):
     """Reader.fzline returns DataFrame → list of records."""
     mock_df = pd.DataFrame(
         {"price": [10.0, 10.5], "vol": [100, 200]},
@@ -150,14 +150,14 @@ def test_get_fzline_local_returns_records(client):
     mock_reader.fzline.return_value = mock_df
 
     with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_fzline_local("600036"))
+        r = asyncio.run(client.get_fzline("600036"))
 
     assert r.success is True
     assert mock_reader.fzline.call_args.kwargs.get("symbol") == "600036"
     assert len(r.data) == 2
 
 
-def test_get_fzline_local_bool_result(client):
+def test_get_fzline_bool_result(client):
     """Reader.fzline sometimes returns False → no_data_result (don't crash on bool)."""
     client.config.settings = MagicMock()
     client.config.settings.tdxdir = "/fake/tdx"
@@ -165,7 +165,7 @@ def test_get_fzline_local_bool_result(client):
     mock_reader.fzline.return_value = False
 
     with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_fzline_local("600036"))
+        r = asyncio.run(client.get_fzline("600036"))
 
     assert r.success is True
     assert r.data is None
@@ -178,7 +178,7 @@ def test_new_tools_registered_in_method_map(client):
     """call_tool 必须能路由到 3 个新离线接口。"""
     import inspect
 
-    expected = {"get_daily_local", "get_minute_local", "get_fzline_local"}
+    expected = {"get_daily", "get_minute", "get_fzline"}
     src = inspect.getsource(client.call_tool)
     for name in expected:
         assert name in src, f"{name} 未在 method_map 注册"
@@ -195,16 +195,16 @@ def test_yaml_has_offline_reader_tools():
         data = yaml.safe_load(f)
     by_name = {t["name"]: t for t in data["tools"]}
 
-    assert by_name["get_daily_local"]["data_source_type"] == "offline"
-    assert by_name["get_minute_local"]["data_source_type"] == "offline"
-    assert by_name["get_fzline_local"]["data_source_type"] == "offline"
+    assert by_name["get_daily"]["data_source_type"] == "offline"
+    assert by_name["get_minute"]["data_source_type"] == "offline"
+    assert by_name["get_fzline"]["data_source_type"] == "offline"
 
     # verify params
-    daily_params = [p["name"] for p in by_name["get_daily_local"]["params"]]
+    daily_params = [p["name"] for p in by_name["get_daily"]["params"]]
     assert "code" in daily_params
     assert "adjust" in daily_params
-    assert by_name["get_daily_local"]["params"][1]["enum"] == ["none", "qfq", "hfq"]
+    assert by_name["get_daily"]["params"][1]["enum"] == ["none", "qfq", "hfq"]
 
-    minute_params = [p["name"] for p in by_name["get_minute_local"]["params"]]
+    minute_params = [p["name"] for p in by_name["get_minute"]["params"]]
     assert "suffix" in minute_params
-    assert by_name["get_minute_local"]["params"][1]["enum"] == ["1", "5"]
+    assert by_name["get_minute"]["params"][1]["enum"] == ["1", "5"]

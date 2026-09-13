@@ -59,9 +59,19 @@ class TdxQuantConfig:
     @property
     def tqcenter_path(self) -> Path:
         """tqcenter.py 的预期路径。"""
-        return self.tdx_root_path / "PYPlugins" / "user" / "tqcenter.py"
+        # 先尝试 user 目录，再尝试 sys 目录
+        user_path = self.tdx_root_path / "PYPlugins" / "user" / "tqcenter.py"
+        sys_path = self.tdx_root_path / "PYPlugins" / "sys" / "tqcenter.py"
+        if sys_path.exists():
+            return sys_path
+        return user_path
 
     @property
     def tqcenter_dir(self) -> Path:
         """需要加入 sys.path 的目录（含 tqcenter.py）。"""
-        return self.tdx_root_path / "PYPlugins" / "user"
+        # 先尝试 user 目录，再尝试 sys 目录
+        user_dir = self.tdx_root_path / "PYPlugins" / "user"
+        sys_dir = self.tdx_root_path / "PYPlugins" / "sys"
+        if sys_dir.exists():
+            return sys_dir
+        return user_dir

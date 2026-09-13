@@ -35,6 +35,7 @@ from ..models.thsdk_config import (
     USERNAME_ENV,
 )
 from .upstream_client import ToolResult, UpstreamStatus
+from ..core.blocking_pool import get_blocking_executor
 
 logger = logging.getLogger(__name__)
 
@@ -90,97 +91,11 @@ def collect_thscodes(obj: Any) -> list[str]:
 
 
 
-def _decode_gbk_bytes(obj: Any) -> tuple[Any, bool]:
-    """Recursively decode GBK-encoded bytes to UTF-8 strings.
-
-    Returns (decoded_obj, had_warnings) tuple. The warnings flag indicates
-    whether any GBK decoding was performed.
-    """
-    had_warnings = False
-
-    if obj is None:
-        return None, False
-
-    if isinstance(obj, bytes):
-        try:
-            # Directly decode GBK to UTF-8
-            decoded = obj.decode("gbk")
-            return decoded, True
-        except UnicodeDecodeError:
-            return obj, False
-
-    if isinstance(obj, dict):
-        result = {}
-        for k, v in obj.items():
-            decoded_v, w = _decode_gbk_bytes(v)
-            had_warnings = had_warnings or w
-            result[k] = decoded_v
-        return result, had_warnings
-
-    if isinstance(obj, (list, tuple, set, frozenset)):
-        result = []
-        for item in obj:
-            decoded_item, w = _decode_gbk_bytes(item)
-            had_warnings = had_warnings or w
-            result.append(decoded_item)
-        return type(obj)(result) if isinstance(obj, (tuple, set, frozenset)) else result, had_warnings
-
-    return obj, had_warnings
-
-
-def _decode_gbk_str(obj: Any) -> tuple[Any, list[str]]:
-    """Recursively decode GBK-encoded strings back to UTF-8.
-
-    json_safe converts bytes to str representations (e.g., "b'\\xbf\\xc6...'"),
-    so we need to detect those patterns and decode them back to UTF-8.
-
-    Returns (decoded_obj, warnings) tuple.
-    """
-    warnings: list[str] = []
-
-    if obj is None:
-        return None, []
-
-    # Detect str that looks like GBK-encoded bytes: b'\\x..\\x..'
-    if isinstance(obj, str):
-        if obj.startswith("b'") and obj.endswith("'"):
-            byte_str = obj[2:-1]  # Remove b' and '
-            try:
-                # Reconstruct bytes from hex escapes
-                byte_str = byte_str.replace("\\x", "").replace("'", "")
-                if len(byte_str) % 2 == 0:
-                    # Convert hex string back to bytes
-                    byte_data = bytes.fromhex(byte_str)
-                    decoded = byte_data.decode("gbk")
-                    return decoded, ["decoded GBK string"]
-            except (ValueError, UnicodeDecodeError):
-                pass
-        return obj, []
-
-    if isinstance(obj, dict):
-        result = {}
-        for k, v in obj.items():
-            decoded_v, w = _decode_gbk_str(v)
-            warnings.extend(w)
-            result[k] = decoded_v
-        return result, warnings
-
-    if isinstance(obj, (list, tuple, set, frozenset)):
-        result = []
-        for item in obj:
-            decoded_item, w = _decode_gbk_str(item)
-            warnings.extend(w)
-            result.append(decoded_item)
-        return type(obj)(result) if isinstance(obj, (tuple, set, frozenset)) else result, warnings
-
-    return obj, warnings
-
-
 def json_safe(obj: Any) -> Any:
     """把 thsdk 返回（DataFrame/dict/标量/numpy 类型/datetime）转成 JSON 安全对象。
 
     DataFrame（含时间索引）→ list[dict]（records）；datetime/date/Timestamp
-    → ISO 字符串；NaN/Inf → None；其余递归转换。GBK 字段名自动解码为 UTF-8。
+    → ISO 字符串；NaN/Inf → None；其余递归转字符串。
     """
     if obj is None:
         return None
@@ -230,7 +145,7 @@ class _Throttle:
                 await asyncio.sleep(wait)
             try:
                 return await asyncio.wait_for(
-                    loop.run_in_executor(None, fn), timeout=timeout
+                    loop.run_in_executor(get_blocking_executor(), fn), timeout=timeout
                 )
             finally:
                 self._last = time.monotonic()
@@ -431,21 +346,6 @@ class ThsdkClient:
         )
         return json_safe(raw)
 
-    async def _call_with_gbk_decode(self, fn: Callable, *args: Any, **kwargs: Any) -> tuple[Any, list[str]]:
-        """Like _call but also handles GBK decoding for watchlist group names.
-
-        Returns (result, warnings) tuple.
-        """
-        loop = asyncio.get_running_loop()
-        raw = await self._throttle.run(
-            loop, lambda: fn(*args, **kwargs), self.config.call_timeout_sec
-        )
-        # M3: 先对 raw 数据做 GBK 解码（处理 bytes），再 json_safe
-        decoded, had_warnings = _decode_gbk_bytes(raw)
-        result = json_safe(decoded)
-        warnings = ["GBK name decoded to UTF-8"] if had_warnings else []
-        return result, warnings
-
     async def _resolve_codes(self, codes: list[str]) -> list[str]:
         """短代码先经 complete_ths_code 补全；返回去重后的完整 THSCODE 列表。"""
         if not codes:
@@ -483,49 +383,40 @@ class ThsdkClient:
         return await self._call(self._mod.get_account_watchlist)
 
     async def _tool_ths_get_account_watchlist_groups(self, p: dict) -> Any:
-        result, warnings = await self._call_with_gbk_decode(
-            self._mod.get_account_watchlist_groups
-        )
-        if warnings:
-            result["_warnings"] = warnings
-        return result
+        return await self._call(self._mod.get_account_watchlist_groups)
 
     async def _tool_ths_get_all_watchlist(self, p: dict) -> Any:
         """合并主自选(group_id=0)与分组(group_id=35+)为一个统一视图。"""
+        # thsdk 2.0.2 返回 list 格式
         wl = await self._call(self._mod.get_account_watchlist)
-        groups, warnings = await self._call_with_gbk_decode(
-            self._mod.get_account_watchlist_groups
-        )
+        groups = await self._call(self._mod.get_account_watchlist_groups)
 
         # 构建 group_id=0 的"默认分组"（主自选）
+        # wl 是 list，元素是 {code, market}
         default_group = {
             "id": 0,
             "name": "默认分组",
-            "securities": wl.get("securities", []),
-            "version": wl.get("version"),
+            "securities": wl,
+            "version": None,
         }
 
-        # 转换 groups 为 dict 格式（thsdk 返回的 groups 已是 dict）
+        # groups 是 list，每个元素是 {group_key, id, name, securities, version}
         all_groups = {"0": default_group}
-        if groups.get("groups"):
-            for gid, gdata in groups["groups"].items():
-                all_groups[gid] = gdata
+        if groups:
+            for g in groups:
+                gid = str(g.get("id", g.get("group_key", "")))
+                all_groups[gid] = g
 
-        result = {
-            "version": groups.get("group_order_version"),
-            "group_order": [0] + groups.get("group_order", []),
+        return {
+            "version": None,
+            "group_order": [0] + [g.get("id") or g.get("group_key") for g in groups],
             "groups": all_groups,
             "main_watchlist": {
-                "count": wl.get("count"),
-                "securities": wl.get("securities", []),
-                "version": wl.get("version"),
+                "count": len(wl) if wl else 0,
+                "securities": wl,
+                "version": None,
             },
         }
-
-        if warnings:
-            result["_warnings"] = warnings
-
-        return result
 
     async def _tool_ths_search_symbols(self, p: dict) -> Any:
         return await self._call(
@@ -557,15 +448,19 @@ class ThsdkClient:
             kwargs["end_time"] = p["end_time"]
         else:
             kwargs["count"] = int(p.get("count", 20))
-        return await self._call(self._mod.klines, p["security"], **kwargs)
+        # thsdk 2.0.2 参数名是 ths_code，但 YAML 定义的是 security
+        ths_code = p.get("security") or p.get("ths_code")
+        return await self._call(self._mod.klines, ths_code, **kwargs)
 
     async def _tool_ths_intraday_data(self, p: dict) -> Any:
+        ths_code = p.get("security") or p.get("ths_code")
         return await self._call(
-            self._mod.intraday_data, p["security"], date=p.get("date")
+            self._mod.intraday_data, ths_code, date=p.get("date")
         )
 
     async def _tool_ths_depth(self, p: dict) -> Any:
-        return await self._call(self._mod.depth, p["securities"])
+        ths_code = p.get("security") or p.get("ths_code")
+        return await self._call(self._mod.depth, ths_code)
 
     async def _tool_ths_tick_level1(self, p: dict) -> Any:
         kwargs: dict[str, Any] = {"count": int(p.get("count", 100))}
@@ -573,18 +468,20 @@ class ThsdkClient:
             kwargs["start_time"] = p["start_time"]
         if p.get("end_time"):
             kwargs["end_time"] = p["end_time"]
-        return await self._call(self._mod.tick_level1, p["security"], **kwargs)
+        ths_code = p.get("security") or p.get("ths_code")
+        return await self._call(self._mod.tick_level1, ths_code, **kwargs)
 
     async def _tool_ths_corporate_action(self, p: dict) -> Any:
+        ths_code = p.get("security") or p.get("ths_code")
         return await self._call(
-            self._mod.corporate_action, p["security"], count=int(p.get("count", 100))
+            self._mod.corporate_action, ths_code, count=int(p.get("count", 100))
         )
 
     async def _tool_ths_wencai_nlp(self, p: dict) -> Any:
         return await self._call(
             self._mod.wencai_nlp,
-            p["query"],
-            markets=p.get("market"),
+            condition=p["query"],
+            markets=p.get("markets"),
             limit=int(p.get("limit", 50)),
         )
 
@@ -605,13 +502,11 @@ class ThsdkClient:
         )
 
     async def _tool_ths_market_securities(self, p: dict) -> Any:
-        page = max(1, int(p.get("page", 1)))
-        page_size = int(p.get("page_size", 100))
         return await self._call(
-            self._mod.market_securities,
-            p["market"],
-            start=(page - 1) * page_size,
-            count=page_size,
+            self._mod.list_market_securities,
+            market=p["market"],
+            sort_begin=int(p.get("start", 0)),
+            sort_count=int(p.get("count", 100)),
         )
 
     # ========== 账号自选写工具（运行时兜底；注册由 ALLOW_WATCHLIST_WRITE 门控） ==========
@@ -685,4 +580,220 @@ class ThsdkClient:
             self._mod.replace_account_watchlist_group_securities,
             group_id=int(p["group_id"]),
             securities=codes,
+        )
+
+    # ========== 板块 Blocks ==========
+
+    async def _tool_ths_list_block_descriptions(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_block_descriptions, blocks=p["blocks"]
+        )
+
+    async def _tool_ths_list_security_block_memberships(self, p: dict) -> Any:
+        # YAML 定义的是 securities (数组)，thsdk 2.0.2 期望 security (单个)
+        sec = p.get("security") or (p.get("securities")[0] if p.get("securities") else None)
+        return await self._call(
+            self._mod.list_security_block_memberships, security=sec
+        )
+
+    async def _tool_ths_get_security_concept_tags(self, p: dict) -> Any:
+        sec = p.get("security") or (p.get("securities")[0] if p.get("securities") else None)
+        return await self._call(
+            self._mod.get_security_concept_tags, security=sec
+        )
+
+    async def _tool_ths_get_security_industry(self, p: dict) -> Any:
+        sec = p.get("security") or (p.get("securities")[0] if p.get("securities") else None)
+        return await self._call(
+            self._mod.get_security_industry, security=sec
+        )
+
+    async def _tool_ths_list_industry_children(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_industry_children,
+            industry=p["industry"],
+        )
+
+    async def _tool_ths_rank_block_securities(self, p: dict) -> Any:
+        kwargs: dict[str, Any] = {
+            "block": p["block"],
+            "sort_begin": int(p.get("start", 0)),
+            "sort_count": int(p.get("count", 50)),
+        }
+        if p.get("sort_id"):
+            kwargs["sort_id"] = str(p["sort_id"])
+        if p.get("order"):
+            kwargs["sort_order"] = p["order"]
+        return await self._call(self._mod.rank_block_securities, **kwargs)
+
+    # ========== 问财 WenCai ==========
+
+    async def _tool_ths_query_wencai(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.query_wencai,
+            query=p["query"],
+            markets=p.get("markets"),
+            limit=int(p.get("limit", 50)),
+        )
+
+    async def _tool_ths_query_wencai_securities(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.query_wencai_securities,
+            query=p["query"],
+            markets=p.get("markets"),
+            limit=int(p.get("limit", 50)),
+        )
+
+    async def _tool_ths_list_wencai_hot_blocks(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_wencai_hot_blocks,
+            kind=p.get("kind", "concept"),
+        )
+
+    # ========== 热度 Popularity ==========
+
+    async def _tool_ths_rank_securities_by_popularity(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.rank_securities_by_popularity,
+            type=1,  # realtime
+        )
+
+    async def _tool_ths_get_security_popularity_rank(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.get_security_popularity_rank,
+            security=p["security"],
+        )
+
+    # ========== 新闻 News ==========
+
+    async def _tool_ths_list_hot_event_news(self, p: dict) -> Any:
+        kwargs: dict[str, Any] = {"range": p.get("range", "recent")}
+        if p.get("block"):
+            kwargs["block"] = p["block"]
+        return await self._call(self._mod.list_hot_event_news, **kwargs)
+
+    async def _tool_ths_list_security_news_events(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_news_events,
+            security=p["security"],
+        )
+
+    # ========== 实时统计 Realtime ==========
+
+    async def _tool_ths_calculate_security_realtime_statistics(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.calculate_security_realtime_statistics,
+            securities=[p["security"]],
+        )
+
+    async def _tool_ths_get_security_short_term_highlights(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.get_security_short_term_highlights,
+            security=p["security"],
+        )
+
+    async def _tool_ths_list_security_price_volume_levels(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_price_volume_levels,
+            security=p["security"],
+        )
+
+    # ========== 公司行为 Corporate ==========
+
+    async def _tool_ths_list_security_corporate_actions(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_corporate_actions,
+            security=p["security"],
+        )
+
+    async def _tool_ths_list_security_financial_snapshots(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_financial_snapshots,
+            securities=p["securities"],
+            fields=p.get("fields"),
+        )
+
+    # ========== 涨跌停 Limit ==========
+
+    async def _tool_ths_analyze_security_limit_up(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.analyze_security_limit_up,
+            security=p["security"],
+            date=p.get("date"),
+        )
+
+    async def _tool_ths_get_security_price_limit_events(self, p: dict) -> Any:
+        kwargs: dict[str, Any] = {"security": p["security"]}
+        if p.get("start_year"):
+            kwargs["start_year"] = int(p["start_year"])
+        if p.get("end_year"):
+            kwargs["end_year"] = int(p["end_year"])
+        return await self._call(
+            self._mod.get_security_price_limit_events, **kwargs
+        )
+
+    # ========== 跨市场 Cross-Market ==========
+
+    async def _tool_ths_list_futures_related_securities(self, p: dict) -> Any:
+        return await self._call(self._mod.list_futures_related_securities)
+
+    async def _tool_ths_list_security_ah_relations(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_ah_relations,
+            security=p["security"],
+        )
+
+    async def _tool_ths_list_security_futures_relations(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_futures_relations,
+            securities=[p["security"]],
+        )
+
+    # ========== 搜索 Search ==========
+
+    async def _tool_ths_search_securities(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.search_securities,
+            pattern=p["keyword"],
+            market=p.get("market"),
+        )
+
+    async def _tool_ths_resolve_securities(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.resolve_securities,
+            codes=p["codes"],
+        )
+
+    # ========== 行情增强 Quotes ==========
+
+    async def _tool_ths_list_security_ticks(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_ticks,
+            security=p["security"],
+        )
+
+    async def _tool_ths_list_security_intraday_bars(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_intraday_bars,
+            security=p["security"],
+            date=p.get("date"),
+        )
+
+    async def _tool_ths_list_security_order_books(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_order_books,
+            securities=[p["security"]],
+            depth=p.get("depth", "10"),
+        )
+
+    async def _tool_ths_list_security_daily_capital_flows(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.list_security_daily_capital_flows,
+            securities=[p["security"]],
+        )
+
+    async def _tool_ths_get_market_security_names(self, p: dict) -> Any:
+        return await self._call(
+            self._mod.get_market_security_names,
+            market=p.get("market"),
         )

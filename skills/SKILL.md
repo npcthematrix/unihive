@@ -331,7 +331,7 @@ tq.get_market_data(
 |------|------|------|------|
 | field_list | N | List[str] | 需返回的字段列表；空列表返回所有字段 |
 | stock_list | Y | List[str] | 股票代码列表 |
-| period | Y | str | K线周期 |
+| period | Y | str | K线周期：`'1m'`（1分钟）/`'5m'`（5分钟）/`'15m'`（15分钟）/`'30m'`（30分钟）/`'1h'`（60分钟）/`'1d'`（日线）/`'1w'`（周线） |
 | start_time | N | str | 开始时间 |
 | end_time | N | str | 结束时间；未传则默认当前时间 |
 | count | N | int | `count>0`：取截止 end_time 最近 n 条；`count<=0`：使用 start_time/end_time 区间 |
@@ -438,7 +438,9 @@ tq.get_stock_info(
 ) -> Dict
 ```
 
-**注意：`field_list` 不能为空，必须明确指定字段列表。**
+**参数说明：**
+- `stock_code`：股票代码，如 `'600519.SH'` 或 `'000001.SZ'`
+- `field_list`：字段列表，不能为空，必须明确指定字段（如 `['Name', 'Market']`）
 
 **完整返回字段（84个）：**
 
@@ -568,7 +570,10 @@ tq.get_relation(stock_code: str = '') -> List[Dict]
 获取指定股票所属的全部板块信息。
 
 **参数说明：**
-- `stock_code`：股票代码，如 `'688318.SH'`
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_code | N | str | 股票代码，如 `'688318.SH'` |
 
 **返回字段：**
 
@@ -609,6 +614,11 @@ tq.get_divid_factors(
 ) -> pd.DataFrame
 ```
 
+**参数说明：**
+- `stock_code`：股票代码，如 `'600519.SH'`
+- `start_time`：开始日期，格式 `'YYYYMMDD'`
+- `end_time`：结束日期，格式 `'YYYYMMDD'`
+
 **返回 DataFrame 列：**
 - `Type`：类型；`Bonus`：每10股分红；`AllotPrice`：配股价；`ShareBonus`：送股比例；`Allotment`：配股比例
 
@@ -622,6 +632,10 @@ tq.get_more_info(
     field_list: List = []
 ) -> Dict
 ```
+
+**参数说明：**
+- `stock_code`：股票代码，如 `'600519.SH'`
+- `field_list`：字段列表，空则返回所有字段
 
 获取股票更多扩展信息，包含涨幅系列、主力净额、L2数据、封单、PE/PB/市值等上百个字段。`field_list` 为空返回所有字段。
 
@@ -814,8 +828,12 @@ tq.get_gb_info(
 ```
 
 **参数说明：**
-- `date_list`：日期列表，格式 `YYYYMMDD`；须从小到大排序；`len(date_list)` 必须 ≥ `count`
-- `count`：要获取的日期数量，必须 ≥ 1
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_code | N | str | 股票代码，如 `'600519.SH'` |
+| date_list | N | List[str] | 日期列表，格式 `YYYYMMDD`，须从小到大排序 |
+| count | N | int | 要获取的日期数量，必须 ≥ 1 |
 
 **返回字段：**
 
@@ -844,6 +862,13 @@ tq.get_kzz_info(
     field_list: List[str] = []
 ) -> Dict
 ```
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_code | N | str | 可转债代码，如 `'113052.SH'` |
+| field_list | N | List[str] | 字段列表 |
 
 **完整返回字段：**
 
@@ -884,8 +909,12 @@ tq.get_ipo_info(
 ) -> list
 ```
 
-- `ipo_type`：`0`=新股申购，`1`=新发债，`2`=两者都返回
-- `ipo_date`：`0`=只返回今天，`1`=今天及以后
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| ipo_type | N | int | `0`=新股申购，`1`=新发债，`2`=两者都返回 |
+| ipo_date | N | int | `0`=只返回今天，`1`=今天及以后 |
 
 **返回字段：**
 
@@ -1008,8 +1037,17 @@ tq.get_financial_data(
 
 获取财务报表数据（字段 FN1~FN584），需要客户端下载专业财务数据包。
 
-- `report_type`：`'announce_time'`（按公告时间）或 `'tag_time'`（按标签时间），默认按报告期
-- **返回值：** `Dict`，键为股票代码，值为 `pd.DataFrame`
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表，如 `['600519.SH', '000001.SZ']` |
+| field_list | N | List[str] | 财务字段列表，如 `['FN1', 'FN2']`；空则返回所有字段 |
+| start_time | N | str | 开始日期，格式 `'YYYYMMDD'` |
+| end_time | N | str | 结束日期，格式 `'YYYYMMDD'` |
+| report_type | N | str | `'announce_time'`（按公告时间）或 `'tag_time'`（按标签时间），默认按报告期 |
+
+**返回值：** `Dict`，键为股票代码，值为 `pd.DataFrame`
 
 **常用字段（完整字段请参考官方文档）：**
 
@@ -1052,8 +1090,14 @@ tq.get_financial_data_by_date(
 ) -> Dict
 ```
 
-- `year`：年份（如 `2023`）；`0` 返回最新
-- `mmdd`：报告期月日（如 `331`=一季报，`630`=中报，`930`=三季报，`1231`=年报）；`0` 返回最新
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表，如 `['600519.SH']` |
+| field_list | N | List[str] | 财务字段列表，如 `['FN1', 'FN2']` |
+| year | N | int | 年份（如 `2023`）；`0` 返回最新 |
+| mmdd | N | int | 报告期月日：`331`=一季报，`630`=中报，`930`=三季报，`1231`=年报；`0` 返回最新 |
 
 ---
 
@@ -1069,6 +1113,15 @@ tq.get_gpjy_value(
 ```
 
 获取股票市场交易数据（字段 GP1~GP46），包含：股东人数、龙虎榜、融资融券、大宗交易、陆股通、涨停数据等。
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表 |
+| field_list | N | List[str] | 字段列表，如 `['GP1', 'GP2']` |
+| start_time | N | str | 开始日期，格式 `'YYYYMMDD'` |
+| end_time | N | str | 结束日期，格式 `'YYYYMMDD'` |
 
 **完整返回字段（GP1~GP46）：**
 
@@ -1140,6 +1193,15 @@ tq.get_gpjy_value_by_date(
 ) -> Dict
 ```
 
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表 |
+| field_list | N | List[str] | 字段列表 |
+| year | N | int | 年份，`0` 返回最新 |
+| mmdd | N | int | 报告期：`331`/`630`/`931`/`1231` |
+
 ---
 
 ### 3.5 获取板块交易数据 `get_bkjy_value`
@@ -1154,6 +1216,15 @@ tq.get_bkjy_value(
 ```
 
 获取板块级别市场交易数据（字段 BK5~BK19），包含：PE/PB/PS/PC、市值、涨跌停数、融资融券等。
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表 |
+| field_list | N | List[str] | 字段列表，如 `['BK5', 'BK6']` |
+| start_time | N | str | 开始日期，格式 `'YYYYMMDD'` |
+| end_time | N | str | 结束日期，格式 `'YYYYMMDD'` |
 
 **完整返回字段（BK5~BK19）：**
 
@@ -1200,6 +1271,15 @@ tq.get_bkjy_value_by_date(
 ) -> Dict
 ```
 
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表 |
+| field_list | N | List[str] | 字段列表 |
+| year | N | int | 年份，`0` 返回最新 |
+| mmdd | N | int | 报告期：`331`/`630`/`931`/`1231` |
+
 ---
 
 ### 3.7 获取市场交易数据 `get_scjy_value`
@@ -1213,6 +1293,14 @@ tq.get_scjy_value(
 ```
 
 获取市场整体宏观交易数据（字段 SC01~SC42），包含：融资融券、陆股通、涨停、打板资金、ETF规模、新开户等。无需传 `stock_list`。
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| field_list | N | List[str] | 字段列表，如 `['SC01', 'SC02']` |
+| start_time | N | str | 开始日期，格式 `'YYYYMMDD'` |
+| end_time | N | str | 结束日期，格式 `'YYYYMMDD'` |
 
 **完整返回字段（SC01~SC42）：**
 
@@ -1273,6 +1361,14 @@ tq.get_scjy_value_by_date(
 ) -> Dict
 ```
 
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| field_list | N | List[str] | 字段列表 |
+| year | N | int | 年份，`0` 返回最新 |
+| mmdd | N | int | 报告期：`331`/`630`/`931`/`1231` |
+
 ---
 
 ### 3.9 获取股票单个数据字段 `get_gp_one_data`
@@ -1285,6 +1381,13 @@ tq.get_gp_one_data(
 ```
 
 获取股票单个数据字段（字段 GO1~GO47，不按时间序列，返回当前值），包含：发行价、一致预期EPS、解禁日、机构持股、业绩预告等。
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表 |
+| field_list | N | List[str] | 字段列表，如 `['GO1', 'GO2']` |
 
 **完整返回字段（GO1~GO47）：**
 
@@ -1380,7 +1483,12 @@ tq.get_stock_list(
 
 获取指定市场/分类的股票列表。
 
-- `list_type`：`0`=只返回代码，`1`=返回代码和名称（`[{'Code':..., 'Name':...}, ...]`）
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| market | N | str | 市场分类代码，默认 `'5'`（全部A股） |
+| list_type | N | int | `0`=只返回代码，`1`=返回代码和名称 |
 
 **market 参数完整说明：**
 
@@ -1420,6 +1528,9 @@ futures_main = tq.get_stock_list(market='92')
 ```python
 tq.get_sector_list(list_type: int = 0) -> List
 ```
+
+**参数说明：**
+- `list_type`：`0`=全部板块；`1`=行业板块；`2`=概念板块；`3`=地区板块；`4`=自定义板块
 
 获取 A 股全部板块代码列表（相当于 `get_stock_list('10')`）。
 
@@ -1461,24 +1572,48 @@ tq.get_user_sector() -> List
 ```python
 tq.create_sector(block_code: str = '', block_name: str = '')
 ```
-- `block_code`：板块简称（不能为空）
-- `block_name`：板块显示名称（不能为空）
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| block_code | Y | str | 板块简称（不能为空） |
+| block_name | Y | str | 板块显示名称（不能为空） |
 
 #### 删除板块 `delete_sector`
 ```python
 tq.delete_sector(block_code: str = '')
 ```
 
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| block_code | Y | str | 板块简称 |
+
 #### 重命名板块 `rename_sector`
 ```python
 tq.rename_sector(block_code: str = '', block_name: str = '')
 ```
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| block_code | Y | str | 板块简称 |
+| block_name | Y | str | 新的板块显示名称 |
 
 #### 清空板块 `clear_sector`
 ```python
 tq.clear_sector(block_code: str = '')
 ```
 清空板块内所有成分股（不删除板块本身）。
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| block_code | Y | str | 板块简称 |
 
 ---
 
@@ -1523,8 +1658,13 @@ tq.refresh_kline(
 ```
 
 **参数说明：**
-- `period`：仅支持 `'1m'`、`'5m'`、`'1d'` 三种
-- 不建议一次更新太多，会堵塞策略和客户端
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表 |
+| period | N | str | K线周期，仅支持 `'1m'`、`'5m'`、`'1d'` 三种 |
+
+不建议一次更新太多，会堵塞策略和客户端。
 
 ---
 
@@ -1536,6 +1676,13 @@ tq.subscribe_hq(
     callback = None
 ) -> object
 ```
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | Y | List[str] | 股票代码列表，最多 100 只 |
+| callback | N | function | 回调函数，行情变化时触发 |
 
 订阅指定股票的实时行情更新，有行情变化时自动触发回调函数。**最多订阅 100 只。**
 
@@ -1564,6 +1711,12 @@ for i in range(0, len(stocks), BATCH_SIZE):
 ```python
 tq.unsubscribe_hq(stock_list: List[str] = [])
 ```
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表，为空则取消全部订阅 |
 
 ---
 
@@ -1602,6 +1755,12 @@ tq.download_file(
 tq.send_message(msg_str: str) -> Dict
 ```
 
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| msg_str | Y | str | 消息内容，用 `|` 分行 |
+
 将字符串消息发送到通达信客户端 TQ 策略管理界面显示。用 `|` 分行。
 
 ```python
@@ -1615,6 +1774,12 @@ tq.send_message("MSG,策略运行中|买入信号数：3")
 ```python
 tq.send_file(file_path: str) -> Dict
 ```
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| file_path | Y | str | 文件路径，须放在 `./PYPlugins/file/` 目录 |
 
 发送 txt/pdf/html 文件到通达信客户端展示。文件须放在 `./PYPlugins/file/` 目录。
 
@@ -1644,6 +1809,18 @@ tq.send_warn(
 发送预警信号到通达信客户端 TQ 策略信号界面。
 
 **参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | N | List[str] | 股票代码列表 |
+| time_list | N | List[str] | 时间列表，格式 `YYYYMMDDHHMMSS` |
+| price_list | N | List[str] | 价格列表（数字字符串） |
+| close_list | N | List[str] | 收盘价列表（数字字符串） |
+| volum_list | N | List[str] | 成交量列表（数字字符串） |
+| bs_flag_list | N | List[str] | 买卖标记：`0`=买入，`1`=卖出 |
+| warn_type_list | N | List[str] | 预警类型 |
+| reason_list | N | List[str] | 原因说明 |
+| count | N | int | 信号数量 |
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
@@ -1690,9 +1867,13 @@ tq.send_bt_data(
 输出回测数据到通达信客户端显示，配合 `SIGNALS_TQ` 公式在K线图上展示。
 
 **参数说明：**
-- `time_list`：时间列表（`YYYYMMDDHHMMSS` 或 `YYYYMMDD`）；长度必须 ≥ `count`
-- `data_list`：二维列表，每个子列表对应一个时间点，最多取前**16个**值（均为纯数字字符串）
-- `count`：数据条数，必须 > 0
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_code | N | str | 股票代码 |
+| time_list | N | List[str] | 时间列表（`YYYYMMDDHHMMSS` 或 `YYYYMMDD`），长度必须 ≥ count |
+| data_list | N | List[List[str]] | 二维列表，每个子列表对应一个时间点，最多取前16个值 |
+| count | N | int | 数据条数，必须 > 0 |
 
 **data_list 子列表位置与 SIGNALS_TQ ID 对应关系：**
 - 位置1（index 0）→ `SIGNALS_TQ(1, TYPE)`
@@ -1817,9 +1998,16 @@ tq.get_trading_dates(
 ) -> List
 ```
 
-获取指定市场在时间范围内的纯交易日列表。**需要先在客户端下载上证指数盘后数据。**
+**参数说明：**
 
-- `market`：如 `'SH'`、`'SZ'`、`'HK'` 等
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| market | Y | str | 市场代码，如 `'SH'`、`'SZ'`、`'HK'` |
+| start_time | Y | str | 开始日期，格式 `'YYYYMMDD'` |
+| end_time | Y | str | 结束日期，格式 `'YYYYMMDD'` |
+| count | N | int | 返回数量，`-1`=返回全部 |
+
+获取指定市场在时间范围内的纯交易日列表。**需要先在客户端下载上证指数盘后数据。**
 - `count`：返回数量限制，`-1` 返回全部
 
 ---
@@ -1832,9 +2020,13 @@ tq.get_trading_dates(
 tq.formula_format_data(data_dict: Dict = {}) -> Dict
 ```
 
-将 `get_market_data` 获取的K线数据格式化为通达信公式接口可识别的格式。
+**参数说明：**
 
-**输入要求：** `data_dict` 必须包含 `Amount`、`Volume`、`Close`、`Open`、`High`、`Low` 六个字段。
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| data_dict | Y | Dict | K线数据字典，必须包含 `Amount`、`Volume`、`Close`、`Open`、`High`、`Low` 字段 |
+
+将 `get_market_data` 获取的K线数据格式化为通达信公式接口可识别的格式。
 
 **返回值：** `Dict`，键为股票代码，值为 `List[Dict]`，每个 Dict 包含 `Date`、`Amount`、`Volume`、`Close`、`Open`、`High`、`Low`。
 
@@ -1947,6 +2139,21 @@ tq.formula_process_mul_xg(
     dividend_type: int = 0
 ) -> Dict
 ```
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| formula_name | Y | str | 公式名称 |
+| formula_arg | N | str | 公式参数字符串 |
+| return_count | N | int | 每只股票返回结果数量 |
+| return_date | N | bool | 是否返回日期 |
+| stock_list | Y | List[str] | 股票代码列表 |
+| stock_period | N | str | K线周期，默认 `'1d'` |
+| start_time | N | str | 开始日期 |
+| end_time | N | str | 结束日期 |
+| count | N | int | K线数量 |
+| dividend_type | N | int | 复权类型 |
 
 对多只股票批量调用通达信选股公式，**无需提前设置数据，效率更高。**
 

@@ -17,7 +17,7 @@ import logging
 
 import pytest
 
-from src.gateway_server import GatewayServer
+from src.unihive.gateway_server import GatewayServer
 
 
 def _make_server(tmp_path, *, command):

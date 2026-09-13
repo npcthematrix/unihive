@@ -4,6 +4,27 @@
 # Fuyao 接口参数说明：详见 docs/fuyao-api-params.md
 # AI 调用前请先查阅该文档，了解各参数的含义、枚举值和约束。
 
+# 缓存策略：只缓存"远程 HTTP 同花顺源(fuyao_*)"的非实时响应。
+#   - 实时行情(realtime_quote) 不缓存：行情要最新，且本地终端获取已足够快。
+#   - 本地终端/本地库(mootdx2 / tdx_quant / thsdk / omni) 一律不缓存：
+#     本地数据访问再套一层缓存纯属多余。
+#   - 未在此配置 TTL 的 ttl_key 同样视为不缓存。
+# 仅当工具路由候选链上含 fuyao_* 源、且本次实际命中 fuyao 时才读写缓存。
+cache:
+  enabled: true
+  db_path: logs/cache.db
+  max_entries: 50000
+  operation_timeout: 3.0
+  ttl:
+    # realtime_quote: 故意不配置 —— 实时行情不缓存
+    historical: 86400        # 历史K线/复权因子等（收盘后不变），缓存 1 天
+    fundamentals: 86400      # 财报三表/财务指标，缓存 1 天
+    valuation: 30            # 估值快照，30s（兼顾新鲜度与上游削峰）
+    special_data: 300        # 涨停池/异动等特色数据，5 分钟
+    ticker_list: 3600        # 证券代码/板块列表，1 小时
+    workday: 604800          # 交易日历，7 天
+    search: 60               # 证券搜索，1 分钟
+
 upstreams:
   mootdx2:
     enabled: true
@@ -47,8 +68,8 @@ upstreams:
     description: "同花顺-a-share-mcp: A 股行情/财报/估值/特殊数据, 28 个 gateway 工具, 端点: /mcp/a-share"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share"
-    api_key: "${RHTHS_API_KEY}"
-    timeout_seconds: 30
+    api_key: "${FUYAO_API_KEY}"
+    timeout_seconds: 15
     retry:
       max_attempts: 3
       backoff_base: 2
@@ -69,8 +90,8 @@ upstreams:
     description: "同花顺-a-share-index-mcp: 指数/板块目录/成分股/历史K线, 7 个 gateway 工具, 端点: /mcp/a-share-index"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/a-share-index"
-    api_key: "${RHTHS_API_KEY}"
-    timeout_seconds: 30
+    api_key: "${FUYAO_API_KEY}"
+    timeout_seconds: 10
     retry:
       max_attempts: 3
       backoff_base: 2
@@ -85,8 +106,8 @@ upstreams:
     description: "同花顺-meta-mcp: 跨市场 ticker 搜索/列表, 2 个 gateway 工具, 端点: /mcp/meta"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/meta"
-    api_key: "${RHTHS_API_KEY}"
-    timeout_seconds: 30
+    api_key: "${FUYAO_API_KEY}"
+    timeout_seconds: 10
     retry:
       max_attempts: 3
       backoff_base: 2
@@ -99,8 +120,8 @@ upstreams:
     description: "同花顺-fund-mcp: 公募基金持仓/业绩/经理/财务/历史, 30 个 gateway 工具, 端点: /mcp/fund"
     type: "http"
     base_url: "https://fuyao.aicubes.cn/mcp/fund"
-    api_key: "${RHTHS_API_KEY}"
-    timeout_seconds: 30
+    api_key: "${FUYAO_API_KEY}"
+    timeout_seconds: 20
     retry:
       max_attempts: 3
       backoff_base: 2
@@ -135,6 +156,10 @@ upstreams:
       - wencai
       - news
       - watchlist
+
+# Gateway 全局性能配置
+gateway:
+  per_upstream_timeout: 10  # 单个上游调用超时，防止卡死 fallback 链
 
 # 上游 tool 映射 (gateway_tool -> {upstream_name: upstream_tool_name})
 # 是 routing 链之外的另一种声明方式：当某 gateway_tool 没有 routing chain，

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..api.upstream_client import ToolResult, UpstreamClient
+from .rate_limiter import AsyncTokenBucketLimiter, get_default_limiter
 
 if TYPE_CHECKING:
     from ..api.fuyao_client import FuyaoClient
@@ -46,7 +47,7 @@ class Router:
     基于配置优先级链路由请求，支持降级
     """
 
-    DEFAULT_PER_UPSTREAM_TIMEOUT = 10.0
+    DEFAULT_PER_UPSTREAM_TIMEOUT = 30.0
 
     def __init__(
         self,
@@ -54,6 +55,7 @@ class Router:
         routing_config: dict[str, dict],
         upstream_tool_mapping: dict[str, dict[str, str]] | None = None,
         per_upstream_timeout: float | None = None,
+        limiter: AsyncTokenBucketLimiter | None = None,
     ):
         self.upstreams = upstreams
         self.routing_config = routing_config
@@ -69,6 +71,10 @@ class Router:
             if per_upstream_timeout is not None
             else self.DEFAULT_PER_UPSTREAM_TIMEOUT
         )
+        # 限流器：保护 fuyao/thsdk 等互联网上游，避免触发上游 429/QPD 限制。
+        # 不传则用进程默认单例 (20 QPS / 桶 40)。本地上游 (mootdx2/tdx_quant/
+        # omni) 不需要限流，但走同一接口也无害（桶大从不阻塞）。
+        self.limiter = limiter or get_default_limiter()
 
     def _get_routing_chain(self, gateway_tool: str) -> list[str]:
         """获取路由链"""
@@ -148,6 +154,21 @@ class Router:
                 )
                 hops.append(hop)
                 logger.info(f"[{gateway_tool}] {source} unavailable, trying next...")
+                continue
+
+            # 限流：protect 互联网上游 (fuyao/thsdk) 避免触发上游 429/QPD 配额
+            # 本地上游 (mootdx2/tdx_quant/omni) 走同一接口也无害（默认 20 QPS
+            # 桶大，从不阻塞）。wait=False：桶空直接跳过该 upstream 试下一个。
+            if not await self.limiter.acquire(source, wait=False):
+                hop = RouteHop(
+                    source=source,
+                    tool_name=tool_name,
+                    duration_ms=0,
+                    success=False,
+                    error=f"rate limited (qps cap reached for {source})"
+                )
+                hops.append(hop)
+                logger.info(f"[{gateway_tool}] {source} rate limited, trying next...")
                 continue
 
             # 调用上游

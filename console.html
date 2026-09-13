@@ -407,9 +407,9 @@ async with Client("http://127.0.0.1:18080/mcp") as client:
                 <div class="omni-stats" id="omni-stats">
                     <p class="omni-hint">加载中...</p>
                 </div>
-                <!-- 同步日志 -->
+                <!-- 同步日志 (改名以区分于同步管理子标签的"最近同步") -->
                 <div class="omni-logs">
-                    <h3>同步记录</h3>
+                    <h3>同步日志</h3>
                     <div id="omni-log-list">
                         <p class="omni-hint">暂无同步记录</p>
                     </div>
@@ -418,25 +418,31 @@ async with Client("http://127.0.0.1:18080/mcp") as client:
 
             <!-- 2. 板块查询 -->
             <div class="omni-panel" data-omni-panel="query" id="omni-panel-query" role="tabpanel" aria-labelledby="omni-subtab-query">
-                <!-- 搜索栏 -->
-                <div class="omni-search-bar">
-                    <input type="text" id="omni-keyword" placeholder="输入板块名称或代码搜索...">
-                    <select id="omni-query-source" title="数据源">
-                        <option value="">全部数据源</option>
-                        <option value="fuyao">Fuyao</option>
-                        <option value="TDX">TDX</option>
-                        <option value="tqquant">TDX-QUANT</option>
-                    </select>
-                    <select id="omni-query-type" title="板块类型">
-                        <option value="">全部类型</option>
-                        <option value="industry">行业板块</option>
-                        <option value="concept">概念板块</option>
-                    </select>
-                    <button class="btn-primary" id="omni-query-btn">查询</button>
+                <div class="omni-query-section">
+                    <!-- 搜索栏 -->
+                    <div class="omni-search-bar">
+                        <div class="omni-search-input-wrap">
+                            <input type="text" id="omni-keyword" placeholder="输入板块名称或代码搜索...">
+                            <button class="omni-search-clear" id="omni-keyword-clear" type="button" title="清空关键词" hidden>×</button>
+                        </div>
+                        <select id="omni-query-source" title="数据源">
+                            <option value="">全部数据源</option>
+                            <option value="fuyao">同花顺</option>
+                            <option value="tqquant">TDX-QUANT</option>
+                        </select>
+                        <select id="omni-query-type" title="板块类型">
+                            <option value="">全部类型</option>
+                            <option value="industry">行业板块</option>
+                            <option value="concept">概念板块</option>
+                            <option value="style">风格板块</option>
+                            <option value="region">地域板块</option>
+                        </select>
+                        <button class="btn-primary" id="omni-query-btn">查询</button>
+                    </div>
                 </div>
                 <!-- 结果列表 -->
                 <div class="omni-results" id="omni-results">
-                    <p class="omni-hint">请输入关键词搜索板块，或选择筛选条件后点击查询</p>
+                    <div class="omni-feedback omni-feedback-info omni-results-placeholder"><span class="status-icon">💡</span> 请输入关键词搜索板块，或调整筛选条件后点击查询</div>
                 </div>
             </div>
 
@@ -452,9 +458,8 @@ async with Client("http://127.0.0.1:18080/mcp") as client:
                         <label>数据源：</label>
                         <select id="omni-sync-source">
                             <option value="all">全部</option>
-                            <option value="fuyao">Fuyao (同花顺)</option>
-                            <option value="TDX">TDX (通达信)</option>
-                            <option value="tqquant" selected>TDX-QUANT</option>
+                            <option value="fuyao">同花顺</option>
+                            <option value="tqquant">TDX-QUANT</option>
                         </select>
                         <label>板块类型：</label>
                         <select id="omni-sync-type">
@@ -463,6 +468,7 @@ async with Client("http://127.0.0.1:18080/mcp") as client:
                             <option value="concept">概念板块</option>
                         </select>
                         <button class="btn-primary" id="omni-sync-btn">立即同步</button>
+                        <button class="btn-secondary" id="omni-sync-cancel-btn" type="button" title="中断当前同步请求 (后端任务仍会运行到超时)" hidden>中止</button>
                     </div>
                 </div>
                 <!-- 最近 N 次同步历史 (替代空 hint) -->

@@ -3,7 +3,7 @@ import inspect
 
 import pytest
 
-from src.registry import (
+from src.unihive.core.registry import (
     _DEFAULT_MAP,
     _TYPE_MAP,
     build_signature,

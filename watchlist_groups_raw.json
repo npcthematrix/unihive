@@ -1,0 +1,137 @@
+{
+  "version": 13,
+  "group_order_version": 13,
+  "group_order": [
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42
+  ],
+  "groups": {
+    "35": {
+      "id": 35,
+      "name": "AI应用",
+      "securities": [
+        {
+          "code": "600588",
+          "market": "USHA"
+        },
+        {
+          "code": "300378",
+          "market": "USZA"
+        },
+        {
+          "code": "300170",
+          "market": "USZA"
+        },
+        {
+          "code": "688369",
+          "market": "USHA"
+        },
+        {
+          "code": "688777",
+          "market": "USHA"
+        },
+        {
+          "code": "300687",
+          "market": "USZA"
+        },
+        {
+          "code": "600570",
+          "market": "USHA"
+        },
+        {
+          "code": "300033",
+          "market": "USZA"
+        },
+        {
+          "code": "688615",
+          "market": "USHA"
+        },
+        {
+          "code": "300058",
+          "market": "USZA"
+        },
+        {
+          "code": "301171",
+          "market": "USZA"
+        },
+        {
+          "code": "300634",
+          "market": "USZA"
+        },
+        {
+          "code": "002230",
+          "market": "USZA"
+        },
+        {
+          "code": "601360",
+          "market": "USHA"
+        },
+        {
+          "code": "300624",
+          "market": "USZA"
+        },
+        {
+          "code": "688111",
+          "market": "USHA"
+        },
+        {
+          "code": "300253",
+          "market": "USZA"
+        },
+        {
+          "code": "688095",
+          "market": "USHA"
+        }
+      ],
+      "version": 6
+    },
+    "36": {
+      "id": 36,
+      "name": "AI基础设施",
+      "securities": null,
+      "version": 7
+    },
+    "37": {
+      "id": 37,
+      "name": "板块3",
+      "securities": null,
+      "version": 2
+    },
+    "38": {
+      "id": 38,
+      "name": "板块4",
+      "securities": null,
+      "version": 2
+    },
+    "39": {
+      "id": 39,
+      "name": "板块5",
+      "securities": null,
+      "version": 2
+    },
+    "40": {
+      "id": 40,
+      "name": "板块6",
+      "securities": null,
+      "version": 2
+    },
+    "41": {
+      "id": 41,
+      "name": "板块7",
+      "securities": null,
+      "version": 2
+    },
+    "42": {
+      "id": 42,
+      "name": "板块8",
+      "securities": null,
+      "version": 2
+    }
+  }
+}

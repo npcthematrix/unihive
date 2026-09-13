@@ -113,6 +113,7 @@
         const fetchOpts = { method: (opts && opts.method) || 'GET' };
         if (opts && opts.headers) fetchOpts.headers = opts.headers;
         if (opts && opts.body !== undefined) fetchOpts.body = opts.body;
+        if (opts && opts.signal) fetchOpts.signal = opts.signal;
         const resp = await fetch(url, fetchOpts);
         if (!resp.ok) {
             let detail = '';
@@ -1328,6 +1329,34 @@
         return `<span class="${cls}">${escapeHtml(s)}</span>`;
     }
 
+    /* 数据源原始值 (数据库 / board_sync.py 写入) → 用户友好标签
+     * - 后端 SQLite SECTORS.SOURCE 存的是 'THS' / 'TDX' (历史可能 'fuyao' / 'tqquant')
+     * - dropdown 的 value 是 'fuyao' / 'tqquant' (前端 API 调用名)
+     * - 这里统一映射为用户在下拉框中看到的标签, 避免出现 'THS' 这种内部缩写 */
+    const OMNI_SOURCE_DISPLAY = {
+        'THS': '同花顺',
+        'fuyao': '同花顺',
+        'TDX': 'TDX-QUANT',
+        'tqquant': 'TDX-QUANT',
+        'tdxquant': 'TDX-QUANT',
+    };
+    function omniFmtSource(raw) {
+        return OMNI_SOURCE_DISPLAY[raw] || raw;
+    }
+
+    /* 板块类型: 内部值 (industry/concept/style/region) → 中文标签
+     * dropdown value 与数据库 board_type 一致, 所以 dropdown 选 industry
+     * 后端直接查, 这里只用于"展示", 避免表格列出现英文 */
+    const OMNI_BOARD_TYPE_DISPLAY = {
+        'industry': '行业板块',
+        'concept': '概念板块',
+        'style': '风格板块',
+        'region': '地域板块',
+    };
+    function omniFmtBoardType(raw) {
+        return OMNI_BOARD_TYPE_DISPLAY[raw] || raw;
+    }
+
     function omniRenderStats(stats) {
         if (!stats || stats.length === 0) return '<p class="omni-hint">暂无数据，请先同步</p>';
         return stats.map(s => `
@@ -1465,7 +1494,7 @@
 
             const d = await fetchJSON('/api/omni/query?' + params.toString(), { silent: true });
 
-            const queryDesc = [source && `数据源=${source}`, boardType && `类型=${boardType}`, keyword && `关键词="${keyword}"`].filter(Boolean).join(', ') || '(无筛选)';
+            const queryDesc = [source && `数据源=${omniFmtSource(source)}`, boardType && `类型=${omniFmtBoardType(boardType)}`, keyword && `关键词="${keyword}"`].filter(Boolean).join(', ') || '(无筛选)';
 
             if (!d.sectors || d.sectors.length === 0) {
                 resultsDiv.innerHTML = `<div class="omni-feedback omni-feedback-empty"><span class="status-icon status-icon-empty">○</span> 未找到匹配的板块 <span class="omni-feedback-meta">[${escapeHtml(queryDesc)}]</span></div>`;
@@ -1475,7 +1504,7 @@
             _omniQueryState.totalCount = d.total_count || d.sectors.length;
             const pagination = omniRenderPagination(d.page || page, d.page_size || 50, _omniQueryState.totalCount);
 
-            const header = `<div class="omni-results-header">找到 <strong>${_omniQueryState.totalCount}</strong> 个板块 <span class="omni-feedback-meta">[${escapeHtml(queryDesc)}]</span></div>`;
+            const header = `<div class="omni-results-header">找到 <strong>${_omniQueryState.totalCount}</strong> 个板块 <span class="omni-feedback-meta">[${escapeHtml(queryDesc)}]</span><span class="omni-results-hint">点击板块行查看成分股</span></div>`;
             const list = `
                 <table class="omni-sector-table">
                     <thead>
@@ -1491,12 +1520,12 @@
                     <tbody>
                         ${d.sectors.map(s => `
                             <tr class="sector-item" data-id="${escapeHtml(String(s.id))}">
-                                <td class="sector-name" style="display:table-cell !important;width:30% !important">${escapeHtml(s.name)}</td>
-                                <td class="sector-code" style="display:table-cell !important;width:12% !important">${escapeHtml(s.code)}</td>
-                                <td style="display:table-cell !important;width:10% !important"><span class="sector-type-badge">${escapeHtml(s.board_type)}</span></td>
-                                <td class="sector-count" style="display:table-cell !important;width:12% !important">${Number(s.stock_count) || 0}</td>
-                                <td class="sector-source" style="display:table-cell !important;width:14% !important">${escapeHtml(s.source)}</td>
-                                <td class="sector-update" style="display:table-cell !important;width:22% !important">${s.update_time ? escapeHtml(s.update_time.slice(0, 10)) : '-'}</td>
+                                <td class="sector-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</td>
+                                <td class="sector-code">${escapeHtml(s.code)}</td>
+                                <td><span class="sector-type-badge">${escapeHtml(omniFmtBoardType(s.board_type))}</span></td>
+                                <td class="sector-count">${Number(s.stock_count) || 0}</td>
+                                <td class="sector-source">${escapeHtml(omniFmtSource(s.source))}</td>
+                                <td class="sector-update">${s.update_time ? escapeHtml(s.update_time.slice(0, 10)) : '-'}</td>
                             </tr>
                         `).join('')}
                     </tbody>
@@ -1511,26 +1540,38 @@
         }
     }
 
+    /* omniSync() 增加中止能力: AbortController + 取消按钮, 同步期间用户可主动中断
+     * (后端目前没有 abort 钩子, 中断只是让浏览器停止等待响应, 实际同步任务会在
+     *  SYNC_TIMEOUT_SECONDS=300s 后端超时后被丢弃. 前端体验: 点取消立即刷新历史) */
+    let _omniSyncAbort = null;
     async function omniSync() {
         if (_omniSyncInFlight) {
             showToast('同步已在进行中，请等待完成', 'warn');
             return;
         }
         const btn = document.getElementById('omni-sync-btn');
+        const cancelBtn = document.getElementById('omni-sync-cancel-btn');
         const historyEl = document.getElementById('omni-sync-history-list');
         const source = document.getElementById('omni-sync-source').value;
         const boardType = document.getElementById('omni-sync-type').value;
         if (!btn) return;
         _omniSyncInFlight = true;
+        _omniSyncAbort = new AbortController();
         btn.disabled = true;
         btn.textContent = '同步中...';
-        if (historyEl) historyEl.innerHTML = '<div class="omni-feedback omni-feedback-info"><span class="status-icon status-icon-loading">⏳</span> 同步中… <span class="omni-feedback-meta">(同步可能持续数十秒, 请勿关闭页面)</span></div>';
+        if (cancelBtn) {
+            cancelBtn.hidden = false;
+            cancelBtn.disabled = false;
+        }
+        if (historyEl) historyEl.innerHTML = '<div class="omni-feedback omni-feedback-info"><span class="status-icon status-icon-loading">⏳</span> 同步中… <span class="omni-feedback-meta">(同步可能持续数十秒, 请勿关闭页面; 可点"中止"主动取消)</span></div>';
+        let cancelled = false;
         try {
             const d = await fetchJSON('/api/omni/sync', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ source, board_type: boardType }),
                 silent: true,
+                signal: _omniSyncAbort.signal,
             });
             if (d.status === 'success') {
                 showToast('同步成功: ' + (d.message || ''), 'success');
@@ -1539,14 +1580,30 @@
                 showToast('同步失败: ' + msg, 'error');
             }
         } catch (e) {
-            showToast('同步失败: ' + e.message, 'error');
+            if (e.name === 'AbortError') {
+                cancelled = true;
+                showToast('已中止同步', 'warn');
+            } else {
+                showToast('同步失败: ' + e.message, 'error');
+            }
         } finally {
             _omniSyncInFlight = false;
+            _omniSyncAbort = null;
             btn.disabled = false;
             btn.textContent = '立即同步';
+            if (cancelBtn) {
+                cancelBtn.hidden = true;
+                cancelBtn.disabled = true;
+            }
         }
-        // 完成后刷新概览 + 历史 (这两块在 sync tab 内自包含, 不依赖 stats tab)
+        // 完成后刷新本 tab 概览 + 历史, 同时刷新 stats tab 让新数据立即可见 (联动)
         omniLoadSyncTab();
+        if (!cancelled) omniLoadStats();
+    }
+    function omniCancelSync() {
+        if (_omniSyncAbort) {
+            _omniSyncAbort.abort();
+        }
     }
 
     /* ===== OMNI 同步管理 tab 自渲染 (上次同步概览 + 最近历史) ===== */
@@ -1570,12 +1627,27 @@
         }
     }
 
+    /* 计算耗时 (秒): 同时有 start/end 时返回 "X.Xs", 仅 running 时返回 null */
+    function omniFmtDuration(start, end) {
+        if (!start || !end) return null;
+        const s = new Date(start.replace(' ', 'T')).getTime();
+        const e = new Date(end.replace(' ', 'T')).getTime();
+        if (!Number.isFinite(s) || !Number.isFinite(e) || e < s) return null;
+        return ((e - s) / 1000).toFixed(1) + 's';
+    }
+
     function omniRenderLastSync(logs) {
         if (!logs || logs.length === 0) return '<div class="omni-hint">暂无同步记录 — 下方点击"立即同步"开始</div>';
         const last = logs[0];
         const statusClass = last.status === 'success' ? 'omni-last-sync-success'
             : last.status === 'running' ? 'omni-last-sync-running'
             : 'omni-last-sync-failed';
+        const duration = omniFmtDuration(last.start_time, last.end_time);
+        const message = (last.message || '').trim();
+        // 失败时把 message 展开给用户看 (成功时 message 通常是 "Synced N sectors, M stocks", 没价值, 折叠)
+        const showMessage = last.status !== 'success' && message.length > 0;
+        const msgHtml = showMessage ? `<div class="omni-last-sync-message">${escapeHtml(message)}</div>` : '';
+        const durHtml = duration ? `<span class="omni-last-sync-duration">耗时 <strong>${escapeHtml(duration)}</strong></span>` : '';
         return `
             <div class="omni-last-sync-card ${statusClass}">
                 <div class="omni-last-sync-label">上次同步</div>
@@ -1586,8 +1658,10 @@
                 </div>
                 <div class="omni-last-sync-meta">
                     <span>${escapeHtml(omniFmtTime(last.start_time))}</span>
+                    ${durHtml}
                     <span class="omni-last-sync-count">写入 <strong>${Number(last.record_count) || 0}</strong> 条</span>
                 </div>
+                ${msgHtml}
             </div>`;
     }
 
@@ -1629,7 +1703,14 @@
         // 按钮绑定
         const queryBtn = document.getElementById('omni-query-btn');
         if (queryBtn) queryBtn.addEventListener('click', () => omniQuerySectors(1, false));
+        // dropdown 变更自动触发查询 (关键词仍需 Enter 触发, 避免拼音选词时误查)
+        const querySource = document.getElementById('omni-query-source');
+        const queryType = document.getElementById('omni-query-type');
+        if (querySource) querySource.addEventListener('change', () => omniQuerySectors(1, false));
+        if (queryType) queryType.addEventListener('change', () => omniQuerySectors(1, false));
         const keywordInput = document.getElementById('omni-keyword');
+        const keywordClear = document.getElementById('omni-keyword-clear');
+        const syncKeywordClear = () => { if (keywordClear) keywordClear.hidden = !keywordInput.value; };
         if (keywordInput) {
             keywordInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
@@ -1637,11 +1718,22 @@
                     omniQuerySectors(1, false);
                 }
             });
+            keywordInput.addEventListener('input', syncKeywordClear);
+            syncKeywordClear();
+        }
+        if (keywordClear) {
+            keywordClear.addEventListener('click', () => {
+                keywordInput.value = '';
+                syncKeywordClear();
+                keywordInput.focus();
+            });
         }
         const refreshBtn = document.getElementById('omni-refresh-btn');
         if (refreshBtn) refreshBtn.addEventListener('click', () => { omniLoadStats(); omniLoadSyncTab(); });
         const syncBtn = document.getElementById('omni-sync-btn');
         if (syncBtn) syncBtn.addEventListener('click', omniSync);
+        const cancelBtn = document.getElementById('omni-sync-cancel-btn');
+        if (cancelBtn) cancelBtn.addEventListener('click', omniCancelSync);
 
         // OMNI 结果区事件委托: 分页按钮 + 板块行点击 (避免 omniQuerySectors 每次重渲 forEach addEventListener)
         const resultsDiv = document.getElementById('omni-results');

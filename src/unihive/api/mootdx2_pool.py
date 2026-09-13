@@ -43,7 +43,6 @@ class ConnectionPool:
         self.settings = settings
         self._pools: dict[str, PooledConnection] = {}  # server_key -> connection
         self._lock = asyncio.Lock()
-        self._health_check_task: Optional[asyncio.Task] = None
         self._running = False
 
         # 指标
@@ -58,19 +57,12 @@ class ConnectionPool:
     async def start(self):
         """启动连接池"""
         self._running = True
-        # 启动健康检查任务
-        self._health_check_task = asyncio.create_task(self._health_check_loop())
+        # 按需健康检查，删除后台循环
         logger.info(f"Connection pool started with {len(self.settings.servers)} servers")
 
     async def stop(self):
         """停止连接池"""
         self._running = False
-        if self._health_check_task:
-            self._health_check_task.cancel()
-            try:
-                await self._health_check_task
-            except asyncio.CancelledError:
-                pass
 
         # 关闭所有连接
         async with self._lock:
@@ -180,17 +172,6 @@ class ConnectionPool:
             # 选择延迟最低的
             best = min(healthy_servers, key=lambda s: s.latency_ms or 99999)
             return best
-
-    async def _health_check_loop(self):
-        """定期健康检查"""
-        while self._running:
-            try:
-                await asyncio.sleep(30)  # 每 30 秒检查一次
-                await self._health_check()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Health check error: {e}")
 
     async def _health_check(self):
         """执行健康检查"""

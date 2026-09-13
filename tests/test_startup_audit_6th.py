@@ -35,7 +35,7 @@ class TestExecuteCachedNoDeadCode:
         reference to self._in_flight_requests.get() at function body
         level.
         """
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         src = inspect.getsource(GatewayServer._execute_cached)
         # The canonical single-flight check uses self._in_flight_requests.get(...)
@@ -62,7 +62,7 @@ class TestExecuteCachedNoDeadCode:
         import ast
         import textwrap
 
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         # inspect.getsource returns the method body with the class's
         # 4-space indent prefix; ast.parse needs module-level source.
@@ -103,7 +103,7 @@ class TestRouterPerUpstreamTimeout:
         configurable per-upstream timeout. Upstream 1 hangs past the
         budget → next upstream tried.
         """
-        from src.router import Router
+        from src.unihive.router import Router
 
         @dataclass
         class _FakeResult:
@@ -165,7 +165,7 @@ class TestRouterPerUpstreamTimeout:
         """H2: three-upstream chain where 1 hangs, 2 returns failure,
         3 returns success. Per-upstream timeout fires on 1, the chain
         continues."""
-        from src.router import Router
+        from src.unihive.router import Router
 
         @dataclass
         class _FakeResult:
@@ -206,7 +206,7 @@ class TestRouterPerUpstreamTimeout:
     async def test_all_upstreams_timeout_returns_failure(self):
         """H2: every upstream exceeds the per-upstream timeout — chain
         ends with a synthesized 'timeout' failure result."""
-        from src.router import Router
+        from src.unihive.router import Router
 
         @dataclass
         class _FakeResult:
@@ -239,7 +239,7 @@ class TestRouterPerUpstreamTimeout:
         sensible default (e.g. 10s). Verifies a non-hung upstream still
         completes successfully without explicit timeout.
         """
-        from src.router import Router
+        from src.unihive.router import Router
 
         @dataclass
         class _FakeResult:

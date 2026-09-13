@@ -559,11 +559,25 @@ button:focus-visible { outline-offset: 2px; }
 .omni-panel { display: none; }
 .omni-panel.active { display: block; }
 
+/* 板块查询子标签 - section 容器 (与统计/同步管理视觉一致) */
+.omni-query-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.omni-query-section:last-child { margin-bottom: 0; }
+
 /* 搜索栏 */
 .omni-search-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-.omni-search-bar input { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; }
+.omni-search-input-wrap { flex: 1; min-width: 200px; position: relative; display: flex; align-items: center; }
+.omni-search-input-wrap input { flex: 1; padding-right: 32px; }
+.omni-search-clear { position: absolute; right: 6px; background: transparent; border: 0; color: var(--text-secondary); font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
+.omni-search-clear:hover { color: var(--text); background: var(--bg); }
+.omni-search-clear[hidden] { display: none; }
+.omni-search-bar input { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; }
 .omni-search-bar select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 120px; }
 .omni-search-bar input:focus, .omni-search-bar select:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* 窄屏: 让 input 占满一行, 控件换行避免挤压 */
+@media (max-width: 768px) {
+    .omni-search-bar { flex-direction: column; align-items: stretch; }
+    .omni-search-input-wrap, .omni-search-bar select { min-width: 0; width: 100%; }
+}
 
 /* 同步控制 */
 .omni-sync-controls { margin-bottom: 16px; }
@@ -571,19 +585,24 @@ button:focus-visible { outline-offset: 2px; }
 .omni-sync-controls label { font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
 .omni-sync-controls select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.875rem; background: var(--card-bg); min-width: 140px; }
 
-/* 上次同步概览卡片 (顶部, 用户最想看的"刚才同步结果") */
-.omni-last-sync { margin-bottom: 16px; }
-.omni-last-sync-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; border-left: 4px solid; }
-.omni-last-sync-card.omni-last-sync-success { border-left-color: var(--success); }
-.omni-last-sync-card.omni-last-sync-failed { border-left-color: var(--danger); }
-.omni-last-sync-card.omni-last-sync-running { border-left-color: var(--warning); }
-.omni-last-sync-label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+/* 上次同步概览卡片 (顶部, 用户最想看的"刚才同步结果")
+   与下方同步控制卡片视觉区分: 边框更粗 (6px), 阴影 + 状态色背景轻染 */
+.omni-last-sync { margin-bottom: 20px; }
+.omni-last-sync-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; border-left: 6px solid; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06); }
+.omni-last-sync-card.omni-last-sync-success { border-left-color: var(--success); background: linear-gradient(to right, rgba(34, 197, 94, 0.06), var(--card-bg) 30%); }
+.omni-last-sync-card.omni-last-sync-failed { border-left-color: var(--danger); background: linear-gradient(to right, rgba(239, 68, 68, 0.08), var(--card-bg) 30%); }
+.omni-last-sync-card.omni-last-sync-running { border-left-color: var(--warning); background: linear-gradient(to right, rgba(245, 158, 11, 0.08), var(--card-bg) 30%); }
+.omni-last-sync-label { font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; font-weight: 600; }
 .omni-last-sync-main { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
 .omni-last-sync-source { font-size: 1.25rem; font-weight: 700; color: var(--text); }
 .omni-last-sync-type { font-size: 0.875rem; color: var(--text-secondary); background: var(--bg); padding: 2px 8px; border-radius: 4px; }
 .omni-last-sync-status { font-size: 0.875rem; margin-left: auto; }
-.omni-last-sync-meta { display: flex; gap: 16px; font-size: 0.875rem; color: var(--text-secondary); }
+.omni-last-sync-meta { display: flex; gap: 16px; font-size: 0.875rem; color: var(--text-secondary); flex-wrap: wrap; }
+.omni-last-sync-duration strong { color: var(--text); font-size: 1rem; font-variant-numeric: tabular-nums; }
 .omni-last-sync-count strong { color: var(--text); font-size: 1rem; }
+/* 失败原因: 单独一行, 与 meta 行视觉分隔 */
+.omni-last-sync-message { margin-top: 10px; padding: 8px 12px; background: rgba(239, 68, 68, 0.08); border-left: 2px solid var(--danger); border-radius: 4px; font-size: 0.8125rem; color: #991b1b; word-break: break-word; white-space: pre-wrap; }
+@media (prefers-color-scheme: dark) { .omni-last-sync-message { color: #fca5a5; background: rgba(239, 68, 68, 0.15); } }
 
 /* 最近同步历史列表 (替代空 hint) */
 .omni-sync-history { margin-top: 16px; }
@@ -611,8 +630,12 @@ button:focus-visible { outline-offset: 2px; }
 .status-icon-empty { color: #9ca3af; }
 
 /* OMNI 结果头 */
-.omni-results-header { padding: 8px 4px 12px; font-size: 0.875rem; color: var(--text); border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.omni-results-header { padding: 8px 4px 12px; font-size: 0.875rem; color: var(--text); border-bottom: 1px solid var(--border); margin-bottom: 12px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .omni-results-header strong { color: var(--primary); font-weight: 600; }
+.omni-results-hint { font-size: 0.75rem; color: var(--text-secondary); margin-left: auto; font-weight: normal; }
+
+/* 板块查询 - 初始未查询占位 (与"查无结果"视觉区分: info 蓝色背景 vs empty 灰色背景) */
+.omni-results-placeholder { padding: 24px 16px; }
 
 /* OMNI 分页 */
 .omni-pagination { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px 0 8px; border-top: 1px solid var(--border); margin-top: 12px; }
@@ -665,8 +688,8 @@ button:focus-visible { outline-offset: 2px; }
 .omni-modal-close { background: transparent; border: 0; font-size: 1.5rem; line-height: 1; color: var(--text-secondary); cursor: pointer; padding: 0 4px; border-radius: 4px; transition: color 120ms, background 120ms; }
 .omni-modal-close:hover { color: var(--text); background: var(--bg); }
 .omni-modal-close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-.omni-modal-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
-.omni-stocks-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.omni-modal-body { padding: 16px 20px; overflow-y: auto; overflow-x: auto; flex: 1; }
+.omni-stocks-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; min-width: 360px; }
 .omni-stocks-table th { text-align: left; padding: 8px 10px; background: var(--bg); border-bottom: 2px solid var(--border); font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
 .omni-stocks-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .omni-stocks-table .stock-rank { width: 56px; text-align: right; color: var(--text-secondary); font-variant-numeric: tabular-nums; }

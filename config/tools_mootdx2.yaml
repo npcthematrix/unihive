@@ -115,6 +115,50 @@ tools:
         required: true
         description: 逗号分隔的股票代码，最多 50 只，如 '600000,000001'
 
+  - name: batch_bars
+    description: |-
+      【批量K线】批量获取多只股票的K线数据。
+
+      【使用场景】
+      - 当用户需要同时查看多只股票的历史走势时调用
+      - 适合对比多只股票的K线趋势
+      - 不适合：单只股票（用 get_kline）、实时行情（用 get_quote）
+
+      【参数说明】
+      - codes (必填): 逗号分隔的股票代码列表，最多 20 只
+        - 示例：'600000,000001' 或 'sh600000,sz000001'
+      - type (可选): K线类型，默认 day
+        - day=日K / week=周K / month=月K
+        - minute1=1分钟 / minute5=5分钟 / minute15=15分钟 / minute30=30分钟 / minute60=60分钟
+      - limit (可选): 每只股票返回根数，默认 100，最大 500
+
+      【返回示例】
+      成功: {"success": true, "data": {"600000": [{date: "2024-01-01", open: 10.0, ...}], "000001": [...]}}
+      失败: {"success": false, "error": {"error_type": "invalid_param", "message": "批量请求超过 20 只股票限制"}}
+
+      【典型错误】
+      - invalid_param: 股票数量超过 20 只限制
+    routing: batch_bars
+    upstream_tool_mapping:
+      mootdx2: batch_bars
+    cache_ttl_key: historical
+    data_source_type: online
+    dangerous: false
+    params:
+      - name: codes
+        type: str
+        required: true
+        description: 逗号分隔的股票代码，最多 20 只，如 '600000,000001'
+      - name: type
+        type: str
+        required: false
+        enum: [day, week, month, minute1, minute5, minute15, minute30, minute60]
+        description: K线类型（默认 day）
+      - name: limit
+        type: int
+        required: false
+        description: 每只股票返回根数（默认 100，最大 500）
+
   - name: get_minute_data
     description: |-
       【今日分时】获取单只股票今日的分时数据（240 根）。

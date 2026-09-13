@@ -1,6 +1,7 @@
 """MooTDX2 MCP Client 基于 mootdx2 库"""
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .upstream_client import ToolResult, UpstreamStatus
+from ..core.blocking_pool import get_blocking_executor
 from ..models.mootdx2_errors import (
     ErrorClassifier,
     MooTDXErrorType,
@@ -114,6 +116,10 @@ class MooTDX2Client:
         self._status = UpstreamStatus.UNKNOWN
         self._quotes = None
         self._quotes_cls = None  # 延迟导入
+        self._reader = None  # Reader 实例缓存
+        self._quotes = None  # Quotes 实例缓存
+        self._reader_lock = threading.Lock()  # Reader 缓存锁（高并发保护）
+        self._quotes_lock = threading.Lock()  # Quotes 缓存锁（高并发保护）
 
         # 指标收集
         self._request_id = 0
@@ -135,6 +141,17 @@ class MooTDX2Client:
             if tdxdir:
                 return tdxdir
         return None
+
+    def _get_reader(self):
+        """获取缓存的 Reader 实例（懒初始化，线程安全）。"""
+        if self._reader is None:
+            with self._reader_lock:
+                # 双重检查
+                if self._reader is None:
+                    from mootdx2.reader import Reader
+                    tdxdir = self._get_tdxdir()
+                    self._reader = Reader.factory(market="std", tdxdir=tdxdir)
+        return self._reader
 
     def _error_result(self, exc: Exception, context: str) -> ToolResult:
         """将异常转换为错误结果"""
@@ -229,23 +246,26 @@ class MooTDX2Client:
         )
 
     def _get_quotes(self):
-        """获取或创建 Quotes 实例"""
+        """获取或创建 Quotes 实例（线程安全）。"""
         if self._quotes is None:
-            from mootdx2.quotes import Quotes
-            self._quotes_cls = Quotes
-            # 从配置获取超时设置
-            timeout = 30  # 默认 30 秒
-            if self.config.settings:
-                timeout = max(
-                    self.config.settings.connect_timeout_seconds,
-                    self.config.settings.read_timeout_seconds,
-                ) * 3  # 给足够的重试时间
-            self._quotes = Quotes.factory(
-                market=self.config.market,
-                multithread=True,
-                bestip=True,
-                timeout=timeout,
-            )
+            with self._quotes_lock:
+                # 双重检查
+                if self._quotes is None:
+                    from mootdx2.quotes import Quotes
+                    self._quotes_cls = Quotes
+                    # 从配置获取超时设置
+                    timeout = 30  # 默认 30 秒
+                    if self.config.settings:
+                        timeout = max(
+                            self.config.settings.connect_timeout_seconds,
+                            self.config.settings.read_timeout_seconds,
+                        ) * 3  # 给足够的重试时间
+                    self._quotes = Quotes.factory(
+                        market=self.config.market,
+                        multithread=True,
+                        bestip=True,
+                        timeout=timeout,
+                    )
         return self._quotes
 
     def _get_quote_sync(self, code: str):
@@ -281,6 +301,10 @@ class MooTDX2Client:
 
     async def stop(self):
         self._status = UpstreamStatus.UNKNOWN
+
+    async def health_check(self) -> bool:
+        """健康检查 — 读取本地 _status，不再真打 TDX 服务。"""
+        return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def call_tool(self, tool_name: str, params: dict) -> ToolResult:
         """工具路由"""
@@ -321,6 +345,13 @@ class MooTDX2Client:
             "get_daily": self.get_daily,
             "get_minute": self.get_minute,
             "get_fzline": self.get_fzline,
+            # YAML 工具名映射
+            "batch_bars": self.batch_bars,
+            "get_daily_local": self.get_daily,
+            "get_fzline_local": self.get_fzline,
+            "get_minute_local": self.get_minute,
+            "mootdx2_stock_info": self.get_stock_info,
+            "search_stock_local": self.search_stock,
         }
 
         method = method_map.get(tool_name)
@@ -344,7 +375,7 @@ class MooTDX2Client:
 
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_quote_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_quote_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"股票 {code} 无行情数据（可能停牌或非交易日）")
@@ -390,7 +421,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_kline_sync, code, type, limit)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_kline_sync, code, type, limit)
             if data:
                 # 数据合理性校验
                 valid_data = [r for r in data if _validate_kline_record(r)]
@@ -417,13 +448,50 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_batch_quote_sync, codes)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_batch_quote_sync, codes)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
         except Exception as e:
             logger.error(f"get_batch_quote failed: {e}")
             return self._error_result(e, f"get_batch_quote({codes})")
+
+    # ========== 批量K线 ==========
+    FREQ_MAP_BATCH = {
+        "day": 9,
+        "week": 5,
+        "month": 6,
+        "minute1": 1,
+        "minute5": 5,
+        "minute15": 15,
+        "minute30": 30,
+        "minute60": 60,
+    }
+
+    def _get_batch_bars_sync(self, codes: str, type: str = "day", limit: int = 100):
+        """同步批量K线"""
+        q = self._get_quotes()
+        code_list = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in codes.split(",")]
+        freq = FREQ_MAP_BATCH.get(type, 9)
+        result = q.batch_bars(symbols=code_list, frequency=freq, count=limit)
+        if result and isinstance(result, dict):
+            return {k: v.to_dict(orient="records") if v is not None else [] for k, v in result.items()}
+        return None
+
+    async def batch_bars(self, codes: str, type: str = "day", limit: int = 100) -> ToolResult:
+        """批量获取K线"""
+        if limit > 500:
+            limit = 500
+        self._metrics["total_requests"] += 1
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_batch_bars_sync, codes, type, limit)
+            if data:
+                return ToolResult(success=True, data=data, source="mootdx2")
+            return self._no_data_result()
+        except Exception as e:
+            logger.error(f"batch_bars failed: {e}")
+            return self._error_result(e, f"batch_bars({codes})")
 
     # ========== 今日分时 ==========
     def _get_minute_data_sync(self, code: str):
@@ -439,7 +507,7 @@ class MooTDX2Client:
         """获取今日分时"""
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_minute_data_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_minute_data_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -462,7 +530,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_trade_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_trade_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -485,7 +553,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_trade_history_sync, code, date, start, count)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_trade_history_sync, code, date, start, count)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -508,7 +576,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_index_kline_sync, code, type)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_kline_sync, code, type)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -530,7 +598,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_code_list_sync, exchange)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_code_list_sync, exchange)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -555,7 +623,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_stock_codes_sync, limit, prefix)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_codes_sync, limit, prefix)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -580,7 +648,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_etf_codes_sync, limit, prefix)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_etf_codes_sync, limit, prefix)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -603,7 +671,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_etf_list_sync, exchange, limit)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_etf_list_sync, exchange, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -623,7 +691,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_market_count_sync, market)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_market_count_sync, market)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -655,7 +723,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_workday_sync, date, count)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_workday_sync, date, count)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -688,7 +756,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_workday_range_sync, start, end)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_workday_range_sync, start, end)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -713,7 +781,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_index_all_sync, code, type, limit)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_all_sync, code, type, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -736,7 +804,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_income_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_income_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -836,7 +904,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_custom_sector_list_sync)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_custom_sector_list_sync)
             return ToolResult(success=True, data=data, source="mootdx2")
         except SectorDataError as e:
             return self._sector_error_result(e)
@@ -921,7 +989,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                None, self._get_custom_sector_stocks_sync, sector_code, market
+                get_blocking_executor(), self._get_custom_sector_stocks_sync, sector_code, market
             )
             return ToolResult(success=True, data=data, source="mootdx2")
         except SectorDataError as e:
@@ -979,7 +1047,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._index_overview_sync)
+            data = await loop.run_in_executor(get_blocking_executor(), self._index_overview_sync)
             if not data:
                 return self._no_data_result("指数数据获取失败")
             return ToolResult(success=True, data=data, source="mootdx2")
@@ -1007,7 +1075,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_f10_sync, symbol, name)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_f10_sync, symbol, name)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1034,7 +1102,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_f10_company_sync, symbol)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_f10_company_sync, symbol)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1062,7 +1130,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_minutes_sync, symbol, date)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_minutes_sync, symbol, date)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1082,10 +1150,8 @@ class MooTDX2Client:
             start_date: 起始日期 yyyy-MM-dd（可选）
             end_date: 结束日期 yyyy-MM-dd（可选）
         """
-        tdxdir = self._get_tdxdir()
+        reader = self._get_reader()
         sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        from mootdx2.reader import Reader
-        reader = Reader.factory(market="std", tdxdir=tdxdir)
         df = reader.daily(symbol=sym, adjust=adjust)
         if df is None or df.empty:
             return []
@@ -1122,7 +1188,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                None, self._get_daily_sync, code, adjust, start_date, end_date
+                get_blocking_executor(), self._get_daily_sync, code, adjust, start_date, end_date
             )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -1149,8 +1215,7 @@ class MooTDX2Client:
         sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
         suffix_int = 1 if str(suffix) == "1" else 5
 
-        from mootdx2.reader import Reader
-        reader = Reader.factory(market="std", tdxdir=tdxdir)
+        reader = self._get_reader()
         df = reader.minute(symbol=sym, suffix=suffix_int)
         if df is None or df.empty:
             return []
@@ -1185,7 +1250,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                None, self._get_minute_sync, code, suffix, start_date, end_date
+                get_blocking_executor(), self._get_minute_sync, code, suffix, start_date, end_date
             )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -1203,10 +1268,8 @@ class MooTDX2Client:
         Args:
             code: 6 位股票代码
         """
-        tdxdir = self._get_tdxdir()
+        reader = self._get_reader()
         sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        from mootdx2.reader import Reader
-        reader = Reader.factory(market="std", tdxdir=tdxdir)
         df = reader.fzline(symbol=sym)
         if df is None or (hasattr(df, "empty") and df.empty):
             return []
@@ -1231,7 +1294,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_fzline_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_fzline_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的分时线数据")
@@ -1262,7 +1325,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_index_bars_sync, symbol, frequency, start, offset)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_bars_sync, symbol, frequency, start, offset)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1289,7 +1352,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_xdxr_sync, symbol)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_xdxr_sync, symbol)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1311,7 +1374,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_stock_all_sync)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_all_sync)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1340,7 +1403,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_k_data_sync, code, start_date, end_date)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_k_data_sync, code, start_date, end_date)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1357,11 +1420,9 @@ class MooTDX2Client:
         本方法在 V7.73 环境下会返回空列表，由 router 串行 fallback 到 fuyao_meta。
         """
         try:
-            from mootdx2.reader import Reader
-            tdxdir = self._get_tdxdir()
-            if not tdxdir:
+            reader = self._get_reader()
+            if not self._get_tdxdir():
                 return []
-            reader = Reader.factory(market="std", tdxdir=tdxdir)
             df_block = reader.block()
             if df_block is None or len(df_block) == 0:
                 return []
@@ -1406,7 +1467,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._search_stock_sync, keyword)
+            data = await loop.run_in_executor(get_blocking_executor(), self._search_stock_sync, keyword)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"search_stock failed: {e}")
@@ -1424,9 +1485,7 @@ class MooTDX2Client:
             quote = quote_df.iloc[0].to_dict() if len(quote_df) > 0 else None
 
             # 2. K线（离线 - Reader）
-            from mootdx2.reader import Reader
-            tdxdir = self._get_tdxdir()
-            reader = Reader.factory(market="std", tdxdir=tdxdir)
+            reader = self._get_reader()
             daily_df = reader.daily(symbol=code)
             kline_list = daily_df.tail(kline_count).to_dict(orient="records") if daily_df is not None and len(daily_df) > 0 else []
 
@@ -1463,7 +1522,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._get_stock_info_sync, code, market, kline_period, kline_count)
+            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_info_sync, code, market, kline_period, kline_count)
             if data.get("quote") is None and not data.get("kline") and not data.get("minute"):
                 return self._no_data_result(f"股票 {market}{code} 无数据")
             return ToolResult(success=True, data=data, source="mootdx2")
@@ -1519,7 +1578,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._indicator_atr_sync, code, type, limit)
+            data = await loop.run_in_executor(get_blocking_executor(), self._indicator_atr_sync, code, type, limit)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"indicator_atr failed: {e}")
@@ -1712,7 +1771,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._stock_top_board_sync, sort_by, direction, limit, market)
+            data = await loop.run_in_executor(get_blocking_executor(), self._stock_top_board_sync, sort_by, direction, limit, market)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"stock_top_board failed: {e}")
@@ -1723,7 +1782,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, self._stock_unusual_sync, event_type)
+            data = await loop.run_in_executor(get_blocking_executor(), self._stock_unusual_sync, event_type)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"stock_unusual failed: {e}")

@@ -14,10 +14,10 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from src.api.thsdk_client import ThsdkClient
-from src.api.upstream_client import UpstreamStatus
-from src.core.tool_loader import filter_specs_by_env, load_all_tools
-from src.models.thsdk_config import ThsdkConfig
+from src.unihive.api.thsdk_client import ThsdkClient
+from src.unihive.api.upstream_client import UpstreamStatus
+from src.unihive.core.tool_loader import filter_specs_by_env, load_all_tools
+from src.unihive.models.thsdk_config import ThsdkConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_YAML = REPO_ROOT / "config" / "tools_ths.yaml"
@@ -232,31 +232,6 @@ async def test_rate_limited_classification(guest_env, fake_mod):
     assert result.error_detail["recoverable"] is True
 
 
-async def test_watchlist_groups_gbk_decode(guest_env, fake_mod):
-    """M3: GBK 编码的分组名应自动解码为 UTF-8 并产生 warnings。"""
-    fake_mod.get_account_watchlist_groups.return_value = {
-        "groups": {
-            "35": {"id": 35, "name": "科技股".encode("gbk")},
-            "36": {"id": 36, "name": "消费".encode("gbk")},
-        },
-        "group_order": [35, 36],
-        "group_order_version": 2,
-    }
-    client = await _started(fake_mod)
-
-    result = await client.call_tool("ths_get_account_watchlist_groups", {})
-    assert result.success is True
-    data = result.data
-
-    # 验证 GBK 解码成功
-    assert data["groups"]["35"]["name"] == "科技股"
-    assert data["groups"]["36"]["name"] == "消费"
-
-    # 验证 warnings 字段存在
-    assert "_warnings" in data
-    assert len(data["_warnings"]) >= 1
-
-
 # ---------- 写门控 / confirm ----------
 
 async def test_write_blocked_when_switch_off(guest_env, fake_mod):
@@ -411,10 +386,10 @@ def _yaml_specs() -> list[dict]:
 
 def test_yaml_shape():
     specs = _yaml_specs()
-    assert len(specs) == 27
+    assert len(specs) == 57
     writes = [s for s in specs if s.get("requires_env")]
     assert len(writes) == 10
-    assert len(specs) - len(writes) == 17
+    assert len(specs) - len(writes) == 47
     for spec in writes:
         assert spec["requires_env"] == "ALLOW_WATCHLIST_WRITE"
         assert spec["dangerous"] is True
@@ -447,7 +422,7 @@ def test_yaml_write_tools_all_in_WRITE_TOOLS():
     漏注册会让该工具的 confirm 校验失效——若本应是 critical 的工具被绕过，
     在 ALLOW_WATCHLIST_WRITE=true 时可直接执行，没有二次确认。
     """
-    from src.api.thsdk_client import WRITE_TOOLS
+    from src.unihive.api.thsdk_client import WRITE_TOOLS
 
     writes = [s for s in _yaml_specs() if s.get("requires_env")]
     yaml_write_names = {s["routing"] for s in writes}
@@ -465,7 +440,7 @@ def test_WRITE_TOOLS_no_dead_entries():
 
     防 WRITE_TOOLS 留旧条目（YAML 已删但字典未同步），造成死代码。
     """
-    from src.api.thsdk_client import WRITE_TOOLS
+    from src.unihive.api.thsdk_client import WRITE_TOOLS
 
     writes = [s for s in _yaml_specs() if s.get("requires_env")]
     yaml_write_names = {s["routing"] for s in writes}
@@ -481,14 +456,14 @@ def test_WRITE_TOOLS_no_dead_entries():
 def test_filter_specs_by_env_off(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("ALLOW_WATCHLIST_WRITE", raising=False)
     specs = filter_specs_by_env(_yaml_specs())
-    assert len(specs) == 17
+    assert len(specs) == 47
     assert all(not s.get("dangerous") for s in specs)
 
 
 def test_filter_specs_by_env_on(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ALLOW_WATCHLIST_WRITE", "true")
     specs = filter_specs_by_env(_yaml_specs())
-    assert len(specs) == 27
+    assert len(specs) == 57
 
 
 def test_load_all_tools_gates_specs_and_mapping_off(
@@ -519,7 +494,7 @@ def test_load_all_tools_gates_specs_and_mapping_on(
 # ---------- registry annotations 透传 ----------
 
 def test_registry_passes_annotations_to_fastmcp():
-    from src.core.registry import register_tools_from_config
+    from src.unihive.core.registry import register_tools_from_config
 
     captured: list[dict] = []
 

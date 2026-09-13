@@ -44,7 +44,7 @@ class TestIsSecretField:
         "authorization",
     ])
     def test_secret_field_names_are_detected(self, name):
-        from src.utils.console_api import _is_secret_field
+        from src.unihive.utils.console_api import _is_secret_field
         assert _is_secret_field(name) is True, f"{name!r} 应当识别为密钥字段"
 
     @pytest.mark.parametrize("name", [
@@ -62,11 +62,11 @@ class TestIsSecretField:
         "port",
     ])
     def test_non_secret_field_names_are_not_detected(self, name):
-        from src.utils.console_api import _is_secret_field
+        from src.unihive.utils.console_api import _is_secret_field
         assert _is_secret_field(name) is False, f"{name!r} 不应识别为密钥字段"
 
     def test_empty_string_returns_false(self):
-        from src.utils.console_api import _is_secret_field
+        from src.unihive.utils.console_api import _is_secret_field
         assert _is_secret_field("") is False
 
 
@@ -74,7 +74,7 @@ class TestMaskSecretsConfig:
     """整段 config 通过 _mask_config_secrets 后, 密钥字段必须打码, 其它字段保持原样。"""
 
     def test_api_key_masked_but_description_intact(self):
-        from src.utils.console_api import _mask_config_secrets
+        from src.unihive.utils.console_api import _mask_config_secrets
         cfg = {
             "upstreams": {
                 "fuyao": {
@@ -95,7 +95,7 @@ class TestMaskSecretsConfig:
 
     def test_apikey_field_now_detected(self):
         """回归: 'apikey' (无下划线) 之前用子串匹配漏报, 现在精确匹配打码。"""
-        from src.utils.console_api import _mask_config_secrets
+        from src.unihive.utils.console_api import _mask_config_secrets
         cfg = {"creds": {"apikey": "abcdef1234567890"}}
         out = _mask_config_secrets(cfg)
         assert out["creds"]["apikey"] != "abcdef1234567890"
@@ -119,7 +119,7 @@ class TestGatewayPortLazy:
 
     def test_falls_back_to_file_when_not_injected(self, tmp_path, monkeypatch):
         from src import console_api
-        from src.config_loader import load_config as real_load
+        from src.unihive.utils.config_loader import load_config as real_load
 
         cfg_file = tmp_path / "upstreams.yaml"
         cfg_file.write_text(
@@ -209,7 +209,7 @@ class TestValidateConfigBlocking:
     而不是只 warning 然后带着错配置启动."""
 
     def test_init_raises_on_missing_base_url(self, tmp_path):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         cfg_file = tmp_path / "upstreams.yaml"
         cfg_file.write_text(
@@ -226,7 +226,7 @@ class TestValidateConfigBlocking:
 
     def test_init_non_strict_only_warns(self, tmp_path):
         """strict_validation=False 时只 warning, 不抛 — 用于开发/调试场景."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         cfg_file = tmp_path / "upstreams.yaml"
         cfg_file.write_text(
@@ -246,7 +246,7 @@ class TestValidateConfigBlocking:
         assert server.config is not None  # 初始化没抛
 
     def test_init_strict_passes_on_valid_config(self, tmp_path):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         cfg_file = tmp_path / "upstreams.yaml"
         cfg_file.write_text(

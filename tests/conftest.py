@@ -22,7 +22,7 @@ def gateway_server_minimal():
     测试想直接构造一个 server (跳过真实 config 加载) 但仍需要 _execute_cached
     / stop() / health loop 等依赖这些字段时, 用这个 fixture 替代手工赋值。
     """
-    from src.gateway_server import GatewayServer
+    from src.unihive.gateway_server import GatewayServer
 
     server = GatewayServer.__new__(GatewayServer)
     server._shutdown_event = asyncio.Event()
@@ -44,7 +44,7 @@ def config_path(tmp_path) -> Path:
 @pytest_asyncio.fixture
 async def temp_cache(tmp_path):
     """返回一个已初始化的临时 Cache 实例"""
-    from src.storage.cache import Cache, CacheConfig
+    from src.unihive.storage.cache import Cache, CacheConfig
 
     cfg = CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db"))
     cache = Cache(cfg)
@@ -58,7 +58,7 @@ async def temp_cache(tmp_path):
 @pytest.fixture
 def mock_upstream(monkeypatch):
     """返回一个 mock UpstreamClient 工厂"""
-    from src.upstream_client import ToolResult, UpstreamStatus
+    from src.unihive.api.upstream_client import ToolResult, UpstreamStatus
 
     class _Mock:
         def __init__(self, name, tools=None, results=None):

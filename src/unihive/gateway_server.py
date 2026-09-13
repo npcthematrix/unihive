@@ -35,7 +35,9 @@ from .api.fuyao_client import FuyaoClient, FuyaoConfig
 from .api.mootdx2_client import MooTDX2Client, MooTDX2Config
 from .api.tdx_quant_client import TdxQuantClient
 from .api.omni_client import OmniClient, OmniConfig
+from .api.thsdk_client import ThsdkClient
 from .models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
+from .models.thsdk_config import ThsdkConfig
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,7 @@ def _read_gateway_version() -> str:
     直接读源码根的 pyproject.toml。读不到时退回到 'unknown'，避免启动崩。
     """
     try:
-        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        pyproject = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
         text = pyproject.read_text(encoding="utf-8")
         m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
         if m:
@@ -138,7 +140,7 @@ def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, s
     secret = None
 
     # Load config.yaml if it exists
-    config_yaml_path = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
+    config_yaml_path = Path(__file__).resolve().parent.parent.parent / "config" / "config.yaml"
     if config_yaml_path.exists():
         try:
             with open(config_yaml_path, encoding="utf-8") as f:
@@ -268,8 +270,6 @@ class GatewayServer:
         # _execute_cached 的 per-key 单飞 dict: HIGH 1 (2026-09-07
         # 4th-round audit), 同 key 并发 miss 只触发一次 router.route().
         self._in_flight_requests: dict[str, asyncio.Future] = {}
-        # health check loop 任务引用, stop() 时 cancel. HIGH 2.
-        self._health_task: asyncio.Task | None = None
         # initialize() 并发保护: 两次 await initialize() 必须串行化,
         # 否则 cache / upstream 会被重复初始化 (HIGH #1)。
         self._init_lock = asyncio.Lock()
@@ -286,6 +286,22 @@ class GatewayServer:
             if health_check_timeout is not None
             else self.DEFAULT_HEALTH_CHECK_TIMEOUT
         )
+        # 从 gateway 配置读取 per_upstream_timeout
+        gateway_cfg = self.config.get("gateway", {})
+        self._per_upstream_timeout = gateway_cfg.get("per_upstream_timeout", self.DEFAULT_REQUEST_TIMEOUT)
+        # 初始化限流器：从配置读取每个上游的 QPS 限制
+        from .core.rate_limiter import get_default_limiter
+        self.limiter = get_default_limiter()
+        rate_cfg = gateway_cfg.get("rate_limit", {})
+        for upstream_name, params in rate_cfg.items():
+            if isinstance(params, dict):
+                self.limiter.configure(
+                    upstream_name,
+                    rate=float(params.get("rate", 20.0)),
+                    capacity=float(params.get("capacity", 40.0)),
+                )
+            elif isinstance(params, (int, float)):
+                self.limiter.configure(upstream_name, rate=float(params))
 
     async def initialize(self):
         # 双重检查锁: 第二次 fast path 直接返回; 拿到锁后再校验一次防 TOCTOU。
@@ -310,6 +326,8 @@ class GatewayServer:
             self.cache = Cache(CacheConfig(
                 enabled=cache_cfg.get("enabled", True),
                 db_path=cache_cfg.get("db_path", "logs/cache.db"),
+                max_entries=int(cache_cfg.get("max_entries", 50000)),
+                operation_timeout=float(cache_cfg.get("operation_timeout", 3.0)),
             ))
             await self.cache.initialize()
 
@@ -367,6 +385,10 @@ class GatewayServer:
                         db_path=cfg.get("db_path", "./data/board.db"),
                     )
                     client = OmniClient(omni_cfg)
+                elif cfg.get("type") == "thsdk":
+                    # THSDK（社区 thsdk 包）客户端；凭证只从环境变量读
+                    thsdk_cfg = ThsdkConfig.from_dict(name, cfg)
+                    client = ThsdkClient(thsdk_cfg)
                 else:
                     # stdio MCP 客户端
                     upstream_cfg = UpstreamConfig(
@@ -432,6 +454,7 @@ class GatewayServer:
                 upstreams=self.upstreams,
                 routing_config=self.config.get("routing", {}),
                 upstream_tool_mapping=self.config.get("upstream_tool_mapping", {}),
+                per_upstream_timeout=self._per_upstream_timeout,
             )
 
             # 初始化 MCP Server（传入已加载的 specs，避免重复 _load_all_tools() 调用）
@@ -476,7 +499,11 @@ class GatewayServer:
         """路由 + 缓存包装。
 
         缓存策略：
-        - 仅当 ttl_key 配了 TTL、cache 启用、是在线数据源且非实时接口时才缓存。
+        - 只缓存"远程 HTTP 同花顺源"(fuyao_*) 的非实时响应。实时行情不缓存；
+          本地终端/本地库（mootdx2/tdx_quant/thsdk/omni）数据访问本身够快，
+          再套缓存反而多余。
+        - 读缓存/单飞前提：该工具路由候选链上存在 fuyao_* 源；实际写缓存还要
+          求本次确实命中 fuyao（本地源优先时不写，避免本地结果污染 fuyao 缓存）。
         - 命中路径：直接返回缓存的响应，附 cache_hit=True。
         - 失效路径：调一次路由；失败响应也只算一次，不双倍路由。
         - hops 是请求级元数据，不进缓存。
@@ -496,17 +523,28 @@ class GatewayServer:
 
             ttl = cache_strategy.ttl_for(self.config, ttl_key) if ttl_key else None
             cache_enabled = self.cache is not None and self.cache.enabled
-            can_cache = (
+            # 候选路由链（与 Router.route 解析顺序一致）：显式 routing.chain
+            # 优先，否则从 upstream_tool_mapping 推导。
+            routing_cfg = (self.config.get("routing") or {}).get(route_key)
+            if isinstance(routing_cfg, dict) and "chain" in routing_cfg:
+                chain = list(routing_cfg.get("chain") or [])
+            else:
+                chain = list(
+                    (self.config.get("upstream_tool_mapping") or {})
+                    .get(route_key, {})
+                    .keys()
+                )
+            # 是否走缓存读/单飞：有 TTL、非实时、链上存在远程 fuyao 源。
+            can_read_cache = (
                 ttl is not None
                 and cache_enabled
-                and cache_strategy.is_cacheable_data_source(data_source_type)
-                # realtime_quote 不再被 hardcoded 排除: 用户配的 TTL (哪怕短如
-                # 10s 作为外部服务故障兜底) 都应被尊重。
+                and not cache_strategy.is_realtime_ttl(ttl_key)
+                and cache_strategy.chain_has_remote_http(chain)
             )
-            # hit/miss 统计跟踪范围: cache 启用 + TTL 配了即跟踪 (即便因
-            # data_source_type 不是 online 而 can_cache=False), 用于运维观测。
-            # ttl_key 没配 TTL 或 cache 禁用则不跟踪, 避免运维误判缓存效果。
-            tracks_stats = cache_enabled and ttl is not None
+            # 向后兼容：原变量名在下方逻辑中代表"本次走缓存路径"。
+            can_cache = can_read_cache
+            # hit/miss 统计跟踪范围与读缓存前提一致。
+            tracks_stats = can_read_cache
 
             key: str | None = None
             if can_cache:
@@ -519,9 +557,8 @@ class GatewayServer:
                     return {**cached, "hops": cached.get("hops", []), "cache_hit": True}
 
             if tracks_stats and not can_cache:
-                # tracks_stats 但 can_cache=False 路径 (例如 data_source != online,
-                # 有 TTL 但 _is_cacheable_data_source 排除) 不走单飞, 每个请求
-                # 各自路由, 各自计 miss 用于运维观测。
+                # 计 miss 但不走单飞：例如实时 key、链上无远程 fuyao 源。
+                # 每个请求各自路由, 用于运维观测命中率。
                 self.cache.record_miss()
 
             # 路由 + 缓存写入的内部闭包 (不再管 _active_requests)
@@ -547,7 +584,15 @@ class GatewayServer:
                     source=result.source,
                     hops=[h.source for h in result.hops],  # 真实 hops 留给消费者
                 )
-                if can_cache and key is not None and result.success and result.data is not None:
+                # 仅当本次实际命中远程 fuyao 源才写缓存：若链上本地源优先并成功，
+                # 不能把本地结果按 fuyao 的 key 缓存，否则后续 fuyao 直查会误命中。
+                if (
+                    can_cache
+                    and key is not None
+                    and result.success
+                    and result.data is not None
+                    and cache_strategy.is_fuyao_source(result.source)
+                ):
                     # 缓存里只存稳定数据：hops（请求级）入空，cache_hit 在 setdefault 之前写
                     await self.cache.set(key, {**resp, "hops": []}, ttl=ttl)
                 # 标记 miss，让消费者区分"缓存端点本次未命中"与"无缓存端点"
@@ -733,7 +778,6 @@ class GatewayServer:
         self._running = True
         try:
             await self.initialize()
-            self._health_task = asyncio.create_task(self._health_check_loop())
         except BaseException:
             await self.stop()
             raise
@@ -785,7 +829,6 @@ class GatewayServer:
         # 调 stop() 清 partial state, 允许同实例重试。
         try:
             await self.initialize()
-            self._health_task = asyncio.create_task(self._health_check_loop())
         except BaseException:
             await self.stop()
             raise
@@ -873,7 +916,7 @@ class GatewayServer:
             lifespan=mcp_app.lifespan,
             routes=[
                 Mount(mcp_path, app=mcp_app),
-                Mount("/static", StaticFiles(directory="static", html=False)),
+                Mount("/static", StaticFiles(directory=str(_ca._PROJECT_ROOT / "static"), html=False)),
                 Route("/", _index_route),
                 Route("/console.html", _index_route),
                 Route("/api/status", _status_api),
@@ -938,62 +981,16 @@ class GatewayServer:
         finally:
             await self.stop()
 
-    async def _health_check_loop(self):
-        while self._running:
-            try:
-                for name, client in self.upstreams.items():
-                    if hasattr(client, 'health_check'):
-                        try:
-                            # MED3: 单 client.health_check() 加 timeout, 防止
-                            # 卡死的 client 拖住整个 tick, 后续 client 都探不到。
-                            await asyncio.wait_for(
-                                client.health_check(),
-                                timeout=self._health_check_timeout,
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                f"[{name}] health_check timed out after "
-                                f"{self._health_check_timeout}s, skipping this tick"
-                            )
-                        except Exception as e:
-                            logger.warning(f"[{name}] health_check error: {e}")
-                if self.cache:
-                    await self.cache.cleanup_expired()
-            except Exception as e:
-                logger.error(f"Health check error: {e}")
-            # 等 30s 或被 stop() 唤醒；之前 asyncio.sleep 不响应 stop,
-            # 最坏等一个 tick 才退出，期间可能再调 cleanup_expired（已 dispose 的 engine）。
-            try:
-                await asyncio.wait_for(self._shutdown_event.wait(), timeout=30)
-                break  # stop() 唤醒了我们
-            except asyncio.TimeoutError:
-                continue
-
     async def stop(self):
         """优雅关闭：等待在途请求完成后关闭连接池"""
         self._running = False
-        self._shutdown_event.set()  # 唤醒 health loop，立即退出而不是等下次 tick
+        self._shutdown_event.set()  # 唤醒 stdio signal watcher
 
         # Reset console_api state
         # _ca 在 stop() 局部 import, 与 _do_initialize / serve_http 各 import
         # 一次保持一致 (避免隐式依赖 __init__ 的局部变量)。
         from .utils import console_api as _ca
         _ca.set_omni_client(None)
-
-        # HIGH 2 (2026-09-07 4th-round audit): 取消 health task 防止它跑
-        # 在已 stop 的 client 上 — 若 health loop 正在 client.health_check()
-        # 中, stop 后这个 health_check 仍跑在 dead client, 卡死或报错。
-        # shield 避免 stop 自己被 cancel 时 health task 泄漏。
-        health_task = getattr(self, "_health_task", None)
-        if health_task is not None and not health_task.done():
-            health_task.cancel()
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(health_task), timeout=5.0
-                )
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
-            self._health_task = None
 
         # 等待在途请求完成（最多 10 秒）
         wait_start = time.time()

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from src.registry import _TYPE_MAP, build_signature, _validate_and_normalize
+from src.unihive.core.registry import _TYPE_MAP, build_signature, _validate_and_normalize
 
 
 def test_type_map_includes_list_str():

@@ -4,7 +4,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.testclient import TestClient
 
-from src.console_auth import (
+from src.unihive.console_auth import (
     hash_password,
     verify_password,
     setup_console_auth,

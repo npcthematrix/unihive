@@ -30,14 +30,18 @@ def is_cacheable_source(source: str | None) -> bool:
 
 
 def is_fuyao_source(source: str | None) -> bool:
-    """是否 FUYAO 源：仅以 fuyao_ 开头（myfuyao_xx 不算）。"""
+    """是否远程同花顺 HTTP 源：仅以 fuyao_ 开头（myfuyao_xx 不算）。
+
+    只有这类"远程 HTTP"响应值得缓存。本地终端/本地库（mootdx2 /
+    tdx_quant / thsdk / omni）本身就是本地数据访问，再加一层缓存纯属多余。
+    """
     if not source:
         return False
     return source.startswith("fuyao_")
 
 
 def is_realtime_ttl(ttl_key: str | None) -> bool:
-    """实时接口不缓存（realtime_quote TTL 极短，无意义）。"""
+    """实时行情不缓存：行情要求最新，且本地终端获取本身足够快。"""
     return ttl_key == "realtime_quote"
 
 
@@ -46,3 +50,12 @@ def is_cacheable_data_source(data_source_type: str | None) -> bool:
     if not data_source_type:
         return False
     return data_source_type == "online"
+
+
+def chain_has_remote_http(chain: list[str] | None) -> bool:
+    """路由候选链里是否含远程 HTTP(fuyao_*) 源。
+
+    用于在路由前判断该工具是否值得走缓存读/单飞：只有链上存在远程源，
+    缓存命中才有意义。实际是否写缓存仍由命中源 is_fuyao_source 决定。
+    """
+    return bool(chain) and any(is_fuyao_source(s) for s in chain)

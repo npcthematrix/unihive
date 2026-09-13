@@ -19,8 +19,8 @@ class TestGatewayInitializeIdempotent:
     否则会重新构造 cache / 重启 upstreams 进程。"""
 
     async def test_initialize_called_twice_short_circuits(self, tmp_path):
-        from src.storage.cache import Cache, CacheConfig
-        from src.gateway_server import GatewayServer
+        from src.unihive.storage.cache import Cache, CacheConfig
+        from src.unihive.gateway_server import GatewayServer
 
         # bypass __init__ (跳过真实 config 加载); 手动注入测试所需的最小状态
         server = GatewayServer.__new__(GatewayServer)
@@ -57,7 +57,7 @@ class TestHealthLoopShutdown:
 
     async def test_stop_wakes_health_loop_immediately(self, tmp_path):
         import time
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -88,7 +88,7 @@ class TestProbeCacheKey:
     """同 name 改了 type 或 base_url 后, 下一次探测必须 miss 缓存。"""
 
     def test_same_name_different_type_misses_cache(self):
-        from src.utils.console_api import _probe_upstream, _probe_cache
+        from src.unihive.utils.console_api import _probe_upstream, _probe_cache
         from time import monotonic
 
         _probe_cache.clear()
@@ -103,7 +103,7 @@ class TestProbeCacheKey:
         assert result is not sentinel_http, "同 name 改 type 后不应复用旧缓存"
 
     def test_same_name_different_base_url_misses_cache(self):
-        from src.utils.console_api import _probe_upstream, _probe_cache
+        from src.unihive.utils.console_api import _probe_upstream, _probe_cache
         from time import monotonic
 
         _probe_cache.clear()
@@ -131,7 +131,7 @@ class TestConsoleLoadConfigMasksSecrets:
         )
         monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
-        from src.utils.console_api import load_config
+        from src.unihive.utils.console_api import load_config
         cfg = load_config()
         api_key = cfg["upstreams"]["fuyao"]["api_key"]
         assert api_key != "supersecret123", "raw secret 应被 mask"
@@ -139,7 +139,7 @@ class TestConsoleLoadConfigMasksSecrets:
 
     def test_load_config_returns_empty_when_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(tmp_path / "nope.yaml"))
-        from src.utils.console_api import load_config
+        from src.unihive.utils.console_api import load_config
         assert load_config() == {}
 
     def test_load_config_resolves_env_placeholder(self, tmp_path, monkeypatch):
@@ -154,7 +154,7 @@ class TestConsoleLoadConfigMasksSecrets:
         monkeypatch.setenv("TEST_API_KEY", "resolved-secret-xyz")
         monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
-        from src.utils.console_api import load_config
+        from src.unihive.utils.console_api import load_config
         cfg = load_config()
         api_key = cfg["upstreams"]["fuyao"]["api_key"]
         assert "${" not in api_key, "应解析 ${TEST_API_KEY}, 不是原样返回"
@@ -172,7 +172,7 @@ class TestConsoleLoadConfigMasksSecrets:
         )
         monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
-        from src.utils.console_api import load_config
+        from src.unihive.utils.console_api import load_config
         cfg1 = load_config()
         # 模拟 tool_loader.load_all_tools 的回写副作用
         cfg1["upstream_tool_mapping"] = {"sneaky": "leaked"}
@@ -190,7 +190,7 @@ class TestGatewayReachabilityProbe:
 
     def test_returns_false_when_nothing_listening(self, monkeypatch):
         """没有 gateway 监听时必须返回 False, 而不是 True。"""
-        from src.utils.console_api import is_gateway_reachable, _gateway_health_cache
+        from src.unihive.utils.console_api import is_gateway_reachable, _gateway_health_cache
         _gateway_health_cache.clear()
         # GATEWAY_HTTP_PORT 指向一个没东西监听的随机端口
         # 用 1 (需 root, 不可用) 或 找空闲端口再关掉
@@ -205,7 +205,7 @@ class TestGatewayReachabilityProbe:
 
     def test_returns_true_when_port_open(self, monkeypatch):
         """监听着的端口必须返回 True。"""
-        from src.utils.console_api import is_gateway_reachable, _gateway_health_cache
+        from src.unihive.utils.console_api import is_gateway_reachable, _gateway_health_cache
         import socket
         _gateway_health_cache.clear()
         s = socket.socket()
@@ -220,7 +220,7 @@ class TestGatewayReachabilityProbe:
 
     def test_result_is_cached_within_ttl(self, monkeypatch):
         """1s 内重复调用应走缓存, 不重连。"""
-        from src.utils.console_api import is_gateway_reachable, _gateway_health_cache
+        from src.unihive.utils.console_api import is_gateway_reachable, _gateway_health_cache
         import socket
         _gateway_health_cache.clear()
         s = socket.socket()
@@ -251,7 +251,7 @@ class TestGatewayShutdownChain:
     async def test_serve_http_calls_stop_on_normal_exit(self, tmp_path, monkeypatch):
         """serve() 正常返回时必须调 stop。"""
         import socket
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         # 找一个空闲端口 — serve_http 现在会预检端口, 默认 18080 常被占
         s = socket.socket()
@@ -319,7 +319,7 @@ class TestGatewayShutdownChain:
     async def test_serve_http_calls_stop_on_exception(self, tmp_path, monkeypatch):
         """serve() 抛异常时 stop() 也必须跑 (try/finally)。"""
         import socket
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         # 找一个空闲端口 — serve_http 现在会预检端口, 默认 18080 常被占
         s = socket.socket()
@@ -387,7 +387,7 @@ class TestGatewayShutdownChain:
         import sys
         if sys.platform == "win32":
             pytest.skip("Windows asyncio 不支持 add_signal_handler")
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -434,7 +434,7 @@ class TestCreateAndRegisterGatewayMcp:
     (HIGH #3, 2026-09-07 audit)。"""
 
     async def test_factory_sets_self_mcp(self, tmp_path):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -470,7 +470,7 @@ class TestCreateAndRegisterGatewayMcp:
     async def test_factory_installs_capability_filter(self, tmp_path):
         """factory 必须装 capability filter; 没有 _unihive_capability_filter_installed
         标记就是 HIGH #3 复发路径。"""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -504,7 +504,7 @@ class TestInitializeFailureResetsRouterMcp:
     否则后续 get_server_status / 路由调用读到半构造对象。"""
 
     async def test_router_and_mcp_reset_on_init_failure(self, tmp_path, monkeypatch):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -550,7 +550,7 @@ class TestStopResetsStateForRestart:
     用已经 stop 过的死客户端路由 → 'Process not running'。"""
 
     async def test_stop_clears_upstreams(self, tmp_path):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -580,7 +580,7 @@ class TestStopResetsStateForRestart:
         assert len(stopped_clients) == 2, "两个 client 的 stop() 都必须被调"
 
     async def test_stop_resets_router_mcp(self, tmp_path):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -601,7 +601,7 @@ class TestStopResetsStateForRestart:
         assert server.mcp is None, "stop() 后 mcp 必须重置为 None"
 
     async def test_stop_resets_initialized_flag(self, tmp_path):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -626,7 +626,7 @@ class TestStopResetsStateForRestart:
 
 @pytest.fixture(autouse=True)
 def _clear_probe_cache():
-    from src.utils.console_api import _probe_cache
+    from src.unihive.utils.console_api import _probe_cache
     _probe_cache.clear()
     yield
     _probe_cache.clear()

@@ -8,7 +8,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.gateway_server import GatewayServer  # noqa: E402
+from src.unihive.gateway_server import GatewayServer  # noqa: E402
 
 
 def test_load_all_tools_merges_both_sources(tmp_path, monkeypatch):

@@ -1,8 +1,8 @@
 import pytest
 import unittest.mock as mock
 from datetime import datetime, timedelta
-from src.mootdx2_client import MooTDX2Client, MooTDX2Config
-from src.upstream_client import UpstreamStatus
+from src.unihive.api.mootdx2_client import MooTDX2Client, MooTDX2Config
+from src.unihive.api.upstream_client import UpstreamStatus
 
 
 class TestMooTDX2Client:
@@ -62,7 +62,7 @@ class TestMooTDX2Client:
     def test_get_index_overview_returns_six_indices(self):
         """Test get_index_overview returns 6 major indices"""
         import pandas as pd
-        from src.mootdx2_client import MooTDX2Client, MooTDX2Config
+        from src.unihive.api.mootdx2_client import MooTDX2Client, MooTDX2Config
         config = MooTDX2Config(name="test", market="std")
         client = MooTDX2Client(config)
         # Mock _get_quotes to return DataFrame with 6 index rows
@@ -93,7 +93,7 @@ class TestMooTDX2Client:
     def test_stock_top_board_sorts_correctly(self):
         """Test stock_top_board returns sorted results"""
         import pandas as pd
-        from src.mootdx2_client import MooTDX2Client, MooTDX2Config
+        from src.unihive.api.mootdx2_client import MooTDX2Client, MooTDX2Config
         config = MooTDX2Config(name="test", market="std")
         client = MooTDX2Client(config)
         mock_stock_df = pd.DataFrame({"code": ["600000", "600016", "600036"]})
@@ -114,7 +114,7 @@ class TestMooTDX2Client:
     def test_stock_unusual_filters_by_event_type(self):
         """Test stock_unusual filters stocks by event_type"""
         import pandas as pd
-        from src.mootdx2_client import MooTDX2Client, MooTDX2Config
+        from src.unihive.api.mootdx2_client import MooTDX2Client, MooTDX2Config
         config = MooTDX2Config(name="test", market="std")
         client = MooTDX2Client(config)
         mock_block_df = pd.DataFrame([{"name": "沪股通", "code_list": "600000,600016,600036"}])

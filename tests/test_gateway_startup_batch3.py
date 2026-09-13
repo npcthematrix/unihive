@@ -35,7 +35,7 @@ def _reset_root_logging_handlers():
 class TestLogLevelFromConfig:
     def test_log_level_default_info_when_no_logging_section(self):
         """config 缺 logging 节时, 应回退到 'info'."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {"gateway": {"host": "127.0.0.1", "port": 18080}}
@@ -43,7 +43,7 @@ class TestLogLevelFromConfig:
         assert level == "info"
 
     def test_log_level_respects_config_debug(self):
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {"logging": {"level": "DEBUG"}, "gateway": {}}
@@ -52,7 +52,7 @@ class TestLogLevelFromConfig:
 
     def test_log_level_uppercase_normalized(self):
         """YAML 里写 'INFO' / 'WARNING' 也应被归一化为小写喂给 uvicorn."""
-        from src.gateway_server import GatewayServer
+        from src.unihive.gateway_server import GatewayServer
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {"logging": {"level": "WARNING"}, "gateway": {}}

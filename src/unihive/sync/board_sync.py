@@ -24,8 +24,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dotenv import load_dotenv
-from src.api.fuyao_client import FuyaoConfig, FuyaoClient
-from src.api.omni_client import OmniConfig, OmniClient
+from src.unihive.api.fuyao_client import FuyaoConfig, FuyaoClient
+from src.unihive.api.omni_client import OmniConfig, OmniClient
 
 # 加载 .env 文件
 load_dotenv()
@@ -33,7 +33,7 @@ load_dotenv()
 # 获取 API Key
 def get_fuyao_api_key() -> str:
     """从环境变量或配置文件获取 Fuyao API Key"""
-    return os.environ.get("RHTHS_API_KEY", "")
+    return os.environ.get("FUYAO_API_KEY", "")
 
 
 DB_PATH = "./data/board.db"
@@ -53,6 +53,42 @@ def get_board_type(code: str) -> str:
         return "industry"
     else:
         return "industry"
+
+
+def is_a_share_code(code: str) -> bool:
+    """判断是否为合法的 6 位 A 股代码（用于拦截脏数据写库）。"""
+    return isinstance(code, str) and len(code) == 6 and code.isdigit()
+
+
+def normalize_stock_entry(stock) -> tuple[str, str]:
+    """把 tqcenter 板块成分股条目归一化成 (6 位代码, 名称)。
+
+    tqcenter get_stock_list_in_sector 随 list_type 返回不同形态:
+      - list_type=0: ["600519.SH", "000001.SZ", ...] 纯代码字符串
+      - list_type=1: [{"Code": "600519.SH", "Name": "贵州茅台"}, ...]
+        (键名与 get_sector_list 一致, 为 Code / Name)
+
+    历史 bug: 旧实现直接 for stock_code, stock_name in stocks
+    解包, dict 条目会被解成键名 "Code" / "Name" 并写进库,
+    于是每个 TDX 板块在 sector_stocks 里只剩一条 stock_code='Code' 脏数据。
+    """
+    if isinstance(stock, dict):
+        raw_code = stock.get("Code") or stock.get("code") or stock.get("thscode") or ""
+        raw_name = stock.get("Name") or stock.get("name") or ""
+    elif isinstance(stock, (list, tuple)):
+        raw_code = stock[0] if len(stock) > 0 else ""
+        raw_name = stock[1] if len(stock) > 1 else ""
+    else:
+        raw_code, raw_name = stock, ""
+
+    code = str(raw_code or "").strip().upper()
+    if "." in code:
+        code = code.split(".", 1)[0]
+    for prefix in ("SH", "SZ", "BJ"):
+        if code.startswith(prefix):
+            code = code[len(prefix):]
+            break
+    return code.strip(), str(raw_name or "").strip()
 
 
 def get_db_connection():
@@ -197,8 +233,9 @@ async def sync_fuyao_index(board_type: str = "all") -> dict:
                         code_6 = code.split(".")[0] if "." in code else code[:6]
 
                         # UPSERT 板块：检查存在则更新，不存在则插入
+                        # 注意：FUYAO 数据源的 SOURCE 字段存储为 "THS"
                         cursor_check = conn.execute(
-                            "SELECT id FROM sectors WHERE source = 'fuyao' AND code = ?",
+                            "SELECT id FROM sectors WHERE source = 'THS' AND code = ?",
                             (code_6,),
                         )
                         existing = cursor_check.fetchone()
@@ -212,7 +249,7 @@ async def sync_fuyao_index(board_type: str = "all") -> dict:
                         else:
                             cursor = conn.execute(
                                 "INSERT INTO sectors (source, board_type, code, name, stock_count) VALUES (?, ?, ?, ?, 0)",
-                                ("fuyao", bt, code_6, name),
+                                ("THS", bt, code_6, name),
                             )
                             sector_id = cursor.lastrowid
 
@@ -325,8 +362,8 @@ async def sync_tqquant(board_type: str = "all") -> dict:
             }
 
         # 初始化 TDX 客户端
-        from src.api.tdx_quant_client import TdxQuantClient
-        from src.models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
+        from src.unihive.api.tdx_quant_client import TdxQuantClient
+        from src.unihive.models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
         settings = TdxQuantSettings(
             tdx_root=tdx_cfg.get("tdx_root", "D:/new_tdx_mock"),
             strategy_id=tdx_cfg.get("strategy_id", "unihive_gateway"),
@@ -446,9 +483,10 @@ async def sync_tqquant(board_type: str = "all") -> dict:
                             )
 
                             if stocks:
-                                for rank, (stock_code, stock_name) in enumerate(stocks, 1):
-                                    # 转换为 6 位代码
-                                    stock_code_6 = stock_code.replace(".SH", "").replace(".SZ", "")
+                                for rank, stock in enumerate(stocks, 1):
+                                    stock_code_6, stock_name = normalize_stock_entry(stock)
+                                    if not is_a_share_code(stock_code_6):
+                                        continue
                                     try:
                                         conn.execute(
                                             "INSERT INTO sector_stocks (sector_id, stock_code, stock_name, rank) VALUES (?, ?, ?, ?)",
@@ -511,8 +549,10 @@ async def sync_tqquant(board_type: str = "all") -> dict:
                             )
 
                             if stocks:
-                                for rank, (stock_code, stock_name) in enumerate(stocks, 1):
-                                    stock_code_6 = stock_code.replace(".SH", "").replace(".SZ", "")
+                                for rank, stock in enumerate(stocks, 1):
+                                    stock_code_6, stock_name = normalize_stock_entry(stock)
+                                    if not is_a_share_code(stock_code_6):
+                                        continue
                                     try:
                                         conn.execute(
                                             "INSERT INTO sector_stocks (sector_id, stock_code, stock_name, rank) VALUES (?, ?, ?, ?)",

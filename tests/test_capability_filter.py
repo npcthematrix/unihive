@@ -20,7 +20,7 @@ import asyncio
 import pytest
 from fastmcp import FastMCP
 
-from src.core.mcp_factory import install_capability_filter
+from src.unihive.core.mcp_factory import install_capability_filter
 
 
 @pytest.fixture
