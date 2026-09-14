@@ -1861,6 +1861,106 @@
         const initialActivePanel = document.querySelector('.panel.active')?.id;
         if (initialActivePanel === 'status') startUpdateClock();
         refreshAll();
+
+        // === 代理设置 (proxy settings) ===
+        // 必须放在主 IIFE 的 init() 内, 因为依赖 fetchJSON / showToast
+        // (都是主 IIFE 闭包内定义的). 之前的修复 e0b5c98 把这段代码搬到
+        // console.js 末尾形成独立 IIFE, 仍然拿不到 fetchJSON, console 报
+        // "ReferenceError: fetchJSON is not defined" → 覆盖表格永远是空.
+        (function initProxySettings() {
+            const proxyToggle = document.getElementById('proxy-enabled-toggle');
+            if (!proxyToggle) return;
+            const proxySaveStatus = document.getElementById('proxy-save-status');
+            const proxyTdxStatus = document.getElementById('proxy-tdx-status');
+            const proxyStatusHint = document.getElementById('proxy-status-hint');
+            const proxyCoverageBody = document.getElementById('proxy-coverage-body');
+            const proxyCoverageCount = document.getElementById('proxy-coverage-count');
+            const proxySubtabCount = document.getElementById('cfg-count-proxy');
+
+            const STATUS_HINTS = {
+                HEALTHY: 'TDX_QUANT 在线, 代理可正常生效',
+                DEGRADED: 'TDX_QUANT 状态降级, 代理可能间歇失败',
+                UNAVAILABLE: 'TDX_QUANT 离线, 启用代理也不会生效 (仍会自动降级 mootdx2)',
+                MISSING: 'TDX_QUANT 客户端未注册 (检查 config/upstreams.yaml)',
+                LOADING: '加载中…',
+                FAILED: '加载失败 — 检查 gateway 是否运行',
+            };
+
+            function showProxySaveStatus(text, isError) {
+                proxySaveStatus.textContent = text;
+                proxySaveStatus.className = 'proxy-save-status' + (isError ? ' error' : '');
+                if (text) {
+                    clearTimeout(proxySaveStatus._hideTimer);
+                    proxySaveStatus._hideTimer = setTimeout(() => {
+                        proxySaveStatus.textContent = '';
+                        proxySaveStatus.className = 'proxy-save-status';
+                    }, 2500);
+                }
+            }
+
+            function applyProxyStatus(status) {
+                proxyTdxStatus.textContent = status;
+                proxyTdxStatus.className = 'proxy-status-value ' + status;
+                if (proxyStatusHint) proxyStatusHint.textContent = STATUS_HINTS[status] || '';
+                const offline = (status === 'UNAVAILABLE' || status === 'MISSING');
+                proxyToggle.disabled = offline;
+                proxyToggle.title = offline ? (STATUS_HINTS[status] || '当前不可用') : '';
+            }
+
+            function renderProxyCoverage(coverage) {
+                if (!coverage || coverage.length === 0) {
+                    proxyCoverageBody.innerHTML =
+                        '<tr><td colspan="3" class="proxy-table-empty">'
+                        + '覆盖范围为空 — TOOL_MAP 未配置或加载失败'
+                        + '</td></tr>';
+                } else {
+                    proxyCoverageBody.innerHTML = coverage.map(c =>
+                        '<tr><td>' + c.mootdx2_tool + '</td>'
+                        + '<td class="proxy-arrow">→</td>'
+                        + '<td>' + c.tdx_quant_tool + '</td></tr>'
+                    ).join('');
+                }
+                const n = coverage ? coverage.length : 0;
+                if (proxyCoverageCount) proxyCoverageCount.textContent = n;
+                if (proxySubtabCount) proxySubtabCount.textContent = n;
+            }
+
+            async function loadProxySettings() {
+                applyProxyStatus('LOADING');
+                try {
+                    const resp = await fetchJSON('/api/proxy/settings');
+                    if (!resp) return;
+                    proxyToggle.checked = resp.enabled;
+                    applyProxyStatus(resp.tdx_quant_status);
+                    renderProxyCoverage(resp.coverage);
+                } catch (e) {
+                    applyProxyStatus('FAILED');
+                    renderProxyCoverage([]);
+                    console.error('load proxy settings failed:', e);
+                }
+            }
+
+            proxyToggle.addEventListener('change', async function() {
+                showProxySaveStatus('保存中…', false);
+                try {
+                    await fetchJSON('/api/proxy/settings', {
+                        method: 'PUT',
+                        body: JSON.stringify({ enabled: proxyToggle.checked }),
+                    });
+                    showProxySaveStatus('已保存', false);
+                    showToast('代理已' + (proxyToggle.checked ? '启用' : '关闭'), 'success');
+                } catch (e) {
+                    showProxySaveStatus('保存失败: ' + e.message, true);
+                    showToast('代理设置保存失败', 'error');
+                }
+            });
+
+            // 子标签点击时刷新 (覆盖 refreshAll 旧 cache)
+            const proxySubtab = document.querySelector('.cfg-subtab[data-cfg="proxy"]');
+            if (proxySubtab) proxySubtab.addEventListener('click', loadProxySettings);
+            // 立即加载一次
+            loadProxySettings();
+        })();
     }
 
     if (document.readyState === 'loading') {
@@ -1868,120 +1968,4 @@
     } else {
         init();
     }
-})();
-
-// === 代理设置 (proxy settings) ===
-// 注意: 此 IIFE 必须放在 console.js 末尾, 因为依赖 fetchJSON (console.js 内
-// 定义)。之前在 console.html 内嵌 script 块时, 内嵌 script 先于 defer 的
-// console.js 执行, 导致 fetchJSON 未定义, ReferenceError 被静默 catch,
-// 覆盖范围表格 tbody 永远空着 — 用户看到 "覆盖范围 (只读)" 标题 + 空表。
-(function initProxySettings() {
-    const toggle = document.getElementById('proxy-enabled-toggle');
-    const saveStatus = document.getElementById('proxy-save-status');
-    const tdxStatusEl = document.getElementById('proxy-tdx-status');
-    const statusHint = document.getElementById('proxy-status-hint');
-    const coverageBody = document.getElementById('proxy-coverage-body');
-    const coverageCount = document.getElementById('proxy-coverage-count');
-    const subtabCount = document.getElementById('cfg-count-proxy');
-    if (!toggle) return;
-
-    // 状态 → 中文提示 + 启用/禁用 toggle 的语义
-    const STATUS_HINTS = {
-        HEALTHY: 'TDX_QUANT 在线, 代理可正常生效',
-        DEGRADED: 'TDX_QUANT 状态降级, 代理可能间歇失败',
-        UNAVAILABLE: 'TDX_QUANT 离线, 启用代理也不会生效 (仍会自动降级 mootdx2)',
-        MISSING: 'TDX_QUANT 客户端未注册 (检查 config/upstreams.yaml)',
-        LOADING: '加载中…',
-        FAILED: '加载失败 — 检查 gateway 是否运行',
-    };
-
-    function showSaveStatus(text, isError) {
-        saveStatus.textContent = text;
-        saveStatus.className = 'proxy-save-status' + (isError ? ' error' : '');
-        if (text) {
-            clearTimeout(saveStatus._hideTimer);
-            saveStatus._hideTimer = setTimeout(() => {
-                saveStatus.textContent = '';
-                saveStatus.className = 'proxy-save-status';
-            }, 2500);
-        }
-    }
-
-    function applyStatus(status) {
-        tdxStatusEl.textContent = status;
-        tdxStatusEl.className = 'proxy-status-value ' + status;
-        if (statusHint) statusHint.textContent = STATUS_HINTS[status] || '';
-        // toggle 在 UNAVAILABLE / MISSING 时禁用
-        const offline = (status === 'UNAVAILABLE' || status === 'MISSING');
-        toggle.disabled = offline;
-        toggle.title = offline
-            ? STATUS_HINTS[status] || '当前不可用'
-            : '';
-    }
-
-    function renderCoverage(coverage) {
-        if (!coverage || coverage.length === 0) {
-            coverageBody.innerHTML =
-                '<tr><td colspan="3" class="proxy-table-empty">'
-                + '覆盖范围为空 — TOOL_MAP 未配置或加载失败'
-                + '</td></tr>';
-        } else {
-            coverageBody.innerHTML = coverage.map(c =>
-                '<tr><td>' + c.mootdx2_tool + '</td>'
-                + '<td class="proxy-arrow">→</td>'
-                + '<td>' + c.tdx_quant_tool + '</td></tr>'
-            ).join('');
-        }
-        // 更新顶部描述中的"以下 N 个"计数 + 子标签角标
-        if (coverageCount) {
-            coverageCount.textContent = coverage ? coverage.length : 0;
-        }
-        if (subtabCount) {
-            subtabCount.textContent = coverage ? coverage.length : 0;
-        }
-    }
-
-    async function load() {
-        applyStatus('LOADING');
-        try {
-            const resp = await fetchJSON('/api/proxy/settings');
-            if (!resp) return;
-            toggle.checked = resp.enabled;
-            applyStatus(resp.tdx_quant_status);
-            renderCoverage(resp.coverage);
-        } catch (e) {
-            applyStatus('FAILED');
-            renderCoverage([]);
-            console.error('load proxy settings failed:', e);
-        }
-    }
-
-    // 自动保存: toggle 改变即 PUT
-    toggle.addEventListener('change', async function() {
-        showSaveStatus('保存中…', false);
-        try {
-            await fetchJSON('/api/proxy/settings', {
-                method: 'PUT',
-                body: JSON.stringify({ enabled: toggle.checked }),
-            });
-            showSaveStatus('已保存', false);
-            // 同时用 toast 加强反馈 (屏幕中央也弹一条)
-            if (typeof showToast === 'function') {
-                showToast('代理已' + (toggle.checked ? '启用' : '关闭'), 'success');
-            }
-        } catch (e) {
-            showSaveStatus('保存失败: ' + e.message, true);
-            if (typeof showToast === 'function') {
-                showToast('代理设置保存失败', 'error');
-            }
-        }
-    });
-
-    // 首次点击子标签时刷新 (覆盖 refreshAll 已触发的可能旧 cache)
-    const proxySubtab = document.querySelector('.cfg-subtab[data-cfg="proxy"]');
-    if (proxySubtab) {
-        proxySubtab.addEventListener('click', load);
-    }
-    // 立即加载一次, 即使子标签没被点过 (init 内部已经触发 refreshAll)
-    load();
 })();
