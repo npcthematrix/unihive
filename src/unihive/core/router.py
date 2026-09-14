@@ -295,6 +295,14 @@ class Router:
                 f"falling back to chain"
             )
             return None
+        except Exception as e:
+            # Round 10 audit principle: never let a proxy exception escape —
+            # otherwise the router fallback chain breaks. Log + fall back.
+            logger.warning(
+                f"[{gateway_tool}] proxy tdx_quant exception: {e}, "
+                f"falling back to chain"
+            )
+            return None
 
         hop = RouteHop(
             source="tdx_quant",
@@ -318,7 +326,7 @@ class Router:
             )
 
         logger.warning(
-                f"[{gateway_tool}] proxy tdx_quant failed: {result.error}, "
-                f"falling back to chain"
+            f"[{gateway_tool}] proxy tdx_quant failed: {result.error}, "
+            f"falling back to chain"
         )
         return None  # 失败 → 降级到原 chain
