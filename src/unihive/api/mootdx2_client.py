@@ -857,22 +857,57 @@ class MooTDX2Client:
             return self._error_result(e, f"get_index_kline({code})")
 
     # ========== 全量代码列表 ==========
-    def _get_code_list_sync(self, exchange: str):
-        """同步全量代码列表"""
-        q = self._get_quotes()
-        df = q.stock(exchange=exchange)
-        if df is not None and len(df) > 0:
-            return df.to_dict(orient="records")
-        return None
+    # mootdx2 Quotes.stocks(market) 只支持沪深 (TDX 协议 market: 1=SH/0=SZ),
+    # market=2(BJ) 库会直接抛 MootdxValidationException; 全市场走 stock_all()。
+    _CODE_LIST_MARKETS = {"sh": 1, "sz": 0}
 
-    async def get_code_list(self, exchange: str) -> ToolResult:
-        """获取全量代码列表"""
+    def _get_code_list_sync(self, exchange: str) -> list[dict] | None:
+        """同步全量代码列表。返回合同字段 [{"code", "name"}, ...]。
+
+        mootdx2 不支持北交所 (bj), 该入参返回 None 由上层转 no_data。
+        """
+        q = self._get_quotes()
+        exchange = (exchange or "").strip().lower()
+        if exchange:
+            market = self._CODE_LIST_MARKETS.get(exchange)
+            if market is None:
+                logger.info(
+                    "get_code_list: mootdx2 全量代码列表不支持交易所 %r (仅 sh/sz)",
+                    exchange,
+                )
+                return None
+            df = q.stocks(market=market)
+        else:
+            df = q.stock_all()
+        if df is None or len(df) == 0:
+            return None
+        # 解析器行含 volunit/decimal_point 等内部列, 只保留合同承诺的 code/name
+        return [
+            {"code": str(row["code"]), "name": row.get("name", "")}
+            for row in df.to_dict(orient="records")
+            if row.get("code")
+        ]
+
+    async def get_code_list(self, exchange: str = "") -> ToolResult:
+        """获取全量代码列表
+
+        Args:
+            exchange: 交易所, sh=上海 / sz=深圳 / bj=北京(库不支持);
+                      "" 或 None 返回沪深全部
+        """
         self._metrics["total_requests"] += 1
+        exchange_val = (exchange or "").strip().lower()
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_code_list_sync, exchange)
+            data = await loop.run_in_executor(
+                get_blocking_executor(), self._get_code_list_sync, exchange_val
+            )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
+            if exchange_val == "bj":
+                return self._no_data_result(
+                    "mootdx2 全量代码列表仅支持沪深 (sh/sz),暂不支持北京证券交易所"
+                )
             return self._no_data_result()
         except Exception as e:
             logger.error(f"get_code_list failed: {e}")

@@ -522,3 +522,92 @@ class TestMooTDX2StartEdgeCases:
         result = await client._probe_with_existing_quotes()
         assert result is False
         assert called == [], "probe 路径不应触发 factory"
+
+class TestGetCodeList:
+    """get_code_list: mootdx2 stocks(market) 分页拉全量, 输出合同 = code/name 记录。
+
+    mootdx2 Quotes.stocks(market) 只支持沪深 (1=SH / 0=SZ), market=2(BJ) 会
+    抛 MootdxValidationException; 全市场用 stock_all()。返回行是裸 6 位 code,
+    没有 symbol 字段。
+    """
+
+    class _FakeQuotes:
+        def __init__(self):
+            self.calls: list[tuple] = []
+
+        def stocks(self, market):
+            import pandas as pd
+
+            self.calls.append(("stocks", market))
+            if market == 1:
+                return pd.DataFrame([
+                    {"code": "600000", "name": "浦发银行", "volunit": 100, "decimal_point": 3},
+                    {"code": "600519", "name": "贵州茅台", "volunit": 100, "decimal_point": 3},
+                ])
+            if market == 0:
+                return pd.DataFrame([
+                    {"code": "000001", "name": "平安银行", "volunit": 100, "decimal_point": 3},
+                ])
+            raise ValueError("市场代码错误, 目前只支持沪深市场")
+
+        def stock_all(self):
+            import pandas as pd
+
+            self.calls.append(("stock_all",))
+            return pd.DataFrame([
+                {"code": "600000", "name": "浦发银行"},
+                {"code": "000001", "name": "平安银行"},
+            ])
+
+    def _make_client(self, fake_quotes):
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+        client._quotes = fake_quotes
+        return client
+
+    def test_sh_uses_market_1_and_projects_code_name(self):
+        q = self._FakeQuotes()
+        client = self._make_client(q)
+        rows = client._get_code_list_sync("sh")
+        assert q.calls == [("stocks", 1)]
+        assert rows == [
+            {"code": "600000", "name": "浦发银行"},
+            {"code": "600519", "name": "贵州茅台"},
+        ]  # volunit/decimal_point 等内部列不得泄漏
+
+    def test_sz_uses_market_0(self):
+        q = self._FakeQuotes()
+        client = self._make_client(q)
+        rows = client._get_code_list_sync("sz")
+        assert q.calls == [("stocks", 0)]
+        assert rows == [{"code": "000001", "name": "平安银行"}]
+
+    def test_empty_exchange_uses_stock_all(self):
+        q = self._FakeQuotes()
+        client = self._make_client(q)
+        rows = client._get_code_list_sync("")
+        assert q.calls == [("stock_all",)]
+        assert len(rows) == 2
+
+    def test_bj_unsupported_returns_none_without_calling_stocks_2(self):
+        q = self._FakeQuotes()
+        client = self._make_client(q)
+        assert client._get_code_list_sync("bj") is None
+        assert q.calls == []  # 库对 market=2 直接抛异常, 不应发起调用
+
+    async def test_async_success_envelope(self):
+        client = self._make_client(self._FakeQuotes())
+        result = await client.get_code_list("sh")
+        assert result.success is True
+        assert result.source == "mootdx2"
+        assert result.data[0]["code"] == "600000"
+
+    async def test_async_bj_returns_no_data_not_error(self):
+        client = self._make_client(self._FakeQuotes())
+        result = await client.get_code_list("bj")
+        # BJ 是库限制而非调用失败: 走 no_data 业务状态 (success=True, data=None),
+        # 不产生 error_result, 也不会触发 router 降级链
+        assert result.success is True
+        assert result.data is None
+        assert result.error_detail["error_type"] == "no_data"
+        assert "北京证券交易所" in result.error
