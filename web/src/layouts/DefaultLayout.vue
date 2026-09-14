@@ -13,6 +13,10 @@
         text-color="rgba(255,255,255,0.72)"
         active-text-color="#ffffff"
       >
+        <el-menu-item index="/guides">
+          <el-icon><Document /></el-icon>
+          <span>接入指南</span>
+        </el-menu-item>
         <el-menu-item index="/status">
           <el-icon><Monitor /></el-icon>
           <span>上游状态</span>
@@ -28,10 +32,6 @@
         <el-menu-item index="/omni">
           <el-icon><Grid /></el-icon>
           <span>OMNI板块管理</span>
-        </el-menu-item>
-        <el-menu-item index="/guides">
-          <el-icon><Document /></el-icon>
-          <span>接入指南</span>
         </el-menu-item>
       </el-menu>
     </el-aside>
