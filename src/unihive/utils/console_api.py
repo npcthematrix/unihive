@@ -123,16 +123,21 @@ def mask_sensitive(value: str, show_chars: int = 2) -> str:
 
 
 def _mask_config_secrets(node: Any) -> Any:
-    """递归扫描 config 节点，对密钥类字段打码。原地修改。"""
+    """递归扫描 config 节点，对密钥类字段打码。返回深拷贝（不修改原对象）。"""
+    import copy
+    node = copy.deepcopy(node)
     if isinstance(node, dict):
         for k, v in list(node.items()):
             if isinstance(v, str) and _is_secret_field(k):
                 node[k] = mask_sensitive(v)
             elif isinstance(v, (dict, list)):
-                _mask_config_secrets(v)
+                # 必须把递归返回值回赋, 否则内层 mask 后的新 dict 被丢弃,
+                # 外层仍指向原 dict (未 mask 的副本)
+                node[k] = _mask_config_secrets(v)
     elif isinstance(node, list):
-        for item in node:
-            _mask_config_secrets(item)
+        for i, item in enumerate(node):
+            if isinstance(item, (dict, list)):
+                node[i] = _mask_config_secrets(item)
     return node
 
 
@@ -144,21 +149,16 @@ def _mask_config_secrets(node: Any) -> Any:
 def load_config() -> dict:
     """加载并脱敏 config。复用 config_loader 解析 ${VAR} 占位符.
 
-    HIGH-3 (2026-09-14 audit): 当 GatewayServer 已通过 ``set_config()``
-    注入过 ``_GW_CFG`` 时, 优先复用注入的 config — 它已经跑过
-    ``load_all_tools`` 的 mutation (回写了 upstream_tool_mapping), 与
-    router / interfaces / mcp-tools-list 的视图一致; 否则每次重新读盘
-    会拿到一份"未 mutation"的 mapping, 与运行态不一致。
+    每次现取现读盘 — 不复用 GatewayServer.set_config() 注入的 _GW_CFG,
+    因为:
+    - /api/config / /api/upstreams / /api/interfaces 的语义是「当前配置快照」,
+      而非 GatewayServer 进程内经过 load_all_tools mutation 的运行时副本
+      (mutation 写在 get_interfaces 自己内部, 不应泄漏到 /api/config)。
+    - 测试 fixture 用 monkeypatch.setattr(GATEWAY_CONFIG_PATH, …) 时必须
+      看到自己写入的 yaml, 否则断言拿不到期望的 upstream。
 
-    不缓存: mutation 是不可重入的 (load_all_tools 写回 upstream_tool_mapping),
-    缓存会让 mutation 跨调用泄漏到 /api/config 返回值。下游 get_interfaces
-    自己有 5s 缓存, 这里没必要再缓存。
+    不缓存: 见上面的「每次现取现读盘」理由。
     """
-    # 1. 优先复用 GatewayServer 注入的 config (运行态 + mutation 完整)
-    if _INJECTED and _GW_CFG is not None:
-        return _mask_config_secrets({**_GW_CFG})
-
-    # 2. Standalone 模式 (无 gateway server): 从盘上重新加载
     config_path = Path(GATEWAY_CONFIG_PATH)
     if not config_path.exists():
         return {}

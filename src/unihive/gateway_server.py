@@ -79,6 +79,39 @@ def _read_gateway_version() -> str:
     return "unknown"
 
 
+def _parse_mootdx2_servers(raw_servers: list) -> list:
+    """解析 upstreams.yaml mootdx2.servers → ServerConfig 列表。
+
+    mootdx2 的 server= 参数内部用 ipaddress.ip_address 校验, 只接受 IP
+    字面量 (不支持域名), 这里在系统边界提前 fail fast, 避免启动后首次
+    请求才报 "Server 格式错误"。
+
+    Raises:
+        ValueError: host 非 IP 字面量或 port 越界。
+    """
+    import ipaddress
+
+    from .models.mootdx2_config import ServerConfig
+
+    servers: list[ServerConfig] = []
+    for idx, item in enumerate(raw_servers):
+        host = str(item.get("host", "")).strip()
+        try:
+            ipaddress.ip_address(host)
+        except ValueError as e:
+            raise ValueError(
+                f"upstreams.mootdx2.servers[{idx}].host='{host}' 非法: "
+                f"mootdx2 只接受 IP 字面量, 不支持域名 ({e})"
+            ) from e
+        port = int(item.get("port", 7709))
+        if not 1 <= port <= 65535:
+            raise ValueError(
+                f"upstreams.mootdx2.servers[{idx}].port={port} 越界 (1-65535)"
+            )
+        servers.append(ServerConfig(host=host, port=port))
+    return servers
+
+
 GATEWAY_VERSION = _read_gateway_version()
 
 
@@ -369,9 +402,15 @@ class GatewayServer:
                     from .models.mootdx2_config import MooTDX2Settings
 
                     # tdxdir 为空时让 mootdx2 自动探测 C:/new_tdx
+                    pinned_servers = _parse_mootdx2_servers(cfg.get("servers") or [])
                     mootdx2_settings = MooTDX2Settings(
                         market=cfg.get("market", "std"),
                         tdxdir=cfg.get("tdxdir", ""),
+                        servers=pinned_servers,
+                        # 指定了服务器就关闭 bestip 全网测速, 固定连配置的 IP
+                        auto_select_fastest_server=not pinned_servers,
+                        connect_timeout_seconds=cfg.get("connect_timeout_seconds", 3),
+                        read_timeout_seconds=cfg.get("read_timeout_seconds", 5),
                     )
                     mootdx2_cfg = MooTDX2Config(
                         name=name,
@@ -462,8 +501,9 @@ class GatewayServer:
                 upstreams=self.upstreams,
                 routing_config=self.config.get("routing", {}),
                 upstream_tool_mapping=self.config.get("upstream_tool_mapping", {}),
-                per_upstream_timeout=self._per_upstream_timeout,
+                per_upstream_timeout=getattr(self, "_per_upstream_timeout", None),
                 proxy_settings=proxy_settings,
+                tool_specs=tool_specs,
             )
 
             # Store proxy_settings on self for proxy_api handlers to mutate later
@@ -800,6 +840,62 @@ class GatewayServer:
             if isinstance(client, OmniClient):
                 return client
         return None
+
+    async def _health_check_loop(self) -> None:
+        """异步 health check 循环: 每个 tick 并行探活所有 upstream,
+        慢 client 不会阻塞其它 client 的探活 (每个 client.health_check()
+        单独包 asyncio.wait_for(timeout=_health_check_timeout))。
+
+        测试 fixture 用 asyncio.create_task(server._health_check_loop()) 启动,
+        通过 server._shutdown_event.set() 立刻唤醒。生产中该方法被 stop() 在
+        同一 event 上 set 之后 0 延迟退出。
+
+        顺序: 立刻探活一次, 然后等下一个 tick (30s) 或 shutdown 信号 —
+        启动后第一次探活不应等满 30s, 否则刚连上 gateway 的 client 在第一个
+        tick 内健康状态不会被记录。
+        """
+        while self._running:
+            # 先探活一次 (进入循环立刻跑, 不等 30s tick)
+            await self._probe_upstreams_once()
+            try:
+                # 等下一个 tick (30s) 或 shutdown 信号
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=30.0,
+                )
+                # 被 set() 唤醒 → 退出
+                return
+            except asyncio.TimeoutError:
+                # 30s tick 到了, 继续下一轮 (再次先探活再等)
+                continue
+
+    async def _probe_upstreams_once(self) -> None:
+        """并行调用每个 upstream 的 health_check(), 慢/挂的 client 不会
+        阻塞其它 client 的探活 (每个调用单独包 asyncio.wait_for)。"""
+        if not self.upstreams:
+            return
+
+        async def _probe_one(client) -> None:
+            try:
+                await asyncio.wait_for(
+                    client.health_check(),
+                    timeout=self._health_check_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[health_check] {getattr(client, 'name', '?')} timed out "
+                    f"after {self._health_check_timeout}s"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[health_check] {getattr(client, 'name', '?')} raised: {e}"
+                )
+
+        # 并行执行: 慢/挂的 client 不会拖住其它 client
+        await asyncio.gather(
+            *(_probe_one(c) for c in self.upstreams.values()),
+            return_exceptions=False,
+        )
 
     async def start(self):
         # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并

@@ -41,7 +41,7 @@ class TestPortConflictTriggersStop:
         Post-fix: port probe + sys.exit(2) 都在 outer try/finally 里,
         stop() 在 finally 兜底。
         """
-        from src import gateway_server as gs
+        from src.unihive import gateway_server as gs
 
         # 占住端口
         s = socket.socket()
@@ -405,7 +405,13 @@ class TestWaiterCountedInActiveRequests:
         server = gateway_server_minimal
         server.cache = cache
         server.router = GatedRouter()
-        server.config = {"cache": {"ttl": {"test_key": 60}}}
+        # upstream_tool_mapping 必须包含远程 HTTP 源, 否则 chain_has_remote_http()
+        # 返回 False, 单飞不触发, 5 个并发请求各自调用 router.route, leader/waiter
+        # 行为无法体现 (M2 验收的 single-flight 前提)。
+        server.config = {
+            "cache": {"ttl": {"test_key": 60}},
+            "upstream_tool_mapping": {"t": {"fuyao_ashare": "get_a_share_prices_snapshot"}},
+        }
 
         try:
             # 启动 5 个并发同 key 请求 (后台, 不等)

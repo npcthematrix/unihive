@@ -3,24 +3,39 @@ from unittest.mock import patch
 
 
 def test_get_interfaces_returns_140_tools():
-    """Regression: /api/interfaces returns 140 tools.
+    """Regression: /api/interfaces returns the expected tool surface.
 
     History: 148 -> 147 -> 140 (indicator cleanup) -> 139 (trade_history_full) -> 138
     (minute_trade_all) -> 140 (mootdx2 sector refactor: net +2 — added get_custom_sector_list
     and get_custom_sector_stocks; the 3 block→sector renames preserved count; tdx_quant
     codegen already contributed 8 sector-named tools independently — not introduced by
     this plan).
+
+    2026-09-14: tool surface grew to 202 (THSDK upstream +16 read-only + tdx_quant
+    sector/subscribe + fuyao fund补足 + omni). 真实数字以 config/upstreams.yaml +
+    config/tools_*.yaml 的 load_all_tools 输出为准, 此处只做下限检查 + 关键工具
+    存在性, 避免每次加 upstream 都要修测试。
     """
     import yaml
     config_path = "config/upstreams.yaml"
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_api.load_config", return_value=full_config):
+    with patch("src.unihive.utils.console_api.load_config", return_value=full_config):
         from src.unihive.utils.console_api import get_interfaces
         result = get_interfaces()
         tool_count = len(result["tools"])
-        assert tool_count == 143, f"Expected 143 tools, got {tool_count}"
+        # 下限: 历史最高 ~148, 现在 ≥ 150 才能保住 4 个上游 + tdx_quant + mootdx2 + omni + thsdk
+        assert tool_count >= 150, f"Expected at least 150 tools, got {tool_count}"
+        # 关键工具必须存在 (避免上游删减把核心工具删了)
+        names = {t["name"] for t in result["tools"]}
+        for must_have in (
+            "a_share_prices_snapshot",
+            "a_share_financials_indicators",
+            "meta_tickers_list",
+            "fund_profile_detail",
+        ):
+            assert must_have in names, f"Core tool {must_have!r} missing from /api/interfaces"
 
 
 def test_merged_tool_specs_have_unique_names():
@@ -51,7 +66,7 @@ def test_get_interfaces_enriches_with_generated_tools():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_api.load_config", return_value=full_config):
+    with patch("src.unihive.utils.console_api.load_config", return_value=full_config):
         from src.unihive.utils.console_api import get_interfaces
         result = get_interfaces()
         tool_names = {t["name"] for t in result["tools"]}
@@ -66,7 +81,7 @@ def test_get_interfaces_includes_cache_ttl_seconds():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_api.load_config", return_value=full_config):
+    with patch("src.unihive.utils.console_api.load_config", return_value=full_config):
         from src.unihive.utils.console_api import get_interfaces
         result = get_interfaces()
         # Find a tool with cache_ttl_key configured
@@ -86,7 +101,7 @@ def test_get_interfaces_includes_routing():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_api.load_config", return_value=full_config):
+    with patch("src.unihive.utils.console_api.load_config", return_value=full_config):
         from src.unihive.utils.console_api import get_interfaces
         result = get_interfaces()
         # Generated tools have routing keys
@@ -106,7 +121,7 @@ def test_get_interfaces_includes_chain():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_api.load_config", return_value=full_config):
+    with patch("src.unihive.utils.console_api.load_config", return_value=full_config):
         from src.unihive.utils.console_api import get_interfaces
         result = get_interfaces()
 
@@ -137,7 +152,7 @@ def test_get_interfaces_chain_matches_router_for_explicit_chain_tools():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_api.load_config", return_value=full_config):
+    with patch("src.unihive.utils.console_api.load_config", return_value=full_config):
         result = get_interfaces()
 
     by_name = {t["name"]: t for t in result["tools"]}
@@ -163,7 +178,7 @@ def test_get_interfaces_includes_full_params():
     with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
-    with patch("src.console_api.load_config", return_value=full_config):
+    with patch("src.unihive.utils.console_api.load_config", return_value=full_config):
         from src.unihive.utils.console_api import get_interfaces
         result = get_interfaces()
         # Find a tool with params
@@ -208,7 +223,7 @@ def test_get_upstreams_includes_description():
             "last_error": None,
         }
 
-    with patch("src.console_api._probe_upstream", side_effect=fake_probe):
+    with patch("src.unihive.utils.console_api._probe_upstream", side_effect=fake_probe):
         result = get_upstream_status()
 
     for name, info in result.get("upstreams", {}).items():
@@ -217,33 +232,54 @@ def test_get_upstreams_includes_description():
 
 
 def test_console_html_uses_upstream_description():
-    """Regression: console.html onboarding must fetch /api/upstreams and prefer description.
+    """Regression: console.html + console.js onboarding must fetch /api/upstreams
+    and prefer description over GROUP_META fallback.
 
     Without this, onboarding cards fall back to GROUP_META forever — re-introducing
     the rot problem this spec solved.
+
+    Note: console.html is the thin SPA shell that loads console.js; the actual
+    fetch + descByName logic lives in console.js.
     """
     html_path = "console.html"
+    js_path = "static/console/console.js"
     with open(html_path, encoding="utf-8") as f:
         html = f.read()
+    with open(js_path, encoding="utf-8") as f:
+        js = f.read()
 
-    assert "/api/status" in html, "console.html must fetch /api/status for upstream descriptions"
-    assert "descByName" in html, "console.html must build descByName map from upstream description"
+    # console.html must reference the JS bundle so the runtime code is loaded.
+    assert "/static/console/console.js" in html, (
+        "console.html must load /static/console/console.js"
+    )
+    # console.js must fetch /api/status and build descByName map.
+    assert "/api/status" in js, (
+        "console.js must fetch /api/status for upstream descriptions"
+    )
+    assert "descByName" in js, (
+        "console.js must build descByName map from upstream description"
+    )
 
 
 def test_console_html_routes_section_uses_chain_label():
-    """Regression: console.html must label the routing walk order as 'Chain', not 'Fallback'.
+    """Regression: console.js must label the routing walk order as 'Chain', not 'Fallback'.
 
     Pre-fix: label was 'Fallback' but data was an unfiltered priority-sorted list —
     mismatched with src/router.py behavior.
+
+    Note: the label is rendered dynamically by console.js; console.html just
+    holds the static scaffolding.
     """
-    html_path = "console.html"
-    with open(html_path, encoding="utf-8") as f:
-        html = f.read()
+    js_path = "static/console/console.js"
+    with open(js_path, encoding="utf-8") as f:
+        js = f.read()
 
     # The interface detail panel must use Chain as the key label
-    assert "Fallback" not in html or html.count("Fallback") == html.count("Chain"), (
-        "console.html still uses 'Fallback' label for routing walk order; "
+    assert "Fallback" not in js or js.count("Fallback") == js.count("Chain"), (
+        "console.js still uses 'Fallback' label for routing walk order; "
         "should be 'Chain' to match src/router.py behavior"
     )
     # Sanity: at least one Chain label exists for routing
-    assert ">Chain<" in html, "console.html missing 'Chain' label for routing section"
+    assert ">Chain<" in js or '"Chain"' in js or "'Chain'" in js, (
+        "console.js missing 'Chain' label for routing section"
+    )
