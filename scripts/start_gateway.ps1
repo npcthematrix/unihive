@@ -57,7 +57,7 @@ Write-Host ""
 
 # Start Python gateway server
 if ($Transport -eq "stdio") {
-    python -m src.gateway_server --transport stdio
+    python -m src.unihive.gateway_server --transport stdio
 } else {
-    python -m src.gateway_server --transport http --port $GatewayPort
+    python -m src.unihive.gateway_server --transport http --port $GatewayPort
 }
