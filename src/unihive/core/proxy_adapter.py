@@ -10,6 +10,19 @@ Usage:
         result = await tdx_client.call_tool(tdx_tool, params)
         if result.success:
             return normalizer(result.data), "tdx_quant"
+
+Mapping caveat (2026-09-14 audit):
+    Initial commit c83090b mapped `get_batch_quote` → `get_security_snapshot`
+    and `get_minute_data` → `get_minute_time_data`. Neither method exists
+    in `skills/SKILL.md` (tqcenter contract v1.0.12) or
+    `config/tools_tdx_quant.yaml` (54 tools, generated from SKILL.md).
+    SKILL.md only declares:
+      - single-stock snapshot:  get_market_snapshot(stock_code: str)
+      - K-line / minute:        get_market_data(stock_list, period, count)
+                                with period ∈ {1m, 5m, 15m, 30m, 1h, 1d, 1w}
+    Fix: reuse those two methods. If the real installed `tqcenter.py`
+    rejects `get_market_snapshot(stock_list=[...])` (multi-code variant),
+    revisit this mapping or update tqcenter.
 """
 from __future__ import annotations
 
@@ -31,12 +44,12 @@ class Mootdx2ToTdxQuantAdapter:
 
     TOOL_MAP: dict[str, str] = {
         "get_quote": "get_market_snapshot",
-        "get_batch_quote": "get_security_snapshot",
+        "get_batch_quote": "get_market_snapshot",   # multi-code: stock_list=[...]
         "get_kline": "get_market_data",
         "get_index_kline": "get_market_data",
         "get_index_all": "get_market_data",
         "get_index_bars": "get_market_data",
-        "get_minute_data": "get_minute_time_data",
+        "get_minute_data": "get_market_data",       # period='1m', stock_list=[code]
     }
 
     PERIOD_MAP: dict[str, str] = {
@@ -70,23 +83,25 @@ class Mootdx2ToTdxQuantAdapter:
             )
 
         tdx_tool = self.TOOL_MAP[mootdx2_tool]
-        if tdx_tool == "get_market_snapshot":
+
+        # get_market_snapshot is reused by both get_quote (single) and
+        # get_batch_quote (multi-code via stock_list). Disambiguate by
+        # source tool name, not just target.
+        if tdx_tool == "get_market_snapshot" and mootdx2_tool == "get_quote":
             tdx_params = self._adapt_get_quote(params)
-            normalizer = _identity
-        elif tdx_tool == "get_security_snapshot":
-            tdx_params = self._adapt_get_batch_quote(params)
-            normalizer = _identity
+        elif tdx_tool == "get_market_snapshot" and mootdx2_tool == "get_batch_quote":
+            tdx_params = self._adapt_get_batch_quote_to_snapshot(params)
+        elif tdx_tool == "get_market_data" and mootdx2_tool == "get_minute_data":
+            tdx_params = self._adapt_get_minute_data_to_market_data(params)
         elif tdx_tool == "get_market_data":
             tdx_params = self._adapt_get_kline(mootdx2_tool, params)
-            normalizer = _identity
-        elif tdx_tool == "get_minute_time_data":
-            tdx_params = self._adapt_get_minute_data(params)
-            normalizer = _identity
         else:
             raise ProxyAdapterError(
-                f"internal: unknown tdx_tool {tdx_tool!r}"
+                f"internal: unknown (mootdx2_tool, tdx_tool)="
+                f"({mootdx2_tool!r}, {tdx_tool!r})"
             )
 
+        normalizer = _identity
         return tdx_tool, tdx_params, normalizer
 
     # --- private param transformers ---
@@ -95,8 +110,16 @@ class Mootdx2ToTdxQuantAdapter:
         """get_quote(code) → get_market_snapshot(stock_code)."""
         return {"stock_code": params["code"]}
 
-    def _adapt_get_batch_quote(self, params: dict) -> dict:
-        """get_batch_quote(codes='A,B,C') → get_security_snapshot(stock_list=[A,B,C])."""
+    def _adapt_get_batch_quote_to_snapshot(self, params: dict) -> dict:
+        """get_batch_quote(codes='A,B,C') → get_market_snapshot(stock_list=[A,B,C]).
+
+        Caveat: SKILL.md's yaml spec for get_market_snapshot declares only
+        stock_code: str (single). This adapter assumes tqcenter.tq also
+        accepts stock_list for the multi-code form (consistent with how
+        get_market_data uses stock_list). If the real installed tqcenter
+        rejects stock_list here, the proxy will AttributeError on this
+        tool and fall back to mootdx2 (Round 10 audit's safety net).
+        """
         codes_raw = params.get("codes", "")
         if isinstance(codes_raw, list):
             stock_list = list(codes_raw)
@@ -123,9 +146,21 @@ class Mootdx2ToTdxQuantAdapter:
         }
         return out
 
-    def _adapt_get_minute_data(self, params: dict) -> dict:
-        """get_minute_data(code) → get_minute_time_data(stock_code)."""
-        return {"stock_code": params["code"]}
+    def _adapt_get_minute_data_to_market_data(self, params: dict) -> dict:
+        """get_minute_data(code) → get_market_data(stock_list=[code], period='1m', count=N).
+
+        mootdx2's get_minute_data defaults to ~240 1-minute bars per trading
+        day (4 hours × 60 minutes), so count=240 is the natural default.
+        tdx_quant's count semantics: "距 end_time 最近 n 条"; without a count
+        the server may return the full historical minute series.
+        """
+        code = params["code"]
+        count = int(params.get("count", 240))
+        return {
+            "stock_list": [code],
+            "period": "1m",
+            "count": count,
+        }
 
 
 def _identity(x: Any) -> Any:
