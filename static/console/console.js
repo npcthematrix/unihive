@@ -1869,3 +1869,73 @@
         init();
     }
 })();
+
+// === 代理设置 (proxy settings) ===
+// 注意: 此 IIFE 必须放在 console.js 末尾, 因为依赖 fetchJSON (console.js 内
+// 定义)。之前在 console.html 内嵌 script 块时, 内嵌 script 先于 defer 的
+// console.js 执行, 导致 fetchJSON 未定义, ReferenceError 被静默 catch,
+// 覆盖范围表格 tbody 永远空着 — 用户看到 "覆盖范围 (只读)" 标题 + 空表。
+(function initProxySettings() {
+    const toggle = document.getElementById('proxy-enabled-toggle');
+    const saveStatus = document.getElementById('proxy-save-status');
+    const tdxStatusEl = document.getElementById('proxy-tdx-status');
+    const coverageBody = document.getElementById('proxy-coverage-body');
+    if (!toggle) return;
+
+    function showSaveStatus(text, isError) {
+        saveStatus.textContent = text;
+        saveStatus.className = 'proxy-save-status' + (isError ? ' error' : '');
+        if (text) {
+            clearTimeout(saveStatus._hideTimer);
+            saveStatus._hideTimer = setTimeout(() => {
+                saveStatus.textContent = '';
+                saveStatus.className = 'proxy-save-status';
+            }, 2000);
+        }
+    }
+
+    async function load() {
+        tdxStatusEl.textContent = '加载中…';
+        tdxStatusEl.className = 'proxy-status-value';
+        try {
+            const resp = await fetchJSON('/api/proxy/settings');
+            if (!resp) return;
+            toggle.checked = resp.enabled;
+            tdxStatusEl.textContent = resp.tdx_quant_status;
+            tdxStatusEl.className = 'proxy-status-value ' + resp.tdx_quant_status;
+            coverageBody.innerHTML = resp.coverage.map(c =>
+                '<tr><td>' + c.mootdx2_tool + '</td><td>→</td><td>' + c.tdx_quant_tool + '</td></tr>'
+            ).join('');
+            toggle.disabled = (resp.tdx_quant_status === 'UNAVAILABLE');
+            toggle.title = toggle.disabled
+                ? 'TDX_QUANT 当前不可用, 启用代理也不会生效'
+                : '';
+        } catch (e) {
+            tdxStatusEl.textContent = '加载失败';
+            tdxStatusEl.className = 'proxy-status-value UNAVAILABLE';
+            console.error('load proxy settings failed:', e);
+        }
+    }
+
+    // 自动保存: toggle 改变即 PUT
+    toggle.addEventListener('change', async function() {
+        showSaveStatus('保存中…', false);
+        try {
+            await fetchJSON('/api/proxy/settings', {
+                method: 'PUT',
+                body: JSON.stringify({ enabled: toggle.checked }),
+            });
+            showSaveStatus('已保存', false);
+        } catch (e) {
+            showSaveStatus('保存失败: ' + e.message, true);
+        }
+    });
+
+    // 首次点击子标签时刷新 (覆盖 refreshAll 已触发的可能旧 cache)
+    const proxySubtab = document.querySelector('.cfg-subtab[data-cfg="proxy"]');
+    if (proxySubtab) {
+        proxySubtab.addEventListener('click', load);
+    }
+    // 立即加载一次, 即使子标签没被点过 (init 内部已经触发 refreshAll)
+    load();
+})();
