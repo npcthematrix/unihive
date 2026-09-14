@@ -232,54 +232,53 @@ def test_get_upstreams_includes_description():
 
 
 def test_console_html_uses_upstream_description():
-    """Regression: console.html + console.js onboarding must fetch /api/upstreams
-    and prefer description over GROUP_META fallback.
+    """Regression: StatusView + api/status must hit the upstream endpoint that
+    carries the upstream `description` field.
 
-    Without this, onboarding cards fall back to GROUP_META forever — re-introducing
-    the rot problem this spec solved.
-
-    Note: console.html is the thin SPA shell that loads console.js; the actual
-    fetch + descByName logic lives in console.js.
+    Predecessor (2026-09-08): this asserted console.js used descByName map to
+    prefer real upstream description over GROUP_META fallback. After the
+    2026-09-14 Vue migration, the data shape is still the contract (see
+    test_get_upstreams_includes_description above) — this test guards the
+    client side, i.e. that StatusView/api/status actually fetch from the
+    right endpoint instead of relying on a stale client cache or wrong path.
     """
-    html_path = "console.html"
-    js_path = "static/console/console.js"
-    with open(html_path, encoding="utf-8") as f:
-        html = f.read()
-    with open(js_path, encoding="utf-8") as f:
-        js = f.read()
+    status_view = open("web/src/views/StatusView.vue", encoding="utf-8").read()
+    status_api = open("web/src/api/status.ts", encoding="utf-8").read()
 
-    # console.html must reference the JS bundle so the runtime code is loaded.
-    assert "/static/console/console.js" in html, (
-        "console.html must load /static/console/console.js"
+    # api/status.ts must hit the status endpoint that carries upstream descriptions.
+    assert "/api/status" in status_api, (
+        "web/src/api/status.ts must call /api/status to obtain upstream info "
+        "including the description field."
     )
-    # console.js must fetch /api/status and build descByName map.
-    assert "/api/status" in js, (
-        "console.js must fetch /api/status for upstream descriptions"
-    )
-    assert "descByName" in js, (
-        "console.js must build descByName map from upstream description"
+    # StatusView consumes /api/status via the getStatus() wrapper.
+    assert "getStatus" in status_view, (
+        "StatusView.vue must call getStatus() to populate upstream rows. "
+        "If removed, the upstream table loses its data source."
     )
 
 
 def test_console_html_routes_section_uses_chain_label():
-    """Regression: console.js must label the routing walk order as 'Chain', not 'Fallback'.
+    """Regression: InterfacesView + api/interfaces must surface the routing
+    walk order (the `chain` field).
 
-    Pre-fix: label was 'Fallback' but data was an unfiltered priority-sorted list —
-    mismatched with src/router.py behavior.
-
-    Note: the label is rendered dynamically by console.js; console.html just
-    holds the static scaffolding.
+    Predecessor (2026-09-08): asserted console.js labeled routing walk order
+    as 'Chain' not 'Fallback'. After the 2026-09-14 Vue migration the
+    server-side `chain` field is still the contract (see
+    test_get_interfaces_includes_chain above) — this test guards the
+    client side, i.e. that InterfacesView reads the chain field by name
+    instead of the legacy `fallback_chain`.
     """
-    js_path = "static/console/console.js"
-    with open(js_path, encoding="utf-8") as f:
-        js = f.read()
+    interfaces_view = open("web/src/views/InterfacesView.vue", encoding="utf-8").read()
+    interfaces_api = open("web/src/api/interfaces.ts", encoding="utf-8").read()
 
-    # The interface detail panel must use Chain as the key label
-    assert "Fallback" not in js or js.count("Fallback") == js.count("Chain"), (
-        "console.js still uses 'Fallback' label for routing walk order; "
-        "should be 'Chain' to match src/router.py behavior"
+    # InterfacesView reads the chain field by name (NOT fallback_chain).
+    assert "fallback_chain" not in interfaces_view, (
+        "InterfacesView.vue still references legacy `fallback_chain` field. "
+        "The src/router.py contract is now `chain`; legacy field would silently "
+        "render no routing walk order."
     )
-    # Sanity: at least one Chain label exists for routing
-    assert ">Chain<" in js or '"Chain"' in js or "'Chain'" in js, (
-        "console.js missing 'Chain' label for routing section"
+    # The chain field must appear (consumed from interfaces API).
+    assert "chain" in interfaces_view or "chain" in interfaces_api, (
+        "Neither InterfacesView.vue nor web/src/api/interfaces.ts reference "
+        "the routing `chain` field. Routing walk order won't render."
     )

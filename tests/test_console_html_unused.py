@@ -1,143 +1,138 @@
-"""Regression tests for console.html + console.js dead-code removal.
+"""Regression + coverage tests for the Vue console surface.
 
-Ensures the cleanup pass on 2026-09-08 stays clean: previously unused
-CSS classes and JS functions must stay removed. If someone re-introduces
-dead code (e.g. pastes a function from history, copy-pastes an unused
-class from a template), this test catches it.
+2026-09-14 console rewrite: console.html is now a thin SPA shell (Vite-built
+index.html inlined) and console.js / console.css were archived. The console
+UI lives entirely in web/src/views/*.vue; these tests assert that surface is
+intact so a Vue view getting accidentally removed during refactor doesn't
+silently degrade the console.
 
-Note: as of 2026-09-14, console.html is a thin SPA shell (HTML scaffold
-+ CSS variables) and console.js holds the runtime JS. The function-name
-checks below target console.js, where the definitions actually live.
+Predecessor: test_console_html_unused.py (2026-09-08) which guarded dead-code
+removal in the old console.html + console.js. That file is replaced by this
+one now that the dead-code surface no longer exists.
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 CONSOLE_HTML = Path("console.html").read_text(encoding="utf-8")
-CONSOLE_JS = Path("static/console/console.js").read_text(encoding="utf-8")
+WEB_VIEWS = Path("web/src/views")
+WEB_API = Path("web/src/api")
+WEB_ROUTER = Path("web/src/router/index.ts")
 
-
-# Classes identified in the 2026-09-08 audit. Each was defined in
-# <style> but never referenced from the body or JS.
-DEAD_CSS_CLASSES = [
-    "badge-optional",
-    "badge-recommend",
-    "cache-stats",
-    "cfg-banner-icon",
-    "error-msg",
-    "hitrate-bar-fill",
-    "inv-source-toggles",
-    "json-block",
-    "stat-item",
-    "stat-label",
-]
-
-# JS functions identified in the audit. Defined but never called.
-DEAD_JS_FUNCTIONS = [
-    "formatLatency",
-    "formatPercent",
-    "syntaxHighlight",
+# 6 个路由视图 + LoginView (login 单独路径, 不计入主路由 children)。
+EXPECTED_VIEWS = [
+    "StatusView.vue",
+    "InterfacesView.vue",
+    "ConfigView.vue",
+    "OmniView.vue",
+    "GuidesView.vue",
+    "LoginView.vue",
 ]
 
 
-def _class_usage_count(cls: str) -> int:
-    """Count occurrences of `.cls` (CSS rule) or the literal token `cls`
-    anywhere in console.html. Used to detect 'class only defined, never
-    used' patterns.
-    """
-    # Word-boundary match on the class token — catches both .cls (CSS
-    # selector) and "cls" (HTML class="..." or JS string).
-    return len(re.findall(r"\b" + re.escape(cls) + r"\b", CONSOLE_HTML))
-
-
-class TestDeadCssClassesRemoved:
-    def test_dead_css_classes_not_present(self):
-        """Each class below should have ZERO occurrences in console.html.
-        If the regex matches, the dead class has been re-introduced.
-        """
-        reanimated = [c for c in DEAD_CSS_CLASSES if _class_usage_count(c) > 0]
-        assert reanimated == [], (
-            f"Dead CSS classes re-introduced in console.html: {reanimated}. "
-            f"These were removed in the 2026-09-08 cleanup."
-        )
-
-
-class TestDeadJsFunctionsRemoved:
-    def test_dead_js_functions_not_present(self):
-        """Each function below should have ZERO occurrences. We grep for
-        `function name(` to catch only top-level function definitions —
-        local vars named the same wouldn't match this regex.
-        """
-        reanimated = []
-        for name in DEAD_JS_FUNCTIONS:
-            pattern = r"\bfunction\s+" + re.escape(name) + r"\s*\("
-            if re.search(pattern, CONSOLE_HTML):
-                reanimated.append(name)
-        assert reanimated == [], (
-            f"Dead JS functions re-introduced in console.html: {reanimated}. "
-            f"These were removed in the 2026-09-08 cleanup."
-        )
-
-
-class TestConsoleHtmlStillFunctional:
-    """Sanity check: after dead-code removal, console.html still parses
-    and the live JS functions + used CSS classes still resolve."""
-
-    def test_console_html_loads(self):
-        # Trivial: just reading it shouldn't raise.
-        assert "UniHive Console" in CONSOLE_HTML
-        assert 'id="status"' in CONSOLE_HTML
-        assert 'id="interfaces"' in CONSOLE_HTML
-        assert 'id="config"' in CONSOLE_HTML
-        assert 'id="onboarding"' in CONSOLE_HTML
-
-    def test_active_panels_present(self):
-        # Some panels may have additional classes (e.g. "panel active"),
-        # so match on prefix.
-        panel_count = CONSOLE_HTML.count('class="panel')
-        assert panel_count >= 4, (
-            f"console.html should have 4 main panels (status, interfaces, "
-            f"config, onboarding); found {panel_count}"
-        )
-
-    def test_live_functions_still_present(self):
-        """Functions that ARE used must still be defined. If removal
-        accidentally took out a live function, the test catches it.
-
-        Note: as of 2026-09-14 the JS lives in static/console/console.js
-        (extracted from inline <script>); console.html is a thin shell.
-        """
-        live = [
-            "loadStatus",
-            "loadInterfaces",
-            "loadConfig",
-            "loadOnboarding",
-            "renderAll",
-            "renderUpstreamsTable",
-            "renderCache",
-            "renderCfgUpstreams",
-            "renderCfgMapping",
-            "renderCfgTools",
-            "renderCfgCache",
-            "escapeHtml",
-            "fetchJSON",
-            "formatTime",
-            "humanizeDuration",
-        ]
-        missing = [
-            f for f in live
-            if not re.search(r"\bfunction\s+" + re.escape(f) + r"\s*\(", CONSOLE_JS)
-        ]
+class TestVueViewSurface:
+    def test_all_main_views_present(self):
+        missing = [v for v in EXPECTED_VIEWS if not (WEB_VIEWS / v).is_file()]
         assert missing == [], (
-            f"Live JS function definitions missing from console.js: {missing}. "
-            f"The dead-code cleanup should not have removed these."
+            f"Vue view files missing: {missing}. "
+            f"If you renamed/removed a view, also update {WEB_ROUTER}."
         )
 
-    def test_console_html_loads_console_js(self):
-        """console.html must reference /static/console/console.js so the
-        runtime functions are actually executed in the browser."""
-        assert "/static/console/console.js" in CONSOLE_HTML, (
-            "console.html missing <script src=/static/console/console.js> — "
-            "the SPA shell cannot execute any of the live functions."
+    def test_views_subdirectories_intact(self):
+        """子组件目录: ConfigView 5 panel + OmniView 3 panel + GuidesView 2 panel。
+        任何子组件丢失都会让对应主视图渲染残缺, 这里给一个最低数量下限。
+        """
+        for subdir, min_count in [
+            ("config", 5),
+            ("omni", 3),
+            ("guides", 2),
+        ]:
+            files = list((WEB_VIEWS / subdir).glob("*.vue"))
+            assert len(files) >= min_count, (
+                f"web/src/views/{subdir}/ expected >= {min_count} .vue files, "
+                f"got {len(files)}: {[f.name for f in files]}"
+            )
+
+
+class TestConsoleHtmlIsThinShell:
+    """console.html 是 Vite 产物嵌入的薄壳, 不应再含任何内联业务代码。"""
+
+    def test_console_html_loads_vite_bundle(self):
+        assert "/static/console/assets/index-" in CONSOLE_HTML, (
+            "console.html missing reference to the Vite-built bundle "
+            "(/static/console/assets/index-*.{js,css}). "
+            "Run `cd web && npm run build` and let finalize-build.mjs "
+            "regenerate console.html."
         )
+
+    def test_console_html_has_no_inline_panels(self):
+        """旧的 id=status / id=interfaces / id=config / id=onboarding /
+        id=omni / id=ai-onboarding 全部下沉到 Vue 路由。
+        新 console.html 不应再含这些旧 panel 锚点 (否则说明旧版未拆完)。
+        """
+        for legacy_id in (
+            'id="status"',
+            'id="interfaces"',
+            'id="config"',
+            'id="onboarding"',
+            'id="ai-onboarding"',
+            'id="omni"',
+        ):
+            assert legacy_id not in CONSOLE_HTML, (
+                f"console.html still contains legacy panel {legacy_id!r}. "
+                f"This Vue migration replaces inline panels with hash routes."
+            )
+
+    def test_console_html_has_no_inline_script_business_logic(self):
+        """旧 console.html 不应有 <script> 块含旧 JS 业务符号 (loadStatus,
+        wireOnboarding, jumpToPanel 等)。 Vite bundle 走 <script type=module>
+        crossorigin, 不会被这里抓到 (regex 看 <script> 后紧接的源代码)。
+        """
+        bad_markers = [
+            "function loadStatus",
+            "function loadInterfaces",
+            "function wireOnboarding",
+            "function jumpToPanel",
+            "function loadOnboarding",
+        ]
+        leaked = [m for m in bad_markers if m in CONSOLE_HTML]
+        assert leaked == [], (
+            f"console.html still contains inline JS business logic: {leaked}. "
+            f"Migrate the corresponding logic into web/src/views/*.vue."
+        )
+
+
+class TestOldConsoleAssetsArchived:
+    """旧 console.js / console.css 必须已归档而非残留 (防止新版本误以为还在用)。"""
+
+    def test_old_console_js_archived(self):
+        archived = Path("archive/console-pre-vue-2026-09-14/console.js")
+        assert archived.is_file(), (
+            f"Old console.js not found at {archived}. The 2026-09-14 Vue "
+            f"migration should archive it before deleting static/console/console.js."
+        )
+        live = Path("static/console/console.js")
+        assert not live.is_file(), (
+            f"{live} still exists after the Vue migration; should be deleted."
+        )
+
+    def test_old_console_css_archived(self):
+        archived = Path("archive/console-pre-vue-2026-09-14/console.css")
+        assert archived.is_file(), (
+            f"Old console.css not found at {archived}. The 2026-09-14 Vue "
+            f"migration should archive it before deleting static/console/console.css."
+        )
+        live = Path("static/console/console.css")
+        assert not live.is_file(), (
+            f"{live} still exists after the Vue migration; should be deleted."
+        )
+
+
+class TestRouterWiresAllViews:
+    def test_router_has_all_6_routes(self):
+        router_src = WEB_ROUTER.read_text(encoding="utf-8")
+        for view in EXPECTED_VIEWS:
+            assert view in router_src, (
+                f"{view} not referenced in {WEB_ROUTER}. "
+                f"If you removed a view, also delete the route."
+            )
