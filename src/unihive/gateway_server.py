@@ -861,6 +861,10 @@ class GatewayServer:
 
         # Console API handlers (delegates to console_api.py)
         from .utils import console_api as _ca
+        from .utils.proxy_api import build_proxy_routes
+
+        def _proxy_routes():
+            return build_proxy_routes()
 
         async def _status_api(req: Request):
             return JSONResponse(_ca.get_upstream_status())
@@ -947,6 +951,7 @@ class GatewayServer:
                 Route("/console.html", _index_route),
                 Route("/api/status", _status_api),
                 *_ca.build_omni_routes(),
+                *_proxy_routes(),
                 Route("/api/interfaces", _interfaces_api),
                 Route("/api/config", _config_api),
                 Route("/health", _health_api),
