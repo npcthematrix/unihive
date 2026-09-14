@@ -64,12 +64,75 @@ export interface GatewayConfig {
   logging?: Record<string, LoggingValue>
   disable_dangerous?: boolean
   strict_registry?: boolean
+  /** FUYAO 嵌套 TTL — endpoint.default + 工具级 override */
+  fuyao_cache?: FuyaoCacheConfig
+  /** 乐观锁 hash (size+mtime), 提交 PUT 时回带 */
+  version?: string
   [key: string]: unknown
 }
 
 /** GET /api/config — 全量配置快照。 */
 export async function getConfig(): Promise<GatewayConfig> {
   const { data } = await http.get<GatewayConfig>('/api/config')
+  return data
+}
+
+// ---------------------------------------------------------------------------
+// /api/config/fuyao-cache — FUYAO 嵌套缓存 TTL (endpoint default + tool override)
+// ---------------------------------------------------------------------------
+
+/** 单个 endpoint 的 default + 工具级 override。 */
+export interface FuyaoEndpointConfig {
+  /** endpoint 级默认 TTL 秒数 (≥ 0) */
+  default: number
+  /** 工具级覆盖, 键为 MCP tool 名称 */
+  override?: Record<string, number>
+}
+
+/** 4 个固定 endpoint — 与后端 FUYAO_ENDPOINT_NAMES 对齐。 */
+export const FUYAO_ENDPOINT_KEYS = [
+  'fuyao_ashare',
+  'fuyao_index',
+  'fuyao_meta',
+  'fuyao_fund',
+] as const
+export type FuyaoEndpointKey = (typeof FUYAO_ENDPOINT_KEYS)[number]
+
+/** endpoint 中文标签 — 用于 UI 标题。 */
+export const FUYAO_ENDPOINT_TITLES: Record<FuyaoEndpointKey, string> = {
+  fuyao_ashare: 'A 股行情 (a-share)',
+  fuyao_index: 'A 股指数 (a-share-index)',
+  fuyao_meta: '跨市场元数据 (meta)',
+  fuyao_fund: '基金 (fund)',
+}
+
+export interface FuyaoCacheConfig {
+  endpoints?: Partial<Record<FuyaoEndpointKey, FuyaoEndpointConfig>>
+  version?: string
+}
+
+/** GET /api/config/fuyao-cache — 当前 FUYAO 嵌套 TTL 配置。 */
+export async function getFuyaoCache(): Promise<FuyaoCacheConfig> {
+  const { data } = await http.get<FuyaoCacheConfig>('/api/config/fuyao-cache')
+  return data
+}
+
+/** PUT /api/config/fuyao-cache — 写入 FUYAO 嵌套 TTL, 附带乐观锁 version。
+
+  Returns:
+    { fuyao_cache, version } — 新 version 必须让前端更新本地 state。
+  Throws:
+    409 (version_conflict) — 前端应提示刷新后重试
+    400 (validation_failed) — payload 校验失败, 含后端 message
+*/
+export async function saveFuyaoCache(
+  payload: FuyaoCacheConfig,
+  version: string,
+): Promise<{ fuyao_cache: FuyaoCacheConfig; version: string }> {
+  const { data } = await http.put<{ fuyao_cache: FuyaoCacheConfig; version: string }>(
+    '/api/config/fuyao-cache',
+    { fuyao_cache: payload, version },
+  )
   return data
 }
 

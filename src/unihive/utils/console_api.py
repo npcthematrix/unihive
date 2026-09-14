@@ -185,7 +185,104 @@ def load_config() -> dict:
         logger.warning(f"Shared config loader failed ({e}), falling back to raw YAML")
         with open(config_path, encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
-    return _mask_config_secrets({**config})
+
+    masked = _mask_config_secrets({**config})
+    # 乐观锁 version: 用两 yaml 文件 size+mtime 算一个轻量 hash。
+    # 客户端提交时附带 version, 后端 PUT 检测到不匹配 → 409。
+    # 故意不带内容 hash: 内容大且每次脱敏都生成新 dict, 用文件元信息足够。
+    masked["version"] = _compute_config_version()
+    return masked
+
+
+def _compute_config_version() -> str:
+    """两 yaml 文件 (size, mtime) 的 sha256, 用于乐观锁。
+
+    元信息变更即视为版本变更 — 与 GET / PUT 走的文件完全一致。
+    """
+    import hashlib
+
+    files = [Path(GATEWAY_CONFIG_PATH), Path(GATEWAY_CONFIG_PATH).parent / "config.yaml"]
+    parts: list[str] = []
+    for p in files:
+        try:
+            stat = p.stat()
+            parts.append(f"{p.name}:{stat.st_size}:{int(stat.st_mtime)}")
+        except OSError:
+            parts.append(f"{p.name}:missing")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# FUYAO cache 配置读写 (嵌套 mapping)
+# ---------------------------------------------------------------------------
+
+
+def get_fuyao_cache() -> dict:
+    """读取 fuyao_cache 段, 不存在返回默认值。"""
+    config = load_config()
+    fc = config.get("fuyao_cache")
+    if isinstance(fc, dict):
+        return fc
+    # 返回空 + version, 让前端进入空态
+    return {"endpoints": {}, "version": config.get("version", "")}
+
+
+def save_fuyao_cache(payload: dict, *, expected_version: str | None = None) -> dict:
+    """写入 fuyao_cache 段到 upstreams.yaml。
+
+    - 只覆盖 fuyao_cache 子树, 其他顶层段 (upstreams / cache / tools / ...)
+      原样保留
+    - 启动期 config.yaml 已合并进 upstreams.yaml 的内容, 此处直接改 upstreams.yaml
+    - expected_version 与当前文件 version 不一致 → 抛 VersionConflict
+    """
+    from pydantic import ValidationError
+
+    from ..models.fuyao_cache import FuyaoCacheConfig
+
+    try:
+        new_cfg = FuyaoCacheConfig.model_validate(payload)
+    except ValidationError as e:
+        raise ValueError(f"fuyao_cache 校验失败: {e}") from e
+
+    # 乐观锁
+    current_version = _compute_config_version()
+    if expected_version and expected_version != current_version:
+        raise VersionConflict(
+            f"config 版本不一致 (expected={expected_version}, current={current_version}); "
+            "请刷新页面后重试"
+        )
+
+    config_path = Path(GATEWAY_CONFIG_PATH)
+    with open(config_path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    raw["fuyao_cache"] = {
+        "endpoints": {
+            name: {
+                "default": ep.default,
+                "override": dict(ep.override),
+            }
+            for name, ep in new_cfg.endpoints.items()
+        }
+    }
+    # 用 default_flow_style=False 保持块格式; sort_keys=False 保留 key 顺序
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+    # 失效 in-memory 缓存 (interfaces 30s cache / mcp-tools)
+    _interfaces_cache.clear()
+    _mcp_tools_cache.clear()
+    # 触发 fuyao 客户端下次拿新 TTL: 不直接 reload (Gateway 进程内配置不动),
+    # 让运维重启生效 — 与 CachePanel banner "需重启网关" 一致。
+
+    return {
+        "fuyao_cache": raw["fuyao_cache"],
+        "version": _compute_config_version(),
+    }
+
+
+class VersionConflict(Exception):
+    """PUT 时客户端 version 与服务端不一致。"""
 
 
 # ---------------------------------------------------------------------------

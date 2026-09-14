@@ -22,6 +22,68 @@ def ttl_for(config: dict, ttl_key: str) -> int | None:
     return ttl.get(ttl_key)
 
 
+def get_fuyao_endpoint_for_tool(config: dict, tool_name: str) -> str | None:
+    """根据 upstream_tool_mapping 查 tool_name 属于哪个 fuyao endpoint。
+
+    仅当 routing chain 上**唯一**上游是 fuyao_* 才返回 endpoint 名字 —
+    多个上游混合时返回 None, 走 ttl_key 全局, 避免给非 fuyao 工具强加
+    fuyao_cache TTL。
+
+    Returns:
+        endpoint name (如 "fuyao_ashare") 或 None。
+    """
+    if not tool_name:
+        return None
+    mapping = config.get("upstream_tool_mapping") or {}
+    chain = mapping.get(tool_name)
+    if not isinstance(chain, dict) or not chain:
+        return None
+    upstream_names = [name for name in chain.keys() if name]
+    fuyao_only = [n for n in upstream_names if n.startswith("fuyao_")]
+    if not fuyao_only or len(fuyao_only) != len(upstream_names):
+        return None
+    # 优先取 chain 顺序首位 (主路由)
+    return fuyao_only[0]
+
+
+def fuyao_ttl_for(
+    config: dict,
+    tool_name: str,
+    *,
+    endpoint: str | None = None,
+) -> int | None:
+    """FUYAO 嵌套配置 TTL 查询。命中顺序：
+
+    1. fuyao_cache.endpoints[endpoint].override[tool_name]  (工具级 override)
+    2. fuyao_cache.endpoints[endpoint].default             (endpoint 级默认)
+    3. None — 调用方应回退到 ttl_for(cache.ttl[ttl_key])
+
+    Args:
+        config: 已加载的 gateway 配置 (含 fuyao_cache / upstream_tool_mapping)
+        tool_name: MCP tool 名称 (gateway 层, 非 routing_key)
+        endpoint: 可选 — 外部已查到时直接传入, 节省一次 mapping 查询
+
+    Returns:
+        秒数 (含 0 表示「不缓存」) 或 None (未配置任何 fuyao endpoint TTL)
+    """
+    if endpoint is None:
+        endpoint = get_fuyao_endpoint_for_tool(config, tool_name)
+    if not endpoint:
+        return None
+    fuyao_cache = config.get("fuyao_cache") or {}
+    endpoints = fuyao_cache.get("endpoints") or {}
+    ep_cfg = endpoints.get(endpoint)
+    if not isinstance(ep_cfg, dict):
+        return None
+    override = ep_cfg.get("override") or {}
+    if tool_name in override:
+        return int(override[tool_name])
+    default = ep_cfg.get("default")
+    if default is None:
+        return None
+    return int(default)
+
+
 def is_fuyao_source(source: str | None) -> bool:
     """是否远程同花顺 HTTP 源：仅以 fuyao_ 开头（myfuyao_xx 不算）。
 

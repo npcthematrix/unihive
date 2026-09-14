@@ -577,7 +577,12 @@ class GatewayServer:
             # 顶层循环依赖。
             from .core import cache_strategy
 
-            ttl = cache_strategy.ttl_for(self.config, ttl_key) if ttl_key else None
+            # FUYAO 嵌套 TTL 优先于全局 cache.ttl[ttl_key] — 前端可按 endpoint
+            # / 工具粒度覆盖。若 fuyao_cache 未配置, 回退到 ttl_key 全局。
+            fuyao_ttl = cache_strategy.fuyao_ttl_for(self.config, name)
+            ttl = fuyao_ttl if fuyao_ttl is not None else (
+                cache_strategy.ttl_for(self.config, ttl_key) if ttl_key else None
+            )
             cache_enabled = self.cache is not None and self.cache.enabled
             # 候选路由链（与 Router.route 解析顺序一致）：显式 routing.chain
             # 优先，否则从 upstream_tool_mapping 推导。
@@ -975,6 +980,30 @@ class GatewayServer:
         async def _config_api(req: Request):
             return JSONResponse(_ca.load_config())
 
+        async def _fuyao_cache_get_api(req: Request):
+            return JSONResponse(_ca.get_fuyao_cache())
+
+        async def _fuyao_cache_put_api(req: Request):
+            body = await req.json()
+            payload = body.get("fuyao_cache") or {}
+            expected_version = body.get("version")
+            try:
+                result = _ca.save_fuyao_cache(
+                    payload,
+                    expected_version=expected_version,
+                )
+            except _ca.VersionConflict as e:
+                return JSONResponse(
+                    {"error": "version_conflict", "message": str(e)},
+                    status_code=409,
+                )
+            except ValueError as e:
+                return JSONResponse(
+                    {"error": "validation_failed", "message": str(e)},
+                    status_code=400,
+                )
+            return JSONResponse(result)
+
         async def _health_api(req: Request):
             return JSONResponse(_ca.get_health())
 
@@ -1054,6 +1083,8 @@ class GatewayServer:
                 *_proxy_routes(),
                 Route("/api/interfaces", _interfaces_api),
                 Route("/api/config", _config_api),
+                Route("/api/config/fuyao-cache", _fuyao_cache_get_api),
+                Route("/api/config/fuyao-cache", _fuyao_cache_put_api, methods=["PUT"]),
                 Route("/health", _health_api),
                 Route("/api/mcp-tools-list", _mcp_tools_api),
             ]

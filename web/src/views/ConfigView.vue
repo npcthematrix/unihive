@@ -59,7 +59,7 @@
       </button>
     </nav>
 
-    <!-- 5 个 panel, 切换只显示 active -->
+    <!-- 6 个 panel, 切换只显示 active -->
     <div v-loading="loading && !config" class="cfg-panel-stack">
       <section
         v-show="activeTab === 'upstreams'"
@@ -105,6 +105,18 @@
           @change="onProxyChange"
         />
       </section>
+
+      <section
+        v-show="activeTab === 'fuyaoCache'"
+        class="cfg-panel"
+        aria-labelledby="cfg-tab-fuyao-cache"
+      >
+        <FuyaoCachePanel
+          :fuyao-cache="config?.fuyao_cache"
+          :config-version="config?.version || ''"
+          @saved="onFuyaoCacheSaved"
+        />
+      </section>
     </div>
   </el-card>
 </template>
@@ -126,6 +138,7 @@ import MappingPanel from './config/MappingPanel.vue'
 import ToolsPanel from './config/ToolsPanel.vue'
 import CachePanel from './config/CachePanel.vue'
 import ProxyPanel from './config/ProxyPanel.vue'
+import FuyaoCachePanel from './config/FuyaoCachePanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -166,6 +179,16 @@ const mappingCount = computed(() => Object.keys(config.value?.upstream_tool_mapp
 const toolsCount = computed(() => (config.value?.tools || []).length)
 const ttlCount = computed(() => Object.keys(config.value?.cache?.ttl || {}).length)
 const coverageCount = computed(() => proxy.value?.coverage?.length ?? 0)
+/** FUYAO 嵌套 TTL 计数: 全部 endpoint 的 override 总条数; 0 个显示 0。 */
+const fuyaoOverrideCount = computed(() => {
+  const endpoints = config.value?.fuyao_cache?.endpoints
+  if (!endpoints) return 0
+  let n = 0
+  for (const ep of Object.values(endpoints)) {
+    n += Object.keys(ep?.override || {}).length
+  }
+  return n
+})
 
 const TABS = computed(() => [
   { key: 'upstreams' as const, title: TAB_TITLES.upstreams, count: upstreamsCount.value },
@@ -173,6 +196,7 @@ const TABS = computed(() => [
   { key: 'tools' as const, title: TAB_TITLES.tools, count: toolsCount.value },
   { key: 'cache' as const, title: TAB_TITLES.cache, count: ttlCount.value },
   { key: 'proxy' as const, title: TAB_TITLES.proxy, count: coverageCount.value },
+  { key: 'fuyaoCache' as const, title: TAB_TITLES.fuyaoCache, count: fuyaoOverrideCount.value },
 ])
 
 async function loadProxy() {
@@ -210,6 +234,17 @@ async function load(isManual = false) {
 
 function onProxyChange(updated: ProxySettings) {
   proxy.value = updated
+}
+
+/** FUYAO 缓存保存成功 — 把新 fuyao_cache 与 version 回写到本地 config。 */
+function onFuyaoCacheSaved(payload: { fuyao_cache: NonNullable<GatewayConfig['fuyao_cache']>; version: string }) {
+  if (config.value) {
+    config.value = {
+      ...config.value,
+      fuyao_cache: payload.fuyao_cache,
+      version: payload.version,
+    }
+  }
 }
 
 const refreshLabel = computed(() => {
