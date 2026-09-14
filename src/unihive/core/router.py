@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..api.upstream_client import ToolResult, UpstreamClient
+from .proxy_adapter import Mootdx2ToTdxQuantAdapter, ProxyAdapterError
+from .proxy_settings import ProxySettings
 from .rate_limiter import AsyncTokenBucketLimiter, get_default_limiter
 
 if TYPE_CHECKING:
@@ -56,6 +58,7 @@ class Router:
         upstream_tool_mapping: dict[str, dict[str, str]] | None = None,
         per_upstream_timeout: float | None = None,
         limiter: AsyncTokenBucketLimiter | None = None,
+        proxy_settings: ProxySettings | None = None,
     ):
         self.upstreams = upstreams
         self.routing_config = routing_config
@@ -75,6 +78,11 @@ class Router:
         # 不传则用进程默认单例 (20 QPS / 桶 40)。本地上游 (mootdx2/tdx_quant/
         # omni) 不需要限流，但走同一接口也无害（桶大从不阻塞）。
         self.limiter = limiter or get_default_limiter()
+        # Proxy: when enabled, route 7 行情类 mootdx2 tools through tdx_quant
+        # first, falling back to mootdx2 on tdx failure. Optional — when not
+        # provided, proxy is disabled and routing behavior is unchanged.
+        self.proxy_settings = proxy_settings
+        self._proxy_adapter = Mootdx2ToTdxQuantAdapter()
 
     def _get_routing_chain(self, gateway_tool: str) -> list[str]:
         """获取路由链"""
@@ -106,6 +114,11 @@ class Router:
         """
         hops: list[RouteHop] = []
         start_time = time.time()
+
+        # Proxy attempt: enabled + tdx 健康 + tool 在 TOOL_MAP 时, 先试 tdx_quant
+        proxy_result = await self._try_proxy(gateway_tool, params, start_time)
+        if proxy_result is not None:
+            return proxy_result
 
         # 确定路由链
         if force_source:
@@ -244,3 +257,68 @@ class Router:
             source=None,
             hops=hops,
         )
+
+    async def _try_proxy(
+        self,
+        gateway_tool: str,
+        params: dict[str, Any],
+        start_time: float,
+    ) -> RouteResult | None:
+        """Try TDX_QUANT first when proxy enabled. None = not attempted; RouteResult = handled."""
+        if self.proxy_settings is None:
+            return None
+        if not self.proxy_settings.is_enabled():
+            return None
+        if not self._proxy_adapter.supports(gateway_tool):
+            return None
+
+        tdx_client = self.upstreams.get("tdx_quant")
+        if tdx_client is None or not tdx_client.is_available:
+            return None  # 降级到原 chain
+
+        try:
+            tdx_tool, tdx_params, normalizer = self._proxy_adapter.adapt(
+                gateway_tool, params
+            )
+        except ProxyAdapterError:
+            return None  # 兜底走原 chain
+
+        hop_start = time.time()
+        try:
+            result = await asyncio.wait_for(
+                tdx_client.call_tool(tdx_tool, tdx_params),
+                timeout=self._per_upstream_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[{gateway_tool}] proxy tdx_quant call_tool timed out, "
+                f"falling back to chain"
+            )
+            return None
+
+        hop = RouteHop(
+            source="tdx_quant",
+            tool_name=tdx_tool,
+            duration_ms=int((time.time() - hop_start) * 1000),
+            success=result.success,
+            error=result.error,
+        )
+
+        if result.success:
+            total_duration = int((time.time() - start_time) * 1000)
+            logger.info(
+                f"[{gateway_tool}] proxy Success via tdx_quant in "
+                f"{total_duration}ms"
+            )
+            return RouteResult(
+                success=True,
+                data=normalizer(result.data),
+                source="tdx_quant",
+                hops=[hop],
+            )
+
+        logger.warning(
+                f"[{gateway_tool}] proxy tdx_quant failed: {result.error}, "
+                f"falling back to chain"
+        )
+        return None  # 失败 → 降级到原 chain
