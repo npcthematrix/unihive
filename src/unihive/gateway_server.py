@@ -30,6 +30,7 @@ from .utils.log_config import configure_logging
 from .core.normalizer import Normalizer
 from .core.registry import register_tools_from_config, validate_specs
 from .core.router import Router
+from .core.proxy_settings import ProxySettings
 from .api.upstream_client import UpstreamClient, UpstreamConfig
 from .api.fuyao_client import FuyaoClient, FuyaoConfig
 from .api.mootdx2_client import MooTDX2Client, MooTDX2Config
@@ -449,13 +450,24 @@ class GatewayServer:
             # 初始化路由前先合并生成工具的 mapping（_load_all_tools 会写回顶层 config）
             tool_specs = self._load_all_tools()
 
+            # 2026-09-14: ProxySettings — 读 config/proxy_settings.yaml,
+            # 控制 mootdx2 → tdx_quant 透明代理. yaml 不存在时自动 fallback
+            # 到默认 (enabled=False), 不阻断 gateway 启动.
+            proxy_settings = ProxySettings(
+                path="config/proxy_settings.yaml",
+            )
+
             # 初始化路由
             self.router = Router(
                 upstreams=self.upstreams,
                 routing_config=self.config.get("routing", {}),
                 upstream_tool_mapping=self.config.get("upstream_tool_mapping", {}),
                 per_upstream_timeout=self._per_upstream_timeout,
+                proxy_settings=proxy_settings,
             )
+
+            # Store proxy_settings on self for proxy_api handlers to mutate later
+            self.proxy_settings = proxy_settings
 
             # 初始化 MCP Server（传入已加载的 specs，避免重复 _load_all_tools() 调用）
             # 经 _create_and_register_gateway_mcp 工厂走, FastMCP 构造 + tools
