@@ -978,6 +978,8 @@
         const enabled = cache.enabled ? '<span class="cfg-switch on">启用</span>' : '<span class="cfg-switch off">停用</span>';
         const ttl = cache.ttl || {};
         const ttlEntries = Object.entries(ttl).sort((a, b) => Number(a[1]) - Number(b[1]));
+        const cacheCountEl = document.getElementById('cfg-count-cache');
+        if (cacheCountEl) cacheCountEl.textContent = ttlEntries.length;
         const ttlRows = ttlEntries.map(([k, v]) =>
             `<tr><td><span class="tool-name">${escapeHtml(k)}</span></td><td class="num">${v}</td><td>${humanizeDuration(v)}</td></tr>`
         ).join('') || `<tr><td colspan="${CFG_TABLE_COLSPANS.cache}" style="color:var(--text-secondary)">无 TTL 配置</td></tr>`;
