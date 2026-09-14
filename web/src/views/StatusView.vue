@@ -196,9 +196,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import { Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { errorMessage } from '@/api/client'
+import { copyText } from '@/utils/clipboard'
 import {
   getStatus,
   type CacheStats,
@@ -391,13 +391,8 @@ function latencyClass(ms: number): string {
   return 'good'
 }
 
-async function copyError(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('错误信息已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择错误文本复制')
-  }
+function copyError(text: string): void {
+  void copyText(text, '错误信息已复制')
 }
 
 /** el-table 两态排序 (sort-orders 限定 asc/desc, 无第三态取消)。 */
