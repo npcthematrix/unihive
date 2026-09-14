@@ -1,0 +1,7 @@
+# Proxy settings — mootdx2 → TDX_QUANT transparent adapter for 行情类 tools.
+# enabled: true 时, 7 个行情类工具 (get_quote, get_batch_quote, get_kline,
+#          get_index_kline, get_index_all, get_index_bars, get_minute_data)
+#          会优先走 TDX_QUANT, 失败自动降级回 mootdx2.
+# 工具映射/period 映射写死到代码, 不可在此文件覆盖.
+proxy:
+  enabled: false
