@@ -76,7 +76,10 @@ export interface OmniQueryParams {
 }
 
 /** GET /api/omni/query — 板块查询 + 分页。 */
-export async function queryOmniSectors(params: OmniQueryParams): Promise<OmniQueryResponse> {
+export async function queryOmniSectors(
+  params: OmniQueryParams,
+  signal?: AbortSignal,
+): Promise<OmniQueryResponse> {
   const search = new URLSearchParams()
   if (params.source) search.set('source', params.source)
   if (params.board_type) search.set('board_type', params.board_type)
@@ -86,6 +89,7 @@ export async function queryOmniSectors(params: OmniQueryParams): Promise<OmniQue
   const qs = search.toString()
   const { data } = await http.get<OmniQueryResponse>(
     `/api/omni/query${qs ? `?${qs}` : ''}`,
+    { signal },
   )
   return data
 }
@@ -147,6 +151,7 @@ export interface OmniSectorStocksParams {
 /** GET /api/omni/sector-stocks — 板块成分股; sector_id 优先, 否则 code+source 兜底。 */
 export async function getOmniSectorStocks(
   params: OmniSectorStocksParams,
+  signal?: AbortSignal,
 ): Promise<OmniSectorStocksResponse> {
   const search = new URLSearchParams()
   if (params.sector_id) search.set('sector_id', String(params.sector_id))
@@ -155,6 +160,7 @@ export async function getOmniSectorStocks(
   const qs = search.toString()
   const { data } = await http.get<OmniSectorStocksResponse>(
     `/api/omni/sector-stocks${qs ? `?${qs}` : ''}`,
+    { signal },
   )
   return data
 }

@@ -42,6 +42,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { TAB_KEYS, TAB_TITLES, type GuidesTabKey } from './guides/format'
+import { parseHashTab } from './_shared/hashTab'
 import OnboardingPanel from './guides/OnboardingPanel.vue'
 import AiOnboardingPanel from './guides/AiOnboardingPanel.vue'
 
@@ -50,18 +51,12 @@ const router = useRouter()
 
 const activeTab = ref<GuidesTabKey>('human')
 
-function parseTabFromQuery(q: unknown): GuidesTabKey {
-  const candidate = Array.isArray(q) ? q[0] : q
-  const value = typeof candidate === 'string' ? candidate : ''
-  return (TAB_KEYS as readonly string[]).includes(value) ? (value as GuidesTabKey) : 'human'
-}
-
-activeTab.value = parseTabFromQuery(route.query.tab)
+activeTab.value = parseHashTab(route.query.tab, TAB_KEYS, 'human')
 
 watch(
   () => route.query.tab,
   (q) => {
-    activeTab.value = parseTabFromQuery(q)
+    activeTab.value = parseHashTab(q, TAB_KEYS, 'human')
   },
 )
 

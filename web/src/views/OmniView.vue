@@ -15,17 +15,6 @@
       </div>
     </template>
 
-    <el-alert
-      v-if="loadError"
-      type="error"
-      :closable="false"
-      show-icon
-      class="load-error"
-      :title="`加载失败: ${loadError}`"
-    >
-      <el-button size="small" @click="refreshAll">重试</el-button>
-    </el-alert>
-
     <!-- 子标签导航 -->
     <nav class="cfg-subtabs" aria-label="OMNI 子标签">
       <button
@@ -108,6 +97,7 @@ import {
 } from '@/api/omni'
 import { errorMessage } from '@/api/client'
 import { TAB_KEYS, TAB_TITLES, type OmniTabKey } from './omni/format'
+import { parseHashTab } from './_shared/hashTab'
 import StatsPanel from './omni/StatsPanel.vue'
 import QueryPanel from './omni/QueryPanel.vue'
 import SyncPanel from './omni/SyncPanel.vue'
@@ -174,7 +164,7 @@ async function loadStats(force = false) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadStats(true), runQuery(1, false)])
+  await Promise.all([loadStats(true), hasSearched.value ? runQuery(1, false) : Promise.resolve()])
 }
 
 // ===== query =====
@@ -204,11 +194,12 @@ async function runQuery(page: number, fromPagination: boolean) {
       params.board_type = (queryFilters.value.boardType || undefined) as OmniQueryParams['board_type']
       params.keyword = queryFilters.value.keyword || undefined
     }
-    const d = await queryOmniSectors(params)
+    const d = await queryOmniSectors(params, ac.signal)
     if (ac.signal.aborted) return
     // 后端偶发返回 null (历史缩进 bug 修复前已有, 留兜底避免 .sectors 读取崩溃)。
     sectors.value = d?.sectors || []
-    totalCount.value = d?.total_count ?? d?.total ?? sectors.value.length
+    const tc = d?.total_count
+    totalCount.value = typeof tc === 'number' ? tc : (d?.total ?? sectors.value.length)
     queryPage.value = d?.page ?? page
   } catch (e) {
     if ((e as { name?: string })?.name === 'CanceledError') return
@@ -244,18 +235,12 @@ const syncPanelRef = ref<InstanceType<typeof SyncPanel> | null>(null)
 
 // ===== tab 路由 =====
 
-function parseTabFromQuery(q: unknown): OmniTabKey {
-  const candidate = Array.isArray(q) ? q[0] : q
-  const value = typeof candidate === 'string' ? candidate : ''
-  return (TAB_KEYS as readonly string[]).includes(value) ? (value as OmniTabKey) : 'stats'
-}
-
-activeTab.value = parseTabFromQuery(route.query.tab)
+activeTab.value = parseHashTab(route.query.tab, TAB_KEYS, 'stats')
 
 watch(
   () => route.query.tab,
   (q) => {
-    activeTab.value = parseTabFromQuery(q)
+    activeTab.value = parseHashTab(q, TAB_KEYS, 'stats')
   },
 )
 

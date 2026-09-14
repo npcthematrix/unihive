@@ -10,6 +10,14 @@
     </p>
 
     <!-- TDX_QUANT 实时状态 -->
+    <el-alert
+      v-if="loadError"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="proxy-load-error"
+      :title="`加载失败: ${loadError}`"
+    />
     <div class="proxy-status">
       <span class="proxy-status-label">TDX_QUANT 状态:</span>
       <span
@@ -83,6 +91,8 @@ import { errorMessage } from '@/api/client'
 interface Props {
   proxy: ProxySettings | null
   loading: boolean
+  /** 加载失败时由父级传入, 仅本面板内 alert, 不污染 ConfigView 全局 alert。 */
+  loadError?: string
 }
 
 const props = defineProps<Props>()

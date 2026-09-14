@@ -263,7 +263,7 @@ async function fetchStocks() {
   const ac = new AbortController()
   modalRequest.value = { cancel: () => ac.abort() }
   try {
-    const res = await getOmniSectorStocks({ sector_id: sector.id, code: sector.code, source: sector.source })
+    const res = await getOmniSectorStocks({ sector_id: sector.id, code: sector.code, source: sector.source }, ac.signal)
     modalSector.value = res.sector
     modalStocks.value = res.stocks || []
   } catch (e) {

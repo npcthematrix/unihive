@@ -8,7 +8,7 @@
             class="last-refresh"
             :class="{ failed: loadError }"
           >{{ refreshLabel }}</span>
-          <el-button :icon="Refresh" @click="copyJson" :disabled="!config">复制 JSON</el-button>
+          <el-button :icon="DocumentCopy" @click="copyJson" :disabled="!config">复制 JSON</el-button>
           <el-button
             :icon="Refresh"
             :loading="manualLoading"
@@ -27,6 +27,17 @@
       :title="`加载失败：${loadError}`"
     >
       <el-button size="small" @click="load">重试</el-button>
+    </el-alert>
+
+    <el-alert
+      v-if="proxyError"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="load-error"
+      :title="`代理设置加载失败：${proxyError}`"
+    >
+      <el-button size="small" @click="loadProxy">重试</el-button>
     </el-alert>
 
     <!-- subtab 导航 -->
@@ -87,6 +98,7 @@
         <ProxyPanel
           :proxy="proxy"
           :loading="proxyLoading"
+          :load-error="proxyError"
           @change="onProxyChange"
         />
       </section>
@@ -97,7 +109,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getConfig } from '@/api/config'
 import type { GatewayConfig, ProxySettings } from '@/api/config'
@@ -105,6 +117,7 @@ import { getProxySettings } from '@/api/config'
 import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
 import { TAB_KEYS, TAB_TITLES, type TabKey } from './config/format'
+import { parseHashTab } from './_shared/hashTab'
 import UpstreamsPanel from './config/UpstreamsPanel.vue'
 import MappingPanel from './config/MappingPanel.vue'
 import ToolsPanel from './config/ToolsPanel.vue'
@@ -120,23 +133,18 @@ const loading = ref(false)
 const proxyLoading = ref(false)
 const manualLoading = ref(false)
 const loadError = ref('')
+/** proxy 失败独立 ref, 不污染全局 loadError (后者只反映 getConfig 状态)。 */
+const proxyError = ref('')
 const lastRefresh = ref<number | null>(null)
 
 const activeTab = ref<TabKey>('upstreams')
 
-/** 从 hash query ?tab= 解析初始 subtab */
-function parseTabFromQuery(q: unknown): TabKey {
-  const candidate = Array.isArray(q) ? q[0] : q
-  const value = typeof candidate === 'string' ? candidate : ''
-  return (TAB_KEYS as readonly string[]).includes(value) ? (value as TabKey) : 'upstreams'
-}
-
-activeTab.value = parseTabFromQuery(route.query.tab)
+activeTab.value = parseHashTab(route.query.tab, TAB_KEYS, 'upstreams')
 
 watch(
   () => route.query.tab,
   (q) => {
-    activeTab.value = parseTabFromQuery(q)
+    activeTab.value = parseHashTab(q, TAB_KEYS, 'upstreams')
   },
 )
 
@@ -165,10 +173,11 @@ async function loadProxy() {
   proxyLoading.value = true
   try {
     proxy.value = await getProxySettings()
+    proxyError.value = ''
   } catch (e) {
     // proxy tab 单独失败不影响 config 渲染; 用户切到该 tab 时再感知。
-    // 静默记录, 不弹全局错误。
-    loadError.value = errorMessage(e, '加载代理设置失败')
+    // 写到 proxyError 独立 ref, 不污染全局 loadError (后者只反映 getConfig 状态)。
+    proxyError.value = errorMessage(e, '加载代理设置失败')
   } finally {
     proxyLoading.value = false
   }
@@ -179,7 +188,7 @@ async function load(isManual = false) {
   else loading.value = true
   loadError.value = ''
   try {
-    const [cfg] = await Promise.all([getConfig(), loadProxy()])
+    const cfg = await getConfig()
     config.value = cfg
     lastRefresh.value = Date.now()
   } catch (e) {
@@ -188,6 +197,8 @@ async function load(isManual = false) {
     loading.value = false
     manualLoading.value = false
   }
+  // proxy 单独拉, 失败不影响 config 渲染
+  void loadProxy()
 }
 
 function onProxyChange(updated: ProxySettings) {
