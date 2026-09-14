@@ -9,6 +9,9 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+.venv/
+venv/
+env/
 
 # THSDK 登录会话文件（thsdk 包写入进程工作目录，内含账号会话，禁止提交）
 account.session

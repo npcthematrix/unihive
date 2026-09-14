@@ -181,7 +181,7 @@ class TestDotenvLoadedOnce:
     """_load_dotenv 只在第一次 load_config 时调用, 避免每次都 IO .env。"""
 
     def test_dotenv_called_only_once_across_multiple_loads(self, tmp_path, monkeypatch):
-        import src.config_loader as cl
+        import src.unihive.utils.config_loader as cl
         monkeypatch.setattr(cl, "_DOTENV_LOADED", False)
 
         env_file = tmp_path / ".env"

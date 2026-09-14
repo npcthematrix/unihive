@@ -1,4 +1,4 @@
-"""Reader-based offline tools tests — mock mootdx.reader.Reader to avoid TDX file dependency."""
+"""Reader-based offline tools tests — mock mootdx2.reader.Reader to avoid TDX file dependency."""
 import asyncio
 from unittest.mock import patch, MagicMock
 
@@ -37,7 +37,7 @@ def test_get_daily_returns_records(client):
     mock_reader = MagicMock()
     mock_reader.daily.return_value = mock_df
 
-    with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         r = asyncio.run(client.get_daily("600036", adjust="qfq"))
 
     assert r.success is True
@@ -56,7 +56,7 @@ def test_get_daily_empty_result(client):
     mock_reader = MagicMock()
     mock_reader.daily.return_value = None
 
-    with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         r = asyncio.run(client.get_daily("600036"))
 
     assert r.success is True
@@ -75,7 +75,7 @@ def test_get_daily_date_filter(client):
     mock_reader = MagicMock()
     mock_reader.daily.return_value = mock_df
 
-    with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         r = asyncio.run(
             client.get_daily("600036", start_date="2024-01-03", end_date="2024-01-04")
         )
@@ -106,7 +106,7 @@ def test_get_minute_suffix_1(client):
     mock_reader = MagicMock()
     mock_reader.minute.return_value = mock_df
 
-    with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         r = asyncio.run(client.get_minute("600036", suffix="1"))
 
     assert r.success is True
@@ -122,7 +122,7 @@ def test_get_minute_suffix_5(client):
     mock_reader = MagicMock()
     mock_reader.minute.return_value = mock_df
 
-    with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         r = asyncio.run(client.get_minute("600036", suffix="5"))
 
     assert r.success is True
@@ -149,7 +149,7 @@ def test_get_fzline_returns_records(client):
     mock_reader = MagicMock()
     mock_reader.fzline.return_value = mock_df
 
-    with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         r = asyncio.run(client.get_fzline("600036"))
 
     assert r.success is True
@@ -164,7 +164,7 @@ def test_get_fzline_bool_result(client):
     mock_reader = MagicMock()
     mock_reader.fzline.return_value = False
 
-    with patch("mootdx.reader.Reader.factory", return_value=mock_reader):
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         r = asyncio.run(client.get_fzline("600036"))
 
     assert r.success is True
@@ -195,16 +195,16 @@ def test_yaml_has_offline_reader_tools():
         data = yaml.safe_load(f)
     by_name = {t["name"]: t for t in data["tools"]}
 
-    assert by_name["get_daily"]["data_source_type"] == "offline"
-    assert by_name["get_minute"]["data_source_type"] == "offline"
-    assert by_name["get_fzline"]["data_source_type"] == "offline"
+    assert by_name["get_daily_local"]["data_source_type"] == "offline"
+    assert by_name["get_minute_local"]["data_source_type"] == "offline"
+    assert by_name["get_fzline_local"]["data_source_type"] == "offline"
 
     # verify params
-    daily_params = [p["name"] for p in by_name["get_daily"]["params"]]
+    daily_params = [p["name"] for p in by_name["get_daily_local"]["params"]]
     assert "code" in daily_params
     assert "adjust" in daily_params
-    assert by_name["get_daily"]["params"][1]["enum"] == ["none", "qfq", "hfq"]
+    assert by_name["get_daily_local"]["params"][1]["enum"] == ["none", "qfq", "hfq"]
 
-    minute_params = [p["name"] for p in by_name["get_minute"]["params"]]
+    minute_params = [p["name"] for p in by_name["get_minute_local"]["params"]]
     assert "suffix" in minute_params
-    assert by_name["get_minute"]["params"][1]["enum"] == ["1", "5"]
+    assert by_name["get_minute_local"]["params"][1]["enum"] == ["1", "5"]

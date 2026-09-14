@@ -65,7 +65,7 @@ class TestLogLevelFromConfig:
 class TestArgparseTopLevel:
     def test_argparse_imported_at_module_top(self):
         """避免函数内 import; argparse 必须在模块顶层可访问."""
-        import src.gateway_server as gs
+        import src.unihive.gateway_server as gs
 
         assert hasattr(gs, "argparse"), "argparse 应在模块顶层 import, 不应在 _build_arg_parser 内"
         # 类型也确认下
@@ -77,7 +77,7 @@ class TestArgparseTopLevel:
 class TestStartupBanner:
     async def test_async_main_logs_startup_banner(self, capsys, tmp_path):
         """async_main 启动时必须打 banner, 包含 transport / config path / upstream 数."""
-        from src import gateway_server as gs
+        from src.unihive import gateway_server as gs
 
         cfg = tmp_path / "upstreams.yaml"
         cfg.write_text(
@@ -119,7 +119,7 @@ class TestStartupBanner:
 class TestPortInUse:
     async def test_port_in_use_yields_clean_exit(self, tmp_path, capsys):
         """端口被占时必须: 友好 stderr 消息 + 退出码 2, 不打 traceback."""
-        from src import gateway_server as gs
+        from src.unihive import gateway_server as gs
 
         # 真起一个 socket 占住端口
         s = socket.socket()

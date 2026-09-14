@@ -59,11 +59,16 @@ class Router:
         per_upstream_timeout: float | None = None,
         limiter: AsyncTokenBucketLimiter | None = None,
         proxy_settings: ProxySettings | None = None,
+        tool_specs: list[dict] | None = None,
     ):
         self.upstreams = upstreams
         self.routing_config = routing_config
         # 来自 config.upstream_tool_mapping；未声明的 gateway_tool 自动回退到 chain 顺序
         self.upstream_tool_mapping = upstream_tool_mapping or {}
+        # 工具规格：用于获取 data_source_type 等元数据
+        # 格式: {tool_name: {data_source_type: "offline"|"online", ...}}
+        self.tool_specs = tool_specs or []
+        self._tool_metadata = {spec.get("name"): spec for spec in self.tool_specs}
         # H2 (2026-09-08 6th-round audit): 单个 upstream.call_tool() 超时,
         # 防止上游卡死把整条 chain 拖住, 后续 fallback 永远走不到。
         # 之前没有 per-upstream timeout, 整条 chain 总时间受 outer
@@ -116,9 +121,13 @@ class Router:
         start_time = time.time()
 
         # Proxy attempt: enabled + tdx 健康 + tool 在 TOOL_MAP 时, 先试 tdx_quant
-        proxy_result = await self._try_proxy(gateway_tool, params, start_time)
-        if proxy_result is not None:
-            return proxy_result
+        # MED (round 8 audit): 用 getattr 兜底, 兼容 Router.__new__(Router)
+        # 跳过 __init__ 的测试场景 (e.g. round 8 audit 直接构造 Router 实例)
+        proxy_settings = getattr(self, "proxy_settings", None)
+        if proxy_settings is not None:
+            proxy_result = await self._try_proxy(gateway_tool, params, start_time)
+            if proxy_result is not None:
+                return proxy_result
 
         # 确定路由链
         if force_source:
@@ -163,7 +172,13 @@ class Router:
             # 记录跳点
             hop_start = time.time()
 
-            if not upstream.is_available:
+            # 获取工具元数据，判断是否离线工具
+            tool_meta = self._tool_metadata.get(gateway_tool, {})
+            is_offline_tool = tool_meta.get("data_source_type") == "offline"
+
+            # 跳过 is_available 检查：离线工具读取本地文件，不需要网络
+            # 其他所有工具都直接调用，失败再处理
+            if is_offline_tool and not upstream.is_available:
                 hop = RouteHop(
                     source=source,
                     tool_name=tool_name,

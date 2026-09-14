@@ -25,7 +25,7 @@ def restore_root_logger():
 
 def _make_record(**kwargs) -> logging.LogRecord:
     defaults = dict(
-        name="src.gateway_server",
+        name="src.unihive.gateway_server",
         level=logging.INFO,
         pathname="gateway_server.py",
         lineno=42,
@@ -42,7 +42,7 @@ class TestJsonFormatter:
         out = JsonFormatter().format(_make_record())
         payload = json.loads(out)
         assert payload["level"] == "INFO"
-        assert payload["logger"] == "src.gateway_server"
+        assert payload["logger"] == "src.unihive.gateway_server"
         assert payload["message"] == "hello world"
         assert payload["ts"].endswith("Z")
 

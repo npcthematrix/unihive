@@ -108,7 +108,7 @@ class TestGatewayPortLazy:
     """set_config() 注入晚于模块级常量求值 — 之前用模块级常量就拿不到新值."""
 
     def test_gateway_http_port_reflects_injected_config(self, tmp_path, monkeypatch):
-        from src import console_api
+        import src.unihive.utils.console_api as console_api
 
         # 模拟 GatewayServer.__init__ 注入新 config, port=19999
         console_api.set_config({"gateway": {"port": 19999, "host": "10.0.0.1"}})
@@ -118,7 +118,7 @@ class TestGatewayPortLazy:
         assert console_api.mcp_url() == "http://10.0.0.1:19999/mcp"
 
     def test_falls_back_to_file_when_not_injected(self, tmp_path, monkeypatch):
-        from src import console_api
+        import src.unihive.utils.console_api as console_api
         from src.unihive.utils.config_loader import load_config as real_load
 
         cfg_file = tmp_path / "upstreams.yaml"
@@ -145,7 +145,7 @@ class TestGatewayPortLazy:
 
 class TestGetInterfacesCached:
     def test_second_call_within_ttl_returns_same_object(self, monkeypatch, tmp_path):
-        from src import console_api
+        import src.unihive.utils.console_api as console_api
 
         cfg_file = tmp_path / "upstreams.yaml"
         cfg_file.write_text(
@@ -168,7 +168,7 @@ class TestGetInterfacesCached:
 
 class TestGetHealthReflectsReachability:
     def test_status_is_degraded_when_gateway_unreachable(self, monkeypatch):
-        from src import console_api
+        import src.unihive.utils.console_api as console_api
 
         # 找一个空闲端口然后立刻关掉, 保证没监听
         s = socket.socket()
@@ -184,7 +184,7 @@ class TestGetHealthReflectsReachability:
         assert health["gateway_reachable"] is False
 
     def test_status_is_ok_when_gateway_listening(self, monkeypatch):
-        from src import console_api
+        import src.unihive.utils.console_api as console_api
 
         # 起一个真监听的端口
         s = socket.socket()

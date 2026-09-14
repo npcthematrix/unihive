@@ -103,7 +103,7 @@ class TestUpstreamTimeoutIsolation:
     async def test_single_upstream_timeout_does_not_break_init(self, tmp_path):
         """场景: good 立刻成功, bad 卡死超过 timeout. 期望: init 不抛, 两者都被跟踪."""
         from src.unihive.gateway_server import GatewayServer
-        import src.gateway_server as gs
+        import src.unihive.gateway_server as gs
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -159,7 +159,7 @@ class TestUpstreamTimeoutIsolation:
         """超时的 upstream 必须打 ERROR 日志, 不能悄无声息."""
         import logging
         from src.unihive.gateway_server import GatewayServer
-        import src.gateway_server as gs
+        import src.unihive.gateway_server as gs
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -390,7 +390,7 @@ class TestConfigCLI:
             encoding="utf-8",
         )
 
-        from src import gateway_server as gs
+        from src.unihive import gateway_server as gs
 
         seen: dict[str, str] = {}
 

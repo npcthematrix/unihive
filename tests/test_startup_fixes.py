@@ -129,7 +129,7 @@ class TestConsoleLoadConfigMasksSecrets:
             "    api_key: supersecret123\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
+        monkeypatch.setattr("src.unihive.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
         from src.unihive.utils.console_api import load_config
         cfg = load_config()
@@ -138,7 +138,7 @@ class TestConsoleLoadConfigMasksSecrets:
         assert "***" in api_key
 
     def test_load_config_returns_empty_when_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(tmp_path / "nope.yaml"))
+        monkeypatch.setattr("src.unihive.utils.console_api.GATEWAY_CONFIG_PATH", str(tmp_path / "nope.yaml"))
         from src.unihive.utils.console_api import load_config
         assert load_config() == {}
 
@@ -152,7 +152,7 @@ class TestConsoleLoadConfigMasksSecrets:
             encoding="utf-8",
         )
         monkeypatch.setenv("TEST_API_KEY", "resolved-secret-xyz")
-        monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
+        monkeypatch.setattr("src.unihive.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
         from src.unihive.utils.console_api import load_config
         cfg = load_config()
@@ -170,7 +170,7 @@ class TestConsoleLoadConfigMasksSecrets:
             "    base_url: http://x\n    api_key: a-secret\n",
             encoding="utf-8",
         )
-        monkeypatch.setattr("src.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
+        monkeypatch.setattr("src.unihive.utils.console_api.GATEWAY_CONFIG_PATH", str(yaml_path))
 
         from src.unihive.utils.console_api import load_config
         cfg1 = load_config()
@@ -199,7 +199,7 @@ class TestGatewayReachabilityProbe:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
         s.close()  # 立刻关掉, 这个端口 99% 没人监听
-        monkeypatch.setattr("src.utils.console_api._gateway_port", lambda: port)
+        monkeypatch.setattr("src.unihive.utils.console_api._gateway_port", lambda: port)
 
         assert is_gateway_reachable() is False, "没监听时应返回 False"
 
@@ -212,7 +212,7 @@ class TestGatewayReachabilityProbe:
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         port = s.getsockname()[1]
-        monkeypatch.setattr("src.utils.console_api._gateway_port", lambda: port)
+        monkeypatch.setattr("src.unihive.utils.console_api._gateway_port", lambda: port)
         try:
             assert is_gateway_reachable() is True
         finally:
@@ -227,7 +227,7 @@ class TestGatewayReachabilityProbe:
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         port = s.getsockname()[1]
-        monkeypatch.setattr("src.utils.console_api._gateway_port", lambda: port)
+        monkeypatch.setattr("src.unihive.utils.console_api._gateway_port", lambda: port)
         try:
             first = is_gateway_reachable()
             # 关掉监听, 不应有第二次连接尝试 (否则会 False)

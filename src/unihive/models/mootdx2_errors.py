@@ -77,6 +77,17 @@ class ErrorClassifier:
     def classify(cls, exc: Exception, context: str = "") -> MooTDXError:
         """将异常分类为 MooTDXError"""
 
+        # TDX 未安装 (tdxdir 缺失或目录不存在) — 在 Reader factory 抛错时归类
+        # moctdx2 factory 直接 raise Exception("tdxdir 目录不存在: ...")
+        msg = str(exc).lower()
+        if "tdxdir" in msg or ("vipdoc" in msg and "not found" in msg):
+            return MooTDXError(
+                error_type=MooTDXErrorType.TDX_NOT_INSTALLED,
+                message=f"TDX 本地数据未安装: {str(exc)[:100]}",
+                recoverable=False,
+                details={"context": context},
+            )
+
         # 连接错误
         if isinstance(exc, ConnectionError):
             return MooTDXError(

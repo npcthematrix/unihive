@@ -103,7 +103,7 @@ class TestRouterPerUpstreamTimeout:
         configurable per-upstream timeout. Upstream 1 hangs past the
         budget → next upstream tried.
         """
-        from src.unihive.router import Router
+        from src.unihive.core.router import Router
 
         @dataclass
         class _FakeResult:
@@ -165,7 +165,7 @@ class TestRouterPerUpstreamTimeout:
         """H2: three-upstream chain where 1 hangs, 2 returns failure,
         3 returns success. Per-upstream timeout fires on 1, the chain
         continues."""
-        from src.unihive.router import Router
+        from src.unihive.core.router import Router
 
         @dataclass
         class _FakeResult:
@@ -206,7 +206,7 @@ class TestRouterPerUpstreamTimeout:
     async def test_all_upstreams_timeout_returns_failure(self):
         """H2: every upstream exceeds the per-upstream timeout — chain
         ends with a synthesized 'timeout' failure result."""
-        from src.unihive.router import Router
+        from src.unihive.core.router import Router
 
         @dataclass
         class _FakeResult:
@@ -239,7 +239,7 @@ class TestRouterPerUpstreamTimeout:
         sensible default (e.g. 10s). Verifies a non-hung upstream still
         completes successfully without explicit timeout.
         """
-        from src.unihive.router import Router
+        from src.unihive.core.router import Router
 
         @dataclass
         class _FakeResult:
@@ -273,7 +273,7 @@ class TestConsoleAuthTimingSafe:
         """
         import inspect
 
-        from src import console_auth
+        import src.unihive.console_auth as console_auth
 
         # Find the function that does password checking
         # (it should reference both password_hash and password branches)
@@ -296,7 +296,7 @@ class TestConsoleAuthTimingSafe:
         import inspect
         import re
 
-        from src import console_auth
+        import src.unihive.console_auth as console_auth
 
         src = inspect.getsource(console_auth)
         # Look for the pattern: plain-password comparison site.

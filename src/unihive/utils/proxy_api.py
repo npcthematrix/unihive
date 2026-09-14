@@ -63,16 +63,20 @@ def _tdx_quant_status_from_module() -> str:
 
 
 async def get_proxy_settings_handler(req: Request, app_state=None) -> JSONResponse:
-    """GET /api/proxy/settings — current state + tdx status + coverage."""
-    if _proxy_settings is None:
+    """GET /api/proxy/settings — current state + tdx status + coverage.
+
+    接受 app_state 参数 (测试 fixture 注入), 优先于 module-level 状态。
+    """
+    ps, upstreams = _resolve_state(app_state)
+    if ps is None:
         return JSONResponse(
             {"error": "proxy not configured"},
             status_code=500,
         )
     return JSONResponse(
         {
-            "enabled": _proxy_settings.is_enabled(),
-            "tdx_quant_status": _tdx_quant_status_from_module(),
+            "enabled": ps.is_enabled(),
+            "tdx_quant_status": _tdx_quant_status(upstreams),
             "coverage": _coverage_table(),
         }
     )
@@ -80,7 +84,8 @@ async def get_proxy_settings_handler(req: Request, app_state=None) -> JSONRespon
 
 async def put_proxy_settings_handler(req: Request, app_state=None) -> JSONResponse:
     """PUT /api/proxy/settings — body {enabled: bool}, persists + triggers reload."""
-    if _proxy_settings is None:
+    ps, upstreams = _resolve_state(app_state)
+    if ps is None:
         return JSONResponse(
             {"error": "proxy not configured"},
             status_code=500,
@@ -104,15 +109,36 @@ async def put_proxy_settings_handler(req: Request, app_state=None) -> JSONRespon
             status_code=400,
         )
 
-    _proxy_settings.set_enabled(enabled_val)
+    ps.set_enabled(enabled_val)
     logger.info(f"proxy settings updated: enabled={enabled_val}")
     return JSONResponse(
         {
-            "enabled": _proxy_settings.is_enabled(),
-            "tdx_quant_status": _tdx_quant_status_from_module(),
+            "enabled": ps.is_enabled(),
+            "tdx_quant_status": _tdx_quant_status(upstreams),
             "coverage": _coverage_table(),
         }
     )
+
+
+def _resolve_state(app_state):
+    """从 app_state (优先) 或 module-level 拿 (proxy_settings, upstreams)"""
+    if app_state is not None:
+        ps = getattr(app_state, "proxy_settings", None)
+        upstreams = getattr(app_state, "upstreams", None)
+        return ps, upstreams
+    return _proxy_settings, _upstreams
+
+
+def _tdx_quant_status(upstreams):
+    """Read tdx_quant upstream status (from upstreams dict, may be module-level)."""
+    if upstreams is None:
+        return "MISSING"
+    client = upstreams.get("tdx_quant")
+    if client is None:
+        return "MISSING"
+    status = client.status
+    raw = getattr(status, "value", str(status))
+    return raw.upper() if raw else "MISSING"
 
 
 def build_proxy_routes() -> list:

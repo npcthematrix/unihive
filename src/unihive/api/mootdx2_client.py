@@ -237,16 +237,25 @@ class MooTDX2Client:
     async def get_server_status(self) -> ToolResult:
         """获取服务状态（供 MCP 网关管理台直接读取）"""
         pool_stats = self.config.pool.get_stats() if self.config.pool else {}
-        server_health = pool_stats.get("server_health", {})
 
-        # 当前选中的服务器
+        # 当前实际连接的服务器: 优先读 mootdx2 ServerManager 的 current,
+        # 退回 StdQuotes.server; quotes 未初始化时为 None。
         current_server = None
-        if self.config.pool and self.config.pool.settings.servers:
-            for s in self.config.pool.settings.servers:
-                key = f"{s.host}:{s.port}"
-                if key in server_health and server_health[key].get("healthy"):
-                    current_server = {"host": s.host, "port": s.port, "latency_ms": s.latency_ms}
-                    break
+        quotes = self._quotes
+        if quotes is not None:
+            current = None
+            manager = getattr(quotes, "manager", None)
+            if manager is not None and getattr(manager, "current", None):
+                current = manager.current
+            elif getattr(quotes, "server", None):
+                current = quotes.server
+            if current:
+                current_server = {"host": current[0], "port": int(current[1])}
+
+        configured_servers = (
+            [{"host": s.host, "port": s.port} for s in self.config.settings.servers]
+            if self.config.settings else []
+        )
 
         return ToolResult(
             success=True,
@@ -254,6 +263,7 @@ class MooTDX2Client:
                 "version": self.config.settings.version if self.config.settings else "1.0.0",
                 "status": self._status.value,
                 "current_server": current_server,
+                "servers": configured_servers,
                 "pool_stats": pool_stats,
                 "error_counts": self._metrics.get("error_counts", {}),
                 "total_requests": self._metrics.get("total_requests", 0),
@@ -261,27 +271,75 @@ class MooTDX2Client:
             source="mootdx2",
         )
 
+    def _pin_quotes_servers(self, quotes, servers) -> None:
+        """把配置的多台行情服务器注入 mootdx2 ServerManager 候选池。
+
+        mootdx2 StdQuotes 的 server= 参数只接受单台 (内部 candidates 固定为
+        [server]), 多台顺序故障转移只能通过其 ServerManager 候选列表实现。
+        factory 已用首台初始化 manager, 这里把其余服务器追加进同一个
+        manager (StdQuotes 与 AutoSwitchClient 共享该对象引用), 运行期请求
+        失败时 mootdx2 会自动切换候选并重连。
+
+        auto_switch=1 (factory 处传入) 让阈值为 1: 一次失败即切下一台,
+        否则默认阈值 3 会让第二台在单次请求的重试预算内根本轮不到。
+        """
+        manager = getattr(quotes, "manager", None)
+        if manager is None:
+            logger.warning(f"{self.name}: Quotes 实例无 manager, 额外服务器候选未注入")
+            return
+        candidates = [(s.host, int(s.port)) for s in servers]
+        with manager.lock:
+            for cand in candidates[1:]:
+                if cand not in manager._candidates:
+                    manager._candidates.append(cand)
+        logger.info(
+            f"{self.name}: pinned TDX servers (failover order): "
+            f"{[f'{h}:{p}' for h, p in candidates]}"
+        )
+
     def _get_quotes(self):
-        """获取或创建 Quotes 实例（线程安全）。"""
+        """获取或创建 Quotes 实例（线程安全）。
+
+        settings.servers 非空时固定连配置的 IP (bestip=False + server=首台,
+        其余经 _pin_quotes_servers 注入 failover 候选); 为空时保持原行为
+        bestip=True 全网测速自动选优。
+        """
         if self._quotes is None:
             with self._quotes_lock:
                 # 双重检查
                 if self._quotes is None:
                     from mootdx2.quotes import Quotes
                     self._quotes_cls = Quotes
+                    settings = self.config.settings
+                    pinned = settings.servers if settings else []
                     # 从配置获取超时设置
                     timeout = 30  # 默认 30 秒
-                    if self.config.settings:
+                    if settings:
                         timeout = max(
-                            self.config.settings.connect_timeout_seconds,
-                            self.config.settings.read_timeout_seconds,
+                            settings.connect_timeout_seconds,
+                            settings.read_timeout_seconds,
                         ) * 3  # 给足够的重试时间
-                    self._quotes = Quotes.factory(
-                        market=self.config.market,
-                        multithread=True,
-                        bestip=True,
-                        timeout=timeout,
-                    )
+                    if pinned:
+                        first = pinned[0]
+                        # bestip=False: 跳过全网测速; auto_switch=1: 失败 1 次
+                        # 即切换候选, 保证第二台在单次请求重试预算内能轮到。
+                        quotes = Quotes.factory(
+                            market=self.config.market,
+                            multithread=True,
+                            bestip=False,
+                            server=(first.host, int(first.port)),
+                            auto_switch=1,
+                            timeout=timeout,
+                        )
+                        self._pin_quotes_servers(quotes, pinned)
+                        self._quotes = quotes
+                    else:
+                        self._quotes = Quotes.factory(
+                            market=self.config.market,
+                            multithread=True,
+                            bestip=True,
+                            timeout=timeout,
+                        )
         return self._quotes
 
     def _get_quote_sync(self, code: str):
@@ -1627,49 +1685,86 @@ class MooTDX2Client:
 
     # ========== 搜索股票 ==========
     def _search_stock_sync(self, keyword: str):
-        """同步搜索股票（基于本地 block 板块文件）
+        """同步搜索股票（优先本地 block 文件，fallback 到 SQLite）
 
         V7.73-64 注意事项：mootdx2 `reader.block()` 接口在新版通达信已废弃
-        （官方 dat 文件迁到 infoharbor_block.dat / spblock.dat，mootdx2 未适配）。
-        本方法在 V7.73 环境下会返回空列表，由 router 串行 fallback 到 fuyao_meta。
+        （官方 dat 文件迁到 infoharbor_block.dat / spblock.dat，mootdx2 未适配)。
+        当 block 为空时，fallback 到 SQLite (board.db) 搜索。
         """
+        # 优先尝试本地 block 文件
         try:
             reader = self._get_reader()
-            if not self._get_tdxdir():
-                return []
-            df_block = reader.block()
-            if df_block is None or len(df_block) == 0:
-                return []
-
-            kw = keyword.lower()
-            result = []
-            for _, row in df_block.iterrows():
-                code = str(row.get("code", ""))
-                name = row.get("name", "")
-                if not code or not name:
-                    continue
-                if kw in code or kw in name.lower():
-                    # 判断市场前缀
-                    if code.startswith(("60", "68")):
-                        market = "sh"
-                    elif code.startswith(("00", "30")):
-                        market = "sz"
-                    elif code.startswith(("8", "4")):
-                        market = "bj"
-                    else:
-                        market = "sz"
-                    result.append({
-                        "code": code,
-                        "market": market,
-                        "name": name,
-                    })
-            return result[:20]
+            if self._get_tdxdir():
+                df_block = reader.block()
+                if df_block is not None and len(df_block) > 0:
+                    kw = keyword.lower()
+                    result = []
+                    for _, row in df_block.iterrows():
+                        code = str(row.get("code", ""))
+                        name = row.get("name", "")
+                        if not code or not name:
+                            continue
+                        if kw in code or kw in name.lower():
+                            # 判断市场前缀
+                            if code.startswith(("60", "68")):
+                                market = "sh"
+                            elif code.startswith(("00", "30")):
+                                market = "sz"
+                            elif code.startswith(("8", "4")):
+                                market = "bj"
+                            else:
+                                market = "sz"
+                            result.append({
+                                "code": code,
+                                "market": market,
+                                "name": name,
+                            })
+                    return result[:20]
         except Exception as e:
-            # V7.73 下 reader.block() 会报"板块文件不存在"，
-            # 降级为 warning，让 router fallback 到 fuyao_meta 搜索。
-            logger.warning(
-                f"search_stock fallback (likely V7.73+ TDX): {e}"
-            )
+            logger.debug(f"search_stock reader.block() failed: {e}")
+
+        # Fallback: 从 SQLite (board.db) 搜索
+        return self._search_stock_from_sqlite(keyword)
+
+    def _search_stock_from_sqlite(self, keyword: str) -> list[dict]:
+        """从 SQLite 数据库搜索股票"""
+        import sqlite3
+        from pathlib import Path
+
+        db_path = Path("data/board.db")
+        if not db_path.exists():
+            logger.warning("search_stock: board.db not found")
+            return []
+
+        try:
+            conn = sqlite3.connect(str(db_path))
+            kw = f"%{keyword}%"
+            cursor = conn.execute("""
+                SELECT DISTINCT stock_code, stock_name
+                FROM sector_stocks
+                WHERE stock_name LIKE ? OR stock_code LIKE ?
+                LIMIT 20
+            """, (kw, kw))
+            result = []
+            for stock_code, stock_name in cursor.fetchall():
+                # 判断市场前缀
+                if stock_code.startswith(("60", "68")):
+                    market = "sh"
+                elif stock_code.startswith(("00", "30")):
+                    market = "sz"
+                elif stock_code.startswith(("8", "4")):
+                    market = "bj"
+                else:
+                    market = "sz"
+                result.append({
+                    "code": stock_code,
+                    "market": market,
+                    "name": stock_name,
+                })
+            conn.close()
+            return result
+        except Exception as e:
+            logger.warning(f"search_stock SQLite fallback failed: {e}")
             return []
 
     async def search_stock(self, keyword: str) -> ToolResult:

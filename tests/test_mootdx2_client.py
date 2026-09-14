@@ -316,6 +316,159 @@ class TestMooTDX2MetricsThreadSafety:
         assert client._metrics["error_counts"].get("test_error") == n_writers * per_writer
 
 
+# ========== 2026-09-14 固定行情服务器 (pinned servers + failover) ==========
+
+class TestMooTDX2PinnedServers:
+    """配置 servers 后 Quotes.factory 必须固定连指定 IP, 多台注入 failover 候选。"""
+
+    @staticmethod
+    def _make_fake_quotes_module(monkeypatch, captured):
+        """patch mootdx2.quotes.Quotes.factory, 返回带 manager 的假 StdQuotes。
+
+        复刻真实构造: manager candidates 初始只有 server= 传入的首台,
+        其余候选靠 _pin_quotes_servers 追加。
+        """
+        import threading
+        import mootdx2.quotes as mq
+
+        class FakeManager:
+            def __init__(self, candidates):
+                self.lock = threading.RLock()
+                self._candidates = list(candidates)
+                self.current = candidates[0] if candidates else None
+
+        class FakeStdQuotes:
+            def __init__(self, server, kwargs):
+                self.server = server
+                self.kwargs = kwargs
+                self.manager = FakeManager([server] if server else [])
+
+        def fake_factory(market=None, driver=None, **kwargs):
+            captured.update({"market": market, **kwargs})
+            return FakeStdQuotes(kwargs.get("server"), {"market": market, **kwargs})
+
+        monkeypatch.setattr(mq.Quotes, "factory", staticmethod(fake_factory))
+
+    def test_get_quotes_pins_first_server_and_injects_failover_candidates(self, monkeypatch):
+        from src.unihive.models.mootdx2_config import MooTDX2Settings, ServerConfig
+
+        settings = MooTDX2Settings(
+            market="std",
+            servers=[
+                ServerConfig(host="101.33.225.16", port=7709),
+                ServerConfig(host="81.71.32.47", port=7709),
+            ],
+        )
+        config = MooTDX2Config(name="test", market="std", settings=settings)
+        client = MooTDX2Client(config)
+
+        captured = {}
+        self._make_fake_quotes_module(monkeypatch, captured)
+
+        quotes = client._get_quotes()
+
+        # factory 必须关闭 bestip, 固定连首台, threshold=1 保证第二台能轮到
+        assert captured["bestip"] is False
+        assert captured["server"] == ("101.33.225.16", 7709)
+        assert captured["auto_switch"] == 1
+        # 第二台必须被注入同一 manager 的候选列表 (顺序 failover)
+        assert quotes.manager._candidates == [
+            ("101.33.225.16", 7709),
+            ("81.71.32.47", 7709),
+        ]
+
+        # 再次获取必须复用缓存实例, 不重复 factory
+        assert client._get_quotes() is quotes
+
+    def test_get_quotes_without_servers_keeps_bestip_autoselect(self, monkeypatch):
+        """无 servers 配置时维持原行为: bestip=True, 不传 server。"""
+        config = MooTDX2Config(name="test", market="std")
+        client = MooTDX2Client(config)
+
+        captured = {}
+        self._make_fake_quotes_module(monkeypatch, captured)
+
+        client._get_quotes()
+
+        assert captured["bestip"] is True
+        assert "server" not in captured
+        assert "auto_switch" not in captured
+
+    def test_get_quotes_single_server_no_extra_candidates(self, monkeypatch):
+        from src.unihive.models.mootdx2_config import MooTDX2Settings, ServerConfig
+
+        settings = MooTDX2Settings(
+            servers=[ServerConfig(host="101.33.225.16", port=7709)],
+        )
+        config = MooTDX2Config(name="test", market="std", settings=settings)
+        client = MooTDX2Client(config)
+
+        captured = {}
+        self._make_fake_quotes_module(monkeypatch, captured)
+
+        quotes = client._get_quotes()
+        assert quotes.manager._candidates == [("101.33.225.16", 7709)]
+
+    @pytest.mark.asyncio
+    async def test_get_server_status_reports_current_and_configured(self, monkeypatch):
+        import threading
+        from src.unihive.models.mootdx2_config import MooTDX2Settings, ServerConfig
+
+        settings = MooTDX2Settings(
+            servers=[
+                ServerConfig(host="101.33.225.16", port=7709),
+                ServerConfig(host="81.71.32.47", port=7709),
+            ],
+        )
+        config = MooTDX2Config(name="test", market="std", settings=settings)
+        client = MooTDX2Client(config)
+
+        class FakeManager:
+            lock = threading.RLock()
+            current = ("81.71.32.47", 7709)  # 模拟 failover 后当前节点
+
+        client._quotes = type("FakeQuotes", (), {"manager": FakeManager()})()
+
+        result = await client.get_server_status()
+        assert result.success is True
+        assert result.data["current_server"] == {"host": "81.71.32.47", "port": 7709}
+        assert result.data["servers"] == [
+            {"host": "101.33.225.16", "port": 7709},
+            {"host": "81.71.32.47", "port": 7709},
+        ]
+
+
+class TestParseMooTDX2Servers:
+    """gateway 配置边界校验: 只接受 IP 字面量 + 合法端口。"""
+
+    def test_valid_servers(self):
+        from src.unihive.gateway_server import _parse_mootdx2_servers
+        from src.unihive.models.mootdx2_config import ServerConfig
+
+        servers = _parse_mootdx2_servers([
+            {"host": "101.33.225.16", "port": 7709},
+            {"host": "81.71.32.47"},  # 默认端口
+        ])
+        assert servers == [
+            ServerConfig(host="101.33.225.16", port=7709),
+            ServerConfig(host="81.71.32.47", port=7709),
+        ]
+
+    def test_empty_list(self):
+        from src.unihive.gateway_server import _parse_mootdx2_servers
+        assert _parse_mootdx2_servers([]) == []
+
+    def test_domain_rejected(self):
+        from src.unihive.gateway_server import _parse_mootdx2_servers
+        with pytest.raises(ValueError, match="只接受 IP 字面量"):
+            _parse_mootdx2_servers([{"host": "tdx.example.com", "port": 7709}])
+
+    def test_bad_port_rejected(self):
+        from src.unihive.gateway_server import _parse_mootdx2_servers
+        with pytest.raises(ValueError, match="port"):
+            _parse_mootdx2_servers([{"host": "101.33.225.16", "port": 70000}])
+
+
 # ========== 2026-09-14 Round 11 audit: startup edge cases ==========
 
 class TestMooTDX2StartEdgeCases:

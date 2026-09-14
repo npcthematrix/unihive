@@ -29,6 +29,17 @@ upstreams:
     type: "mootdx2"
     market: "std"
     tdxdir: "D:/new_tdx_mock"  # 通达信本地路径，空则自动探索
+    # 固定行情服务器列表（按顺序连接 + 故障转移）。
+    # - 配置后只连这些 IP，不再跑 mootdx2 bestip 全网测速选优；首台作为启动
+    #   连接目标，其余作为运行期 failover 候选（连续失败自动切换）。
+    # - 只接受 IP 字面量（mootdx2 内部 ipaddress 校验），不支持域名；
+    #   端口为通达信标准 7709。
+    # - 留空/删除本段则保持原行为：bestip=True 自动测速选最优服务器。
+    servers:
+      - host: "101.33.225.16"
+        port: 7709
+      - host: "81.71.32.47"
+        port: 7709
     capabilities:
       - market_data
       - realtime_quote
