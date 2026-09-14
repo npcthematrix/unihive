@@ -150,14 +150,18 @@ class TestAuthMiddleware:
         # Should be redirected or blocked
         assert response.status_code in (401, 302, 303)
 
-    def test_auth_middleware_blocks_root_when_unauthenticated(self):
-        """GET / (no cookie) -> 303 -> /login."""
+    def test_root_shell_served_unauthenticated(self):
+        """GET / (no cookie) -> 200 SPA 外壳; 是否展示登录页由前端守卫决定。"""
         client = TestClient(self.app)
         response = client.get("/", follow_redirects=False)
-        # Should redirect to login
-        assert response.status_code in (302, 303)
-        if response.status_code in (302, 303):
-            assert "/login" in response.headers.get("location", "")
+        assert response.status_code == 200
+        assert response.text == "hello"
+
+    def test_console_html_served_unauthenticated(self):
+        """/console.html 与 / 行为一致 (外壳公开, 数据靠 /api 401 拦截)。"""
+        self.app.add_route("/console.html", lambda r: PlainTextResponse("shell"))
+        client = TestClient(self.app)
+        assert client.get("/console.html").status_code == 200
 
     def test_auth_middleware_passes_mcp_unauthenticated(self):
         """GET /mcp -> 200 (FastMCP handles)."""
@@ -227,6 +231,78 @@ class TestSessionPersistence:
 
         assert response1.status_code == 200
         assert response2.status_code == 200
+
+
+class TestJsonAuthApi:
+    """Vue 控制台使用的 JSON 鉴权端点 (cookie session 不变)。"""
+
+    def setup_method(self):
+        self.app = Starlette()
+        self.app.add_route("/api/status", lambda r: JSONResponse({"status": "ok"}))
+        setup_console_auth(self.app, _creds())
+
+    def test_json_login_valid_sets_cookie_and_returns_username(self):
+        client = TestClient(self.app)
+        resp = client.post("/api/auth/login", json={
+            "username": "admin", "password": "devpass",
+        })
+        assert resp.status_code == 200
+        assert resp.json() == {"username": "admin"}
+        assert "set-cookie" in {c.lower() for c in resp.headers}
+        # 种 cookie 后受保护接口立即可用
+        assert client.get("/api/status").status_code == 200
+
+    def test_json_login_wrong_password_returns_401_json(self):
+        client = TestClient(self.app)
+        resp = client.post("/api/auth/login", json={
+            "username": "admin", "password": "nope",
+        })
+        assert resp.status_code == 401
+        assert resp.headers["content-type"].startswith("application/json")
+        assert "error" in resp.json()
+
+    def test_json_login_wrong_username_returns_401_json(self):
+        client = TestClient(self.app)
+        resp = client.post("/api/auth/login", json={
+            "username": "root", "password": "devpass",
+        })
+        assert resp.status_code == 401
+
+    def test_json_login_missing_fields_returns_400_json(self):
+        client = TestClient(self.app)
+        resp = client.post("/api/auth/login", json={"username": "admin"})
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    def test_me_unauthenticated_returns_401(self):
+        client = TestClient(self.app)
+        resp = client.get("/api/auth/me")
+        assert resp.status_code == 401
+
+    def test_me_after_login_returns_username(self):
+        client = TestClient(self.app)
+        client.post("/api/auth/login", json={
+            "username": "admin", "password": "devpass",
+        })
+        resp = client.get("/api/auth/me")
+        assert resp.status_code == 200
+        assert resp.json() == {"username": "admin"}
+
+    def test_json_logout_clears_session(self):
+        client = TestClient(self.app)
+        client.post("/api/auth/login", json={
+            "username": "admin", "password": "devpass",
+        })
+        assert client.get("/api/auth/me").status_code == 200
+
+        resp = client.post("/api/auth/logout")
+        assert resp.status_code == 200
+        assert client.get("/api/auth/me").status_code == 401
+
+    def test_json_logout_is_public(self):
+        """会话已过期时调 logout 不应被中间件拦成 401。"""
+        client = TestClient(self.app)
+        assert client.post("/api/auth/logout").status_code == 200
 
 
 class TestAuthDisabled:
