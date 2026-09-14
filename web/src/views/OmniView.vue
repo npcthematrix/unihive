@@ -16,14 +16,15 @@
     </template>
 
     <!-- 子标签导航 -->
-    <nav class="cfg-subtabs" aria-label="OMNI 子标签">
+    <nav class="cfg-subtabs" role="tablist" aria-label="OMNI 子标签">
       <button
         v-for="tab in TABS"
         :key="tab.key"
         type="button"
         class="cfg-subtab"
         :class="{ active: activeTab === tab.key }"
-        :aria-current="activeTab === tab.key ? 'page' : undefined"
+        role="tab"
+        :aria-selected="activeTab === tab.key"
         @click="selectTab(tab.key)"
       >{{ tab.title }}</button>
     </nav>
@@ -298,14 +299,6 @@ defineExpose({ refreshAll })
 </script>
 
 <style scoped>
-.cfg-subtabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0;
-  margin-bottom: 16px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-}
-
 .omni-panel-stack {
   min-height: 240px;
 }

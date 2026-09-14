@@ -16,3 +16,86 @@ body {
 * {
   box-sizing: border-box;
 }
+
+/* ============================================================================
+   Subtabs — ConfigView / OmniView / GuidesView 共享
+   原 <button> 元素若不重置浏览器默认, 会渲染成带灰底/边框的原生按钮。
+   这里强制 transparent + 2px 底部 active 下划线, 视觉上才是 tabs。
+   ============================================================================ */
+
+.cfg-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.cfg-subtab {
+  /* kill native button look */
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  /* 拉低 1px 让 active 下划线与 wrapper 边线视觉对齐 */
+  margin-bottom: -1px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+  padding: 8px 16px;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 4px 4px 0 0;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.cfg-subtab:hover:not(:disabled):not([aria-disabled='true']) {
+  color: var(--el-color-primary);
+  background: var(--el-fill-color-light);
+}
+
+.cfg-subtab:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+}
+
+.cfg-subtab[aria-selected='true'],
+.cfg-subtab.active {
+  color: var(--el-color-primary);
+  border-bottom-color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.cfg-subtab:disabled,
+.cfg-subtab[aria-disabled='true'] {
+  color: var(--el-text-color-placeholder);
+  cursor: not-allowed;
+}
+
+/* 计数 badge — ConfigView tab 上显示配置项数量 */
+.cfg-subtab-count {
+  font-family: var(--el-font-family-monospace, 'Consolas', 'Monaco', monospace);
+  font-size: 0.72rem;
+  padding: 1px 7px;
+  background: var(--el-fill-color);
+  color: var(--el-text-color-secondary);
+  border-radius: 999px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.cfg-subtab[aria-selected='true'] .cfg-subtab-count,
+.cfg-subtab.active .cfg-subtab-count {
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  color: var(--el-color-primary);
+}
