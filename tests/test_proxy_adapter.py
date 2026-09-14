@@ -15,12 +15,12 @@ class TestAdapterToolMapping:
         "mootdx2_tool,tdx_tool",
         [
             ("get_quote", "get_market_snapshot"),
-            ("get_batch_quote", "get_security_snapshot"),
+            ("get_batch_quote", "get_market_snapshot"),
             ("get_kline", "get_market_data"),
             ("get_index_kline", "get_market_data"),
             ("get_index_all", "get_market_data"),
             ("get_index_bars", "get_market_data"),
-            ("get_minute_data", "get_minute_time_data"),
+            ("get_minute_data", "get_market_data"),
         ],
     )
     def test_tool_map_covers_7_quote_tools(self, mootdx2_tool, tdx_tool):
@@ -49,12 +49,12 @@ class TestAdaptParams:
         assert params == {"stock_code": "600519.SH"}
 
     def test_adapt_get_batch_quote_splits_codes_to_stock_list(self):
-        """mootdx2 get_batch_quote(codes='600519.SH,000001.SZ') → tdx_quant stock_list=['600519.SH','000001.SZ']."""
+        """mootdx2 get_batch_quote(codes='600519.SH,000001.SZ') → tdx_quant get_market_snapshot(stock_list=[...])."""
         tool, params, _normalizer = self.adapter.adapt(
             "get_batch_quote", {"codes": "600519.SH,000001.SZ"}
         )
-        assert tool == "get_security_snapshot"
-        assert params["stock_list"] == ["600519.SH", "000001.SZ"]
+        assert tool == "get_market_snapshot"
+        assert params == {"stock_list": ["600519.SH", "000001.SZ"]}
 
     @pytest.mark.parametrize(
         "mootdx2_period,tdx_period",
@@ -80,11 +80,28 @@ class TestAdaptParams:
         assert params["count"] == 10
 
     def test_adapt_get_minute_data_keeps_today_window(self):
+        """mootdx2 get_minute_data(code) → tdx_quant get_market_data(stock_list=[code], period='1m', count=240)."""
         tool, params, _normalizer = self.adapter.adapt(
             "get_minute_data", {"code": "600519.SH"}
         )
-        assert tool == "get_minute_time_data"
-        assert params["stock_code"] == "600519.SH"
+        assert tool == "get_market_data"
+        assert params["stock_list"] == ["600519.SH"]
+        assert params["period"] == "1m"
+        assert params["count"] == 240
+
+    def test_adapt_get_minute_data_respects_explicit_count(self):
+        tool, params, _normalizer = self.adapter.adapt(
+            "get_minute_data", {"code": "600519.SH", "count": 60}
+        )
+        assert params["count"] == 60
+
+    def test_adapt_get_batch_quote_accepts_list_input(self):
+        """codes 既可能是逗号分隔字符串, 也可能是 list (call_tool 入参可能如此)."""
+        tool, params, _normalizer = self.adapter.adapt(
+            "get_batch_quote", {"codes": ["600519.SH", "000001.SZ"]}
+        )
+        assert tool == "get_market_snapshot"
+        assert params == {"stock_list": ["600519.SH", "000001.SZ"]}
 
     def test_adapt_unknown_tool_raises(self):
         with pytest.raises(ProxyAdapterError) as exc:
