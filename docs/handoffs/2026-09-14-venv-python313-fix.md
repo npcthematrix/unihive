@@ -4,6 +4,19 @@
 **Branch:** main (uncommitted changes)
 **Goal:** 重建 .venv (Python 3.13.15) 并把 66 个预存测试失败收敛到 12 个
 
+> **2026-09-14 收尾更新:** 桶 A/B/C/D 在 commit `b09f759` 中已全部解决
+> (23 个相关测试全绿)。恢复工作时发现的实际红灯是另一处未提交 WIP
+> (`proxy_adapter._normalize_stock_code_for_tdxquant` 用 `str.replace("sh","")`
+> 把 `600519.SH` 改成 `600519..SH`,并把指数 `sh000001` 误判 SZ,13 个测试失败)。
+> 已用 regex 重写 (后缀/前缀权威,裸代码按真实号段推断,未知格式透传) + 补
+> `TestNormalizeStockCode` 参数化测试与 3 个调用点前缀形式集成测试。
+> code-review 后把单字启发式换成 2~3 位号段表 (修复北交 `920xxx` 误判 SH,
+> 补 B 股/基金/可转债/逆回购号段),空白处理对齐 core Normalizer,签名改
+> `str | None`。**全量 `pytest tests/`:504 passed / 1 skipped / 0 failed**
+> (此前两个 collection-error 文件与 dotenv deselect 也已随 import-path
+> 规范化转绿)。`mootdx2_client.py` 的 `q.stocks()` 过滤改动是独立
+> WIP,未在本轮处理。
+
 ## TL;DR
 
 - ✅ Python 3.13.15 通过 winget 安装完成

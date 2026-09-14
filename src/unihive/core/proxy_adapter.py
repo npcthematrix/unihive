@@ -26,13 +26,78 @@ Mapping caveat (2026-09-14 audit):
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 ResponseNormalizer = Callable[[Any], Any]
 
+# 600519.SH / 600519.sh (THS 后缀格式, tdx_quant 合同要求)
+_CODE_SUFFIX_RE = re.compile(r"^(\d{6})\.(sh|sz|bj)$", re.IGNORECASE)
+# sh600519 / SH600519 (TDX 前缀格式, registry Normalizer 的产物)
+_CODE_PREFIX_RE = re.compile(r"^(sh|sz|bj)(\d{6})$", re.IGNORECASE)
+_BARE_DIGITS_RE = re.compile(r"^\d{6}$")
+# 裸 6 位代码的号段 → 交易所 (best-effort; 权威路径是代码自带的前缀/后缀)。
+# 3 位号段排在前面优先匹配 (200=SZ B股 vs 204=SH 逆回购 前两位冲突)。
+# 覆盖 core.normalizer.Normalizer 首字启发式之外的基金/可转债/B股/北交 920 号段。
+_BARE_EXCHANGE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("204", "SH"),  # 沪国债逆回购 (204001 等)
+    ("131", "SZ"),  # 深国债逆回购 (131810 等)
+    ("200", "SZ"),  # 深 B 股 (200002 等)
+    # SH: 主板 60 / 科创板 68 / B股 90 / ETF·基金 50·51·52·56·58 / 可转债 11
+    ("60", "SH"), ("68", "SH"), ("90", "SH"),
+    ("50", "SH"), ("51", "SH"), ("52", "SH"), ("56", "SH"), ("58", "SH"),
+    ("11", "SH"),
+    # SZ: 主板 00 / 创业板 30 / ETF·LOF 15·16·18 / 可转债 12·13
+    ("00", "SZ"), ("30", "SZ"),
+    ("15", "SZ"), ("16", "SZ"), ("18", "SZ"),
+    ("12", "SZ"), ("13", "SZ"),
+    # BJ: 老三板/北交 43·83·87·88 + 2024 年起新号段 920
+    ("43", "BJ"), ("83", "BJ"), ("87", "BJ"), ("88", "BJ"), ("92", "BJ"),
+)
+
 
 class ProxyAdapterError(Exception):
     """Raised when adapter cannot translate mootdx2 → tdx_quant."""
+
+
+def _normalize_stock_code_for_tdxquant(code: str | None) -> str | None:
+    """将 mootdx2/TDX 格式的股票代码转换为 tdx_quant 需要的 THS 后缀格式。
+
+    接受 (adapter 边界两种格式都会出现 — registry Normalizer 把裸代码转成
+    ``sh600519``, 客户端直传的 ``600519.SH`` 则原样放行):
+
+    - ``600519.SH`` / ``600519.sh`` → ``600519.SH`` (幂等, 后缀大小写归一)
+    - ``sh600519`` / ``SH600519``    → ``600519.SH``
+    - ``600519`` (裸 6 位)            → ``600519.SH`` (按真实号段推断)
+
+    前缀/后缀是交易所的权威来源: ``sh000001`` 是上证指数 → ``000001.SH``,
+    不会被裸代码启发式误判成 SZ。裸代码号段推断扩展 (而非等同)
+    ``core.normalizer.Normalizer`` 的首字启发式, 额外覆盖 B 股/基金/可转债/
+    逆回购/北交 920 号段; 空白处理与 Normalizer 一致 (内部空白一并剔除)。
+    无法识别的格式原样返回, 不臆造后缀。
+    """
+    if not code:
+        return code
+    raw = re.sub(r"\s+", "", str(code))
+    if not raw:
+        return raw
+
+    m = _CODE_SUFFIX_RE.match(raw)
+    if m:
+        digits, exchange = m.groups()
+        return f"{digits}.{exchange.upper()}"
+
+    m = _CODE_PREFIX_RE.match(raw)
+    if m:
+        exchange, digits = m.groups()
+        return f"{digits}.{exchange.upper()}"
+
+    if _BARE_DIGITS_RE.match(raw):
+        for prefix, exchange in _BARE_EXCHANGE_PREFIXES:
+            if raw.startswith(prefix):
+                return f"{raw}.{exchange}"
+
+    return raw
 
 
 class Mootdx2ToTdxQuantAdapter:
@@ -108,7 +173,9 @@ class Mootdx2ToTdxQuantAdapter:
 
     def _adapt_get_quote(self, params: dict) -> dict:
         """get_quote(code) → get_market_snapshot(stock_code)."""
-        return {"stock_code": params["code"]}
+        code = params["code"]
+        stock_code = _normalize_stock_code_for_tdxquant(code)
+        return {"stock_code": stock_code}
 
     def _adapt_get_batch_quote_to_snapshot(self, params: dict) -> dict:
         """get_batch_quote(codes='A,B,C') → get_market_snapshot(stock_list=[A,B,C]).
@@ -122,9 +189,11 @@ class Mootdx2ToTdxQuantAdapter:
         """
         codes_raw = params.get("codes", "")
         if isinstance(codes_raw, list):
-            stock_list = list(codes_raw)
+            raw_codes = list(codes_raw)
         else:
-            stock_list = [c.strip() for c in str(codes_raw).split(",") if c.strip()]
+            raw_codes = [c.strip() for c in str(codes_raw).split(",") if c.strip()]
+        # 标准化为 tdx_quant 格式
+        stock_list = [_normalize_stock_code_for_tdxquant(c) for c in raw_codes]
         return {"stock_list": stock_list}
 
     def _adapt_get_kline(self, mootdx2_tool: str, params: dict) -> dict:
@@ -136,7 +205,9 @@ class Mootdx2ToTdxQuantAdapter:
         period_raw = params.get("period", "day")
         period = self.PERIOD_MAP.get(period_raw, period_raw)
         code = params.get("code") or params.get("codes", "")
-        stock_list = [c.strip() for c in str(code).split(",") if c.strip()]
+        raw_codes = [c.strip() for c in str(code).split(",") if c.strip()]
+        # 标准化为 tdx_quant 格式
+        stock_list = [_normalize_stock_code_for_tdxquant(c) for c in raw_codes]
         # mootdx2 limit (>0 取最近 n 条) ↔ tdx_quant count (>0 取截止 end_time 最近 n 条)
         limit = int(params.get("limit", 0))
         out: dict[str, Any] = {
@@ -155,9 +226,10 @@ class Mootdx2ToTdxQuantAdapter:
         the server may return the full historical minute series.
         """
         code = params["code"]
+        stock_code = _normalize_stock_code_for_tdxquant(code)
         count = int(params.get("count", 240))
         return {
-            "stock_list": [code],
+            "stock_list": [stock_code],
             "period": "1m",
             "count": count,
         }
