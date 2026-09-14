@@ -6,7 +6,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
     <link rel="icon" href="data:,">
     <title>UniHive Console</title>
-    <link rel="stylesheet" href="/static/console/console.css?v=20260909-11">
+    <link rel="stylesheet" href="/static/console/console.css?v=20260914-1">
     <style>
       /* === 代理设置 (proxy settings) === */
       .proxy-description {
@@ -45,6 +45,39 @@
         border-bottom: 1px solid var(--border-color, #eee);
       }
       .proxy-table th { font-weight: 600; background: var(--surface-bg, #f5f5f5); }
+      .proxy-table td.proxy-arrow { text-align: center; color: var(--text-secondary); opacity: 0.6; padding: 0.4em 0.3em; }
+      .proxy-table-empty {
+        color: var(--text-secondary);
+        font-style: italic;
+        padding: 0.8em;
+        text-align: center;
+      }
+      .proxy-section-non-proxied {
+        margin-top: 1.5em;
+        color: var(--text-secondary);
+        font-size: 0.85em;
+      }
+      .proxy-section-non-proxied h4 { margin: 0 0 0.4em; font-size: 1em; color: var(--text); }
+      .proxy-section-non-proxied p { margin: 0.4em 0; }
+      .proxy-section-non-proxied ul { margin: 0.4em 0 0 1.5em; padding: 0; }
+      .proxy-section-non-proxied code {
+        background: var(--surface-bg, #f5f5f5);
+        padding: 0.05em 0.3em;
+        border-radius: 2px;
+        font-size: 0.95em;
+      }
+      .proxy-save-status {
+        font-size: 0.85em;
+        color: var(--success);
+        min-height: 1em;
+        font-weight: 500;
+        transition: opacity 0.2s;
+      }
+      .proxy-save-status.error { color: var(--danger); }
+      .ifs-toggle input:disabled + span {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
     </style>
 </head>
 <body>
@@ -181,7 +214,7 @@
                     <button class="cfg-subtab subtab" data-cfg="mapping">工具映射 <span class="cfg-subtab-count" id="cfg-count-mapping">0</span></button>
                     <button class="cfg-subtab subtab" data-cfg="tools">工具规格 <span class="cfg-subtab-count" id="cfg-count-tools">0</span></button>
                     <button class="cfg-subtab subtab" data-cfg="cache">缓存 <span class="cfg-subtab-count" id="cfg-count-cache">0</span></button>
-                    <button class="cfg-subtab subtab" data-cfg="proxy">代理设置</button>
+                    <button class="cfg-subtab subtab" data-cfg="proxy">代理设置 <span class="cfg-subtab-count" id="cfg-count-proxy">0</span></button>
                 </div>
                 <div class="cfg-panel active" data-cfg-panel="upstreams" id="cfg-panel-upstreams"></div>
                 <div class="cfg-panel" data-cfg-panel="mapping" id="cfg-panel-mapping"></div>
@@ -190,12 +223,13 @@
                 <div class="cfg-panel" data-cfg-panel="proxy" id="cfg-panel-proxy">
                     <h3>代理设置 <small class="sub">(mootdx2 → TDX_QUANT 透明代理)</small></h3>
                     <p class="proxy-description">
-                        启用后,以下 7 个行情类工具优先走 TDX_QUANT (本地 DLL,更稳定),失败时自动降级到 MOOTDX2 (远程 TDX)。
+                        启用后,以下 <strong id="proxy-coverage-count">—</strong> 个行情类工具优先走 TDX_QUANT (本地 DLL,更稳定),失败时自动降级到 MOOTDX2 (远程 TDX)。
                     </p>
 
                     <div class="proxy-status" id="proxy-status">
                         <span class="proxy-status-label">TDX_QUANT 状态:</span>
                         <span class="proxy-status-value" id="proxy-tdx-status">—</span>
+                        <span class="proxy-status-hint" id="proxy-status-hint"></span>
                     </div>
 
                     <div class="proxy-toggle-row">
@@ -207,21 +241,19 @@
                     </div>
 
                     <div class="proxy-coverage" id="proxy-coverage">
-                        <h4>覆盖范围 (只读)</h4>
+                        <h4>覆盖范围 (以下工具在代理启用时优先走 TDX_QUANT)</h4>
                         <table class="proxy-table">
                             <thead>
-                                <tr><th>MOOTDX2 工具</th><th>→</th><th>TDX_QUANT 工具</th></tr>
+                                <tr><th>MOOTDX2 工具</th><th class="proxy-arrow">→</th><th>TDX_QUANT 工具</th></tr>
                             </thead>
                             <tbody id="proxy-coverage-body"></tbody>
                         </table>
                     </div>
 
-                    <div class="proxy-coverage" style="margin-top:1.5em">
+                    <div class="proxy-section-non-proxied">
                         <h4>未代理的 mootdx2 行情类工具</h4>
-                        <p style="color:var(--text-secondary); font-size:0.85em; margin:0.5em 0">
-                            以下工具属于行情类但不在代理范围内,继续走原 mootdx2 链路:
-                        </p>
-                        <ul style="font-size:0.85em; color:var(--text-secondary); margin:0.3em 0 0 1.5em">
+                        <p>以下工具属于行情类但不在代理范围内,继续走原 mootdx2 链路:</p>
+                        <ul>
                             <li><code>batch_bars</code> — 批量 K 线 (候选: 待 tqcenter 多代码形式验证后加入)</li>
                             <li><code>get_k_data</code> / <code>get_minutes</code> / <code>get_fzline_local</code> — 其他 K 线/分时入口</li>
                             <li><code>get_minute_local</code> / <code>get_daily_local</code> — 本地缓存路径 (走代理会绕过缓存, 故排除)</li>
@@ -583,7 +615,7 @@ async with Client("http://127.0.0.1:18080/mcp") as client:
             </div>
         </div>
 
-        <script src="/static/console/console.js?v=20260909-9" defer></script>
+        <script src="/static/console/console.js?v=20260914-1" defer></script>
 
 </body>
 </html>

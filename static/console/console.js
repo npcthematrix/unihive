@@ -1879,8 +1879,21 @@
     const toggle = document.getElementById('proxy-enabled-toggle');
     const saveStatus = document.getElementById('proxy-save-status');
     const tdxStatusEl = document.getElementById('proxy-tdx-status');
+    const statusHint = document.getElementById('proxy-status-hint');
     const coverageBody = document.getElementById('proxy-coverage-body');
+    const coverageCount = document.getElementById('proxy-coverage-count');
+    const subtabCount = document.getElementById('cfg-count-proxy');
     if (!toggle) return;
+
+    // 状态 → 中文提示 + 启用/禁用 toggle 的语义
+    const STATUS_HINTS = {
+        HEALTHY: 'TDX_QUANT 在线, 代理可正常生效',
+        DEGRADED: 'TDX_QUANT 状态降级, 代理可能间歇失败',
+        UNAVAILABLE: 'TDX_QUANT 离线, 启用代理也不会生效 (仍会自动降级 mootdx2)',
+        MISSING: 'TDX_QUANT 客户端未注册 (检查 config/upstreams.yaml)',
+        LOADING: '加载中…',
+        FAILED: '加载失败 — 检查 gateway 是否运行',
+    };
 
     function showSaveStatus(text, isError) {
         saveStatus.textContent = text;
@@ -1890,29 +1903,55 @@
             saveStatus._hideTimer = setTimeout(() => {
                 saveStatus.textContent = '';
                 saveStatus.className = 'proxy-save-status';
-            }, 2000);
+            }, 2500);
+        }
+    }
+
+    function applyStatus(status) {
+        tdxStatusEl.textContent = status;
+        tdxStatusEl.className = 'proxy-status-value ' + status;
+        if (statusHint) statusHint.textContent = STATUS_HINTS[status] || '';
+        // toggle 在 UNAVAILABLE / MISSING 时禁用
+        const offline = (status === 'UNAVAILABLE' || status === 'MISSING');
+        toggle.disabled = offline;
+        toggle.title = offline
+            ? STATUS_HINTS[status] || '当前不可用'
+            : '';
+    }
+
+    function renderCoverage(coverage) {
+        if (!coverage || coverage.length === 0) {
+            coverageBody.innerHTML =
+                '<tr><td colspan="3" class="proxy-table-empty">'
+                + '覆盖范围为空 — TOOL_MAP 未配置或加载失败'
+                + '</td></tr>';
+        } else {
+            coverageBody.innerHTML = coverage.map(c =>
+                '<tr><td>' + c.mootdx2_tool + '</td>'
+                + '<td class="proxy-arrow">→</td>'
+                + '<td>' + c.tdx_quant_tool + '</td></tr>'
+            ).join('');
+        }
+        // 更新顶部描述中的"以下 N 个"计数 + 子标签角标
+        if (coverageCount) {
+            coverageCount.textContent = coverage ? coverage.length : 0;
+        }
+        if (subtabCount) {
+            subtabCount.textContent = coverage ? coverage.length : 0;
         }
     }
 
     async function load() {
-        tdxStatusEl.textContent = '加载中…';
-        tdxStatusEl.className = 'proxy-status-value';
+        applyStatus('LOADING');
         try {
             const resp = await fetchJSON('/api/proxy/settings');
             if (!resp) return;
             toggle.checked = resp.enabled;
-            tdxStatusEl.textContent = resp.tdx_quant_status;
-            tdxStatusEl.className = 'proxy-status-value ' + resp.tdx_quant_status;
-            coverageBody.innerHTML = resp.coverage.map(c =>
-                '<tr><td>' + c.mootdx2_tool + '</td><td>→</td><td>' + c.tdx_quant_tool + '</td></tr>'
-            ).join('');
-            toggle.disabled = (resp.tdx_quant_status === 'UNAVAILABLE');
-            toggle.title = toggle.disabled
-                ? 'TDX_QUANT 当前不可用, 启用代理也不会生效'
-                : '';
+            applyStatus(resp.tdx_quant_status);
+            renderCoverage(resp.coverage);
         } catch (e) {
-            tdxStatusEl.textContent = '加载失败';
-            tdxStatusEl.className = 'proxy-status-value UNAVAILABLE';
+            applyStatus('FAILED');
+            renderCoverage([]);
             console.error('load proxy settings failed:', e);
         }
     }
@@ -1926,8 +1965,15 @@
                 body: JSON.stringify({ enabled: toggle.checked }),
             });
             showSaveStatus('已保存', false);
+            // 同时用 toast 加强反馈 (屏幕中央也弹一条)
+            if (typeof showToast === 'function') {
+                showToast('代理已' + (toggle.checked ? '启用' : '关闭'), 'success');
+            }
         } catch (e) {
             showSaveStatus('保存失败: ' + e.message, true);
+            if (typeof showToast === 'function') {
+                showToast('代理设置保存失败', 'error');
+            }
         }
     });
 
