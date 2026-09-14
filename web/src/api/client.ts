@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios'
+import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import { useAuthStore } from '@/stores/auth'
 import { router } from '@/router'
 
@@ -15,6 +15,66 @@ export const http = axios.create({
   withCredentials: true,
 })
 
+// ===== 5xx / 网络错误指数退避重试 =====
+// 触发条件 (与 401 拦截互补, 不冲突):
+//   - 5xx (502/503/504 等网关瞬时错误)
+//   - timeout (ECONNABORTED)
+//   - 无 response 的网络错误 (断网/DNS 失败)
+// 不重试:
+//   - 401 (鉴权失败, 走下面拦截器跳登录)
+//   - 其他 4xx (客户端错误, 重试无意义)
+//
+// 实现: 通过覆盖请求 config.adapter 复用 axios 自己的调度链,
+// 1 次重试 (再失败就 reject), 退避 500ms 后 setTimeout 重发。
+// retryCount 挂 config 上 (非模块全局), 避免并发请求互相干扰。
+
+const MAX_RETRIES = 1
+const RETRY_DELAY_MS = 500
+
+/** axios 内部用 InternalAxiosRequestConfig 走完整 dispatch; 公开 API 用 AxiosRequestConfig 即可。 */
+declare module 'axios' {
+  export interface InternalAxiosRequestConfig {
+    /** 自增重试计数 (从 0 开始); 第一次请求未设值。 */
+    __retryCount?: number
+  }
+}
+
+function shouldRetry(error: AxiosError): boolean {
+  if ((error as { __isCanceled?: boolean }).__isCanceled) return false
+  const status = error.response?.status
+  // 5xx
+  if (status !== undefined && status >= 500 && status < 600) return true
+  // timeout
+  if (error.code === 'ECONNABORTED') return true
+  // network error (没拿到 response)
+  if (!error.response && error.request) return true
+  return false
+}
+
+/** 暴露给单测用: 判断一个错误是否应触发重试。 */
+export const _shouldRetry = shouldRetry
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 复用 http 实例调度链重发请求 (会再次经过所有 interceptor, 含 401 + 自身重试)。
+ *  上限靠 __retryCount 守门, 超 MAX_RETRIES 即 reject, 不会无限递归。 */
+function retryRequest(config: InternalAxiosRequestConfig): Promise<unknown> {
+  const nextCount = (config.__retryCount ?? 0) + 1
+  if (nextCount > MAX_RETRIES) {
+    // 达到上限, 把原始 error 透出去 (本轮 reject 的 error)
+    return Promise.reject(new Error('retry exhausted'))
+  }
+  const retried: InternalAxiosRequestConfig = {
+    ...config,
+    __retryCount: nextCount,
+  }
+  // http.request 会再次走 http 实例的所有 interceptor — 重试成功时直接 resolve;
+  // 仍失败时再次进 error handler, 此时 nextCount > MAX_RETRIES, 不会再重试。
+  return sleep(RETRY_DELAY_MS).then(() => http.request(retried))
+}
+
 // 401 = 会话缺失/过期: 清掉前端会话状态并回登录页 (登录接口自身的 401
 // 交给登录页展示"用户名或密码错误", 不在此跳转)。
 http.interceptors.response.use(
@@ -22,6 +82,14 @@ http.interceptors.response.use(
   (error: AxiosError) => {
     const status = error.response?.status
     const url = error.config?.url ?? ''
+
+    // 重试在 401 拦截前: 401 不重试 (避免重复认证),
+    // 重试仅对 transient 错误生效。
+    const config = error.config as InternalAxiosRequestConfig | undefined
+    if (config && shouldRetry(error)) {
+      return retryRequest(config)
+    }
+
     if (status === 401 && !url.includes('/api/auth/login')) {
       const auth = useAuthStore()
       auth.clear()
@@ -43,6 +111,13 @@ export function errorMessage(error: unknown, fallback = '请求失败'): string 
     const data = error.response?.data as { error?: string; detail?: string; message?: string } | undefined
     return data?.error || data?.detail || data?.message || error.message || fallback
   }
-  if (error instanceof Error) return error.message
+  if (error instanceof Error) {
+    // 重试耗尽是 axios 拦截器在 retryRequest 上限抛出的内部 Error, 不该
+    // 直接展示给用户 (技术术语)。翻译成"无法连接到网关, 请确认网关已启动"。
+    if (error.message === 'retry exhausted') {
+      return '无法连接到网关, 请确认网关已启动后重试'
+    }
+    return error.message
+  }
   return fallback
 }
