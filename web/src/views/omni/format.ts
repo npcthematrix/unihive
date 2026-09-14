@@ -1,0 +1,69 @@
+/**
+ * OmniView 子组件纯函数 + 常量。
+ * 与旧 console.js OMNI 段行为保持一致, 不依赖 Vue。
+ */
+
+/** 数据库存储值 / 内部别名 → 中文展示名。 */
+const SOURCE_DISPLAY: Record<string, string> = {
+  THS: '同花顺',
+  fuyao: '同花顺',
+  TDX: 'TDX-QUANT',
+  tqquant: 'TDX-QUANT',
+  tdxquant: 'TDX-QUANT',
+}
+
+export function displaySource(raw: string | undefined | null): string {
+  if (!raw) return '-'
+  return SOURCE_DISPLAY[raw] || raw
+}
+
+const BOARD_TYPE_DISPLAY: Record<string, string> = {
+  industry: '行业板块',
+  concept: '概念板块',
+  style: '风格板块',
+  region: '地域板块',
+}
+
+export function displayBoardType(raw: string | undefined | null): string {
+  if (!raw) return '-'
+  return BOARD_TYPE_DISPLAY[raw] || raw
+}
+
+/** sync status → Element Plus el-tag type. */
+export function statusTagType(status: string | undefined): 'success' | 'warning' | 'danger' | 'info' {
+  if (status === 'success') return 'success'
+  if (status === 'running') return 'warning'
+  if (status === 'failed') return 'danger'
+  return 'info'
+}
+
+/** ISO 8601 / 'YYYY-MM-DD HH:MM:SS...' → 'YYYY-MM-DD HH:MM:SS'。 */
+export function formatTime(s: string | undefined | null): string {
+  if (!s) return '-'
+  return String(s).replace('T', ' ').substring(0, 19)
+}
+
+/** 计算耗时 (秒)。 */
+export function formatDuration(start: string | undefined, end: string | undefined): string | null {
+  if (!start || !end) return null
+  const s = new Date(start.replace(' ', 'T')).getTime()
+  const e = new Date(end.replace(' ', 'T')).getTime()
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e < s) return null
+  return ((e - s) / 1000).toFixed(1) + 's'
+}
+
+/** 把日期字符串截短到 YYYY-MM-DD (用于 sector 表格的更新时间列)。 */
+export function formatDate(s: string | undefined | null): string {
+  if (!s) return '-'
+  return String(s).slice(0, 10)
+}
+
+/** 3 个 subtab key 常量 */
+export const TAB_KEYS = ['stats', 'query', 'sync'] as const
+export type OmniTabKey = (typeof TAB_KEYS)[number]
+
+export const TAB_TITLES: Record<OmniTabKey, string> = {
+  stats: '数据统计',
+  query: '板块查询',
+  sync: '同步管理',
+}
