@@ -11,6 +11,7 @@
 """
 import asyncio
 import logging
+import socket
 import sys
 import time
 import uuid
@@ -95,9 +96,7 @@ class TdxQuantClient:
         try:
             fut = asyncio.get_event_loop().run_in_executor(
                 get_blocking_executor(),
-                lambda: __import__("socket").create_connection(
-                    (host, port), timeout=2.0
-                ),
+                lambda: socket.create_connection((host, port), timeout=2.0),
             )
             sock = await asyncio.wait_for(fut, timeout=3.0)
             sock.close()
@@ -162,28 +161,31 @@ class TdxQuantClient:
     async def _verify_tq_interface(self) -> bool:
         """C4: 调一次轻量接口验证 TQ 真正可用。
 
-        Returns:
-            True: TQ 接口返回有效数据
-            False: 调用失败 / 返回 ErrorId != 0
+        2026-09-14 修复: 之前用 isinstance(result, dict) + ErrorId=='0' 判定,
+        但 tqcenter.get_user_sector() 在底层 DLL 失败时返回 [] (list),
+        不是 dict, 也不抛异常 — 任何情况都会被错判为 verify 失败, 永远
+        DEGRADED, call_tool 永远被拒 (死锁)。
+
+        真实行为 (PYPlugins/user/tqcenter.py:1856-1886):
+        - DLL 正常 + 有数据 → 返回 List[dict]
+        - DLL 正常 + 用户无自选股 → 返回 []
+        - DLL 失败 (TdxW.exe 未登录 / DLL 指针空) → 返回 []  (print 错误但不抛)
+        - ctypes 崩溃 (dll 根本不在) → 抛异常
+
+        判定策略: 不依赖返回值内容, 而是 try/except 探测 DLL 链路是否可达。
+        成功调通(无论返回 [] 还是有数据)即视为 OK。
         """
         if self._tq is None:
             return False
         try:
-            result = await asyncio.get_event_loop().run_in_executor(
+            await asyncio.get_event_loop().run_in_executor(
                 get_blocking_executor(),
                 lambda: self._tq.get_user_sector(),
             )
-            # ErrorId=0 表示成功; 其它都算不可用
-            if not isinstance(result, dict):
-                return False
-            err_id = str(result.get("ErrorId", "?"))
-            if err_id == "0":
-                return True
-            logger.debug(
-                f"[{self.name}] TQ verify returned ErrorId={err_id}: "
-                f"{result.get('ErrMsg', '')}"
-            )
-            return False
+            # 调通即视为 OK: 返回 [] 表示 DLL 通但无数据(可能是用户没建
+            # 自选股, 也可能是 TdxW.exe 未登录), 实际请求的 ErrorId 会
+            # 在 call_tool 阶段自然反映真实状态。
+            return True
         except Exception as e:
             logger.debug(f"[{self.name}] TQ verify exception: {e}")
             return False
@@ -268,9 +270,15 @@ class TdxQuantClient:
         task.add_done_callback(self._reconnect_tasks.discard)
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
-        """调用 tq.{tool_name}(**arguments)。"""
+        """调用 tq.{tool_name}(**arguments)。
+
+        2026-09-14: 允许 DEGRADED 状态调用 (与 is_available 对齐)。
+        之前仅 HEALTHY 允许, 导致 _verify_tq_interface() 失败导致的 DEGRADED
+        完全死锁 (init OK 但 request 永远被拒)。DEGRADED 表示 TQ 接口
+        暂时无数据但底层 DLL 已就绪, 应该让请求尝试走通。
+        """
         start_time = time.time()
-        if self._status != UpstreamStatus.HEALTHY or self._tq is None:
+        if self._status == UpstreamStatus.UNAVAILABLE or self._tq is None:
             return ToolResult(
                 success=False,
                 error=f"[{self.name}] upstream unavailable (status={self._status.value})",

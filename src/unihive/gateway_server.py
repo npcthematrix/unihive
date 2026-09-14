@@ -469,6 +469,10 @@ class GatewayServer:
             # Store proxy_settings on self for proxy_api handlers to mutate later
             self.proxy_settings = proxy_settings
 
+            # Configure proxy_api with module-level state (so it doesn't need app.state)
+            from .utils.proxy_api import configure_proxy_api
+            configure_proxy_api(proxy_settings, self.upstreams)
+
             # 初始化 MCP Server（传入已加载的 specs，避免重复 _load_all_tools() 调用）
             # 经 _create_and_register_gateway_mcp 工厂走, FastMCP 构造 + tools
             # 注册 + capability filter 安装一气呵成, 防止未来 refactor 跳过 filter。

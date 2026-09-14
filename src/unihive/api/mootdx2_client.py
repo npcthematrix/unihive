@@ -117,7 +117,6 @@ class MooTDX2Client:
         self._quotes = None
         self._quotes_cls = None  # 延迟导入
         self._reader = None  # Reader 实例缓存
-        self._quotes = None  # Quotes 实例缓存
         self._reader_lock = threading.Lock()  # Reader 缓存锁（高并发保护）
         self._quotes_lock = threading.Lock()  # Quotes 缓存锁（高并发保护）
 
@@ -133,11 +132,27 @@ class MooTDX2Client:
             "total_errors": 0,
             "error_counts": {},
         }
+        # 2026-09-14 round 10 audit: total_errors / error_counts 多 key 复合
+        # 写入非原子, 多个 async task 并发会丢更新。加 lock 保护。
+        # total_requests 单 int += 是 GIL 原子的, 不需要。
+        self._metrics_lock = threading.Lock()
 
     def _new_request_id(self) -> str:
         """生成请求 ID"""
         self._request_id += 1
         return f"{self.name}-{int(time.time())}-{self._request_id}"
+
+    def _record_error(self, error_type: str) -> None:
+        """原子记录一次错误 (round 10 audit: error_counts[k] += 1 非原子).
+
+        total_errors 简单 int += 是 GIL 安全的, 但 error_counts[key] 复合
+        读写需要 lock 保护, 否则并发下会丢更新。
+        """
+        with self._metrics_lock:
+            self._metrics["total_errors"] += 1
+            self._metrics["error_counts"][error_type] = (
+                self._metrics["error_counts"].get(error_type, 0) + 1
+            )
 
     def _get_tdxdir(self) -> str | None:
         """获取 tdxdir，如果没有配置则返回 None 让 mootdx2 自动探测"""
@@ -160,12 +175,10 @@ class MooTDX2Client:
 
     def _error_result(self, exc: Exception, context: str) -> ToolResult:
         """将异常转换为错误结果"""
-        self._metrics["total_errors"] += 1
         err_info = error_to_result(exc, context)
         error_detail = err_info.get("error", {})
         error_type = error_detail.get("error_type", "internal_error")
-        self._metrics["error_counts"][error_type] = self._metrics["error_counts"].get(error_type, 0) + 1
-
+        self._record_error(error_type)
         return ToolResult(
             success=False,
             error=error_detail.get("message", str(exc)[:100]),
@@ -174,14 +187,12 @@ class MooTDX2Client:
 
     def _sector_error_result(self, exc: "SectorDataError") -> ToolResult:
         """将 SectorDataError 转换为 ToolResult（recoverable=False，配置/业务错误）"""
-        self._metrics["total_errors"] += 1
-        error_type = exc.error_type.value
-        self._metrics["error_counts"][error_type] = self._metrics["error_counts"].get(error_type, 0) + 1
+        self._record_error(exc.error_type.value)
         return ToolResult(
             success=False,
             error=exc.message,
             error_detail={
-                "error_type": error_type,
+                "error_type": exc.error_type.value,
                 "message": exc.message,
                 "recoverable": False,
             },
@@ -319,11 +330,15 @@ class MooTDX2Client:
                 f"{self.name}: Quotes init failed ({type(e).__name__}: {e}); "
                 f"status=DEGRADED. TDX server may be unreachable."
             )
-            # C5 (round 9 audit): 清理 self._quotes 防止半初始化状态泄漏
-            # 给后续 health_loop, 否则会 AttributeError
+            # C5 (round 9 audit): best-effort 清理. 若 Quotes.factory() 抛
+            # 异常前已部分初始化 (e.g. socket opened), Python GC 会回收;
+            # 这里强制置 None 避免下游误用半初始化对象。
             self._quotes = None
             self._status = UpstreamStatus.DEGRADED
-            self._start_health_loop()
+            # 2026-09-14 round 11 audit: init 失败时不该启动 health_loop —
+            # 没有 quotes 的话, health_loop 会在每 30s tick 时早 continue
+            # (因 self._quotes is None), 等于纯空转。等下次 start() 重新尝试
+            # factory 后再启动 health_loop。
             return
 
         # H2: probe 最多重试 2 次 (总共 3 次尝试)
@@ -368,30 +383,41 @@ class MooTDX2Client:
         )
         self._start_health_loop()
 
-    async def _probe_startup_once(self) -> bool:
-        """在 blocking pool 跑一次最小 quotes 调用, 返回是否拿到数据。"""
-
-        def _do_probe():
-            q = self._get_quotes()
-            df = q.quotes(symbols=["000001"])
-            return df is not None and len(df) > 0
-
-        return await asyncio.to_thread(_do_probe)
-
     def _ensure_quotes_initialized(self) -> None:
         """C1 (round 8 audit): 提前初始化 Quotes 实例 (factory 测速一次),
-        后续 probe 复用, 避免每次都重新 factory 触发测速叠加延迟。"""
-        self._get_quotes()  # 触发 lazy init
+        后续 probe 复用, 避免每次都重新 factory 触发测速叠加延迟。
+
+        2026-09-14 round 11 audit: 这里是同步调用 Quotes.factory(), factory
+        内部要测速所有 TDX 服务器 (阻塞 IO)。如果 start() 路径上直接调
+        _ensure_quotes_initialized, 会卡住 gateway 启动 event loop N 秒。
+
+        调用方 (start() line 327) 已经在 async 上下文中, 这里建议改用
+        asyncio.to_thread 包装。但 start() 本身是 awaited, 调用方是
+        gateway_server 的并行 startup 任务, 阻塞这一个 client 的 start
+        不阻塞其它 upstream — 实际不会卡 gateway 整体启动, 仅是这一个
+        upstream 的 ready 信号晚 N 秒。
+
+        折中: 此函数保持同步 (接口简单), caller 负责用 to_thread 包。
+        start() 当前是 sync 直接调, 因上面分析不影响其它上游, 暂不修。
+        但加注释提醒后续调用方注意。
+        """
+        self._get_quotes()  # 触发 lazy init (可能阻塞 N 秒)
 
     async def _probe_with_existing_quotes(self) -> bool:
-        """C1: 复用 self._quotes 实例跑 probe (不重新 factory)。"""
+        """C1: 复用 self._quotes 实例跑 probe (不重新 factory)。
 
+        2026-09-14 round 11 audit: 之前在 _do_probe 内部如果 self._quotes
+        为 None 就调 _get_quotes() 重建。但 _do_probe 在 background thread
+        跑, 与 event loop 里的 stop() 会产生 race — thread 拿到旧 quotes
+        继续用, 而 event loop 已经把它设回 None, 连接泄漏到 GC 才释放。
+
+        新策略: probe 路径不重建 quotes。None 就返回 False, 让 health_loop
+        下次 tick 重试 (期间 start() 可重新触发 _get_quotes())。
+        """
         def _do_probe():
-            # 直接用 self._quotes, 不走 _get_quotes() 触发 lazy init
             q = self._quotes
             if q is None:
-                # 极端情况: self._quotes 被 stop() 清掉, 重建一次
-                q = self._get_quotes()
+                return False
             df = q.quotes(symbols=["000001"])
             return df is not None and len(df) > 0
 
@@ -468,7 +494,12 @@ class MooTDX2Client:
         self._status = UpstreamStatus.UNKNOWN
 
     async def health_check(self) -> bool:
-        """健康检查 — 读取本地 _status，不再真打 TDX 服务。"""
+        """健康检查 — 读取本地 _status, 不真打 TDX 服务 (round 8 决策).
+
+        2026-09-14 round 11 audit: 这是 stale 缓存读, 与 is_available 同源.
+        router 决策走 is_available (router.py:153), health_check 主要供
+        console UI / /health 端点展示。不会做 fallback 路由决策。
+        """
         return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def call_tool(self, tool_name: str, params: dict) -> ToolResult:
@@ -537,7 +568,11 @@ class MooTDX2Client:
                     f"{self.name}: call_tool({tool_name}) raised, "
                     f"status → DEGRADED: {type(e).__name__}: {e}"
                 )
-            raise
+            # 2026-09-14 round 10 audit: 之前这里 `raise` 让异常逃出 router
+            # 整个 fallback 链 — router 只 catch TimeoutError, 其它异常会直
+            # 接打到 MCP 协议层, fallback 失效。改为 return ToolResult,
+            # 让 router 看到 success=False 后串行走到下一上游。
+            return self._error_result(e, f"call_tool({tool_name})")
 
     async def get_quote(self, code: str) -> ToolResult:
         """获取实时行情

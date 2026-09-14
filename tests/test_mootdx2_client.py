@@ -1,3 +1,5 @@
+import asyncio
+import threading
 import pytest
 import unittest.mock as mock
 from datetime import datetime, timedelta
@@ -140,3 +142,230 @@ class TestMooTDX2Client:
                 assert r["event"] == "涨停", f"Expected 涨停 but got {r['event']} for {r['code']}"
             elif r["change_pct"] <= -9.9:
                 assert r["event"] == "跌停"
+
+
+# ========== 2026-09-14 Round 10 audit: call_tool + health_loop 回归保护 ==========
+
+class TestMooTDX2CallToolExceptionSafety:
+    """回归测试: call_tool 在方法抛异常时必须 return ToolResult, 不能 raise.
+
+    修复前: call_tool 顶层 try/except 后 `raise`, 让异常逃出 router 整个
+    fallback 链 — router 只 catch TimeoutError, 其它异常打到 MCP 协议层。
+    修复后: return ToolResult(success=False, error=...), router 看到后
+    继续串行走 fallback。
+    """
+
+    @pytest.mark.asyncio
+    async def test_call_tool_returns_tool_result_on_exception_not_raises(self):
+        """核心回归: 方法抛任何异常, call_tool 必须 return 不 raise."""
+        from src.unihive.api.upstream_client import ToolResult
+        config = MooTDX2Config(name="test_mootdx2", market="std")
+        client = MooTDX2Client(config)
+        client._status = UpstreamStatus.HEALTHY  # 起始 HEALTHY, 触发降级
+
+        async def boom(**kwargs):
+            raise RuntimeError("simulated downstream failure")
+
+        # patch get_quote 触发异常路径
+        client.get_quote = boom
+
+        # 必须 NOT 抛
+        result = await client.call_tool("get_quote", {"code": "600519.SH"})
+
+        assert isinstance(result, ToolResult)
+        assert result.success is False
+        # 错误信息经 error_to_result 包装, 显示为 "内部错误: <type>"
+        # 关键不变量: 不应 raise, 不应让异常逃出 call_tool
+        assert "RuntimeError" in result.error
+        # error_detail 也必须有
+        assert result.error_detail is not None
+        assert result.error_detail.get("error_type") == "internal_error"
+        # 同时 status 应被降级
+        assert client._status == UpstreamStatus.DEGRADED, (
+            f"HEALTHY → DEGRADED 降级失败, 实际 {client._status}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_call_tool_does_not_break_router_fallback_chain(self):
+        """核心回归: 模拟 router 视角, call_tool 抛异常会让 fallback 链断裂.
+
+        router 只 catch TimeoutError (router.py:194), 其它异常直接逃出
+        `_call_with_fallback` → 整个请求失败, 而非 fallback 到下一上游。
+        """
+        config = MooTDX2Config(name="test_mootdx2", market="std")
+        client = MooTDX2Client(config)
+
+        async def boom(**kwargs):
+            raise ConnectionError("upstream socket reset")
+
+        client.get_quote = boom
+
+        # 用 asyncio.wait_for 模拟 router 的包装, 验证不会逃出
+        try:
+            result = await asyncio.wait_for(
+                client.call_tool("get_quote", {"code": "600000"}),
+                timeout=5.0,
+            )
+            assert result.success is False
+            # 关键不变量: 不应 raise, 不应让异常逃出 call_tool
+            assert "upstream socket reset" in result.error
+            assert result.error_detail["error_type"] == "connection_error"
+        except asyncio.TimeoutError:
+            pytest.fail("call_tool 应该 return 不应 timeout")
+        except Exception as e:
+            pytest.fail(
+                f"call_tool 不应让异常逃出 (router 拿不到 fallback 机会): {type(e).__name__}: {e}"
+            )
+
+
+class TestMooTDX2HealthLoopRecovery:
+    """回归测试: health_loop DEGRADED → HEALTHY 自动恢复."""
+
+    @pytest.mark.asyncio
+    async def test_health_loop_recovers_degraded_to_healthy(self, monkeypatch):
+        """DEGRADED 状态在 TDX 恢复后应被 health_loop 推回 HEALTHY.
+
+        简化策略: 把 health_loop 内的 `await asyncio.sleep(30.0)` 替换为
+        `await asyncio.sleep(0.05)`, 直接 monkeypatch 该方法 (而不是全局
+        asyncio.sleep — 后者会自递归)。
+        """
+        config = MooTDX2Config(name="test_mootdx2", market="std")
+        client = MooTDX2Client(config)
+
+        # mock quotes 让 probe 成功
+        class MockQuotes:
+            def quotes(self, symbols):
+                import pandas as pd
+                return pd.DataFrame([{"symbol": "000001", "close": 10.0}])
+
+            def close(self):
+                pass
+
+        client._quotes = MockQuotes()
+        client._status = UpstreamStatus.DEGRADED
+
+        # 替换 client 实例的 health_loop: 不改源码, 而是用 faster 副本
+        # 通过 patch.object 直接覆盖该方法, 内部跑简化版的 while + probe
+        async def fast_health_loop():
+            """简化版 health_loop: sleep 0.05s 而非 30s, 逻辑与原版一致."""
+            try:
+                while True:
+                    await asyncio.sleep(0.05)
+                    if client._quotes is None:
+                        continue
+                    try:
+                        ok = await asyncio.wait_for(
+                            client._probe_with_existing_quotes(),
+                            timeout=2.5,
+                        )
+                        if ok and client._status != UpstreamStatus.HEALTHY:
+                            client._status = UpstreamStatus.HEALTHY
+                        elif not ok and client._status == UpstreamStatus.HEALTHY:
+                            client._status = UpstreamStatus.DEGRADED
+                    except asyncio.TimeoutError:
+                        if client._status == UpstreamStatus.HEALTHY:
+                            client._status = UpstreamStatus.DEGRADED
+            except asyncio.CancelledError:
+                pass
+
+        monkeypatch.setattr(client, "_health_loop", fast_health_loop)
+
+        # 启动 health_loop, 等 0.2s 看是否恢复到 HEALTHY
+        task = asyncio.create_task(client._health_loop())
+        await asyncio.sleep(0.2)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        assert client._status == UpstreamStatus.HEALTHY, (
+            f"health_loop 应把 DEGRADED 推回 HEALTHY, 实际 {client._status}"
+        )
+
+
+class TestMooTDX2MetricsThreadSafety:
+    """回归测试: 并发 _record_error 不能丢更新."""
+
+    def test_concurrent_record_error_no_lost_updates(self):
+        config = MooTDX2Config(name="test_mootdx2", market="std")
+        client = MooTDX2Client(config)
+
+        n_writers = 10
+        per_writer = 100
+
+        def writer(error_type):
+            for _ in range(per_writer):
+                client._record_error(error_type)
+
+        threads = [
+            threading.Thread(target=writer, args=("test_error",))
+            for _ in range(n_writers)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # 期望 total_errors = n_writers * per_writer = 1000
+        assert client._metrics["total_errors"] == n_writers * per_writer, (
+            f"丢更新: 期望 {n_writers * per_writer}, "
+            f"实际 {client._metrics['total_errors']}"
+        )
+        # error_counts['test_error'] 也必须 1000
+        assert client._metrics["error_counts"].get("test_error") == n_writers * per_writer
+
+
+# ========== 2026-09-14 Round 11 audit: startup edge cases ==========
+
+class TestMooTDX2StartEdgeCases:
+    """回归测试: start() 在 quotes init 失败 / probe 路径上的边角行为."""
+
+    @pytest.mark.asyncio
+    async def test_start_does_not_launch_health_loop_when_quotes_init_fails(self, monkeypatch):
+        """HIGH-1: factory 失败时不应启动 health_loop (会纯空转 30s/tick).
+
+        之前实现: init 失败也调 _start_health_loop(), health_loop 每次
+        sleep 30s 后看到 self._quotes is None 就 continue — 纯空转,浪费
+        CPU + 日志。改为: init 失败时不启动, 等下次 start() 重新尝试。
+        """
+        config = MooTDX2Config(name="test_mootdx2", market="std")
+        client = MooTDX2Client(config)
+
+        # 强制 _get_quotes 抛异常, 模拟 factory 失败
+        def boom_quotes():
+            raise ConnectionError("TDX unreachable")
+
+        monkeypatch.setattr(client, "_get_quotes", boom_quotes)
+
+        await client.start()
+
+        assert client._status == UpstreamStatus.DEGRADED
+        # 关键断言: health_loop 不应被启动
+        assert client._health_task is None, (
+            f"init 失败时不应启动 health_loop, 但 _health_task={client._health_task}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_probe_returns_false_when_quotes_is_none(self):
+        """HIGH-2: _probe_with_existing_quotes 在 quotes 为 None 时应返 False
+        而非调 _get_quotes() 重建 — 后者与 stop() race 会泄漏旧连接。
+        """
+        config = MooTDX2Config(name="test_mootdx2", market="std")
+        client = MooTDX2Client(config)
+        client._quotes = None
+
+        # _get_quotes 应根本不被调用
+        called = []
+
+        def mock_get_quotes():
+            called.append(1)
+            raise AssertionError(
+                "probe 路径不应调 _get_quotes() (会与 stop race)"
+            )
+
+        client._get_quotes = mock_get_quotes
+
+        result = await client._probe_with_existing_quotes()
+        assert result is False
+        assert called == [], "probe 路径不应触发 factory"

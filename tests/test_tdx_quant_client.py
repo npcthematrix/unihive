@@ -77,7 +77,7 @@ async def test_start_when_module_missing(client_config, monkeypatch):
     assert c.status == UpstreamStatus.UNAVAILABLE
 
 
-# ========== 2026-09-14: 远程 7709 端口探测 (TQ 行情链路) ==========
+# ========== 2026-09-14: 远程 17709 端口探测 (TQ 行情链路) ==========
 
 @pytest.mark.asyncio
 async def test_probe_tdx_remote_port_success(client_config, mock_tq):
@@ -99,6 +99,146 @@ async def test_probe_tdx_remote_port_unreachable_warns(client_config, mock_tq, c
         with caplog.at_level(logging.WARNING, logger="src.unihive.api.tdx_quant_client"):
             await c.start()
     assert "TQ port 17709" in caplog.text
+
+
+# ========== 2026-09-14: verify 不再用 isinstance(dict) 判定 ==========
+
+@pytest.mark.asyncio
+async def test_verify_treats_empty_list_as_ok(client_config, mock_tq):
+    """修复: tqcenter.get_user_sector() 在 DLL 失败时静默返回 [], 不抛异常.
+
+    之前的 verify 用 isinstance(result, dict) + ErrorId=='0' 判定, 导致
+    返回 [] 时永远被判失败, status 永远 DEGRADED, call_tool 永远被拒。
+
+    新策略: 调通即 OK (无异常)。返回 [] (无数据) 视为 DLL 链路通,
+    真实数据状态由 call_tool 阶段的 ErrorId 自然反映。
+    """
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    # 关键: mock 返回 list 而非 dict, 模拟真实 tqcenter 行为
+    mock_tq.get_user_sector.return_value = []   # 不是 dict
+    c = TdxQuantClient(client_config)
+    ok = await c.start()
+    # 必须取消 health_loop 避免后续把状态改回 HEALTHY
+    if c._health_task:
+        c._health_task.cancel()
+        try:
+            await c._health_task
+        except asyncio.CancelledError:
+            pass
+    assert ok is True, f"start() 失败, 但 verify 应该 OK: {ok}"
+    assert c.status == UpstreamStatus.HEALTHY, (
+        f"返回 [] 应被 verify 视为 OK (status=HEALTHY), 实际 {c.status}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_treats_exception_as_degraded(client_config, mock_tq):
+    """verify 抛异常 → DEGRADED (DLL 链路不通)."""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    mock_tq.get_user_sector.side_effect = OSError("DLL not loaded")
+    c = TdxQuantClient(client_config)
+    ok = await c.start()
+    if c._health_task:
+        c._health_task.cancel()
+        try:
+            await c._health_task
+        except asyncio.CancelledError:
+            pass
+    assert ok is True   # init 成功 (initialize 返回 OK), 仅 verify 失败
+    assert c.status == UpstreamStatus.DEGRADED, (
+        f"verify 抛异常应 DEGRADED, 实际 {c.status}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_treats_dict_as_ok(client_config, mock_tq):
+    """verify 返回 dict (即使 ErrorId 非 0) 也视为 OK — 真实数据状态由 call_tool 反映."""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    mock_tq.get_user_sector.return_value = {"ErrorId": "6", "ErrMsg": "disconnected"}
+    c = TdxQuantClient(client_config)
+    await c.start()
+    if c._health_task:
+        c._health_task.cancel()
+        try:
+            await c._health_task
+        except asyncio.CancelledError:
+            pass
+    assert c.status == UpstreamStatus.HEALTHY, (
+        f"返回 dict 也应被 verify 视为 OK (调通即 OK), 实际 {c.status}"
+    )
+
+
+# ========== 2026-09-14: DEGRADED 状态必须允许 call_tool (修复双锁死锁) ==========
+
+@pytest.mark.asyncio
+async def test_call_tool_allows_degraded_status(client_config, mock_tq):
+    """DEGRADED 状态时 call_tool 不能返回 'upstream unavailable'.
+
+    背景: 之前 call_tool 仅允许 HEALTHY。_verify_tq_interface() 失败导致的
+    DEGRADED (典型场景: TdxW.exe 进程在但未登录) 会让 call_tool 永远返回
+    'upstream unavailable', 即使 DLL 已就绪且能响应 tq.* 调用 — 形成死锁。
+
+    修复: call_tool 与 is_available 对齐, 仅 UNAVAILABLE 拒绝, DEGRADED 通过。
+
+    如何触发 verify 失败: 让 get_user_sector 抛异常 (ctypes 段错误 / DLL
+    缺失) — verify 改成"调通即 OK"后, 返回 [] 或 dict 都被视为 OK, 只有
+    抛异常才算 DLL 链路不通。
+    """
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    # 让 verify 抛异常 → 启动后 status=DEGRADED
+    mock_tq.get_user_sector.side_effect = OSError("DLL not loaded")
+    c = TdxQuantClient(client_config)
+    await c.start()
+    # 必须取消后台 health_loop, 否则 1s 后它会重试 get_user_sector 把状态改回 HEALTHY
+    if c._health_task:
+        c._health_task.cancel()
+        try:
+            await c._health_task
+        except asyncio.CancelledError:
+            pass
+    assert c.status == UpstreamStatus.DEGRADED, (
+        f"verify 抛异常应进入 DEGRADED, 实际 {c.status}"
+    )
+    # DEGRADED 下调 get_market_snapshot 必须真发出调用
+    # 但注意: 健康探活(_health_loop)已经把 _fail_count 重置, mock 已正常返回
+    # 因此这里直接 reset 一次 mock 让后续调用不抛
+    mock_tq.get_user_sector.side_effect = None
+    mock_tq.get_market_snapshot.return_value = {
+        "ErrorId": "0", "Now": "10.5", "LastClose": "10.0"
+    }
+    result = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    assert result.success is True, (
+        f"DEGRADED 状态应允许调用, 实际错误: {result.error}"
+    )
+    assert result.error is None, (
+        f"DEGRADED 不应携带 error 字段, 实际: {result.error!r}"
+    )
+    assert result.data["Now"] == "10.5"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_rejects_only_unavailable(client_config, mock_tq):
+    """明确: 只有 UNAVAILABLE 拒绝, HEALTHY/DEGRADED/UNKNOWN 都通过."""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    # UNKNOWN: start() 之前调用 (init 没跑过, _tq 是 None)
+    c = TdxQuantClient(client_config)
+    # _tq 是 None, 必须被拒 (这是双重保护, 不光是 status)
+    result = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    assert result.success is False
+    assert "unavailable" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_after_failed_init_returns_unavailable(client_config, mock_tq):
+    """init 失败 → status=UNAVAILABLE → call_tool 必须返回 unavailable."""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    mock_tq.initialize.side_effect = FileNotFoundError("no tqcenter")
+    c = TdxQuantClient(client_config)
+    await c.start()  # init 失败, status=UNAVAILABLE, 不抛
+    assert c.status == UpstreamStatus.UNAVAILABLE
+    result = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    assert result.success is False
+    assert "unavailable" in result.error.lower()
 
 
 @pytest.mark.asyncio

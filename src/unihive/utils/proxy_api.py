@@ -8,16 +8,32 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ..core.proxy_adapter import Mootdx2ToTdxQuantAdapter
+from ..core.proxy_settings import ProxySettings
+
+if TYPE_CHECKING:
+    from ..api.upstream_client import UpstreamClient
 
 logger = logging.getLogger(__name__)
 
 _ADAPTER = Mootdx2ToTdxQuantAdapter()
+
+# Module-level state — set by gateway_server via configure_proxy_api()
+_proxy_settings: ProxySettings | None = None
+_upstreams: dict[str, "UpstreamClient"] | None = None
+
+
+def configure_proxy_api(proxy_settings: ProxySettings, upstreams: dict[str, "UpstreamClient"]) -> None:
+    """Call from gateway_server after ProxySettings + upstreams are created."""
+    global _proxy_settings, _upstreams
+    _proxy_settings = proxy_settings
+    _upstreams = upstreams
+    logger.info("proxy_api configured with proxy_settings and upstreams")
 
 
 def _get_app_state(req: Request) -> Any:
@@ -33,24 +49,30 @@ def _coverage_table() -> list[dict[str, str]]:
     ]
 
 
-def _tdx_quant_status(app_state) -> str:
-    """Read tdx_quant upstream status — returns enum value name or 'MISSING'."""
-    client = app_state.upstreams.get("tdx_quant")
+def _tdx_quant_status_from_module() -> str:
+    """Read tdx_quant upstream status from module-level _upstreams."""
+    if _upstreams is None:
+        return "MISSING"
+    client = _upstreams.get("tdx_quant")
     if client is None:
         return "MISSING"
     status = client.status
-    # status is enum — its .value is the underlying string
-    return getattr(status, "value", str(status))
+    # Normalize to uppercase for frontend STATUS_HINTS dict
+    raw = getattr(status, "value", str(status))
+    return raw.upper() if raw else "MISSING"
 
 
 async def get_proxy_settings_handler(req: Request, app_state=None) -> JSONResponse:
     """GET /api/proxy/settings — current state + tdx status + coverage."""
-    if app_state is None:
-        app_state = _get_app_state(req)
+    if _proxy_settings is None:
+        return JSONResponse(
+            {"error": "proxy not configured"},
+            status_code=500,
+        )
     return JSONResponse(
         {
-            "enabled": app_state.proxy_settings.is_enabled(),
-            "tdx_quant_status": _tdx_quant_status(app_state),
+            "enabled": _proxy_settings.is_enabled(),
+            "tdx_quant_status": _tdx_quant_status_from_module(),
             "coverage": _coverage_table(),
         }
     )
@@ -58,8 +80,11 @@ async def get_proxy_settings_handler(req: Request, app_state=None) -> JSONRespon
 
 async def put_proxy_settings_handler(req: Request, app_state=None) -> JSONResponse:
     """PUT /api/proxy/settings — body {enabled: bool}, persists + triggers reload."""
-    if app_state is None:
-        app_state = _get_app_state(req)
+    if _proxy_settings is None:
+        return JSONResponse(
+            {"error": "proxy not configured"},
+            status_code=500,
+        )
     try:
         body = await req.json()
     except json.JSONDecodeError:
@@ -79,12 +104,12 @@ async def put_proxy_settings_handler(req: Request, app_state=None) -> JSONRespon
             status_code=400,
         )
 
-    app_state.proxy_settings.set_enabled(enabled_val)
+    _proxy_settings.set_enabled(enabled_val)
     logger.info(f"proxy settings updated: enabled={enabled_val}")
     return JSONResponse(
         {
-            "enabled": app_state.proxy_settings.is_enabled(),
-            "tdx_quant_status": _tdx_quant_status(app_state),
+            "enabled": _proxy_settings.is_enabled(),
+            "tdx_quant_status": _tdx_quant_status_from_module(),
             "coverage": _coverage_table(),
         }
     )

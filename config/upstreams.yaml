@@ -28,7 +28,7 @@ upstreams:
     description: "MooTDX2 行情接口"
     type: "mootdx2"
     market: "std"
-    tdxdir: "c:/new_tdx64"  # 通达信本地路径，空则自动探索
+    tdxdir: "D:/new_tdx_mock"  # 通达信本地路径，空则自动探索
     capabilities:
       - market_data
       - realtime_quote
