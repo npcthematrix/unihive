@@ -132,3 +132,39 @@ class TestPutProxySettings:
         req = _make_request("PUT", body={"enabled": True})
         await put_proxy_settings_handler(req, app_state)
         assert app_state.proxy_settings.is_enabled() is True
+
+    @pytest.mark.asyncio
+    async def test_put_rejects_malformed_json(self, app_state):
+        """PUT with invalid JSON body should return 400."""
+        req = Request(
+            scope={
+                "type": "http",
+                "method": "PUT",
+                "path": "/api/proxy/settings",
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+            },
+            receive=AsyncMock(
+                return_value={"type": "http.request", "body": b"{invalid json}", "more_body": False}
+            ),
+        )
+        resp = await put_proxy_settings_handler(req, app_state)
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert "invalid JSON body" in body["error"]
+
+
+class TestBuildProxyRoutes:
+    """build_proxy_routes() returns a list with GET + PUT Route entries."""
+
+    def test_build_proxy_routes_returns_two_routes(self):
+        from src.unihive.utils.proxy_api import build_proxy_routes
+
+        routes = build_proxy_routes()
+        assert isinstance(routes, list)
+        assert len(routes) == 2
+        # First is GET, second is PUT
+        assert routes[0].path == "/api/proxy/settings"
+        assert "GET" in routes[0].methods
+        assert routes[1].path == "/api/proxy/settings"
+        assert "PUT" in routes[1].methods
