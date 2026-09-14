@@ -11,6 +11,7 @@
 """
 import asyncio
 import logging
+import subprocess
 import sys
 import time
 import uuid
@@ -83,12 +84,92 @@ class TdxQuantClient:
         # 直接跳过, 降级路径走错。改为对齐 UpstreamClient / OmniClient。
         return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
+    async def _auto_start_tdx(self) -> bool:
+        """自动启动 TdxW.exe 并等待登录。
+
+        Returns:
+            True: 启动成功并登录完成
+            False: 启动失败或超时
+        """
+        tdx_exe = self.config.tdx_exe_path
+        if not tdx_exe or not tdx_exe.exists():
+            logger.warning(f"[{self.name}] TdxW.exe not configured or not found: {tdx_exe}")
+            return False
+
+        wait_sec = self.config.settings.auto_start_wait_login_sec
+        logger.info(f"[{self.name}] auto-starting TdxW.exe, will wait {wait_sec}s for login...")
+
+        try:
+            # 启动 TdxW.exe (不等待，让它自己启动)
+            subprocess.Popen(
+                [str(tdx_exe)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+            )
+        except Exception as e:
+            logger.warning(f"[{self.name}] failed to start TdxW.exe: {e}")
+            return False
+
+        # 等待用户登录
+        logger.info(f"[{self.name}] waiting {wait_sec}s for TdxW.exe login...")
+        await asyncio.sleep(wait_sec)
+
+        # 尝试初始化 tqcenter
+        try:
+            tqcenter_dir = str(self.config.tqcenter_dir)
+            if tqcenter_dir and tqcenter_dir not in sys.path:
+                sys.path.insert(0, tqcenter_dir)
+            import tqcenter  # noqa: F401
+            self._tq = tqcenter.tq
+            tdx_root = str(self.config.tdx_root_path)
+            self._tq.initialize(tdx_root)
+            logger.info(f"[{self.name}] tqcenter initialized after auto-start")
+            return True
+        except Exception as e:
+            logger.warning(f"[{self.name}] tqcenter init after auto-start failed: {e}")
+            return False
+
     async def start(self) -> bool:
         """加载 tqcenter + initialize + 启动探活任务。
+
+        若初始化失败且配置了 tdx_exe_path，则尝试自动启动 TdxW.exe。
 
         Returns:
             True: 初始化成功，status=HEALTHY
             False: 初始化失败，status=UNAVAILABLE（不抛，gateway 继续）
+        """
+        init_success, first_err = await self._try_initialize()
+        if init_success:
+            self._status = UpstreamStatus.HEALTHY
+            self._health_task = asyncio.create_task(self._health_loop())
+            logger.info(
+                f"[{self.name}] initialized (tdx_root={self.config.tdx_root_path}, "
+                f"strategy_id={self._strategy_id})"
+            )
+            return True
+
+        # 初始化失败，尝试自动启动 TdxW.exe
+        if self.config.tdx_exe_path and self.config.tdx_exe_path.exists():
+            logger.info(f"[{self.name}] init failed: {first_err}, trying auto-start TdxW.exe...")
+            auto_start_ok = await self._auto_start_tdx()
+            if auto_start_ok:
+                self._status = UpstreamStatus.HEALTHY
+                self._health_task = asyncio.create_task(self._health_loop())
+                logger.info(f"[{self.name}] initialized after auto-start")
+                return True
+
+        # 彻底失败
+        logger.error(f"[{self.name}] init failed: {first_err}")
+        self._status = UpstreamStatus.UNAVAILABLE
+        return False
+
+    async def _try_initialize(self) -> tuple[bool, str | None]:
+        """尝试初始化 tqcenter。
+
+        Returns:
+            (True, None): 初始化成功
+            (False, error_message): 初始化失败及原因
         """
         try:
             tqcenter_dir = str(self.config.tqcenter_dir)
@@ -101,25 +182,16 @@ class TdxQuantClient:
             tdx_root = str(self.config.tdx_root_path)
             self._tq.initialize(tdx_root)
             logger.info(f"[{self.name}] TQ strategy_id={self._strategy_id} (记录用, 未传给 DLL)")
-            self._status = UpstreamStatus.HEALTHY
-            self._health_task = asyncio.create_task(self._health_loop())
-            logger.info(f"[{self.name}] initialized (tdx_root={tdx_root}, strategy_id={self._strategy_id})")
-            return True
+            return True, None
         except (FileNotFoundError, ModuleNotFoundError) as e:
-            logger.error(f"[{self.name}] init failed: {e}")
-            self._status = UpstreamStatus.UNAVAILABLE
-            return False
+            return False, str(e)
         except Exception as e:
-            # 含 ErrorId='12' 同名策略：仅警告，仍标记 HEALTHY
+            # 含 ErrorId='12' 同名策略：仅警告，算初始化成功
             err_str = str(e)
             if "ErrorId='12'" in err_str or "同名策略" in err_str:
                 logger.warning(f"[{self.name}] initialize warning: {e}")
-                self._status = UpstreamStatus.HEALTHY
-                self._health_task = asyncio.create_task(self._health_loop())
-                return True
-            logger.error(f"[{self.name}] initialize failed: {e}")
-            self._status = UpstreamStatus.UNAVAILABLE
-            return False
+                return True, None
+            return False, str(e)
 
     async def stop(self):
         """取消探活任务 + tq.close() (后者是同步 DLL 调用, 必须 run_in_executor)。

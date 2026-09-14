@@ -31,6 +31,12 @@ class TdxQuantSettings:
     # 连续失败 N 次后降级为 UNAVAILABLE，停止自动重连
     unavailable_threshold: int = 10
 
+    # TdxW.exe 路径，用于自动启动（可选，不设置则不自动启动）
+    tdx_exe_path: str = ""
+
+    # 自动启动 TdxW.exe 后等待登录的秒数
+    auto_start_wait_login_sec: int = 10
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TdxQuantSettings":
         return cls(
@@ -40,6 +46,8 @@ class TdxQuantSettings:
             call_timeout_sec=int(data.get("call_timeout_sec", 10)),
             reconnect_threshold=int(data.get("reconnect_threshold", 3)),
             unavailable_threshold=int(data.get("unavailable_threshold", 10)),
+            tdx_exe_path=data.get("tdx_exe_path", ""),
+            auto_start_wait_login_sec=int(data.get("auto_start_wait_login_sec", 10)),
         )
 
 
@@ -75,3 +83,8 @@ class TdxQuantConfig:
         if sys_dir.exists():
             return sys_dir
         return user_dir
+
+    @property
+    def tdx_exe_path(self) -> Path:
+        """TdxW.exe 路径，用于自动启动。"""
+        return Path(self.settings.tdx_exe_path) if self.settings.tdx_exe_path else Path()

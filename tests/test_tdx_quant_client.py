@@ -21,7 +21,8 @@ def mock_tq():
     mock_tq_inst.get_market_snapshot = MagicMock(return_value={
         "ErrorId": "0", "Now": "10.5", "LastClose": "10.0",
     })
-    mock_module.tq = MagicMock(return_value=mock_tq_inst)
+    # 代码中是 tqcenter.tq 直接赋值，没有调用，所以直接赋值 mock_tq_inst
+    mock_module.tq = mock_tq_inst
     sys.modules["tqcenter"] = mock_module
     yield mock_tq_inst
     sys.modules.pop("tqcenter", None)
@@ -49,7 +50,8 @@ async def test_start_initializes_tq_singleton(client_config, mock_tq):
     c = TdxQuantClient(client_config)
     assert await c.start() is True
     assert c.status == UpstreamStatus.HEALTHY
-    mock_tq.initialize.assert_called_once_with("test_strategy")
+    # tqcenter.initialize 接受 tdx_root 路径 (Windows 风格反斜杠)
+    mock_tq.initialize.assert_called_once_with("D:\\fake_tdx")
 
 
 @pytest.mark.asyncio
