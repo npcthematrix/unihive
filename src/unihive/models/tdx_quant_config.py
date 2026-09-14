@@ -31,9 +31,8 @@ class TdxQuantSettings:
     # 连续失败 N 次后降级为 UNAVAILABLE，停止自动重连
     unavailable_threshold: int = 10
 
-    # 远程 TDX 行情端口 (mootdx2 等本地库连的端口)
-    # 用于探测 TdxW.exe 与远程行情服务的连通性
-    tdx_remote_port: int = 7709
+    # TQ 策略本地端口 (TQ Center DLL 通信端口)
+    tdx_remote_port: int = 17709
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TdxQuantSettings":
@@ -44,7 +43,7 @@ class TdxQuantSettings:
             call_timeout_sec=int(data.get("call_timeout_sec", 10)),
             reconnect_threshold=int(data.get("reconnect_threshold", 3)),
             unavailable_threshold=int(data.get("unavailable_threshold", 10)),
-            tdx_remote_port=int(data.get("tdx_remote_port", 7709)),
+            tdx_remote_port=int(data.get("tdx_remote_port", 17709)),
         )
 
 

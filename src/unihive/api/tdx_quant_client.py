@@ -119,11 +119,11 @@ class TdxQuantClient:
             True: 初始化成功，status=HEALTHY
             False: 初始化失败，status=UNAVAILABLE（不抛，gateway 继续）
         """
-        # 先探测 7709 端口连通性, 提前发现 TDX 行情链路问题
+        # 先探测 17709 端口连通性 (TQ Center 本地端口)
         if not await self._probe_tdx_remote_port():
             logger.warning(
-                f"[{self.name}] TDX remote port 7709 unreachable. "
-                f"Check: 1) TdxW.exe running and logged in 2) network 3) firewall"
+                f"[{self.name}] TQ port 17709 unreachable. "
+                f"Check: 1) TdxW.exe running and logged in 2) TQ strategy manager enabled"
             )
 
         init_success, first_err = await self._try_initialize()

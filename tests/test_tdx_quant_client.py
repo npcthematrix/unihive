@@ -98,7 +98,7 @@ async def test_probe_tdx_remote_port_unreachable_warns(client_config, mock_tq, c
     with patch.object(c, "_probe_tdx_remote_port", new=AsyncMock(return_value=False)):
         with caplog.at_level(logging.WARNING, logger="src.unihive.api.tdx_quant_client"):
             await c.start()
-    assert "TDX remote port" in caplog.text
+    assert "TQ port 17709" in caplog.text
 
 
 @pytest.mark.asyncio

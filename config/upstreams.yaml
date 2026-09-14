@@ -43,7 +43,7 @@ upstreams:
     type: "tdx_quant"
     market: "std"
     tdx_root: "D:/new_tdx_mock"
-    tdx_remote_port: 7709
+    tdx_remote_port: 17709
     strategy_id: "unihive_gateway"
     health_check_interval_sec: 60
     call_timeout_sec: 10
