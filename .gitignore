@@ -17,12 +17,16 @@ env/
 account.session
 *.session
 
+# curl/libcurl cookie jar（手动抓包脚本产物，可能含会话凭据）
+cookies.txt
+
 # Logs & runtime data
 logs/*.log
 logs/*.db
 logs/*.db-shm
 logs/*.db-wal
 logs/cache_stats.json
+logs/tdx_quant_strategy_id
 data/
 
 # Session / planning artifacts (not part of the product)
