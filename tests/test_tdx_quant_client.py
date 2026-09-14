@@ -4,8 +4,9 @@ import sys
 import types
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.unihive.api.upstream_client import UpstreamStatus
 from src.unihive.models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
 from src.unihive.exceptions.tdx_quant_errors import TdxQuantErrorType
 
@@ -74,6 +75,30 @@ async def test_start_when_module_missing(client_config, monkeypatch):
     # tdx_root 指向不存在的目录，import tqcenter 会失败
     assert await c.start() is False
     assert c.status == UpstreamStatus.UNAVAILABLE
+
+
+# ========== 2026-09-14: 远程 7709 端口探测 (TQ 行情链路) ==========
+
+@pytest.mark.asyncio
+async def test_probe_tdx_remote_port_success(client_config, mock_tq):
+    """端口可达 → 探测成功, 启动正常."""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    c = TdxQuantClient(client_config)
+    with patch.object(c, "_probe_tdx_remote_port", new=AsyncMock(return_value=True)):
+        await c.start()
+    assert c.status == UpstreamStatus.HEALTHY
+
+
+@pytest.mark.asyncio
+async def test_probe_tdx_remote_port_unreachable_warns(client_config, mock_tq, caplog):
+    """端口不可达 → 警告但不影响 init (TQ 可在本地端口运行)."""
+    import logging
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    c = TdxQuantClient(client_config)
+    with patch.object(c, "_probe_tdx_remote_port", new=AsyncMock(return_value=False)):
+        with caplog.at_level(logging.WARNING, logger="src.unihive.api.tdx_quant_client"):
+            await c.start()
+    assert "TDX remote port" in caplog.text
 
 
 @pytest.mark.asyncio

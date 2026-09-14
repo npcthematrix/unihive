@@ -43,13 +43,12 @@ upstreams:
     type: "tdx_quant"
     market: "std"
     tdx_root: "D:/new_tdx_mock"
-    tdx_exe_path: "D:/new_tdx_mock/tdxw.exe"
+    tdx_remote_port: 7709
     strategy_id: "unihive_gateway"
     health_check_interval_sec: 60
     call_timeout_sec: 10
     reconnect_threshold: 3
     unavailable_threshold: 10
-    auto_start_wait_login_sec: 10
     capabilities:
       - market_data
       - market_snapshot

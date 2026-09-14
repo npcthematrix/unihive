@@ -121,6 +121,11 @@ class MooTDX2Client:
         self._reader_lock = threading.Lock()  # Reader 缓存锁（高并发保护）
         self._quotes_lock = threading.Lock()  # Quotes 缓存锁（高并发保护）
 
+        # H1 (round 8 audit): 后台周期探活任务, 让 DEGRADED 状态有机会
+        # 在 TDX 恢复后自动回到 HEALTHY。
+        self._health_task: asyncio.Task | None = None
+        self._probe_attempts: int = 0  # 用于 start() 内的重试计数 (H2)
+
         # 指标收集
         self._request_id = 0
         self._metrics = {
@@ -300,33 +305,65 @@ class MooTDX2Client:
         """MED-2 (2026-09-14 round 8 audit): 启动时跑一次轻量连通性探测,
         避免 TDX 不可达时仍报 HEALTHY, 首次请求才报错。探测失败设 DEGRADED
         (留 UNAVAILABLE 给"明确不可用"场景, DEGRADED 表示"探测未通但保留余地
-        让健康检查后续重试")。探测 2.5s 超时, 不阻塞启动。"""
+        让健康检查后续重试")。探测 2.5s 超时, 不阻塞启动。
+
+        H2 (round 8 audit): 探测最多重试 2 次 (间隔 1s), 避免瞬时网络抖动误判。
+        C1 (round 8 audit): 复用 self._quotes 实例, 避免每次 probe 都触发
+        Quotes.factory() 重新测速所有服务器, 启动延迟叠加。
+        """
+        # C1: 提前创建一次 Quotes 实例 (factory 内部测速一次, 后续 probe 复用)
         try:
-            ok = await asyncio.wait_for(
-                self._probe_startup_once(),
-                timeout=2.5,
-            )
-            if ok:
-                self._status = UpstreamStatus.HEALTHY
-                logger.info(f"{self.name}: startup connectivity probe OK")
-            else:
-                self._status = UpstreamStatus.DEGRADED
-                logger.warning(
-                    f"{self.name}: startup probe returned empty; "
-                    f"status=DEGRADED. Check TDX server reachable."
-                )
-        except asyncio.TimeoutError:
-            self._status = UpstreamStatus.DEGRADED
-            logger.warning(
-                f"{self.name}: startup probe timed out after 2.5s; "
-                f"status=DEGRADED. Check TDX server reachable."
-            )
+            self._ensure_quotes_initialized()
         except Exception as e:
-            self._status = UpstreamStatus.DEGRADED
             logger.warning(
-                f"{self.name}: startup probe failed ({type(e).__name__}: {e}); "
-                f"status=DEGRADED. Check TDX server reachable."
+                f"{self.name}: Quotes init failed ({type(e).__name__}: {e}); "
+                f"status=DEGRADED. TDX server may be unreachable."
             )
+            self._status = UpstreamStatus.DEGRADED
+            self._start_health_loop()
+            return
+
+        # H2: probe 最多重试 2 次 (总共 3 次尝试)
+        for attempt in range(3):
+            try:
+                ok = await asyncio.wait_for(
+                    self._probe_with_existing_quotes(),
+                    timeout=2.5,
+                )
+                if ok:
+                    self._status = UpstreamStatus.HEALTHY
+                    logger.info(
+                        f"{self.name}: startup probe OK (attempt {attempt + 1}/3)"
+                    )
+                    self._start_health_loop()
+                    return
+                logger.warning(
+                    f"{self.name}: startup probe empty (attempt {attempt + 1}/3)"
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"{self.name}: startup probe timed out (attempt {attempt + 1}/3)"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"{self.name}: startup probe failed "
+                    f"({type(e).__name__}: {e}) (attempt {attempt + 1}/3)"
+                )
+            if attempt < 2:
+                await asyncio.sleep(1.0)
+
+        # 3 次都失败 → DEGRADED (留余地让 health loop 重试)
+        self._status = UpstreamStatus.DEGRADED
+        tdxdir = (
+            self.config.settings.tdxdir
+            if self.config.settings else "N/A"
+        )
+        logger.warning(
+            f"{self.name}: startup probe failed 3 times; "
+            f"status=DEGRADED. Check TDX server reachable at "
+            f"tdxdir={tdxdir}."
+        )
+        self._start_health_loop()
 
     async def _probe_startup_once(self) -> bool:
         """在 blocking pool 跑一次最小 quotes 调用, 返回是否拿到数据。"""
@@ -338,7 +375,83 @@ class MooTDX2Client:
 
         return await asyncio.to_thread(_do_probe)
 
+    def _ensure_quotes_initialized(self) -> None:
+        """C1 (round 8 audit): 提前初始化 Quotes 实例 (factory 测速一次),
+        后续 probe 复用, 避免每次都重新 factory 触发测速叠加延迟。"""
+        self._get_quotes()  # 触发 lazy init
+
+    async def _probe_with_existing_quotes(self) -> bool:
+        """C1: 复用 self._quotes 实例跑 probe (不重新 factory)。"""
+
+        def _do_probe():
+            # 直接用 self._quotes, 不走 _get_quotes() 触发 lazy init
+            q = self._quotes
+            if q is None:
+                # 极端情况: self._quotes 被 stop() 清掉, 重建一次
+                q = self._get_quotes()
+            df = q.quotes(symbols=["000001"])
+            return df is not None and len(df) > 0
+
+        return await asyncio.to_thread(_do_probe)
+
+    def _start_health_loop(self) -> None:
+        """H1 (round 8 audit): 启动后台周期探活, 让 DEGRADED 状态有机会
+        在 TDX 恢复后回到 HEALTHY。每 30s probe 一次 (复用 quotes)。"""
+        if self._health_task and not self._health_task.done():
+            return
+        self._health_task = asyncio.create_task(self._health_loop())
+
+    async def _health_loop(self) -> None:
+        """后台周期探活: DEGRADED → HEALTHY 自动恢复, HEALTHY → DEGRADED 失败检测。"""
+        try:
+            while True:
+                await asyncio.sleep(30.0)
+                try:
+                    ok = await asyncio.wait_for(
+                        self._probe_with_existing_quotes(),
+                        timeout=2.5,
+                    )
+                    if ok and self._status != UpstreamStatus.HEALTHY:
+                        self._status = UpstreamStatus.HEALTHY
+                        logger.info(
+                            f"{self.name}: health_loop recovered → HEALTHY"
+                        )
+                    elif not ok and self._status == UpstreamStatus.HEALTHY:
+                        self._status = UpstreamStatus.DEGRADED
+                        logger.warning(
+                            f"{self.name}: health_loop probe empty → DEGRADED"
+                        )
+                except asyncio.TimeoutError:
+                    if self._status == UpstreamStatus.HEALTHY:
+                        self._status = UpstreamStatus.DEGRADED
+                        logger.warning(
+                            f"{self.name}: health_loop timeout → DEGRADED"
+                        )
+                except Exception as e:
+                    logger.debug(
+                        f"{self.name}: health_loop probe error: {e}"
+                    )
+        except asyncio.CancelledError:
+            pass
+
     async def stop(self):
+        # H1: 取消后台探活任务
+        if self._health_task and not self._health_task.done():
+            self._health_task.cancel()
+            try:
+                await self._health_task
+            except asyncio.CancelledError:
+                pass
+            self._health_task = None
+        # M4 (round 8 audit): 关闭 Quotes 实例防止连接泄漏
+        if self._quotes is not None:
+            try:
+                close_method = getattr(self._quotes, "close", None)
+                if close_method:
+                    await asyncio.to_thread(close_method)
+            except Exception as e:
+                logger.debug(f"{self.name}: Quotes.close failed: {e}")
+            self._quotes = None
         self._status = UpstreamStatus.UNKNOWN
 
     async def health_check(self) -> bool:

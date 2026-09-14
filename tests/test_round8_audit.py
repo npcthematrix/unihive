@@ -74,7 +74,12 @@ class TestMooTDX2StartProbe:
         mock_quotes = MagicMock()
         mock_quotes.quotes.return_value = mock_df
 
-        with patch.object(client, "_get_quotes", return_value=mock_quotes):
+        # H2/C1: 现在 mock 复用接口 (_ensure_quotes + _probe_with_existing)
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_probe_with_existing_quotes", return_value=True
+        ):
             await client.start()
 
         assert client.status == UpstreamStatus.HEALTHY
@@ -83,10 +88,13 @@ class TestMooTDX2StartProbe:
     async def test_start_probe_empty_sets_degraded(self):
         """探测返回空 DataFrame → DEGRADED (而非 HEALTY)."""
         client = self._make_client()
-        mock_quotes = MagicMock()
-        mock_quotes.quotes.return_value = pd.DataFrame()  # 空
 
-        with patch.object(client, "_get_quotes", return_value=mock_quotes):
+        # H2: 3 次都空 → DEGRADED
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_probe_with_existing_quotes", return_value=False
+        ):
             await client.start()
 
         assert client.status == UpstreamStatus.DEGRADED
@@ -95,18 +103,20 @@ class TestMooTDX2StartProbe:
     async def test_start_probe_timeout_sets_degraded(self):
         """探测 2.5s 超时 → DEGRADED, 不阻塞启动."""
         client = self._make_client()
-        mock_quotes = MagicMock()
 
-        def slow_probe():
-            import time
-            time.sleep(5.0)  # 触发 2.5s 超时
-            return pd.DataFrame([{"symbol": "x"}])
+        # H2: 模拟超时 (asyncio.TimeoutError), 3 次都超时
+        async def slow_probe():
+            await asyncio.sleep(5.0)
+            return True
 
-        mock_quotes.quotes.side_effect = slow_probe
-
-        with patch.object(client, "_get_quotes", return_value=mock_quotes):
-            # 不应阻塞 5s
-            await asyncio.wait_for(client.start(), timeout=4.0)
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_probe_with_existing_quotes", side_effect=slow_probe
+        ):
+            # H2 重试间隔 1s, 3 次 × (2.5s timeout + 1s wait) ≈ 11s;
+            # 用 asyncio.wait_for 10s 兜底, 实际测试要够长时间。
+            await asyncio.wait_for(client.start(), timeout=15.0)
 
         assert client.status == UpstreamStatus.DEGRADED
 
@@ -114,13 +124,124 @@ class TestMooTDX2StartProbe:
     async def test_start_probe_exception_sets_degraded(self):
         """探测抛异常 (TDX 服务不可达 / mootdx2 库报错) → DEGRADED."""
         client = self._make_client()
-        mock_quotes = MagicMock()
-        mock_quotes.quotes.side_effect = ConnectionError("TDX unreachable")
 
-        with patch.object(client, "_get_quotes", return_value=mock_quotes):
+        async def bad_probe():
+            raise ConnectionError("TDX unreachable")
+
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_probe_with_existing_quotes", side_effect=bad_probe
+        ):
             await client.start()
 
         assert client.status == UpstreamStatus.DEGRADED
+
+    @pytest.mark.asyncio
+    async def test_probe_retries_up_to_3_times_on_empty(self):
+        """H2: 探测 3 次都空 → DEGRADED, 调用 3 次 _probe_with_existing_quotes."""
+        client = self._make_client()
+        call_count = 0
+
+        async def count_empty_probe():
+            nonlocal call_count
+            call_count += 1
+            return False
+
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_probe_with_existing_quotes", side_effect=count_empty_probe
+        ):
+            await client.start()
+
+        assert call_count == 3
+        assert client.status == UpstreamStatus.DEGRADED
+
+    @pytest.mark.asyncio
+    async def test_probe_recovers_on_second_attempt(self):
+        """H2: 第 2 次 probe 成功 → HEALTHY (不会傻等 3 次全失败)."""
+        client = self._make_client()
+        call_count = 0
+
+        async def recover_on_second():
+            nonlocal call_count
+            call_count += 1
+            return call_count >= 2  # 第 2 次 True
+
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_probe_with_existing_quotes", side_effect=recover_on_second
+        ):
+            await client.start()
+
+        assert call_count == 2  # 第 2 次成功后不再 probe
+        assert client.status == UpstreamStatus.HEALTHY
+
+
+# ========== H1: MooTDX2 后台健康循环 ==========
+
+class TestMooTDX2HealthLoop:
+    """H1: 后台 _health_loop 让 DEGRADED 状态有机会自动恢复到 HEALTHY."""
+
+    def _make_client(self):
+        config = MooTDX2Config(name="test_tdx", market="std")
+        return MooTDX2Client(config)
+
+    @pytest.mark.asyncio
+    async def test_start_starts_health_loop(self):
+        """start() 后会启动 _health_loop 后台任务."""
+        client = self._make_client()
+
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_probe_with_existing_quotes", return_value=True
+        ):
+            await client.start()
+
+        assert client._health_task is not None
+        assert not client._health_task.done()
+        # 清理
+        await client.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_health_loop(self):
+        """stop() 取消 _health_loop 任务."""
+        client = self._make_client()
+
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_probe_with_existing_quotes", return_value=True
+        ):
+            await client.start()
+
+        health_task = client._health_task
+        await client.stop()
+        assert health_task.done()
+
+    @pytest.mark.asyncio
+    async def test_stop_closes_quotes_instance(self):
+        """M4: stop() 关闭 Quotes 实例防止连接泄漏."""
+        client = self._make_client()
+        mock_quotes = MagicMock()
+
+        with patch.object(
+            client, "_ensure_quotes_initialized"
+        ), patch.object(
+            client, "_get_quotes", return_value=mock_quotes
+        ), patch.object(
+            client, "_probe_with_existing_quotes", return_value=True
+        ):
+            await client.start()
+            # 模拟正常请求触发 quotes 实例化
+            client._quotes = mock_quotes
+
+        await client.stop()
+        assert mock_quotes.close.called
+        assert client._quotes is None
 
 
 # ========== MED-3: OmniClient DB 缺失 → UNAVAILABLE ==========

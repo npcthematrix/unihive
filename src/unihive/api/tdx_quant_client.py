@@ -11,7 +11,6 @@
 """
 import asyncio
 import logging
-import subprocess
 import sys
 import time
 import uuid
@@ -84,61 +83,49 @@ class TdxQuantClient:
         # 直接跳过, 降级路径走错。改为对齐 UpstreamClient / OmniClient。
         return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
-    async def _auto_start_tdx(self) -> bool:
-        """自动启动 TdxW.exe 并等待登录。
+    async def _probe_tdx_remote_port(self) -> bool:
+        """探测 TDX 远程行情端口 (默认 7709) 是否可达。
 
-        Returns:
-            True: 启动成功并登录完成
-            False: 启动失败或超时
+        通达信客户端通过 DLL 与 TdxW.exe 内部共享连接, 但 mootdx2 等本地库
+        直接连远程 7709 端口。如果远程 7709 不通, 说明行情链路整体不可用。
         """
-        tdx_exe = self.config.tdx_exe_path
-        if not tdx_exe or not tdx_exe.exists():
-            logger.warning(f"[{self.name}] TdxW.exe not configured or not found: {tdx_exe}")
-            return False
-
-        wait_sec = self.config.settings.auto_start_wait_login_sec
-        logger.info(f"[{self.name}] auto-starting TdxW.exe, will wait {wait_sec}s for login...")
-
+        host = "127.0.0.1"  # 本地探测
+        port = self.config.settings.tdx_remote_port
         try:
-            # 启动 TdxW.exe (不等待，让它自己启动)
-            subprocess.Popen(
-                [str(tdx_exe)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+            fut = asyncio.get_event_loop().run_in_executor(
+                get_blocking_executor(),
+                lambda: __import__("socket").create_connection(
+                    (host, port), timeout=2.0
+                ),
             )
-        except Exception as e:
-            logger.warning(f"[{self.name}] failed to start TdxW.exe: {e}")
-            return False
-
-        # 等待用户登录
-        logger.info(f"[{self.name}] waiting {wait_sec}s for TdxW.exe login...")
-        await asyncio.sleep(wait_sec)
-
-        # 尝试初始化 tqcenter
-        try:
-            tqcenter_dir = str(self.config.tqcenter_dir)
-            if tqcenter_dir and tqcenter_dir not in sys.path:
-                sys.path.insert(0, tqcenter_dir)
-            import tqcenter  # noqa: F401
-            self._tq = tqcenter.tq
-            tdx_root = str(self.config.tdx_root_path)
-            self._tq.initialize(tdx_root)
-            logger.info(f"[{self.name}] tqcenter initialized after auto-start")
+            sock = await asyncio.wait_for(fut, timeout=3.0)
+            sock.close()
             return True
         except Exception as e:
-            logger.warning(f"[{self.name}] tqcenter init after auto-start failed: {e}")
+            logger.debug(
+                f"[{self.name}] remote TDX port {port} probe failed: {e}"
+            )
             return False
 
     async def start(self) -> bool:
         """加载 tqcenter + initialize + 启动探活任务。
 
-        若初始化失败且配置了 tdx_exe_path，则尝试自动启动 TdxW.exe。
+        2026-09-14 重构: 探测 7709 端口 (TDX 行情远程端口) 连通性。
+        若远程端口不通, 不尝试激活 TQ 本地接口 (TQ 必须依赖行情连接)。
+        tq.initialize() 本身会自动激活客户端内 TQ 本地接口, 但前提是
+        TdxW.exe 已启动且登录行情。
 
         Returns:
             True: 初始化成功，status=HEALTHY
             False: 初始化失败，status=UNAVAILABLE（不抛，gateway 继续）
         """
+        # 先探测 7709 端口连通性, 提前发现 TDX 行情链路问题
+        if not await self._probe_tdx_remote_port():
+            logger.warning(
+                f"[{self.name}] TDX remote port 7709 unreachable. "
+                f"Check: 1) TdxW.exe running and logged in 2) network 3) firewall"
+            )
+
         init_success, first_err = await self._try_initialize()
         if init_success:
             self._status = UpstreamStatus.HEALTHY
@@ -149,18 +136,11 @@ class TdxQuantClient:
             )
             return True
 
-        # 初始化失败，尝试自动启动 TdxW.exe
-        if self.config.tdx_exe_path and self.config.tdx_exe_path.exists():
-            logger.info(f"[{self.name}] init failed: {first_err}, trying auto-start TdxW.exe...")
-            auto_start_ok = await self._auto_start_tdx()
-            if auto_start_ok:
-                self._status = UpstreamStatus.HEALTHY
-                self._health_task = asyncio.create_task(self._health_loop())
-                logger.info(f"[{self.name}] initialized after auto-start")
-                return True
-
-        # 彻底失败
-        logger.error(f"[{self.name}] init failed: {first_err}")
+        # 初始化失败
+        logger.error(
+            f"[{self.name}] init failed: {first_err}. "
+            f"Check TdxW.exe is running and logged in to行情."
+        )
         self._status = UpstreamStatus.UNAVAILABLE
         return False
 
