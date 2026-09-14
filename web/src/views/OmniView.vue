@@ -206,9 +206,10 @@ async function runQuery(page: number, fromPagination: boolean) {
     }
     const d = await queryOmniSectors(params)
     if (ac.signal.aborted) return
-    sectors.value = d.sectors || []
-    totalCount.value = d.total_count ?? d.total ?? sectors.value.length
-    queryPage.value = d.page ?? page
+    // 后端偶发返回 null (历史缩进 bug 修复前已有, 留兜底避免 .sectors 读取崩溃)。
+    sectors.value = d?.sectors || []
+    totalCount.value = d?.total_count ?? d?.total ?? sectors.value.length
+    queryPage.value = d?.page ?? page
   } catch (e) {
     if ((e as { name?: string })?.name === 'CanceledError') return
     queryError.value = errorMessage(e, '查询失败')

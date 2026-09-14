@@ -255,28 +255,28 @@ class OmniClient:
             conditions.append("(name LIKE ? OR code LIKE ?)")
             params.extend([f"%{keyword}%", f"%{keyword}%"])
 
-            where_clause = " AND ".join(conditions) if conditions else "1=1"
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-            # Total count
-            cursor = conn.execute(f"SELECT COUNT(*) as cnt FROM sectors WHERE {where_clause}", params)
-            total_count = cursor.fetchone()["cnt"]
+        # Total count
+        cursor = conn.execute(f"SELECT COUNT(*) as cnt FROM sectors WHERE {where_clause}", params)
+        total_count = cursor.fetchone()["cnt"]
 
-            # Pagination
-            offset = (page - 1) * page_size
-            cursor = conn.execute(f"""
-                SELECT id, source, board_type, code, name, stock_count, update_time
-                FROM sectors WHERE {where_clause}
-                ORDER BY name LIMIT ? OFFSET ?
-            """, params + [page_size, offset])
+        # Pagination
+        offset = (page - 1) * page_size
+        cursor = conn.execute(f"""
+            SELECT id, source, board_type, code, name, stock_count, update_time
+            FROM sectors WHERE {where_clause}
+            ORDER BY name LIMIT ? OFFSET ?
+        """, params + [page_size, offset])
 
-            sectors = [dict(row) for row in cursor.fetchall()]
-            return {
-                "sectors": sectors,
-                "total": len(sectors),
-                "total_count": total_count,
-                "page": page,
-                "page_size": page_size,
-            }
+        sectors = [dict(row) for row in cursor.fetchall()]
+        return {
+            "sectors": sectors,
+            "total": len(sectors),
+            "total_count": total_count,
+            "page": page,
+            "page_size": page_size,
+        }
 
     async def run_sync(self, source: str = "all", board_type: str = "all") -> dict:
         """Execute sync as the single entry point for both HTTP and CLI.
