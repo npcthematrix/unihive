@@ -1,0 +1,308 @@
+<template>
+  <div class="ups-panel">
+    <!-- 搜索框 -->
+    <div class="cfg-search-wrap" :class="{ 'has-value': search }">
+      <input
+        v-model="search"
+        type="text"
+        class="cfg-search"
+        placeholder="搜索上游... (名称/类型/URL)"
+        aria-label="搜索上游"
+      >
+      <button
+        v-if="search"
+        type="button"
+        class="cfg-search-clear"
+        title="清空"
+        @click="search = ''"
+      >×</button>
+    </div>
+
+    <!-- 上游表 -->
+    <el-table
+      :data="filteredEntries"
+      :empty-text="emptyText"
+      class="cfg-table ups-table"
+      row-key="name"
+    >
+      <el-table-column label="名称" min-width="140">
+        <template #default="{ row }">
+          <div class="ups-name-cell">
+            <button
+              v-if="row.hasDetail"
+              type="button"
+              class="ups-expand-btn"
+              :class="{ expanded: expandedNames.has(row.name) }"
+              :aria-expanded="expandedNames.has(row.name)"
+              :aria-label="expandedNames.has(row.name) ? '收起详情' : '展开详情'"
+              @click="toggleExpand(row.name)"
+            >▸</button>
+            <span class="tool-name">{{ row.name }}</span>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column label="类型" width="100">
+        <template #default="{ row }">
+          <el-tag v-if="row.cfg.type" size="small" effect="plain" round>
+            {{ row.cfg.type }}
+          </el-tag>
+          <span v-else class="muted">-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="状态" width="90">
+        <template #default="{ row }">
+          <span
+            class="cfg-switch"
+            :class="row.cfg.enabled ? 'on' : 'off'"
+            :title="row.cfg.enabled ? '已启用' : '已停用'"
+          >{{ row.cfg.enabled ? '启用' : '停用' }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="Endpoint" min-width="200">
+        <template #default="{ row }">
+          <code v-if="row.cfg.base_url" class="ups-endpoint">{{ row.cfg.base_url }}</code>
+          <span v-else class="muted">-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="超时" width="70" align="right" header-align="right">
+        <template #default="{ row }">
+          {{ row.cfg.timeout_seconds ?? '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column label="API Key" width="170">
+        <template #default="{ row }">
+          <el-tooltip
+            v-if="row.cfg.api_key"
+            content="服务端已脱敏 (前 2 + *** + 后 2 字符) — 原始值在 .env 中"
+            placement="top"
+          >
+            <code class="cfg-mask">{{ row.cfg.api_key }}</code>
+          </el-tooltip>
+          <span v-else class="muted">-</span>
+        </template>
+      </el-table-column>
+      <el-table-column type="expand" v-if="anyExpandable">
+        <template #default="{ row }">
+          <div v-if="envEntries(row.cfg).length" class="ups-detail-block">
+            <div class="ups-detail-label">环境变量 (env)</div>
+            <el-table :data="envEntries(row.cfg)" class="cfg-table ups-env-table">
+              <el-table-column label="变量" width="160">
+                <template #default="{ row: envRow }">
+                  <span class="tool-name">{{ envRow.key }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="值">
+                <template #default="{ row: envRow }">
+                  <el-tooltip
+                    v-if="looksMasked(envRow.value)"
+                    content="服务端已脱敏 (前 2 + *** + 后 2 字符)"
+                    placement="top"
+                  >
+                    <code class="cfg-mask">{{ envRow.value }}</code>
+                  </el-tooltip>
+                  <span v-else>{{ envRow.value }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+          <div v-if="row.cfg.retry" class="ups-detail-block">
+            <div class="ups-detail-label">retry</div>
+            <code class="ups-retry">{{ retryToString(row.cfg.retry) }}</code>
+          </div>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 全局开关 + 日志: 两个独立折叠区 -->
+    <details class="cfg-section" open>
+      <summary class="cfg-section-header">
+        <span class="cfg-section-title">
+          <span class="cfg-section-toggle">▾</span>
+          全局开关
+          <span class="cfg-section-sub">— disable_dangerous / strict_registry</span>
+        </span>
+      </summary>
+      <div class="cfg-section-body">
+        <div class="cfg-toggles-row">
+          <span
+            class="cfg-switch"
+            :class="config?.disable_dangerous ? 'on' : 'off'"
+            :title="`启用后跳过所有 dangerous: true 的 tool (只读 — 修改 YAML 后重启生效)`"
+          >disable_dangerous</span>
+          <span
+            class="cfg-switch"
+            :class="config?.strict_registry ? 'on' : 'off'"
+            :title="`启用后启动校验 YAML 工具名都在上游 tools/list 中实际出现 (只读 — 修改 YAML 后重启生效)`"
+          >strict_registry</span>
+        </div>
+      </div>
+    </details>
+
+    <details class="cfg-section" open>
+      <summary class="cfg-section-header">
+        <span class="cfg-section-title">
+          <span class="cfg-section-toggle">▾</span>
+          日志配置
+        </span>
+      </summary>
+      <div class="cfg-section-body">
+        <div v-if="logRows.length" class="cfg-kv-grid">
+          <template v-for="row in logRows" :key="row.key">
+            <div class="cfg-kv-key">{{ row.key }}</div>
+            <div class="cfg-kv-val">{{ row.display }}</div>
+          </template>
+        </div>
+        <div v-else class="muted">无日志配置</div>
+      </div>
+    </details>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import type { GatewayConfig, UpstreamConfig } from '@/api/config'
+import { loggingToRows, retryToString } from './format'
+
+interface Props {
+  config: GatewayConfig | null
+}
+
+const props = defineProps<Props>()
+
+const search = ref('')
+
+interface UpstreamRow {
+  name: string
+  cfg: UpstreamConfig
+  hasDetail: boolean
+}
+
+/** 把 upstreams 字典转成数组, 保持 Object.entries 顺序 (旧版等价)。 */
+const upstreamEntries = computed<UpstreamRow[]>(() => {
+  const ups = props.config?.upstreams || {}
+  return Object.entries(ups).map(([name, cfg]) => ({
+    name,
+    cfg: cfg || {},
+    hasDetail: Boolean((cfg?.env && Object.keys(cfg.env).length) || cfg?.retry),
+  }))
+})
+
+const totalUpstreams = computed(() => upstreamEntries.value.length)
+
+const filteredEntries = computed<UpstreamRow[]>(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return upstreamEntries.value
+  return upstreamEntries.value.filter(({ name, cfg }) => {
+    if (name.toLowerCase().includes(q)) return true
+    if ((cfg.type || '').toLowerCase().includes(q)) return true
+    if ((cfg.base_url || '').toLowerCase().includes(q)) return true
+    if ((cfg.description || '').toLowerCase().includes(q)) return true
+    return false
+  })
+})
+
+const anyExpandable = computed(() => upstreamEntries.value.some((r) => r.hasDetail))
+
+const emptyText = computed(() => {
+  if (!totalUpstreams.value) return '暂无上游配置'
+  return `无匹配项 (${filteredEntries.value.length} / ${totalUpstreams.value})`
+})
+
+/** 记录已展开的 upstream name (Vue 自带 expand 列会自管, 此 ref 仅做反向标记/aria) */
+const expandedNames = ref(new Set<string>())
+
+function toggleExpand(name: string) {
+  const next = new Set(expandedNames.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  expandedNames.value = next
+}
+
+interface EnvRow {
+  key: string
+  value: string
+}
+
+function envEntries(cfg: UpstreamConfig): EnvRow[] {
+  if (!cfg.env) return []
+  return Object.entries(cfg.env).map(([k, v]) => ({ key: k, value: String(v) }))
+}
+
+function looksMasked(v: string): boolean {
+  return v.includes('***')
+}
+
+const logRows = computed(() => loggingToRows(props.config?.logging))
+</script>
+
+<style scoped>
+.ups-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ups-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ups-expand-btn {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  transition: transform 120ms ease;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+}
+
+.ups-expand-btn:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.ups-expand-btn.expanded {
+  transform: rotate(90deg);
+}
+
+.ups-endpoint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+
+.ups-detail-block {
+  padding: 10px 16px 4px;
+}
+
+.ups-detail-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.ups-env-table {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.ups-retry {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  background: var(--bg);
+  padding: 6px 10px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+</style>

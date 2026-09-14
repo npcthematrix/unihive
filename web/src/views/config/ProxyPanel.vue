@@ -1,0 +1,307 @@
+<template>
+  <div class="proxy-panel">
+    <h3 class="proxy-title">
+      代理设置
+      <small class="sub">(mootdx2 → TDX_QUANT 透明代理)</small>
+    </h3>
+    <p class="proxy-description">
+      启用后, 以下 <strong>{{ coverageCount }}</strong> 个行情类工具优先走
+      TDX_QUANT (本地 DLL, 更稳定), 失败时自动降级到 MOOTDX2 (远程 TDX)。
+    </p>
+
+    <!-- TDX_QUANT 实时状态 -->
+    <div class="proxy-status">
+      <span class="proxy-status-label">TDX_QUANT 状态:</span>
+      <span
+        class="proxy-status-value"
+        :class="proxy?.tdx_quant_status || 'UNKNOWN'"
+      >{{ proxy?.tdx_quant_status || '—' }}</span>
+      <span class="proxy-status-hint">{{ statusHint }}</span>
+    </div>
+
+    <!-- 启用开关 + 保存反馈 -->
+    <div class="proxy-toggle-row">
+      <el-switch
+        v-model="enabled"
+        :disabled="toggleDisabled || saving"
+        :loading="saving"
+        active-text="启用 TDX_QUANT 代理"
+        inline-prompt
+        @change="onToggle"
+      />
+      <span
+        class="proxy-save-status"
+        :class="{ failed: saveFailed }"
+        aria-live="polite"
+      >{{ saveStatusText }}</span>
+    </div>
+
+    <!-- 覆盖范围 -->
+    <div class="proxy-coverage">
+      <h4>覆盖范围 (以下工具在代理启用时优先走 TDX_QUANT)</h4>
+      <el-table :data="coverage" class="proxy-coverage-table" :empty-text="coverageEmpty">
+        <el-table-column label="MOOTDX2 工具" min-width="200">
+          <template #default="{ row }">
+            <code>{{ row.mootdx2_tool }}</code>
+          </template>
+        </el-table-column>
+        <el-table-column width="40" align="center">
+          <template #default>
+            <span class="proxy-arrow" aria-hidden="true">→</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="TDX_QUANT 工具" min-width="200">
+          <template #default="{ row }">
+            <code>{{ row.tdx_quant_tool }}</code>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <!-- 未代理的行情类工具 (静态说明, 无 JS 数据) -->
+    <div class="proxy-section-non-proxied">
+      <h4>未代理的 mootdx2 行情类工具</h4>
+      <p>以下工具属于行情类但不在代理范围内, 继续走原 mootdx2 链路:</p>
+      <ul>
+        <li><code>batch_bars</code> — 批量 K 线 (候选: 待 tqcenter 多代码形式验证后加入)</li>
+        <li><code>get_k_data</code> / <code>get_minutes</code> / <code>get_fzline_local</code> — 其他 K 线/分时入口</li>
+        <li><code>get_minute_local</code> / <code>get_daily_local</code> — 本地缓存路径 (走代理会绕过缓存, 故排除)</li>
+        <li><code>get_index_overview</code> — 6 大指数概览 (聚合类, tdx_quant 需循环调用)</li>
+        <li><code>get_trade</code> / <code>get_trade_history</code> — 逐笔成交 (tdx_quant 无对应能力)</li>
+      </ul>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import { setProxySettings } from '@/api/config'
+import type { ProxyCoverageEntry, ProxySettings, TdxQuantStatus } from '@/api/config'
+import { errorMessage } from '@/api/client'
+
+interface Props {
+  proxy: ProxySettings | null
+  loading: boolean
+}
+
+const props = defineProps<Props>()
+const emit = defineEmits<{
+  (e: 'change', updated: ProxySettings): void
+}>()
+
+const enabled = ref(Boolean(props.proxy?.enabled))
+const saving = ref(false)
+const saveStatusText = ref('')
+const saveFailed = ref(false)
+
+/** 旧 proxy tab 在设置变更后保持 enabled 与服务端同步 */
+watch(
+  () => props.proxy?.enabled,
+  (v) => {
+    enabled.value = Boolean(v)
+  },
+)
+
+const coverage = computed<ProxyCoverageEntry[]>(() => props.proxy?.coverage || [])
+const coverageCount = computed(() => coverage.value.length)
+const coverageEmpty = computed(() =>
+  coverage.value.length ? '' : '覆盖范围为空 — TOOL_MAP 未配置或加载失败',
+)
+
+const OFFLINE_STATUSES: TdxQuantStatus[] = ['UNAVAILABLE', 'MISSING']
+const toggleDisabled = computed(() =>
+  OFFLINE_STATUSES.includes(props.proxy?.tdx_quant_status || 'UNKNOWN'),
+)
+
+const STATUS_HINTS: Record<TdxQuantStatus, string> = {
+  ONLINE: '在线 — 代理可用',
+  DEGRADED: '降级 — 部分异常, 仍可走代理',
+  OFFLINE: '离线 — 不可用',
+  UNAVAILABLE: '不可用 — 当前状态不允许启用',
+  DISABLED: '未启用 — 启动期被禁用',
+  MISSING: '未配置 — 缺少 tdx_quant 上游',
+  FAILED: '探活失败',
+  LOADING: '加载中…',
+  UNKNOWN: '未知状态',
+}
+
+const statusHint = computed(
+  () => STATUS_HINTS[props.proxy?.tdx_quant_status || 'UNKNOWN'] || '',
+)
+
+async function onToggle(value: boolean | string | number) {
+  const next = Boolean(value)
+  saving.value = true
+  saveFailed.value = false
+  saveStatusText.value = '保存中…'
+  try {
+    const updated = await setProxySettings(next)
+    emit('change', updated)
+    saveStatusText.value = '已保存'
+    ElMessage.success(`代理已${next ? '启用' : '关闭'}`)
+  } catch (e) {
+    saveFailed.value = true
+    const msg = errorMessage(e, '保存失败')
+    saveStatusText.value = `保存失败: ${msg}`
+    ElMessage.error('代理设置保存失败')
+    // 回滚
+    enabled.value = !next
+  } finally {
+    saving.value = false
+  }
+}
+</script>
+
+<style scoped>
+.proxy-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.proxy-title {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.proxy-title .sub {
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-left: 6px;
+}
+
+.proxy-description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.proxy-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.proxy-status-label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.proxy-status-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+}
+
+.proxy-status-value.ONLINE {
+  color: #16a34a;
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.proxy-status-value.DEGRADED {
+  color: #d97706;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.proxy-status-value.OFFLINE,
+.proxy-status-value.UNAVAILABLE,
+.proxy-status-value.MISSING,
+.proxy-status-value.FAILED {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.proxy-status-value.DISABLED,
+.proxy-status-value.LOADING,
+.proxy-status-value.UNKNOWN {
+  color: var(--text-secondary);
+}
+
+.proxy-status-hint {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-left: 4px;
+}
+
+.proxy-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.proxy-save-status {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.proxy-save-status.failed {
+  color: #b91c1c;
+}
+
+.proxy-coverage h4 {
+  margin: 4px 0 8px;
+  font-size: 0.9rem;
+}
+
+.proxy-coverage-table code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.proxy-arrow {
+  color: var(--text-secondary);
+}
+
+.proxy-section-non-proxied {
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.proxy-section-non-proxied h4 {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+.proxy-section-non-proxied p {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.proxy-section-non-proxied ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.proxy-section-non-proxied code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  background: var(--card-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+</style>
