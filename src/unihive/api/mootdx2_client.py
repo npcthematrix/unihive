@@ -319,6 +319,9 @@ class MooTDX2Client:
                 f"{self.name}: Quotes init failed ({type(e).__name__}: {e}); "
                 f"status=DEGRADED. TDX server may be unreachable."
             )
+            # C5 (round 9 audit): 清理 self._quotes 防止半初始化状态泄漏
+            # 给后续 health_loop, 否则会 AttributeError
+            self._quotes = None
             self._status = UpstreamStatus.DEGRADED
             self._start_health_loop()
             return
@@ -402,10 +405,20 @@ class MooTDX2Client:
         self._health_task = asyncio.create_task(self._health_loop())
 
     async def _health_loop(self) -> None:
-        """后台周期探活: DEGRADED → HEALTHY 自动恢复, HEALTHY → DEGRADED 失败检测。"""
+        """后台周期探活: DEGRADED → HEALTHY 自动恢复, HEALTHY → DEGRADED 失败检测。
+
+        C2 (round 9 audit): 检测 self._quotes is None, stop() 后或 start()
+        Quotes.init 失败时不进入 probe 循环, 避免 AttributeError。
+        """
         try:
             while True:
                 await asyncio.sleep(30.0)
+                # C2: stop() 已清理 self._quotes, 不再 probe
+                if self._quotes is None:
+                    logger.debug(
+                        f"{self.name}: health_loop skipped (quotes unavailable)"
+                    )
+                    continue
                 try:
                     ok = await asyncio.wait_for(
                         self._probe_with_existing_quotes(),
@@ -459,7 +472,11 @@ class MooTDX2Client:
         return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def call_tool(self, tool_name: str, params: dict) -> ToolResult:
-        """工具路由"""
+        """工具路由
+
+        C3 (round 9 audit): 顶层 try/except, 失败时降级 status (HEALTHY →
+        DEGRADED), 让 router 快速跳过此上游, 不必等 30s health_loop。
+        """
         method_map = {
             "get_quote": self.get_quote,
             "get_kline": self.get_kline,
@@ -510,7 +527,17 @@ class MooTDX2Client:
         if not method:
             return ToolResult(success=False, error=f"Unknown tool: {tool_name}")
 
-        return await method(**params)
+        try:
+            return await method(**params)
+        except Exception as e:
+            # C3 (round 9 audit): 顶层异常, 降级 status 让 router 快速跳过
+            if self._status == UpstreamStatus.HEALTHY:
+                self._status = UpstreamStatus.DEGRADED
+                logger.warning(
+                    f"{self.name}: call_tool({tool_name}) raised, "
+                    f"status → DEGRADED: {type(e).__name__}: {e}"
+                )
+            raise
 
     async def get_quote(self, code: str) -> ToolResult:
         """获取实时行情

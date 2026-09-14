@@ -84,10 +84,11 @@ class TdxQuantClient:
         return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
     async def _probe_tdx_remote_port(self) -> bool:
-        """探测 TDX 远程行情端口 (默认 7709) 是否可达。
+        """探测 TQ 本地端口 (默认 17709) 是否可达。
 
-        通达信客户端通过 DLL 与 TdxW.exe 内部共享连接, 但 mootdx2 等本地库
-        直接连远程 7709 端口。如果远程 7709 不通, 说明行情链路整体不可用。
+        17709 是 TdxW.exe 暴露的本地服务端口, 用于 TQ 策略管理器与外部通信。
+        注意: 此端口探测只能反映 TdxW.exe 是否运行, 无法验证 TQ 接口是否
+        已激活 (需登录后)。
         """
         host = "127.0.0.1"  # 本地探测
         port = self.config.settings.tdx_remote_port
@@ -110,39 +111,82 @@ class TdxQuantClient:
     async def start(self) -> bool:
         """加载 tqcenter + initialize + 启动探活任务。
 
-        2026-09-14 重构: 探测 7709 端口 (TDX 行情远程端口) 连通性。
-        若远程端口不通, 不尝试激活 TQ 本地接口 (TQ 必须依赖行情连接)。
-        tq.initialize() 本身会自动激活客户端内 TQ 本地接口, 但前提是
-        TdxW.exe 已启动且登录行情。
+        2026-09-14 重构 (round 9): 探测 17709 端口 (TQ 本地端口), init 后
+        立即调一次轻量接口 (tq.get_user_sector) 验证 TQ 真正可用 (避免
+        init 成功但 TdxW.exe 未登录导致请求失败)。
 
         Returns:
             True: 初始化成功，status=HEALTHY
             False: 初始化失败，status=UNAVAILABLE（不抛，gateway 继续）
         """
-        # 先探测 17709 端口连通性 (TQ Center 本地端口)
+        # 探测 17709 端口连通性 (TQ 本地端口)
+        port = self.config.settings.tdx_remote_port
         if not await self._probe_tdx_remote_port():
             logger.warning(
-                f"[{self.name}] TQ port 17709 unreachable. "
-                f"Check: 1) TdxW.exe running and logged in 2) TQ strategy manager enabled"
+                f"[{self.name}] TQ port {port} unreachable. "
+                f"Check: 1) TdxW.exe running and logged in "
+                f"2) TQ strategy manager enabled"
             )
 
         init_success, first_err = await self._try_initialize()
-        if init_success:
-            self._status = UpstreamStatus.HEALTHY
-            self._health_task = asyncio.create_task(self._health_loop())
-            logger.info(
-                f"[{self.name}] initialized (tdx_root={self.config.tdx_root_path}, "
-                f"strategy_id={self._strategy_id})"
+        if not init_success:
+            logger.error(
+                f"[{self.name}] init failed: {first_err}. "
+                f"Check TdxW.exe is running and logged in to行情."
             )
-            return True
+            self._status = UpstreamStatus.UNAVAILABLE
+            return False
 
-        # 初始化失败
-        logger.error(
-            f"[{self.name}] init failed: {first_err}. "
-            f"Check TdxW.exe is running and logged in to行情."
+        # C4 (round 9 audit): init 成功后立即调一次轻量接口, 验证 TQ 真正
+        # 可用 (TdxW.exe 已登录 + TQ 接口已激活)。若失败, 降级 DEGRADED
+        # 而不是 HEALTHY, 让 router / health_loop 知道实际状态。
+        tq_alive = await self._verify_tq_interface()
+        if not tq_alive:
+            logger.warning(
+                f"[{self.name}] TQ interface inactive (port reachable but "
+                f"tq.get_user_sector failed). Likely cause: TdxW.exe not "
+                f"logged in or TQ strategy manager not enabled. "
+                f"status=DEGRADED — health_loop will retry."
+            )
+            self._status = UpstreamStatus.DEGRADED
+        else:
+            self._status = UpstreamStatus.HEALTHY
+
+        self._health_task = asyncio.create_task(self._health_loop())
+        logger.info(
+            f"[{self.name}] initialized (tdx_root={self.config.tdx_root_path}, "
+            f"strategy_id={self._strategy_id}, status={self._status.value})"
         )
-        self._status = UpstreamStatus.UNAVAILABLE
-        return False
+        return True
+
+    async def _verify_tq_interface(self) -> bool:
+        """C4: 调一次轻量接口验证 TQ 真正可用。
+
+        Returns:
+            True: TQ 接口返回有效数据
+            False: 调用失败 / 返回 ErrorId != 0
+        """
+        if self._tq is None:
+            return False
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                get_blocking_executor(),
+                lambda: self._tq.get_user_sector(),
+            )
+            # ErrorId=0 表示成功; 其它都算不可用
+            if not isinstance(result, dict):
+                return False
+            err_id = str(result.get("ErrorId", "?"))
+            if err_id == "0":
+                return True
+            logger.debug(
+                f"[{self.name}] TQ verify returned ErrorId={err_id}: "
+                f"{result.get('ErrMsg', '')}"
+            )
+            return False
+        except Exception as e:
+            logger.debug(f"[{self.name}] TQ verify exception: {e}")
+            return False
 
     async def _try_initialize(self) -> tuple[bool, str | None]:
         """尝试初始化 tqcenter。
@@ -338,7 +382,9 @@ class TdxQuantClient:
             except Exception as e:
                 logger.warning(f"[{self.name}] close during reconnect: {e}")
             try:
-                self._tq.initialize(self._strategy_id)
+                # C1 (round 9 audit): tqcenter.initialize() 只接受 path 参数
+                # (策略 ID 仅记录用), 之前传 self._strategy_id 是 bug。
+                self._tq.initialize(str(self.config.tdx_root_path))
                 self._fail_count = 0
                 self._status = UpstreamStatus.HEALTHY
                 logger.info(f"[{self.name}] reconnected")
