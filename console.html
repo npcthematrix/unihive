@@ -7,6 +7,44 @@
     <link rel="icon" href="data:,">
     <title>UniHive Console</title>
     <link rel="stylesheet" href="/static/console/console.css?v=20260909-11">
+    <style>
+      /* === 代理设置 (proxy settings) === */
+      .proxy-description {
+        color: var(--text-secondary, #666);
+        margin: 0 0 1em;
+        font-size: 0.9em;
+      }
+      .proxy-status {
+        margin: 1em 0;
+        padding: 0.5em 1em;
+        background: var(--surface-bg, #f5f5f5);
+        border-radius: 4px;
+      }
+      .proxy-status-label { font-weight: 600; margin-right: 0.5em; }
+      .proxy-status-value { font-family: monospace; }
+      .proxy-status-value.HEALTHY { color: #2a8f2a; }
+      .proxy-status-value.DEGRADED { color: #c97a00; }
+      .proxy-status-value.UNAVAILABLE { color: #c0392b; }
+      .proxy-toggle-row {
+        margin: 1em 0;
+        display: flex;
+        align-items: center;
+        gap: 1em;
+      }
+      .proxy-save-status { font-size: 0.85em; color: #2a8f2a; }
+      .proxy-save-status.error { color: #c0392b; }
+      .proxy-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 0.5em;
+      }
+      .proxy-table th, .proxy-table td {
+        text-align: left;
+        padding: 0.4em 0.6em;
+        border-bottom: 1px solid var(--border-color, #eee);
+      }
+      .proxy-table th { font-weight: 600; background: var(--surface-bg, #f5f5f5); }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -142,11 +180,42 @@
                     <button class="cfg-subtab subtab" data-cfg="mapping">工具映射 <span class="cfg-subtab-count" id="cfg-count-mapping">0</span></button>
                     <button class="cfg-subtab subtab" data-cfg="tools">工具规格 <span class="cfg-subtab-count" id="cfg-count-tools">0</span></button>
                     <button class="cfg-subtab subtab" data-cfg="cache">缓存</button>
+                    <button class="cfg-subtab subtab" data-cfg="proxy">代理设置</button>
                 </div>
                 <div class="cfg-panel active" data-cfg-panel="upstreams" id="cfg-panel-upstreams"></div>
                 <div class="cfg-panel" data-cfg-panel="mapping" id="cfg-panel-mapping"></div>
                 <div class="cfg-panel" data-cfg-panel="tools" id="cfg-panel-tools"></div>
                 <div class="cfg-panel" data-cfg-panel="cache" id="cfg-panel-cache"></div>
+                <div class="cfg-panel" data-cfg-panel="proxy" id="cfg-panel-proxy">
+                    <h3>代理设置 <small class="sub">(mootdx2 → TDX_QUANT 透明代理)</small></h3>
+                    <p class="proxy-description">
+                        启用后,以下 7 个行情类工具优先走 TDX_QUANT (本地 DLL,更稳定),失败时自动降级到 MOOTDX2 (远程 TDX)。
+                    </p>
+
+                    <div class="proxy-status" id="proxy-status">
+                        <span class="proxy-status-label">TDX_QUANT 状态:</span>
+                        <span class="proxy-status-value" id="proxy-tdx-status">—</span>
+                    </div>
+
+                    <div class="proxy-toggle-row">
+                        <label class="ifs-toggle">
+                            <input type="checkbox" id="proxy-enabled-toggle" />
+                            <span>启用 TDX_QUANT 代理</span>
+                        </label>
+                        <button class="btn-secondary" id="proxy-save" disabled>保存</button>
+                        <span class="proxy-save-status" id="proxy-save-status"></span>
+                    </div>
+
+                    <div class="proxy-coverage" id="proxy-coverage">
+                        <h4>覆盖范围 (只读)</h4>
+                        <table class="proxy-table">
+                            <thead>
+                                <tr><th>MOOTDX2 工具</th><th>→</th><th>TDX_QUANT 工具</th></tr>
+                            </thead>
+                            <tbody id="proxy-coverage-body"></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
         <div id="onboarding" class="panel">
@@ -499,6 +568,67 @@ async with Client("http://127.0.0.1:18080/mcp") as client:
                 </div>
             </div>
         </div>
+
+        <script>
+          // === 代理设置 (proxy settings) ===
+          (function initProxySettings() {
+            const toggle = document.getElementById('proxy-enabled-toggle');
+            const saveBtn = document.getElementById('proxy-save');
+            const saveStatus = document.getElementById('proxy-save-status');
+            const tdxStatusEl = document.getElementById('proxy-tdx-status');
+            const coverageBody = document.getElementById('proxy-coverage-body');
+            if (!toggle) return;
+
+            async function load() {
+              try {
+                const resp = await fetchJSON('/api/proxy/settings');
+                if (!resp) return;
+                toggle.checked = resp.enabled;
+                tdxStatusEl.textContent = resp.tdx_quant_status;
+                tdxStatusEl.className = 'proxy-status-value ' + resp.tdx_quant_status;
+                coverageBody.innerHTML = resp.coverage.map(c =>
+                  '<tr><td>' + c.mootdx2_tool + '</td><td>→</td><td>' + c.tdx_quant_tool + '</td></tr>'
+                ).join('');
+                toggle.disabled = (resp.tdx_quant_status === 'UNAVAILABLE');
+                if (toggle.disabled) {
+                  toggle.title = 'TDX_QUANT 当前不可用, 启用代理也不会生效';
+                }
+                saveBtn.disabled = true;
+              } catch (e) {
+                console.error('load proxy settings failed:', e);
+              }
+            }
+
+            toggle.addEventListener('change', function() { saveBtn.disabled = false; });
+
+            saveBtn.addEventListener('click', async function() {
+              saveStatus.textContent = '';
+              saveStatus.className = 'proxy-save-status';
+              try {
+                const resp = await fetchJSON('/api/proxy/settings', {
+                  method: 'PUT',
+                  body: JSON.stringify({ enabled: toggle.checked }),
+                });
+                if (!resp) {
+                  saveStatus.textContent = '保存失败 (未登录或网络错误)';
+                  saveStatus.className = 'proxy-save-status error';
+                  return;
+                }
+                saveStatus.textContent = '已保存';
+                saveBtn.disabled = true;
+              } catch (e) {
+                saveStatus.textContent = '保存失败: ' + e.message;
+                saveStatus.className = 'proxy-save-status error';
+              }
+            });
+
+            const proxySubtab = document.querySelector('.cfg-subtab[data-cfg="proxy"]');
+            if (proxySubtab) {
+              proxySubtab.addEventListener('click', load);
+            }
+            load();
+          })();
+        </script>
 
         <script src="/static/console/console.js?v=20260909-9" defer></script>
 
