@@ -164,14 +164,32 @@ async function loadStats(force = false) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadStats(true), hasSearched.value ? runQuery(1, false) : Promise.resolve()])
+  await Promise.all([
+    loadStats(true),
+    hasSearched.value ? runQuery(1, 'refresh') : Promise.resolve(),
+  ])
 }
 
 // ===== query =====
 
+type QueryTrigger = 'user' | 'page' | 'refresh'
+
 let queryAbort: AbortController | null = null
 
-async function runQuery(page: number, fromPagination: boolean) {
+/** 从 queryFilters 构建请求参数 (空值不发送, 后端零值不会干扰默认行为)。 */
+function buildParams(page: number): OmniQueryParams {
+  const params: OmniQueryParams = {
+    page,
+    page_size: queryPageSize.value,
+  }
+  const f = queryFilters.value
+  if (f.source) params.source = f.source
+  if (f.boardType) params.board_type = f.boardType as OmniQueryParams['board_type']
+  if (f.keyword) params.keyword = f.keyword
+  return params
+}
+
+async function runQuery(page: number, trigger: QueryTrigger) {
   queryError.value = ''
   // 取消上一次 in-flight
   queryAbort?.abort()
@@ -179,21 +197,9 @@ async function runQuery(page: number, fromPagination: boolean) {
   queryAbort = ac
   queryLoading.value = true
   try {
-    const params: OmniQueryParams = {
-      page,
-      page_size: queryPageSize.value,
-    }
-    if (!fromPagination) {
-      params.source = queryFilters.value.source || undefined
-      params.board_type = (queryFilters.value.boardType || undefined) as OmniQueryParams['board_type']
-      params.keyword = queryFilters.value.keyword || undefined
-      hasSearched.value = true
-    } else {
-      // 翻页时复用上次的筛选条件
-      params.source = queryFilters.value.source || undefined
-      params.board_type = (queryFilters.value.boardType || undefined) as OmniQueryParams['board_type']
-      params.keyword = queryFilters.value.keyword || undefined
-    }
+    const params = buildParams(page)
+    // 只有用户主动搜索才算"已搜索" — 翻页/顶栏刷新不算, refreshAll 已守门
+    if (trigger === 'user') hasSearched.value = true
     const d = await queryOmniSectors(params, ac.signal)
     if (ac.signal.aborted) return
     // 后端偶发返回 null (历史缩进 bug 修复前已有, 留兜底避免 .sectors 读取崩溃)。
@@ -216,11 +222,11 @@ function onSearch(params: OmniQueryParams) {
     boardType: (params.board_type || '') as string,
     keyword: params.keyword || '',
   }
-  void runQuery(1, false)
+  void runQuery(1, 'user')
 }
 
 function onPageChange(page: number) {
-  void runQuery(page, true)
+  void runQuery(page, 'page')
 }
 
 // ===== sync =====

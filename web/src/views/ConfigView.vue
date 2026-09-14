@@ -7,8 +7,8 @@
           <span
             class="last-refresh"
             :class="{ failed: loadError }"
-          >{{ refreshLabel }}</span>
-          <el-button :icon="DocumentCopy" @click="copyJson" :disabled="!config">复制 JSON</el-button>
+          >{{ refreshLabel }}<template v-if="proxyRefreshSuffix"> · {{ proxyRefreshSuffix }}</template></span>
+          <el-button :icon="DocumentCopy" @click="copyJson" :disabled="!config || copyInFlight" :loading="copyInFlight">复制 JSON</el-button>
           <el-button
             :icon="Refresh"
             :loading="manualLoading"
@@ -18,27 +18,29 @@
       </div>
     </template>
 
-    <el-alert
-      v-if="loadError"
-      type="error"
-      :closable="false"
-      show-icon
-      class="load-error"
-      :title="`加载失败：${loadError}`"
-    >
-      <el-button size="small" @click="load">重试</el-button>
-    </el-alert>
+    <div class="alert-stack">
+      <el-alert
+        v-if="loadError"
+        type="error"
+        :closable="false"
+        show-icon
+        class="load-error"
+        :title="`加载失败：${loadError}`"
+      >
+        <el-button size="small" @click="load">重试</el-button>
+      </el-alert>
 
-    <el-alert
-      v-if="proxyError"
-      type="warning"
-      :closable="false"
-      show-icon
-      class="load-error"
-      :title="`代理设置加载失败：${proxyError}`"
-    >
-      <el-button size="small" @click="loadProxy">重试</el-button>
-    </el-alert>
+      <el-alert
+        v-if="proxyError"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="load-error"
+        :title="`代理设置加载失败：${proxyError}`"
+      >
+        <el-button size="small" @click="loadProxy">重试</el-button>
+      </el-alert>
+    </div>
 
     <!-- subtab 导航 -->
     <nav class="cfg-subtabs" aria-label="配置子标签">
@@ -136,6 +138,9 @@ const loadError = ref('')
 /** proxy 失败独立 ref, 不污染全局 loadError (后者只反映 getConfig 状态)。 */
 const proxyError = ref('')
 const lastRefresh = ref<number | null>(null)
+/** proxy 单独的时间戳 — 顶栏让用户区分 "config / 代理" 各自的加载时点。 */
+const proxyLastRefresh = ref<number | null>(null)
+const copyInFlight = ref(false)
 
 const activeTab = ref<TabKey>('upstreams')
 
@@ -174,6 +179,7 @@ async function loadProxy() {
   try {
     proxy.value = await getProxySettings()
     proxyError.value = ''
+    proxyLastRefresh.value = Date.now()
   } catch (e) {
     // proxy tab 单独失败不影响 config 渲染; 用户切到该 tab 时再感知。
     // 写到 proxyError 独立 ref, 不污染全局 loadError (后者只反映 getConfig 状态)。
@@ -211,6 +217,13 @@ const refreshLabel = computed(() => {
   return `更新于 ${formatTime(lastRefresh.value)}`
 })
 
+/** 代理独立的时间后缀; proxy 加载失败时不展示, 避免误导。 */
+const proxyRefreshSuffix = computed(() => {
+  if (loadError.value || proxyError.value) return ''
+  if (!proxyLastRefresh.value) return ''
+  return `代理 ${formatTime(proxyLastRefresh.value)}`
+})
+
 function formatTime(ts: number): string {
   const d = new Date(ts)
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -218,16 +231,21 @@ function formatTime(ts: number): string {
 }
 
 async function copyJson() {
+  // 防抖: 复制动作有 ElMessage 反馈, 连点会刷屏, 用 inFlight 串行化
+  if (copyInFlight.value) return
   if (!config.value) {
     ElMessage.error('暂无配置数据')
     return
   }
+  copyInFlight.value = true
   try {
     const text = JSON.stringify(config.value, null, 2)
     await copyText(text, '')
     ElMessage.success('配置 JSON 已复制到剪贴板')
   } catch {
     ElMessage.error('复制失败, 请手动复制')
+  } finally {
+    copyInFlight.value = false
   }
 }
 
@@ -240,6 +258,13 @@ defineExpose({ load })
 </script>
 
 <style scoped>
+.alert-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
 .cfg-subtabs {
   display: flex;
   flex-wrap: wrap;
@@ -249,6 +274,15 @@ defineExpose({ load })
 }
 
 .cfg-panel-stack {
-  min-height: 200px;
+  min-height: 240px;
+}
+
+/* 顶栏三个控件在窄屏(< 640px) 拥挤 — 允许换行 + 显式 gap */
+:global(.toolbar-actions),
+.toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
 }
 </style>
