@@ -195,6 +195,7 @@ watch(
     source.value = f.source
     boardType.value = f.boardType
   },
+  { deep: true },
 )
 
 const totalPages = computed(() => Math.ceil(props.totalCount / props.pageSize))
@@ -355,9 +356,10 @@ defineExpose({
 
 .results-hint {
   margin-left: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--el-text-color-placeholder);
   font-weight: 400;
   font-size: 0.78rem;
+  font-style: italic;
 }
 
 .sector-table {

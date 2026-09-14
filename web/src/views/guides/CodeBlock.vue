@@ -72,4 +72,16 @@ async function onCopy() {
 .code-block code {
   font-family: inherit;
 }
+
+/* 窄屏(< 480px) 压缩 padding + 字号, 避免横向占满整屏 */
+@media (max-width: 480px) {
+  .code-block pre {
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+  .code-block .copy-btn {
+    top: 4px;
+    right: 4px;
+  }
+}
 </style>

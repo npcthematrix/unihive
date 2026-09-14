@@ -257,12 +257,13 @@ onBeforeUnmount(() => {
 
 .onboarding-nav {
   position: sticky;
-  top: 0;
+  /* 未来加 app header 时, 在 :root 设 --app-header-height 即可, 当前无 header = 0 */
+  top: var(--app-header-height, 0);
   z-index: 5;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   margin-bottom: 16px;
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color-lighter);
@@ -272,7 +273,8 @@ onBeforeUnmount(() => {
 .onboarding-nav a {
   color: var(--el-text-color-regular);
   text-decoration: none;
-  padding: 4px 10px;
+  padding: 2px 8px;
+  font-size: 13px;
   border-radius: 4px;
   transition: background-color 120ms ease, color 120ms ease;
 }
