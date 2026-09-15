@@ -14,7 +14,11 @@ import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
 
 import httpx
 import yaml
@@ -45,6 +49,21 @@ def set_omni_client(client: "OmniClient | None") -> None:
 
 def _omni() -> "OmniClient | None":
     return _OMNI_CLIENT
+
+
+_upstream_registry: dict[str, object] = {}
+
+
+def set_upstream_registry(registry: dict[str, object]) -> None:
+    """gateway_server 在 upstreams 装配完成后调用一次。
+    注册表只用于查找 client 引用, 不持有任何 client 内部状态。
+    """
+    _upstream_registry.clear()
+    _upstream_registry.update(registry)
+
+
+def _get_upstream_client(name: str) -> object | None:
+    return _upstream_registry.get(name)
 
 
 def set_config(config: dict) -> None:
@@ -218,17 +237,33 @@ def _compute_config_version() -> str:
 
 
 def get_fuyao_cache() -> dict:
-    """读取 fuyao_cache 段, 不存在返回默认值。"""
+    """读取 fuyao_cache 段, 不存在返回默认值。
+
+    2026-09-15 重构后新 shape: ``{"tools": {...}, "version": "..."}``。
+    读侧容错: 若 on-disk 仍是旧 shape (含 ``endpoints.<ep>.default``),
+    flatten ``endpoints[*].override`` 成 ``tools`` 后返回, 旧 ``default`` 字段丢弃。
+    """
     config = load_config()
     fc = config.get("fuyao_cache")
-    if isinstance(fc, dict):
-        return fc
-    # 返回空 + version, 让前端进入空态
-    return {"endpoints": {}, "version": config.get("version", "")}
+    if not isinstance(fc, dict):
+        return {"tools": {}, "version": config.get("version", "")}
+    # 旧 shape 容错: 有 endpoints 没 tools, flatten 一下
+    if "endpoints" in fc and "tools" not in fc:
+        tools: dict[str, int] = {}
+        for ep_cfg in fc.get("endpoints", {}).values():
+            if not isinstance(ep_cfg, dict):
+                continue
+            override = ep_cfg.get("override")
+            if isinstance(override, dict):
+                for k, v in override.items():
+                    if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+                        tools[str(k)] = int(v)
+        return {"tools": tools, "version": config.get("version", "")}
+    return fc  # 新格式直通
 
 
 def save_fuyao_cache(payload: dict, *, expected_version: str | None = None) -> dict:
-    """写入 fuyao_cache 段到 upstreams.yaml。
+    """写入 fuyao_cache 段到 upstreams.yaml (新 shape: { tools: {...} })。
 
     - 只覆盖 fuyao_cache 子树, 其他顶层段 (upstreams / cache / tools / ...)
       原样保留
@@ -257,13 +292,7 @@ def save_fuyao_cache(payload: dict, *, expected_version: str | None = None) -> d
         raw = yaml.safe_load(f) or {}
 
     raw["fuyao_cache"] = {
-        "endpoints": {
-            name: {
-                "default": ep.default,
-                "override": dict(ep.override),
-            }
-            for name, ep in new_cfg.endpoints.items()
-        }
+        "tools": dict(new_cfg.tools),
     }
     # 用 default_flow_style=False 保持块格式; sort_keys=False 保留 key 顺序
     with open(config_path, "w", encoding="utf-8") as f:
@@ -818,4 +847,46 @@ def build_omni_routes() -> list:
         Route("/api/omni/sync", omni_sync_api, methods=["POST"]),
         Route("/api/omni/query", omni_query_api),
         Route("/api/omni/sector-stocks", omni_sector_stocks_api),
+        Route("/api/upstreams/<name>/metrics", upstream_metrics_api),
     ]
+
+
+# Module-level handler for /api/upstreams/<name>/metrics (importable for testing)
+async def upstream_metrics_api(req: "Request") -> "JSONResponse":
+    """返回某个上游 client 的运行时指标 (目前仅 mootdx2 实现 get_metrics())。
+
+    状态码:
+      200: 正常返回 metrics dict
+      404: 上游名未在 registry 注册
+      501: 上游客户端未实现 get_metrics() (例如 tdx_quant / fuyao / omni)
+      500: 读取 metrics 时内部异常
+    """
+    from starlette.responses import JSONResponse
+    from starlette.requests import Request as StarletteRequest
+
+    name = req.path_params["name"]
+    client = _get_upstream_client(name)
+    if client is None:
+        return JSONResponse(
+            {"error": f"upstream '{name}' not registered"},
+            status_code=404,
+        )
+    getter = getattr(client, "get_metrics", None)
+    if not callable(getter):
+        return JSONResponse(
+            {"error": f"upstream '{name}' does not expose metrics"},
+            status_code=501,
+        )
+    try:
+        metrics = getter()
+    except Exception as e:
+        logger.warning(f"upstream_metrics_api({name}) raised: {e}")
+        return JSONResponse(
+            {"error": str(e)[:200]},
+            status_code=500,
+        )
+    return JSONResponse({
+        "upstream": name,
+        "metrics": metrics,
+        "timestamp": int(time.time()),
+    })
