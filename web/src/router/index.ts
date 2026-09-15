@@ -21,6 +21,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '上游状态' },
       },
       {
+        path: 'l1-cache',
+        name: 'l1-cache',
+        component: () => import('@/views/L1CacheView.vue'),
+        meta: { title: 'L1 缓存指标' },
+      },
+      {
         path: 'interfaces',
         name: 'interfaces',
         component: () => import('@/views/InterfacesView.vue'),
