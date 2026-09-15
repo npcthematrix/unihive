@@ -145,6 +145,21 @@ class MooTDX2Client:
         # total_requests 单 int += 是 GIL 原子的, 不需要。
         self._metrics_lock = threading.Lock()
 
+        # 2026-09-15 get_daily_local 内存缓存 (思路 3):
+        # 仅缓存 adjust=none 的 records (list[dict]), TTL 2h, maxsize 2048。
+        # 99% 不复权 + 50% 同 symbol 重复 → TTL 主导淘汰, 命中率高。
+        # 不动 Reader/Quotes/线程池, 不动 SQLite, 失败模式 = 走原路径。
+        # 设计稿: docs/superpowers/specs/2026-09-15-get-daily-local-cache-design.md
+        try:
+            from cachetools import TTLCache
+            self._daily_l1 = TTLCache(maxsize=2048, ttl=7200.0)
+            self._daily_l1_hits = 0
+            self._daily_l1_misses = 0
+            self._DAILY_L1_ENABLED = True
+        except ImportError:
+            self._DAILY_L1_ENABLED = False
+            logger.warning("cachetools not installed, get_daily L1 cache disabled")
+
     def _new_request_id(self) -> str:
         """生成请求 ID"""
         self._request_id += 1
@@ -173,6 +188,25 @@ class MooTDX2Client:
             tdxdir = self.config.settings.tdxdir
             if tdxdir:
                 return tdxdir
+        return None
+
+    @staticmethod
+    def _filter_records_by_date(records: list, start_date: str, end_date: str) -> list:
+        """缓存命中后在 records 上做 start/end 过滤。O(N) dict 遍历。
+        date 字段为 'yyyy-MM-dd' 字符串; 字符串比较即可 (ISO 8601)。"""
+        if not (start_date or end_date):
+            return list(records)
+        out = []
+        for r in records:
+            d = r.get("date", "")
+            if not d:
+                continue
+            if start_date and d < start_date:
+                continue
+            if end_date and d > end_date:
+                continue
+            out.append(r)
+        return out
         return None
 
     def _get_reader(self):
@@ -615,6 +649,10 @@ class MooTDX2Client:
             pass
 
     async def stop(self):
+        # 2026-09-15: 清理 get_daily L1 缓存
+        if self._DAILY_L1_ENABLED and hasattr(self, '_daily_l1'):
+            self._daily_l1.clear()
+
         # H1: 取消后台探活任务
         if self._health_task and not self._health_task.done():
             self._health_task.cancel()
@@ -1615,15 +1653,52 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
+            # 2026-09-15: get_daily_local L1 缓存 (仅 adjust=none)
+            # 复用用户原 adjust 入参 (经过 _get_daily_sync 内会按 kind 改写)。
+            # 缓存 key 用 reader_symbol + adjust 入参, 命中后按 start/end 过滤。
+            from .index_registry import parse_symbol, STOCK_KIND, INDEX_KIND
+            cache_hit = False
+            cached_records = None
+            if self._DAILY_L1_ENABLED:
+                try:
+                    parsed_for_key = parse_symbol(code)
+                except ValueError:
+                    parsed_for_key = None
+                if parsed_for_key is not None:
+                    reader_symbol_key = (
+                        f"{parsed_for_key.market}{parsed_for_key.code}"
+                        if parsed_for_key.kind == INDEX_KIND
+                        else parsed_for_key.code
+                    )
+                    cache_key = (reader_symbol_key, adjust)
+                    cached_records = self._daily_l1.get(cache_key)
+                    if cached_records is not None:
+                        self._daily_l1_hits += 1
+                        cache_hit = True
+                    else:
+                        self._daily_l1_misses += 1
+
+            if cache_hit and cached_records is not None:
+                # 在缓存 records 上做 start/end 切片 (dict 遍历, O(N))
+                filtered = self._filter_records_by_date(cached_records, start_date, end_date)
+                return ToolResult(success=True, data=filtered, source="mootdx2")
+
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
                 get_blocking_executor(), self._get_daily_sync, code, adjust, start_date, end_date
             )
             meta = getattr(self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None})
+            # 写缓存: 仅 adjust=none + 有数据 + 解析成功 → 写 reader_symbol_key
+            if (
+                self._DAILY_L1_ENABLED
+                and data
+                and adjust == "none"
+                and parsed_for_key is not None
+            ):
+                self._daily_l1[(reader_symbol_key, adjust)] = data
             if data:
                 result = ToolResult(success=True, data=data, source="mootdx2")
                 if meta.get("warn"):
-                    # success=True + warn: 数据已返回但被自动调整，避免污染 fallback
                     result.error_detail = {
                         "warn": meta["warn"],
                         "recoverable": True,
