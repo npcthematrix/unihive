@@ -161,13 +161,13 @@ const copyInFlight = ref(false)
 
 const activeTab = ref<TabKey>('upstreams')
 
-activeTab.value = parseHashTab(route.query.tab, TAB_KEYS, 'upstreams')
-
+// 用 watch + immediate 一次性处理「初始化 + 后续 hash 变化」, 避免重复 parse。
 watch(
   () => route.query.tab,
   (q) => {
     activeTab.value = parseHashTab(q, TAB_KEYS, 'upstreams')
   },
+  { immediate: true },
 )
 
 function selectTab(tab: TabKey) {

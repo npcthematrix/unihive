@@ -477,16 +477,22 @@ watch(autoRefresh, (on) => {
   }, 10_000)
 })
 
-/** 标签页重新可见且数据超过 30s 时静默重拉 (等价旧版切回面板的 stale 检查)。 */
+/** 标签页重新可见且数据超过 30s 时静默重拉 (等价旧版切回面板的 stale 检查)。
+ *  同时把 nowSec 立即刷新到当前时间, 避免切回时显示陈旧的「X秒前」。 */
 function onVisibility(): void {
-  if (!document.hidden && lastFetchSec.value && nowSec.value - lastFetchSec.value > STALE_THRESHOLD_SEC) {
-    void load(false)
+  if (!document.hidden) {
+    nowSec.value = Math.floor(Date.now() / 1000)
+    if (lastFetchSec.value && nowSec.value - lastFetchSec.value > STALE_THRESHOLD_SEC) {
+      void load(false)
+    }
   }
 }
 
 onMounted(() => {
   void load(true)
   clockTimer = setInterval(() => {
+    // 标签页隐藏时跳过 — 切回时由 visibilitychange 监听补一次 (见 onVisibility)。
+    if (typeof document !== 'undefined' && document.hidden) return
     nowSec.value = Math.floor(Date.now() / 1000)
   }, 1000)
   document.addEventListener('visibilitychange', onVisibility)

@@ -144,6 +144,8 @@ const statusHint = computed(
 )
 
 async function onToggle(value: boolean | string | number) {
+  // 防止快速连点 (保存中) 触发并发请求
+  if (saving.value) return
   const next = Boolean(value)
   saving.value = true
   saveFailed.value = false
