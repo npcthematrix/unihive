@@ -307,6 +307,10 @@ class GatewayServer:
         # initialize() 并发保护: 两次 await initialize() 必须串行化,
         # 否则 cache / upstream 会被重复初始化 (HIGH #1)。
         self._init_lock = asyncio.Lock()
+        # 周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4):
+        # cleanup_expired() 函数已存在但从未调度, 过期条目只能等 max_entries
+        # 命中 LRU 才清。stop() 时取消。
+        self._cache_cleanup_task: asyncio.Task | None = None
         # 单个 upstream 启动超时, 防止某个卡死的 upstream 让整个 init 跟着挂 (MED #4)。
         self._upstream_start_timeout = (
             upstream_start_timeout
@@ -364,6 +368,14 @@ class GatewayServer:
                 operation_timeout=float(cache_cfg.get("operation_timeout", 3.0)),
             ))
             await self.cache.initialize()
+
+            # 启动周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4):
+            # 间隔 5 min, 等价于把 LRU 上界从「50000 条随时混过期」
+            # 收紧到「过期条目最迟 5 min 内回收」。任务在 stop() 取消。
+            self._cache_cleanup_task = asyncio.create_task(
+                self._cache_cleanup_loop(),
+                name="unihive-cache-cleanup",
+            )
 
             # 初始化上游客户端
             # 用 `or {}` 归一化, 防 YAML `upstreams: null` 让 .items() 抛 AttributeError (HIGH #2)
@@ -616,7 +628,9 @@ class GatewayServer:
                     # 命中时给一个 cache sentinel hop 让消费者看到响应走了
                     # 缓存而非未配置 routing chain。不可变拷贝避免污染持久化对象。
                     self.cache.record_hit()
-                    logger.info(f"[{name}] cache hit (key={key})")
+                    # DEBUG 而非 INFO: 缓存命中是常态, 每请求刷 INFO 会让 FileHandler
+                    # 在事件循环线程同步写盘; 100+ QPS 时放大成可观察的 latency。
+                    logger.debug(f"[{name}] cache hit (key={key})")
                     return {
                         **cached,
                         "hops": [
@@ -1184,6 +1198,12 @@ class GatewayServer:
                 return_exceptions=True,
             )
 
+        # 关闭阻塞上游调用专用线程池 (2026-09-15 MCP 二次审视 M2):
+        # 在 upstream 客户端之后关闭, 避免它们还在 await run_in_executor 时被强杀。
+        # shutdown_blocking_executor 是模块级单例, 显式调用避免 atexit 依赖 (stdio 下不可靠)。
+        from .core.blocking_pool import shutdown_blocking_executor
+        shutdown_blocking_executor()
+
         # 关闭缓存
         if self.cache:
             try:
@@ -1191,6 +1211,20 @@ class GatewayServer:
             except asyncio.TimeoutError:
                 logger.warning("cache close() timed out after 2s")
             self.cache = None
+
+        # 取消周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4)。
+        # cache.close() 之后做, 确保最后一次 tick 不会与 close 抢锁。
+        # 用 getattr 兜底: 测试用 __new__ 跳过 __init__ 时字段不存在。
+        cleanup_task = getattr(self, "_cache_cleanup_task", None)
+        if cleanup_task is not None:
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(f"cache cleanup task ended with error: {e}")
+            self._cache_cleanup_task = None
 
         # 重置状态以支持同实例 restart (HIGH B1, 2026-09-07 audit):
         # 不清掉的话, 第二次 initialize() 会因 _initialized=True 短路,
@@ -1211,6 +1245,26 @@ class GatewayServer:
             logger.warning(f"[{name}] stop() timed out after 5s, force-exit")
         except Exception as e:
             logger.warning(f"[{name}] stop() raised: {e}")
+
+    # 2026-09-15 MCP 二次审视 M4: 周期 cache 清理。间隔 5 min — 在清理频率
+    # 与 CPU 开销间取中。Cache.cleanup_expired() 内部已包 operation_timeout,
+    # 不会因一次清理卡住 loop。
+    _CACHE_CLEANUP_INTERVAL_SEC = 300
+
+    async def _cache_cleanup_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._CACHE_CLEANUP_INTERVAL_SEC)
+                if self.cache is None:
+                    return
+                try:
+                    removed = await self.cache.cleanup_expired()
+                    if removed:
+                        logger.debug(f"Cache cleanup removed {removed} expired/LRU entries")
+                except Exception as e:
+                    logger.warning(f"Cache cleanup tick failed: {e}")
+        except asyncio.CancelledError:
+            return
 
 
 async def async_main(transport: str = "stdio", host: str | None = None, port: int | None = None, config_path: str | None = None):

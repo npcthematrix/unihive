@@ -245,7 +245,8 @@ class Router:
 
             if result.success:
                 total_duration = int((time.time() - start_time) * 1000)
-                logger.info(
+                # DEBUG 而非 INFO: 路由成功是常态, 降级避免事件循环线程同步写盘放大。
+                logger.debug(
                     f"[{gateway_tool}] Success via {source} in {total_duration}ms "
                     f"(hops: {len(hops)})"
                 )
