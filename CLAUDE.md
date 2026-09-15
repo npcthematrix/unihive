@@ -56,7 +56,7 @@ unihive/
 
 | 源 | 类型 | 接入方式 | 工具数 | 备注 |
 |---|---|---|---|---|
-| **mootdx2** | 通达信 | 本地 TCP (mootdx2 库) | 34 | 行情 / K线 / 板块,需本地 TDX 服务器 |
+| **mootdx2** | 通达信 | 本地 TCP (mootdx2 库) | 34 | 行情 / K线 / 板块,需本地 TDX 服务器;`get_daily_local` 有 L1 内存缓存 + single-flight,见控制台 `/l1-cache` 页 |
 | **tdx_quant** | 通达信量化终端 | 进程内 tqcenter.py | 54 | 行情 / 板块 / 交易日 / 财务 / 公式 / 交易 / 预警 |
 | **fuyao** | 同花顺 (aicubes.cn) | HTTP MCP,4 端点 | 67 | a-share(28) / a-share-index(7) / meta(2) / fund(30) |
 | **omni** | OMNIDATA | 本地 SQLite | 5 | 行业/概念/地域/风格板块,数据源 THS(同花顺)/TDX(通达信),需 `src.unihive.sync.board_sync` 预同步 |
