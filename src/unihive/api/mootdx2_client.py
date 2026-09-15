@@ -156,6 +156,12 @@ class MooTDX2Client:
             self._daily_l1_hits = 0
             self._daily_l1_misses = 0
             self._DAILY_L1_ENABLED = True
+            # 2026-09-15 single-flight 去重 first-miss 雪崩:
+            #   key = (reader_symbol_key, "none"), value = asyncio.Future[ToolResult]
+            # 首个 miss 占位 Future 跑 _get_daily_sync, 后续 miss 共享同一 Future 结果。
+            # 仅 adjust="none" 路径使用, 与 L1 缓存 key 对齐。
+            self._daily_l1_inflight: dict[tuple[str, str], asyncio.Future] = {}
+            self._daily_l1_inflight_lock = asyncio.Lock()  # 索引互斥
         except ImportError:
             self._DAILY_L1_ENABLED = False
             logger.warning("cachetools not installed, get_daily L1 cache disabled")
@@ -652,6 +658,11 @@ class MooTDX2Client:
         # 2026-09-15: 清理 get_daily L1 缓存
         if self._DAILY_L1_ENABLED and hasattr(self, '_daily_l1'):
             self._daily_l1.clear()
+            # 取消所有 in-flight future, 防止 waiter 在 stop 后挂起
+            for fut in self._daily_l1_inflight.values():
+                if not fut.done():
+                    fut.set_exception(asyncio.CancelledError())
+            self._daily_l1_inflight.clear()
 
         # H1: 取消后台探活任务
         if self._health_task and not self._health_task.done():
