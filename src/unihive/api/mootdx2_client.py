@@ -145,6 +145,19 @@ class MooTDX2Client:
         # total_requests 单 int += 是 GIL 原子的, 不需要。
         self._metrics_lock = threading.Lock()
 
+        # P0.2 (2026-09-15 mootdx2 高并发): get_quote L1 TTL 缓存
+        # 第三方高频调用同一只股票 (查 600519 价格) N 次 = N 次远程,
+        # 加 1.5s L1 缓存可削减 ~80% 重复请求。TTLCache 自动过期。
+        try:
+            from cachetools import TTLCache
+            self._quote_l1: TTLCache = TTLCache(maxsize=2048, ttl=1.5)
+            self._quote_l1_hits = 0
+            self._quote_l1_misses = 0
+            self._QUOTE_L1_ENABLED = True
+        except ImportError:
+            self._QUOTE_L1_ENABLED = False
+            logger.warning("cachetools not installed, get_quote L1 cache disabled")
+
     def _new_request_id(self) -> str:
         """生成请求 ID"""
         self._request_id += 1
@@ -615,6 +628,10 @@ class MooTDX2Client:
             pass
 
     async def stop(self):
+        # P0.2 (2026-09-15 mootdx2 高并发): 清理 L1 缓存
+        if self._QUOTE_L1_ENABLED and hasattr(self, '_quote_l1'):
+            self._quote_l1.clear()
+
         # H1: 取消后台探活任务
         if self._health_task and not self._health_task.done():
             self._health_task.cancel()
@@ -726,15 +743,35 @@ class MooTDX2Client:
 
         Returns:
             ToolResult: 包含实时行情数据或错误信息
+
+        P0.2 (2026-09-15 mootdx2 高并发): L1 TTL 缓存 (1.5s)
         """
         request_id = self._new_request_id()
         self._metrics["total_requests"] += 1
+
+        # L1 缓存查询 (标准化 code 作为 key, 大小写无关)
+        cache_key = code.lower().strip()
+        if self._QUOTE_L1_ENABLED and cache_key in self._quote_l1:
+            self._quote_l1_hits += 1
+            logger.debug(f"[{request_id}] get_quote({code}) L1 hit")
+            cached = self._quote_l1[cache_key]
+            return ToolResult(
+                success=True,
+                data=cached,
+                source="mootdx2",
+            )
+
+        if self._QUOTE_L1_ENABLED:
+            self._quote_l1_misses += 1
         logger.info(f"[{request_id}] get_quote({code})")
 
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_quote_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_quote_sync, code)
             if data:
+                # 写入 L1 缓存 (TTL 自动过期)
+                if self._QUOTE_L1_ENABLED:
+                    self._quote_l1[cache_key] = data
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"股票 {code} 无行情数据（可能停牌或非交易日）")
         except Exception as e:
@@ -779,7 +816,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_kline_sync, code, type, limit)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_kline_sync, code, type, limit)
             if data:
                 # 数据合理性校验
                 valid_data = [r for r in data if _validate_kline_record(r)]
@@ -806,7 +843,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_batch_quote_sync, codes)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_batch_quote_sync, codes)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -843,7 +880,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_batch_bars_sync, codes, type, limit)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_batch_bars_sync, codes, type, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -865,7 +902,7 @@ class MooTDX2Client:
         """获取今日分时"""
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_minute_data_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_minute_data_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -888,7 +925,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_trade_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_trade_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -911,7 +948,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_trade_history_sync, code, date, start, count)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_trade_history_sync, code, date, start, count)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -934,7 +971,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_kline_sync, code, type)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_index_kline_sync, code, type)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -986,7 +1023,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                get_blocking_executor(), self._get_code_list_sync, exchange_val
+                get_blocking_executor('mootdx2'), self._get_code_list_sync, exchange_val
             )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -1016,7 +1053,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_codes_sync, limit, prefix)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_stock_codes_sync, limit, prefix)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1041,7 +1078,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_etf_codes_sync, limit, prefix)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_etf_codes_sync, limit, prefix)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1064,7 +1101,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_etf_list_sync, exchange, limit)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_etf_list_sync, exchange, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1084,7 +1121,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_market_count_sync, market)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_market_count_sync, market)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1116,7 +1153,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_workday_sync, date, count)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_workday_sync, date, count)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1149,7 +1186,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_workday_range_sync, start, end)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_workday_range_sync, start, end)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1174,7 +1211,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_all_sync, code, type, limit)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_index_all_sync, code, type, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1197,7 +1234,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_income_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_income_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1297,7 +1334,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_custom_sector_list_sync)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_custom_sector_list_sync)
             return ToolResult(success=True, data=data, source="mootdx2")
         except SectorDataError as e:
             return self._sector_error_result(e)
@@ -1382,7 +1419,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                get_blocking_executor(), self._get_custom_sector_stocks_sync, sector_code, market
+                get_blocking_executor('mootdx2'), self._get_custom_sector_stocks_sync, sector_code, market
             )
             return ToolResult(success=True, data=data, source="mootdx2")
         except SectorDataError as e:
@@ -1440,7 +1477,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._index_overview_sync)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._index_overview_sync)
             if not data:
                 return self._no_data_result("指数数据获取失败")
             return ToolResult(success=True, data=data, source="mootdx2")
@@ -1468,7 +1505,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_f10_sync, symbol, name)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_f10_sync, symbol, name)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1495,7 +1532,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_f10_company_sync, symbol)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_f10_company_sync, symbol)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1523,7 +1560,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_minutes_sync, symbol, date)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_minutes_sync, symbol, date)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1617,7 +1654,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                get_blocking_executor(), self._get_daily_sync, code, adjust, start_date, end_date
+                get_blocking_executor('mootdx2'), self._get_daily_sync, code, adjust, start_date, end_date
             )
             meta = getattr(self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None})
             if data:
@@ -1712,7 +1749,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
-                get_blocking_executor(), self._get_minute_sync, code, suffix, start_date, end_date
+                get_blocking_executor('mootdx2'), self._get_minute_sync, code, suffix, start_date, end_date
             )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -1756,7 +1793,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_fzline_sync, code)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_fzline_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的分时线数据")
@@ -1883,7 +1920,7 @@ class MooTDX2Client:
         try:
             loop = asyncio.get_event_loop()
             records, meta = await loop.run_in_executor(
-                get_blocking_executor(),
+                get_blocking_executor('mootdx2'),
                 self._get_index_kline_local_sync, code, limit,
             )
             if records:
@@ -1929,7 +1966,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_bars_sync, symbol, frequency, start, offset)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_index_bars_sync, symbol, frequency, start, offset)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1956,7 +1993,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_xdxr_sync, symbol)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_xdxr_sync, symbol)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1978,7 +2015,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_all_sync)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_stock_all_sync)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -2007,7 +2044,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_k_data_sync, code, start_date, end_date)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_k_data_sync, code, start_date, end_date)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -2108,7 +2145,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._search_stock_sync, keyword)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._search_stock_sync, keyword)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"search_stock failed: {e}")
@@ -2163,7 +2200,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_info_sync, code, market, kline_period, kline_count)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._get_stock_info_sync, code, market, kline_period, kline_count)
             if data.get("quote") is None and not data.get("kline") and not data.get("minute"):
                 return self._no_data_result(f"股票 {market}{code} 无数据")
             return ToolResult(success=True, data=data, source="mootdx2")
@@ -2219,7 +2256,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._indicator_atr_sync, code, type, limit)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._indicator_atr_sync, code, type, limit)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"indicator_atr failed: {e}")
@@ -2412,7 +2449,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._stock_top_board_sync, sort_by, direction, limit, market)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._stock_top_board_sync, sort_by, direction, limit, market)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"stock_top_board failed: {e}")
@@ -2423,7 +2460,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._stock_unusual_sync, event_type)
+            data = await loop.run_in_executor(get_blocking_executor('mootdx2'), self._stock_unusual_sync, event_type)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"stock_unusual failed: {e}")

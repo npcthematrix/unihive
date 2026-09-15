@@ -95,7 +95,7 @@ class TdxQuantClient:
         port = self.config.settings.tdx_remote_port
         try:
             fut = asyncio.get_event_loop().run_in_executor(
-                get_blocking_executor(),
+                get_blocking_executor('tdx_quant'),
                 lambda: socket.create_connection((host, port), timeout=2.0),
             )
             sock = await asyncio.wait_for(fut, timeout=3.0)
@@ -179,7 +179,7 @@ class TdxQuantClient:
             return False
         try:
             await asyncio.get_event_loop().run_in_executor(
-                get_blocking_executor(),
+                get_blocking_executor('tdx_quant'),
                 lambda: self._tq.get_user_sector(),
             )
             # 调通即视为 OK: 返回 [] 表示 DLL 通但无数据(可能是用户没建
@@ -256,7 +256,7 @@ class TdxQuantClient:
                 # tq.close() 同步调 DLL, 在主线程跑会阻塞 event loop 0.5s+
                 # (HIGH2). executor 跑让其他 in-flight 请求继续调度。
                 await asyncio.get_event_loop().run_in_executor(
-                    get_blocking_executor(), self._tq.close
+                    get_blocking_executor('tdx_quant'), self._tq.close
                 )
             except Exception as e:
                 logger.warning(f"[{self.name}] close warning: {e}")
@@ -289,7 +289,7 @@ class TdxQuantClient:
         try:
             result = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
-                    get_blocking_executor(),
+                    get_blocking_executor('tdx_quant'),
                     lambda: getattr(self._tq, tool_name)(**arguments),
                 ),
                 timeout=self.config.settings.call_timeout_sec,
@@ -349,7 +349,7 @@ class TdxQuantClient:
             try:
                 result = await asyncio.wait_for(
                     asyncio.get_event_loop().run_in_executor(
-                        get_blocking_executor(), lambda: self._tq.get_user_sector()
+                        get_blocking_executor('tdx_quant'), lambda: self._tq.get_user_sector()
                     ),
                     timeout=5.0,
                 )
@@ -385,7 +385,7 @@ class TdxQuantClient:
                 if self._tq:
                     # HIGH2: tq.close() 同步 DLL, 必须 run_in_executor
                     await asyncio.get_event_loop().run_in_executor(
-                        get_blocking_executor(), self._tq.close
+                        get_blocking_executor('tdx_quant'), self._tq.close
                     )
             except Exception as e:
                 logger.warning(f"[{self.name}] close during reconnect: {e}")

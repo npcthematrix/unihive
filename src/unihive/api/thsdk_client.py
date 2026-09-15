@@ -145,7 +145,7 @@ class _Throttle:
                 await asyncio.sleep(wait)
             try:
                 return await asyncio.wait_for(
-                    loop.run_in_executor(get_blocking_executor(), fn), timeout=timeout
+                    loop.run_in_executor(get_blocking_executor('thsdk'), fn), timeout=timeout
                 )
             finally:
                 self._last = time.monotonic()
