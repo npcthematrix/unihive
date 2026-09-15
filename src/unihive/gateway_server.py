@@ -1099,6 +1099,7 @@ class GatewayServer:
                 Route("/console.html", _index_route),
                 Route("/api/status", _status_api),
                 *_ca.build_omni_routes(),
+                Route("/api/upstreams/{name}/metrics", _ca.upstream_metrics_api),
                 *_proxy_routes(),
                 Route("/api/interfaces", _interfaces_api),
                 Route("/api/config", _config_api),
