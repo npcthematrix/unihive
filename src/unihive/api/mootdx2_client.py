@@ -161,6 +161,12 @@ class MooTDX2Client:
             self._daily_l1: TTLCache = TTLCache(maxsize=2048, ttl=30.0)
             self._daily_l1_hits = 0
             self._daily_l1_misses = 0
+            # P2.A (2026-09-15): 复权后 DataFrame 长 TTL 缓存 (24h)
+            # qfq/hfq 走 reader.daily(adjust=qfq) 内部会调 get_xdxr 远程拉复权因子,
+            # 第一次慢且必走网络。缓存整个复权后 DataFrame (含所有日期),
+            # 24h 内同 (symbol, adjust) 命中直接返, 后续 start_date/end_date
+            # 过滤在缓存 DataFrame 上做 (已是内存 DataFrame, O(N) 切片极快)。
+            self._daily_adjusted_l1: TTLCache = TTLCache(maxsize=512, ttl=86400.0)
         except ImportError:
             self._QUOTE_L1_ENABLED = False
             logger.warning("cachetools not installed, get_quote/get_daily L1 cache disabled")
@@ -668,11 +674,13 @@ class MooTDX2Client:
             pass
 
     async def stop(self):
-        # P0.2 + P1.1 (2026-09-15 mootdx2 高并发): 清理 L1 缓存
+        # P0.2 + P1.1 + P2.A (2026-09-15 mootdx2 高并发): 清理 L1 缓存
         if self._QUOTE_L1_ENABLED and hasattr(self, '_quote_l1'):
             self._quote_l1.clear()
         if self._QUOTE_L1_ENABLED and hasattr(self, '_daily_l1'):
             self._daily_l1.clear()
+        if self._QUOTE_L1_ENABLED and hasattr(self, '_daily_adjusted_l1'):
+            self._daily_adjusted_l1.clear()
 
         # H1: 取消后台探活任务
         if self._health_task and not self._health_task.done():
@@ -1655,7 +1663,19 @@ class MooTDX2Client:
         )
 
         reader = self._get_reader()
-        df = reader.daily(symbol=reader_symbol, adjust=adjust)
+        # P2.A (2026-09-15): 复权数据走长 TTL L1 (24h)
+        # qfq/hfq 第一次 reader.daily() 内部会调 get_xdxr 远程拉复权因子,
+        # 这是 get_daily qfq/hfq 性能不稳定的根因。24h 内同 symbol+adjust
+        # 命中, 跳过整个 .day 文件重读 + 远程拉因子。
+        df = None
+        if self._QUOTE_L1_ENABLED and adjust in ("qfq", "hfq"):
+            adj_key = (reader_symbol, adjust)
+            df = self._daily_adjusted_l1.get(adj_key)
+        if df is None:
+            df = reader.daily(symbol=reader_symbol, adjust=adjust)
+            # 复权结果写入长 TTL 缓存 (含空 df 也缓存, 避免反复查不存在的)
+            if self._QUOTE_L1_ENABLED and adjust in ("qfq", "hfq") and df is not None:
+                self._daily_adjusted_l1[(reader_symbol, adjust)] = df
         if df is None or getattr(df, "empty", True):
             return [], meta
 
