@@ -1819,6 +1819,8 @@ class MooTDX2Client:
                         inflight_future.set_result(error_result)
                 return error_result
             finally:
+                # 必须在所有路径 (success / ValueError / Exception) 清理 inflight,
+                # 否则 leader 释放后, 后续同 key 请求会把过期 Future 当成 leader 复用。
                 if is_leader and inflight_future is not None:
                     async with self._daily_l1_inflight_lock:
                         self._daily_l1_inflight.pop(
