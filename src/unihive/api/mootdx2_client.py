@@ -331,6 +331,49 @@ class MooTDX2Client:
             },
         )
 
+    def _build_daily_tool_result(
+        self,
+        *,
+        code: str,
+        data: list[dict] | None,
+        meta: dict,
+        adjust: str,
+        parsed_for_key,
+        reader_symbol_key: str | None,
+    ) -> ToolResult:
+        """Build ToolResult from `_get_daily_sync` output.
+
+        - `data` truthy -> success ToolResult; attaches `meta["warn"]` if present
+        - `data` falsy -> no_data ToolResult with kind-aware message
+        - 指数代码 (kind=index) -> "指数 X 本地无 .day 文件 (可能未下载完整本地数据)"
+        - 其他 -> "未找到 X 的日线数据"
+        """
+        if data:
+            result = ToolResult(success=True, data=data, source="mootdx2")
+            if meta.get("warn"):
+                result.error_detail = {"warn": meta["warn"], "recoverable": True}
+            return result
+        # 无数据
+        from .index_registry import parse_symbol, INDEX_KIND
+        if meta.get("kind") == INDEX_KIND:
+            if parsed_for_key is not None:
+                msg = (
+                    f"指数 {parsed_for_key.code} 本地无 .day 文件"
+                    f"（可能未下载完整本地数据）"
+                )
+            else:
+                try:
+                    parsed = parse_symbol(code)
+                    msg = (
+                        f"指数 {parsed.code} 本地无 .day 文件"
+                        f"（可能未下载完整本地数据）"
+                    )
+                except ValueError:
+                    msg = "指数本地无 .day 文件（可能未下载完整本地数据）"
+        else:
+            msg = f"未找到 {code} 的日线数据"
+        return self._no_data_result(msg)
+
     def get_metrics(self) -> dict:
         """获取客户端指标"""
         return {
@@ -1694,41 +1737,92 @@ class MooTDX2Client:
                 filtered = self._filter_records_by_date(cached_records, start_date, end_date)
                 return ToolResult(success=True, data=filtered, source="mootdx2")
 
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
-                get_blocking_executor(), self._get_daily_sync, code, adjust, start_date, end_date
-            )
-            meta = getattr(self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None})
-            # 写缓存: 仅 adjust=none + 有数据 + 解析成功 → 写 reader_symbol_key
+            # miss 路径: 仅 adjust=none + 解析成功 → 走 single-flight 去重
+            inflight_future: asyncio.Future | None = None
+            is_leader = False
             if (
                 self._DAILY_L1_ENABLED
-                and data
                 and adjust == "none"
                 and parsed_for_key is not None
             ):
-                self._daily_l1[(reader_symbol_key, adjust)] = data
-            if data:
-                result = ToolResult(success=True, data=data, source="mootdx2")
-                if meta.get("warn"):
-                    result.error_detail = {
-                        "warn": meta["warn"],
-                        "recoverable": True,
-                    }
-                return result
-            # 无数据: kind=index 给更明确的提示（坑 #4 防御）
-            if meta.get("kind") == INDEX_KIND:
-                # 重新解析以拿到 code 字符串
-                try:
-                    parsed = parse_symbol(code)
-                    msg = (
-                        f"指数 {parsed.code} 本地无 .day 文件"
-                        f"（可能未下载完整本地数据）"
+                async with self._daily_l1_inflight_lock:
+                    existing = self._daily_l1_inflight.get(
+                        (reader_symbol_key, adjust)
                     )
-                except ValueError:
-                    msg = "指数本地无 .day 文件（可能未下载完整本地数据）"
-            else:
-                msg = f"未找到 {code} 的日线数据"
-            return self._no_data_result(msg)
+                    if existing is not None:
+                        inflight_future = existing
+                    else:
+                        inflight_future = (
+                            asyncio.get_running_loop().create_future()
+                        )
+                        self._daily_l1_inflight[
+                            (reader_symbol_key, adjust)
+                        ] = inflight_future
+                        is_leader = True
+
+            if inflight_future is not None and not is_leader:
+                # waiter: 共享 leader 的 ToolResult
+                shared = await inflight_future
+                return shared
+
+            # leader 路径 (or 非 none 路径 / inflight 旁路)
+            try:
+                loop = asyncio.get_event_loop()
+                data = await loop.run_in_executor(
+                    get_blocking_executor(),
+                    self._get_daily_sync,
+                    code,
+                    adjust,
+                    start_date,
+                    end_date,
+                )
+                meta = getattr(
+                    self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None}
+                )
+                result = self._build_daily_tool_result(
+                    code=code,
+                    data=data,
+                    meta=meta,
+                    adjust=adjust,
+                    parsed_for_key=parsed_for_key,
+                    reader_symbol_key=reader_symbol_key,
+                )
+                # 写 L1 (仅 adjust=none + 有数据 + 解析成功)
+                if (
+                    self._DAILY_L1_ENABLED
+                    and is_leader
+                    and adjust == "none"
+                    and data
+                    and parsed_for_key is not None
+                ):
+                    self._daily_l1[(reader_symbol_key, adjust)] = data
+
+                if is_leader and inflight_future is not None:
+                    if not inflight_future.done():
+                        inflight_future.set_result(result)
+
+                return result
+            except ValueError:
+                # ValueError 来自 _get_daily_sync 内部的 parse_symbol,
+                # 让它传播到外层统一转为 invalid_symbol
+                # 清理 inflight
+                if is_leader and inflight_future is not None:
+                    async with self._daily_l1_inflight_lock:
+                        self._daily_l1_inflight.pop(
+                            (reader_symbol_key, adjust), None
+                        )
+                raise
+            except Exception as e:
+                # leader 异常: 转为 error ToolResult, 让 waiter 拿同一结果
+                error_result = self._error_result(e, f"get_daily({code})")
+                if is_leader and inflight_future is not None:
+                    if not inflight_future.done():
+                        inflight_future.set_result(error_result)
+                    async with self._daily_l1_inflight_lock:
+                        self._daily_l1_inflight.pop(
+                            (reader_symbol_key, adjust), None
+                        )
+                return error_result
         except ValueError as e:
             # parse_symbol 抛: 后缀非法 / 后缀冲突 / 主体非 6 位数字
             self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
