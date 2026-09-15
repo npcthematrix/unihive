@@ -108,7 +108,28 @@ export const FUYAO_ENDPOINT_TITLES: Record<FuyaoEndpointKey, string> = {
 
 export interface FuyaoCacheConfig {
   endpoints?: Partial<Record<FuyaoEndpointKey, FuyaoEndpointConfig>>
+  /**
+   * 工具级 TTL 覆盖: 键为 MCP tool 名称, 值为 TTL 秒数 (≥ 0)。
+   * 由 FuyaoCachePanel 提交到后端 `/api/config/fuyao-cache` 时使用。
+   */
+  tools?: Record<string, number>
   version?: string
+}
+
+/**
+ * 派生某 gateway tool 对应的 FUYAO endpoint。
+ *
+ * 当前为占位实现 (返回 `undefined`),因为 FUYAO tool→endpoint 的映射
+ * 需要从上游注册表派生;真实的实现留给后续 FuyaoCachePanel 专题修复。
+ *
+ * Why: FuyaoCachePanel 期望此 helper 存在以渲染 endpoint 分组。
+ * How to apply: 后续接入上游注册表元数据时,改为基于 tool prefix 的真实路由。
+ */
+export function fuyaoEndpointOf(
+  _toolName: string,
+  _upstreamToolMapping?: unknown,
+): FuyaoEndpointKey | undefined {
+  return undefined
 }
 
 /** GET /api/config/fuyao-cache — 当前 FUYAO 嵌套 TTL 配置。 */
