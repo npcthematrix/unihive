@@ -350,6 +350,8 @@ class OmniClient:
 
     async def stop(self) -> None:
         """关闭客户端"""
+        # L2 (2026-09-15 MCP 二次审视): 关闭当前线程的 SQLite 长连接
+        self._close_thread_conn()
         self._status = UpstreamStatus.UNKNOWN
 
     async def call_tool(self, tool_name: str, params: dict[str, Any]) -> ToolResult:

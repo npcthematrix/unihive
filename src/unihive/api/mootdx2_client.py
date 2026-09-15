@@ -16,6 +16,12 @@ from ..models.mootdx2_errors import (
     error_to_result,
     no_data_result,
 )
+from .index_registry import (
+    INDEX_KIND,
+    STOCK_KIND,
+    classify_symbol,
+    parse_symbol,
+)
 
 
 class SectorDataError(Exception):
@@ -127,6 +133,8 @@ class MooTDX2Client:
 
         # 指标收集
         self._request_id = 0
+        # L3 (2026-09-15 MCP 二次审视): error_counts 上限防止内存无限增长
+        self._ERROR_COUNTS_MAX = 100
         self._metrics = {
             "total_requests": 0,
             "total_errors": 0,
@@ -147,12 +155,17 @@ class MooTDX2Client:
 
         total_errors 简单 int += 是 GIL 安全的, 但 error_counts[key] 复合
         读写需要 lock 保护, 否则并发下会丢更新。
+
+        L3 (2026-09-15 MCP 二次审视): 达到上限时 LRU 清理最老的条目。
         """
         with self._metrics_lock:
             self._metrics["total_errors"] += 1
-            self._metrics["error_counts"][error_type] = (
-                self._metrics["error_counts"].get(error_type, 0) + 1
-            )
+            error_counts = self._metrics["error_counts"]
+            # LRU 清理: 超过上限时删除最老的条目
+            if len(error_counts) >= self._ERROR_COUNTS_MAX and error_type not in error_counts:
+                oldest_key = next(iter(error_counts))
+                del error_counts[oldest_key]
+            error_counts[error_type] = error_counts.get(error_type, 0) + 1
 
     def _get_tdxdir(self) -> str | None:
         """获取 tdxdir，如果没有配置则返回 None 让 mootdx2 自动探测"""
@@ -172,6 +185,73 @@ class MooTDX2Client:
                     tdxdir = self._get_tdxdir()
                     self._reader = Reader.factory(market="std", tdxdir=tdxdir)
         return self._reader
+
+    # 2026-09-14 round 11 audit (坑 #6 防御):
+    # mootdx2 `_default_tdxdir()` 按平台惯例返回:
+    #   - Windows: C:/new_tdx
+    #   - macOS:   ~/new_tdx
+    #   - Linux:   ~/.local/share/new_tdx
+    # 跨机器部署时若用户没显式配 tdxdir, 会静默指向空目录 → Reader
+    # 返回 DataFrame(data=None) → 上游 no_data, 调用方无法区分
+    # "代码错" vs "本地未下载"。这里在 start() 探测一次, 写 INFO/WARN
+    # 日志告知用户当前 tdxdir 是否能命中白名单指数 .day 文件。
+    # best-effort: 不抛、不改 status、不影响在线接口。
+    _PROBE_INDEX_SAMPLES: tuple[tuple[str, str], ...] = (
+        ("000001", "sh"),   # 上证指数（必检 SH 命中）
+        ("399001", "sz"),   # 深证成指（必检 SZ 命中）
+        ("000300", "sh"),   # 沪深300（SH 宽基，曾因前缀推断被错放 sz）
+    )
+
+    def _probe_tdxdir(self) -> None:
+        """启动期 tdxdir 健康探测（best-effort）。
+
+        探测失败原因（仅写日志，不抛）:
+          (1) tdxdir 为空
+          (2) 目录不存在
+          (3) vipdoc 子目录缺失
+          (4) 指数白名单文件一个都没有命中（本地数据未下载）
+        """
+        tdxdir = self._get_tdxdir()
+        if not tdxdir:
+            logger.warning(
+                f"{self.name}: tdxdir 未配置；离线 reader 工具 "
+                f"将返回 tdx_not_installed（在线模式可忽略）"
+            )
+            return
+
+        base = Path(tdxdir)
+        if not base.exists() or not base.is_dir():
+            logger.warning(
+                f"{self.name}: tdxdir={base} 不存在或不是目录"
+            )
+            return
+
+        vipdoc = base / "vipdoc"
+        if not vipdoc.is_dir():
+            logger.warning(
+                f"{self.name}: tdxdir={base} 下未发现 vipdoc/ 子目录；"
+                f"离线 reader 工具不可用"
+            )
+            return
+
+        # 探一下白名单指数 .day 文件是否存在（任一命中即视为 OK）
+        hits: list[str] = []
+        for code, mkt in self._PROBE_INDEX_SAMPLES:
+            p = vipdoc / mkt / "lday" / f"{mkt}{code}.day"
+            if p.exists():
+                hits.append(p.name)
+        if hits:
+            logger.info(
+                f"{self.name}: tdxdir 探测 OK；本地 .day 命中 "
+                f"{len(hits)}/{len(self._PROBE_INDEX_SAMPLES)} 个指数样本"
+                f"（{hits[:3]}）"
+            )
+        else:
+            logger.warning(
+                f"{self.name}: tdxdir/vipdoc 存在但未发现任何白名单指数 "
+                f".day 文件；离线指数工具将返回 no_data（请通过 TDX 客户端 "
+                f"下载完整本地数据）"
+            )
 
     def _error_result(self, exc: Exception, context: str) -> ToolResult:
         """将异常转换为错误结果"""
@@ -381,6 +461,9 @@ class MooTDX2Client:
         Quotes.factory() 重新测速所有服务器, 启动延迟叠加。
         """
         # C1: 提前创建一次 Quotes 实例 (factory 内部测速一次, 后续 probe 复用)
+        # 2026-09-14 round 11 audit: tdxdir 探测 (best-effort, 不抛) —
+        # 早于 Quotes init, 方便用户在日志里立刻看到本地数据目录错配。
+        self._probe_tdxdir()
         try:
             self._ensure_quotes_initialized()
         except Exception as e:
@@ -596,6 +679,9 @@ class MooTDX2Client:
             "get_custom_sector_list": self.get_custom_sector_list,
             "get_custom_sector_stocks": self.get_custom_sector_stocks,
             "get_index_overview": self.get_index_overview,
+            # 2026-09-14 round 11 audit: 离线指数 K 线（Reader.daily 强制
+            # 无复权），与在线 get_index_kline 区别在于不依赖 TDX 网络。
+            "get_index_kline_local": self.get_index_kline_local,
             "stock_top_board": self.stock_top_board,
             "stock_unusual": self.stock_unusual,
             "indicator_atr": self.indicator_atr,
@@ -1456,11 +1542,40 @@ class MooTDX2Client:
             adjust: 复权方式 none / qfq / hfq（默认不复权）
             start_date: 起始日期 yyyy-MM-dd（可选）
             end_date: 结束日期 yyyy-MM-dd（可选）
+
+        2026-09-14 round 11 audit (坑 #2/#3 防御):
+            - 入口用 ``parse_symbol`` 判断 kind
+            - kind=index → reader_symbol 强制 "sh000300" 形式,
+              否则 mootdx2 ``Reader.find_path`` 会按代码前缀推断
+              把 SH 宽基错放到 sz/lday
+            - kind=index 时 adjust 强制覆盖为 'none' (静默 + meta.warn)
+              否则 mootdx2 走 ``to_adjust`` → ``get_xdxr`` 拉新浪
+              复权因子 → 指数无 XDXR 抛 ReversionError 中断调用
         """
+        # 入口解析; ValueError 由调用方 _get_daily 入口转 invalid_symbol
+        parsed = parse_symbol(code)
+        meta = {"kind": parsed.kind, "warn": None}
+
+        # 指数强制无复权（坑 #3）
+        if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq"):
+            meta["warn"] = (
+                f"指数 {parsed.code} 不支持 {adjust} 复权，已强制为 none"
+            )
+            adjust = "none"
+
+        # Reader 调用符号：
+        #   - stock: 纯 6 位 → reader.find_path 内部前缀推断
+        #   - index: 必须 "{market}{code}" 形式，否则错放目录
+        reader_symbol = (
+            f"{parsed.market}{parsed.code}" if parsed.kind == INDEX_KIND
+            else parsed.code
+        )
+
         reader = self._get_reader()
-        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        df = reader.daily(symbol=sym, adjust=adjust)
-        if df is None or df.empty:
+        df = reader.daily(symbol=reader_symbol, adjust=adjust)
+        if df is None or getattr(df, "empty", True):
+            # 把 kind 信息附在异常路径里，便于 _get_daily 给更明确的 no_data 文案
+            setattr(self, "_last_daily_meta", meta)
             return []
 
         if start_date:
@@ -1473,6 +1588,7 @@ class MooTDX2Client:
             if "index" in r:
                 idx = r.pop("index")
                 r["date"] = str(idx)[:10]
+        setattr(self, "_last_daily_meta", meta)
         return records
 
     async def get_daily(
@@ -1481,15 +1597,21 @@ class MooTDX2Client:
         """获取股票日线数据（离线，TDX 本地 .day 文件）
 
         Args:
-            code: 股票代码（6 位数字，可带 sh/sz/bj 前缀）
+            code: 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
             adjust: 复权方式
                 - 'none': 不复权（默认）
                 - 'qfq': 前复权
                 - 'hfq': 后复权
+                - 指数代码传 qfq/hfq 会被静默覆盖为 none（warn 字段说明）
             start_date: 起始日期 yyyy-MM-dd（可选）
             end_date: 结束日期 yyyy-MM-dd（可选）
 
         数据源：{tdxdir}/vipdoc/sh/lday/sh600036.day 等本地二进制文件
+
+        2026-09-14 round 11 audit:
+            - 指数代码通过 ``parse_symbol`` 走 ``INDEX_MARKET_MAP`` 显式映射
+            - 未登记代码 / 后缀冲突 → ``invalid_symbol``
+            - 指数 .day 本地不存在 → 更明确的 no_data 文案
         """
         self._metrics["total_requests"] += 1
         try:
@@ -1497,9 +1619,42 @@ class MooTDX2Client:
             data = await loop.run_in_executor(
                 get_blocking_executor(), self._get_daily_sync, code, adjust, start_date, end_date
             )
+            meta = getattr(self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None})
             if data:
-                return ToolResult(success=True, data=data, source="mootdx2")
-            return self._no_data_result(f"未找到 {code} 的日线数据")
+                result = ToolResult(success=True, data=data, source="mootdx2")
+                if meta.get("warn"):
+                    # success=True + warn: 数据已返回但被自动调整，避免污染 fallback
+                    result.error_detail = {
+                        "warn": meta["warn"],
+                        "recoverable": True,
+                    }
+                return result
+            # 无数据: kind=index 给更明确的提示（坑 #4 防御）
+            if meta.get("kind") == INDEX_KIND:
+                # 重新解析以拿到 code 字符串
+                try:
+                    parsed = parse_symbol(code)
+                    msg = (
+                        f"指数 {parsed.code} 本地无 .day 文件"
+                        f"（可能未下载完整本地数据）"
+                    )
+                except ValueError:
+                    msg = "指数本地无 .day 文件（可能未下载完整本地数据）"
+            else:
+                msg = f"未找到 {code} 的日线数据"
+            return self._no_data_result(msg)
+        except ValueError as e:
+            # parse_symbol 抛: 后缀非法 / 后缀冲突 / 主体非 6 位数字
+            self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
+            return ToolResult(
+                success=False,
+                error=str(e),
+                error_detail={
+                    "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
+                    "message": str(e),
+                    "recoverable": False,
+                },
+            )
         except SectorDataError as e:
             return self._sector_error_result(e)
         except Exception as e:
@@ -1611,7 +1766,149 @@ class MooTDX2Client:
             logger.error(f"get_fzline failed: {e}")
             return self._error_result(e, f"get_fzline({code})")
 
-    # ========== 指数K线（指定起止） ==========
+    # ========== 离线指数K线（Reader，TDX 本地 .day 文件） ==========
+    # 2026-09-14 round 11 audit (坑 #1/#2/#3/#4/#5/#7 防御):
+    # mootdx2 ``Reader`` 没有专门的 ``index()`` 方法，离线读指数本质上
+    # 仍走 ``Reader.daily(symbol=...)``，但必须显式把指数映射到正确的
+    # sh/sz 子目录（坑 #2），强制无复权（坑 #3），并对本地文件缺失
+    # 给出明确 no_data 提示（坑 #4），对 offset 截断打 warn（坑 #5），
+    # 分钟级不支持（坑 #7）。
+    _INDEX_LOCAL_TYPES: tuple[str, ...] = ("day", "week", "month")
+    # 注：当前实现只直接返回 .day 文件原始日线数据（type 仅 day）。
+    # week/month 由调用方自行 resample，避免 mootdx2 内部周/月频率支持
+    # 不完整（Reader.daily 不接受 frequency 参数）的隐式返回问题。
+
+    def _get_index_kline_local_sync(
+        self, code: str, limit: int,
+    ) -> tuple[list, dict]:
+        """同步读取离线指数 K 线（日级，强制 adjust='none'）。
+
+        Returns:
+            ``(records, meta)``，meta 含 ``truncated`` 等字段。
+        """
+        parsed = parse_symbol(code)
+        reader = self._get_reader()
+        reader_symbol = f"{parsed.market}{parsed.code}"
+        df = reader.daily(symbol=reader_symbol, adjust="none")
+        meta: dict = {"kind": parsed.kind, "truncated": False}
+        if df is None or getattr(df, "empty", True):
+            return [], meta
+
+        records = df.reset_index().to_dict(orient="records")
+        for r in records:
+            if "index" in r:
+                idx = r.pop("index")
+                r["date"] = str(idx)[:10]
+
+        # 坑 #5 防御: limit 截断时显式标记 truncated
+        if records and limit and limit > 0 and len(records) > limit:
+            records = records[-limit:]
+            meta["truncated"] = True
+        return records, meta
+
+    async def get_index_kline_local(
+        self, code: str, type: str = "day", limit: int = 100,
+    ) -> ToolResult:
+        """离线指数 K 线（Reader.daily，强制无复权）。
+
+        与在线 ``get_index_kline`` 的区别:
+          - 不依赖 TDX 网络，走本地 .day 文件
+          - ``type`` 仅支持 day/week/month（分钟级请用 get_minute_local）
+          - 指数代码必须已登记到 ``INDEX_MARKET_MAP``（未登记 → invalid_symbol）
+
+        Args:
+            code: 指数代码，6 位数字或带 .SH/.SZ/.BJ 后缀
+            type: K线类型，仅 day/week/month（默认 day）
+            limit: 返回条数，默认 100，最大 1000
+
+        Returns:
+            ToolResult: 数据 / no_data / invalid_symbol / invalid_param / tdx_not_installed
+        """
+        # type 校验（坑 #7 防御）
+        if type not in self._INDEX_LOCAL_TYPES:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"get_index_kline_local 仅支持 "
+                    f"{'/'.join(self._INDEX_LOCAL_TYPES)}，{type} 请用 get_minute_local"
+                ),
+                error_detail={
+                    "error_type": MooTDXErrorType.INVALID_PARAM.value,
+                    "message": f"type={type} 不支持",
+                    "recoverable": False,
+                },
+            )
+        if limit > MAX_LIMIT_KLINE:
+            return ToolResult(
+                success=False,
+                error=DATA_TOO_LARGE_MSG.format(limit=MAX_LIMIT_KLINE),
+                error_detail={
+                    "error_type": MooTDXErrorType.INVALID_PARAM.value,
+                    "message": DATA_TOO_LARGE_MSG.format(limit=MAX_LIMIT_KLINE),
+                    "recoverable": False,
+                },
+            )
+
+        self._metrics["total_requests"] += 1
+        # 入口解析: 未登记 / 后缀冲突 / 非法后缀 → ValueError → invalid_symbol
+        try:
+            parsed = parse_symbol(code)
+        except ValueError as e:
+            self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
+            return ToolResult(
+                success=False,
+                error=str(e),
+                error_detail={
+                    "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
+                    "message": str(e),
+                    "recoverable": False,
+                },
+            )
+
+        # kind=stock 走错工具: 明确告知用户
+        if parsed.kind != INDEX_KIND:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"代码 {code} 不是指数（kind={parsed.kind}），"
+                    f"请用 get_daily_local / get_kline"
+                ),
+                error_detail={
+                    "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
+                    "message": f"{code} 不是指数",
+                    "recoverable": False,
+                },
+            )
+
+        try:
+            loop = asyncio.get_event_loop()
+            records, meta = await loop.run_in_executor(
+                get_blocking_executor(),
+                self._get_index_kline_local_sync, code, limit,
+            )
+            if records:
+                result = ToolResult(success=True, data=records, source="mootdx2")
+                if meta.get("truncated"):
+                    # 坑 #5 防御: offset 截断时显式告警
+                    result.error_detail = {
+                        "warn": "truncated",
+                        "returned": len(records),
+                        "requested": limit,
+                        "recoverable": True,
+                    }
+                return result
+            # 坑 #4 防御: 本地 .day 缺失给明确 no_data 文案
+            return self._no_data_result(
+                f"指数 {parsed.code} 本地无 .day 文件"
+                f"（可能未下载完整本地数据）"
+            )
+        except SectorDataError as e:
+            return self._sector_error_result(e)
+        except Exception as e:
+            logger.error(f"get_index_kline_local failed: {e}")
+            return self._error_result(e, f"get_index_kline_local({code})")
+
+# ========== 指数K线（指定起止） ==========
     def _get_index_bars_sync(self, symbol: str, frequency: int = 9, start: int = 0, offset: int = 800):
         """同步指数K线（指定起止位置）"""
         q = self._get_quotes()

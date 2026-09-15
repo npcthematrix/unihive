@@ -36,6 +36,14 @@ def configure_proxy_api(proxy_settings: ProxySettings, upstreams: dict[str, "Ups
     logger.info("proxy_api configured with proxy_settings and upstreams")
 
 
+def reset_proxy_api() -> None:
+    """Reset module-level state on gateway stop to support stop/start cycles."""
+    global _proxy_settings, _upstreams
+    _proxy_settings = None
+    _upstreams = None
+    logger.info("proxy_api state reset")
+
+
 def _get_app_state(req: Request) -> Any:
     """Pull our injected app_state (set by gateway_server on each request)."""
     return req.app.state

@@ -140,6 +140,12 @@ class AsyncTokenBucketLimiter:
 _default_limiter: AsyncTokenBucketLimiter | None = None
 
 
+def reset_default_limiter() -> None:
+    """重置全局限流器单例，支持 gateway stop/start 循环。"""
+    global _default_limiter
+    _default_limiter = None
+
+
 def get_default_limiter() -> AsyncTokenBucketLimiter:
     """获取进程内共享的限流器（默认 20 QPS / 桶 40）。"""
     global _default_limiter
