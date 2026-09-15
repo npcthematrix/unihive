@@ -741,6 +741,12 @@ onUnmounted(() => {
   margin-bottom: 10px;
 }
 
+@media (max-width: 1100px) {
+  .ifs-sidebar {
+    flex: 0 0 220px;
+  }
+}
+
 @media (max-width: 900px) {
   .ifs-layout {
     flex-direction: column;
@@ -750,6 +756,10 @@ onUnmounted(() => {
     flex-basis: auto;
     width: 100%;
     position: static;
+  }
+
+  .ifs-table {
+    overflow-x: auto;
   }
 }
 </style>

@@ -19,6 +19,7 @@
     </div>
 
     <!-- 上游表 -->
+    <div class="ups-table-scroll">
     <el-table
       :data="filteredEntries"
       :empty-text="emptyText"
@@ -66,7 +67,7 @@
       </el-table-column>
       <el-table-column label="超时" width="70" align="right" header-align="right">
         <template #default="{ row }">
-          {{ row.cfg.timeout_seconds ?? '-' }}
+          <span class="num">{{ row.cfg.timeout_seconds ?? '-' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="API Key" width="170">
@@ -107,11 +108,12 @@
           </div>
           <div v-if="row.cfg.retry" class="ups-detail-block">
             <div class="ups-detail-label">retry</div>
-            <code class="ups-retry">{{ retryToString(row.cfg.retry) }}</code>
+            <pre class="ups-retry">{{ retryToString(row.cfg.retry) }}</pre>
           </div>
         </template>
       </el-table-column>
     </el-table>
+    </div>
 
     <!-- 全局开关 + 日志: 两个独立折叠区 -->
     <details class="cfg-section" open>
@@ -236,6 +238,11 @@ const logRows = computed(() => loggingToRows(props.config?.logging))
 </script>
 
 <style scoped>
+.ups-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .ups-panel {
   display: flex;
   flex-direction: column;
@@ -255,7 +262,7 @@ const logRows = computed(() => loggingToRows(props.config?.logging))
   background: transparent;
   cursor: pointer;
   font-size: 0.7rem;
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
   transition: transform 120ms ease;
   padding: 0;
   display: inline-flex;
@@ -265,8 +272,13 @@ const logRows = computed(() => loggingToRows(props.config?.logging))
 }
 
 .ups-expand-btn:hover {
-  background: var(--bg);
-  color: var(--text);
+  background: var(--cfg-bg-soft);
+  color: var(--el-text-color-regular);
+}
+
+.ups-expand-btn:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
 }
 
 .ups-expand-btn.expanded {
@@ -285,24 +297,36 @@ const logRows = computed(() => loggingToRows(props.config?.logging))
 
 .ups-detail-label {
   font-size: 0.75rem;
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
   margin-bottom: 6px;
 }
 
 .ups-env-table {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
+  background: var(--cfg-bg-soft);
+  border: 1px solid var(--cfg-border);
   border-radius: 4px;
 }
 
 .ups-retry {
   display: block;
+  margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.75rem;
-  background: var(--bg);
-  padding: 6px 10px;
+  background: var(--cfg-bg-soft);
+  padding: 8px 12px;
   border-radius: 4px;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  color: var(--el-text-color-regular);
+}
+
+.cfg-mask {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  background: var(--cfg-bg-soft);
+  padding: 1px 6px;
+  border-radius: 3px;
 }
 </style>

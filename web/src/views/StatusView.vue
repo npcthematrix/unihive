@@ -90,7 +90,14 @@
           width="120"
         >
           <template #default="{ row }">
-            <span class="status-badge" :class="['b-' + row.status, { muted: row.status === 'disabled' }]">
+            <span
+              class="status-badge"
+              :class="['b-' + row.status, { muted: row.status === 'disabled' }]"
+              :aria-label="`状态: ${STATUS_TEXT[row.status] ?? '未知'}`"
+            >
+              <span class="status-icon" :class="`icon-${row.status}`" aria-hidden="true">
+                {{ statusIcon(row.status) }}
+              </span>
               <span class="status-dot" :class="dotClass(row.status)" />
               {{ STATUS_TEXT[row.status] ?? '未知' }}
             </span>
@@ -385,6 +392,26 @@ function dotClass(status: UpstreamStatusValue): string {
   }
 }
 
+/** 状态色盲友好图标 (✓ 在线 / ⚠ 降级/离线/未知 / ● 已就绪 / ⊘ 已禁用)。
+ *  与颜色 + 文字并存, 提供冗余通道。 */
+function statusIcon(status: UpstreamStatusValue): string {
+  switch (status) {
+    case 'online':
+      return '✓'
+    case 'degraded':
+      return '⚠'
+    case 'offline':
+    case 'unknown':
+      return '✕'
+    case 'configured':
+      return '●'
+    case 'disabled':
+      return '⊘'
+    default:
+      return '?'
+  }
+}
+
 function latencyClass(ms: number): string {
   if (ms > 3000) return 'bad'
   if (ms > 1000) return 'slow'
@@ -442,7 +469,12 @@ watch(autoRefresh, (on) => {
     }
     return
   }
-  pollTimer = setInterval(() => void load(false), 10_000)
+  pollTimer = setInterval(() => {
+    // 标签页隐藏时跳过, 切回时由 visibilitychange 监听补一次 (见 onVisibility)。
+    // 避免后台轮询空跑, 后端网关不至于被空请求打。
+    if (typeof document !== 'undefined' && document.hidden) return
+    void load(false)
+  }, 10_000)
 })
 
 /** 标签页重新可见且数据超过 30s 时静默重拉 (等价旧版切回面板的 stale 检查)。 */
@@ -591,6 +623,19 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 20px;
 }
+
+.status-icon {
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.status-icon.icon-online { color: var(--el-color-success); }
+.status-icon.icon-degraded { color: var(--el-color-warning); }
+.status-icon.icon-offline,
+.status-icon.icon-unknown { color: var(--el-color-danger); }
+.status-icon.icon-configured { color: var(--el-color-primary); }
+.status-icon.icon-disabled { color: var(--el-text-color-secondary); }
 
 .status-badge.b-online {
   color: var(--el-color-success);
@@ -766,6 +811,24 @@ onUnmounted(() => {
 @media (max-width: 1100px) {
   .summary-grid {
     grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .cache-hitrate-card {
+    grid-column: span 1;
   }
 }
 </style>
