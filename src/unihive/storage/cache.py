@@ -13,6 +13,31 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+# JSON 序列化走 orjson (2026-09-15 MCP 二次审视 M5):
+# - 比 stdlib json 快 3-5×, 无需中间 str, 直接返回 bytes
+# - datetime/UUID 等类型原生支持 (option=OPT_NAIVE_UTC 等)
+# - 不可用时降级 stdlib (如 pip install 失败的极小概率场景)
+try:
+    import orjson  # type: ignore[import-untyped]
+    _HAS_ORJSON = True
+except ImportError:
+    orjson = None  # type: ignore[assignment]
+    _HAS_ORJSON = False
+
+
+def _dumps(value: Any) -> str:
+    """序列化。orjson 返回 bytes, 解码成 str (sqlite TEXT 列兼容)。"""
+    if _HAS_ORJSON:
+        return orjson.dumps(value).decode("utf-8")
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _loads(value_str: str) -> Any:
+    """反序列化。"""
+    if _HAS_ORJSON:
+        return orjson.loads(value_str)
+    return json.loads(value_str)
+
 logger = logging.getLogger(__name__)
 
 
@@ -208,7 +233,7 @@ class Cache:
                     return None
 
                 self._access_times[key] = time.time()
-                return json.loads(value_str)
+                return _loads(value_str)
 
         except Exception as e:
             logger.error(f"Cache get error: {e}")
@@ -234,7 +259,7 @@ class Cache:
         async with self._lock:
             try:
                 async with self._session_factory() as session:
-                    value_str = json.dumps(value)
+                    value_str = _dumps(value)
                     now = time.time()
                     expires_at = int(now + ttl) if ttl else None
 
@@ -370,6 +395,25 @@ class Cache:
 
                     if deleted_total > 0:
                         logger.info(f"Cleaned up {deleted_total} cache entries")
+
+                    # WAL checkpoint (2026-09-15 MCP 二次审视 M3):
+                    # PRAGMA wal_checkpoint(TRUNCATE) 把 WAL 内容写回主库并
+                    # 截断 -wal 文件, 防长时间运行持续增长。每次清理 tick 跑
+                    # 一次 (5 min 间隔) 开销可忽略。
+                    try:
+                        ckpt = await session.execute(
+                            text("PRAGMA wal_checkpoint(TRUNCATE)")
+                        )
+                        # 返回 (busy, log_pages, checkpointed_pages)
+                        row = ckpt.fetchone()
+                        if row and row[1]:
+                            logger.debug(
+                                f"WAL checkpoint: {row[1]} pages -> "
+                                f"{row[2]} checkpointed"
+                            )
+                    except Exception as e:
+                        logger.debug(f"WAL checkpoint skipped: {e}")
+
                     return deleted_total
 
             except Exception as e:
