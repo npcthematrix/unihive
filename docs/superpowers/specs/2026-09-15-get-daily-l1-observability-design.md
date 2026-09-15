@@ -33,7 +33,7 @@
 
 ### 1.1 实例字段扩展
 
-现有 (`__init__` line 153-158)：
+现有 (`__init__` line 155-158)：
 
 ```python
 self._daily_l1 = TTLCache(maxsize=2048, ttl=7200.0)
@@ -54,7 +54,7 @@ self._daily_l1_inflight_lock = asyncio.Lock()  # 索引互斥
 
 ### 1.2 `get_daily()` 数据流变更
 
-替换 line 1655-1720 区域（cache 命中路径不变），miss 路径改为：
+替换 `get_daily` 内 line 1686-1720 区域（cache 命中路径 line 1681-1684 不变），miss 路径改为：
 
 ```text
 parse_symbol(code)                              [现状]
@@ -70,7 +70,7 @@ cached = self._daily_l1.get(cache_key)
          if existing:
              future = existing; is_leader = False
          else:
-             future = loop.create_future()
+             future = asyncio.get_running_loop().create_future()
              _daily_l1_inflight[cache_key] = future
              is_leader = True
      if not is_leader:
