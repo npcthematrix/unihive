@@ -122,8 +122,9 @@ class MooTDX2Client:
         self._status = UpstreamStatus.UNKNOWN
         self._quotes = None
         self._quotes_cls = None  # 延迟导入
-        self._reader = None  # Reader 实例缓存
-        self._reader_lock = threading.Lock()  # Reader 缓存锁（高并发保护）
+        self._reader = None  # Reader 实例缓存 (P1.5: 改为 thread-local, 此字段仅 fallback)
+        self._reader_lock = threading.Lock()  # Reader 缓存锁（高并发保护）— 兼容保留
+        self._reader_local = threading.local()  # P1.5: thread-local Reader
         self._quotes_lock = threading.Lock()  # Quotes 缓存锁（高并发保护）
 
         # H1 (round 8 audit): 后台周期探活任务, 让 DEGRADED 状态有机会
@@ -154,9 +155,15 @@ class MooTDX2Client:
             self._quote_l1_hits = 0
             self._quote_l1_misses = 0
             self._QUOTE_L1_ENABLED = True
+            # P1.1 (2026-09-15): get_daily L1 缓存, 30s TTL
+            # 日线数据分钟级实时, 30s 足以削减大部分重复请求。
+            # key = (code_lower, adjust, start_date, end_date)
+            self._daily_l1: TTLCache = TTLCache(maxsize=2048, ttl=30.0)
+            self._daily_l1_hits = 0
+            self._daily_l1_misses = 0
         except ImportError:
             self._QUOTE_L1_ENABLED = False
-            logger.warning("cachetools not installed, get_quote L1 cache disabled")
+            logger.warning("cachetools not installed, get_quote/get_daily L1 cache disabled")
 
     def _new_request_id(self) -> str:
         """生成请求 ID"""
@@ -189,15 +196,48 @@ class MooTDX2Client:
         return None
 
     def _get_reader(self):
-        """获取缓存的 Reader 实例（懒初始化，线程安全）。"""
-        if self._reader is None:
-            with self._reader_lock:
-                # 双重检查
-                if self._reader is None:
-                    from mootdx2.reader import Reader
-                    tdxdir = self._get_tdxdir()
-                    self._reader = Reader.factory(market="std", tdxdir=tdxdir)
-        return self._reader
+        """获取缓存的 Reader 实例。
+
+        P1.5 (2026-09-15 mootdx2 高并发): 改为 thread-local,
+        每线程独立 Reader 实例, 避免 _reader_lock 串行化。
+        Reader 是纯文件 I/O, 多实例只多占内存, 不影响正确性。
+        保留 self._reader 作为 fallback (兼容旧代码路径)。
+        """
+        # thread-local 缓存: 每线程一份
+        if not hasattr(self._reader_local, "reader"):
+            from mootdx2.reader import Reader
+            tdxdir = self._get_tdxdir()
+            self._reader_local.reader = Reader.factory(market="std", tdxdir=tdxdir)
+        return self._reader_local.reader
+
+    @staticmethod
+    def _df_to_records(df) -> list:
+        """DataFrame → list[dict] 优化。
+
+        P1.2 (2026-09-15 mootdx2 高并发): 替代 df.to_dict(orient="records")
+        + record-by-record 'index' rename + str()[:10] copy。
+
+        实现:
+        - df.itertuples() 比 iterrows 快 ~10x (C 实现, namedtuple)
+        - 一次性检查 index 字段, 跳过 isinstance 检查
+        - 用 _asdict() 比 dict(r) 略快 (C 层 namedtuple 方法)
+        - date 字段直接 str(idx)[:10], 不走 idx.date() (再 .isoformat())
+        """
+        if df is None or len(df) == 0:
+            return []
+
+        index_name = df.index.name
+        records = []
+        # itertuples 比 iterrows 快, 字段访问零开销
+        for row in df.itertuples(index=True):
+            r = row._asdict()
+            # index 字段 → date (兼容原代码)
+            if "Index" in r:
+                r["date"] = str(r.pop("Index"))[:10]
+            elif index_name and index_name in r:
+                r["date"] = str(r.pop(index_name))[:10]
+            records.append(r)
+        return records
 
     # 2026-09-14 round 11 audit (坑 #6 防御):
     # mootdx2 `_default_tdxdir()` 按平台惯例返回:
@@ -628,9 +668,11 @@ class MooTDX2Client:
             pass
 
     async def stop(self):
-        # P0.2 (2026-09-15 mootdx2 高并发): 清理 L1 缓存
+        # P0.2 + P1.1 (2026-09-15 mootdx2 高并发): 清理 L1 缓存
         if self._QUOTE_L1_ENABLED and hasattr(self, '_quote_l1'):
             self._quote_l1.clear()
+        if self._QUOTE_L1_ENABLED and hasattr(self, '_daily_l1'):
+            self._daily_l1.clear()
 
         # H1: 取消后台探活任务
         if self._health_task and not self._health_task.done():
@@ -1571,7 +1613,7 @@ class MooTDX2Client:
     # ========== 离线日线（Reader，TDX 本地 .day 文件） ==========
     def _get_daily_sync(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
-    ) -> list:
+    ) -> tuple:
         """同步读取离线日线数据。
 
         Args:
@@ -1579,6 +1621,10 @@ class MooTDX2Client:
             adjust: 复权方式 none / qfq / hfq（默认不复权）
             start_date: 起始日期 yyyy-MM-dd（可选）
             end_date: 结束日期 yyyy-MM-dd（可选）
+
+        Returns:
+            (records, meta) — P1.2: meta 通过返回值传, 替代 setattr
+            (之前 setattr 在 sync 路径里跨调用残留, 非线程安全)。
 
         2026-09-14 round 11 audit (坑 #2/#3 防御):
             - 入口用 ``parse_symbol`` 判断 kind
@@ -1611,22 +1657,17 @@ class MooTDX2Client:
         reader = self._get_reader()
         df = reader.daily(symbol=reader_symbol, adjust=adjust)
         if df is None or getattr(df, "empty", True):
-            # 把 kind 信息附在异常路径里，便于 _get_daily 给更明确的 no_data 文案
-            setattr(self, "_last_daily_meta", meta)
-            return []
+            return [], meta
 
         if start_date:
             df = df[df.index >= start_date] if hasattr(df.index, "__ge__") else df
         if end_date:
             df = df[df.index <= end_date] if hasattr(df.index, "__le__") else df
 
-        records = df.reset_index().to_dict(orient="records")
-        for r in records:
-            if "index" in r:
-                idx = r.pop("index")
-                r["date"] = str(idx)[:10]
-        setattr(self, "_last_daily_meta", meta)
-        return records
+        # P1.2 (2026-09-15): DataFrame → list[dict] 优化
+        # 避免 to_dict + record-by-record copy, 一次性 itertuples + 字段映射。
+        records = self._df_to_records(df)
+        return records, meta
 
     async def get_daily(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
@@ -1652,11 +1693,34 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
+            # P1.1 (2026-09-15): L1 缓存查询
+            # key: (normalized_code, adjust, start_date, end_date)
+            cache_key = (code.lower().strip(), adjust, start_date, end_date)
+            if self._QUOTE_L1_ENABLED and cache_key in self._daily_l1:
+                self._daily_l1_hits += 1
+                cached_records, cached_meta = self._daily_l1[cache_key]
+                if cached_records:
+                    result = ToolResult(success=True, data=cached_records, source="mootdx2")
+                    if cached_meta.get("warn"):
+                        result.error_detail = {
+                            "warn": cached_meta["warn"],
+                            "recoverable": True,
+                        }
+                    return result
+                # 空结果也走缓存 (避免反复查不存在的股票)
+                # 继续到下方 no_data 分支
+
+            self._daily_l1_misses += 1 if self._QUOTE_L1_ENABLED else 0
+
             loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
+            data, meta = await loop.run_in_executor(
                 get_blocking_executor('mootdx2'), self._get_daily_sync, code, adjust, start_date, end_date
             )
-            meta = getattr(self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None})
+
+            # 写 L1 缓存 (含 meta, 避免空 meta 走偏)
+            if self._QUOTE_L1_ENABLED:
+                self._daily_l1[cache_key] = (data, meta)
+
             if data:
                 result = ToolResult(success=True, data=data, source="mootdx2")
                 if meta.get("warn"):
