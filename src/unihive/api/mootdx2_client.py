@@ -1802,15 +1802,14 @@ class MooTDX2Client:
                         inflight_future.set_result(result)
 
                 return result
-            except ValueError:
-                # ValueError 来自 _get_daily_sync 内部的 parse_symbol,
-                # 让它传播到外层统一转为 invalid_symbol
-                # 清理 inflight
+            except ValueError as e:
+                # ValueError 来自 _get_daily_sync 内部 parse_symbol 抛出,
+                # 转为 error_result 让 waiter 拿到, 然后 re-raise 给外层
+                # (外层会再转为 invalid_symbol ToolResult)
+                error_result = self._error_result(e, f"get_daily({code})")
                 if is_leader and inflight_future is not None:
-                    async with self._daily_l1_inflight_lock:
-                        self._daily_l1_inflight.pop(
-                            (reader_symbol_key, adjust), None
-                        )
+                    if not inflight_future.done():
+                        inflight_future.set_result(error_result)
                 raise
             except Exception as e:
                 # leader 异常: 转为 error ToolResult, 让 waiter 拿同一结果
@@ -1818,11 +1817,13 @@ class MooTDX2Client:
                 if is_leader and inflight_future is not None:
                     if not inflight_future.done():
                         inflight_future.set_result(error_result)
+                return error_result
+            finally:
+                if is_leader and inflight_future is not None:
                     async with self._daily_l1_inflight_lock:
                         self._daily_l1_inflight.pop(
                             (reader_symbol_key, adjust), None
                         )
-                return error_result
         except ValueError as e:
             # parse_symbol 抛: 后缀非法 / 后缀冲突 / 主体非 6 位数字
             self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
