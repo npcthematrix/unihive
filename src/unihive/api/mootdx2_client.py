@@ -375,9 +375,27 @@ class MooTDX2Client:
         return self._no_data_result(msg)
 
     def get_metrics(self) -> dict:
-        """获取客户端指标"""
+        """获取客户端指标 — 含 L1 缓存运行时统计 (2026-09-15)."""
+        daily_l1_block: dict
+        if self._DAILY_L1_ENABLED:
+            hits = self._daily_l1_hits
+            misses = self._daily_l1_misses
+            total = hits + misses
+            daily_l1_block = {
+                "enabled": True,
+                "hits": hits,
+                "misses": misses,
+                "hit_rate": (hits / total) if total > 0 else None,
+                "size": len(self._daily_l1),
+                "maxsize": 2048,
+                "ttl_seconds": 7200,
+                "inflight_keys": len(self._daily_l1_inflight),
+            }
+        else:
+            daily_l1_block = {"enabled": False}
         return {
             **self._metrics,
+            "daily_l1": daily_l1_block,
             "pool_stats": self.config.pool.get_stats() if self.config.pool else {},
         }
 

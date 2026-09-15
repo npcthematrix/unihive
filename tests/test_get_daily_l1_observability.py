@@ -107,3 +107,23 @@ def test_leader_exception_shared_by_waiters(mock_setup):
     assert mock_reader.daily.call_count == 1
     # inflight 已清理
     assert len(client._daily_l1_inflight) == 0
+
+
+def test_metrics_includes_daily_l1_block(mock_setup):
+    """get_metrics() 返回 daily_l1 子块, 字段全齐."""
+    client, mock_reader, _ = mock_setup
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        asyncio.run(client.get_daily("600036"))
+        asyncio.run(client.get_daily("600036"))  # 命中
+
+    m = client.get_metrics()
+    assert "daily_l1" in m
+    block = m["daily_l1"]
+    assert block["enabled"] is True
+    assert block["hits"] == 1
+    assert block["misses"] == 1
+    assert block["hit_rate"] == 0.5
+    assert block["size"] == 1
+    assert block["maxsize"] == 2048
+    assert block["ttl_seconds"] == 7200
+    assert block["inflight_keys"] == 0  # 全部完成, inflight 已清理
