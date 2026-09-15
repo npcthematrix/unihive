@@ -494,6 +494,11 @@ class GatewayServer:
                 self.upstreams[name] = client
                 logger.info(f"[{name}] {'Connected' if client.is_available else 'Failed'}")
 
+            # 2026-09-15: 让 console_api 能查到已注册的 upstream client,
+            # 服务 /api/upstreams/<name>/metrics 端点。必须在装配循环结束、
+            # HTTP server 启动前注入 (HTTP server 启动前不会有请求, 安全)。
+            _ca.set_upstream_registry(self.upstreams)
+
             # Inject OmniClient into console_api
             _omni = self._find_omni_client()
             _ca.set_omni_client(_omni)
