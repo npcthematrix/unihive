@@ -29,12 +29,27 @@ export function displayBoardType(raw: string | undefined | null): string {
   return BOARD_TYPE_DISPLAY[raw] || raw
 }
 
+/**
+ * SyncPanel 的 board_type 下拉项。顺序与数据库存储值一致 (同花顺/通达信共享)。
+ * `all` 是 UI 哨兵, 后端透传 → 全量同步; 不属于 BOARD_TYPE_DISPLAY。
+ */
+export const BOARD_TYPE_KEYS = ['industry', 'concept', 'style', 'region'] as const
+export type BoardTypeKey = (typeof BOARD_TYPE_KEYS)[number]
+
 /** sync status → Element Plus el-tag type. */
 export function statusTagType(status: string | undefined): 'success' | 'warning' | 'danger' | 'info' {
   if (status === 'success') return 'success'
   if (status === 'running') return 'warning'
   if (status === 'failed') return 'danger'
   return 'info'
+}
+
+/** sync status → unicode 前缀 (色盲用户友好, 不依赖颜色判别)。 */
+export function statusIcon(status: string | undefined): string {
+  if (status === 'success') return '✓ '
+  if (status === 'running') return '⚠ '
+  if (status === 'failed') return '✗ '
+  return ''
 }
 
 /** ISO 8601 / 'YYYY-MM-DD HH:MM:SS...' → 'YYYY-MM-DD HH:MM:SS'。 */

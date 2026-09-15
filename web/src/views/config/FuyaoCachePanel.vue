@@ -1,21 +1,26 @@
 <template>
   <div class="fcp-panel">
-    <div class="cfg-banner">
+    <!-- 顶部说明 banner -->
+    <div class="cfg-banner fcp-info">
       <span class="cfg-info-icon" aria-hidden="true">i</span>
       <span>
-        按 endpoint 分组管理 FUYAO 缓存 TTL — <code class="fcp-key">default</code> 是该 endpoint 所有工具的默认 TTL;
-        <code class="fcp-key">override</code> 可对单个工具单独覆盖 (留空则用 default)。提交后需重启网关生效。
+        按 endpoint 分组列出全部 FUYAO 工具 — 在每行的
+        <code class="fcp-key">TTL</code>
+        处直接设置秒数 (留空 = 走全局
+        <code class="fcp-key">cache.ttl[cache_ttl_key]</code>)。
+        提交后需重启网关生效。
       </span>
     </div>
 
-    <!-- 空状态: 未配置过 (endpoints 完全为空) — 提示这是默认行为, 不是"全 0 = 全关" -->
+    <!-- 空状态横幅: 仅 isUnset 时显示 -->
     <el-alert
       v-if="isUnset"
       type="info"
       :closable="false"
       show-icon
       class="fcp-unset-alert"
-      title="尚未配置 FUYAO 缓存 TTL — 当前所有 endpoint 走全局 cache.ttl (即上方的「缓存」标签页)。"
+      title="尚未配置 FUYAO 缓存 TTL"
+      description="当前所有 FUYAO 工具走全局 cache.ttl (即上方的「缓存」标签页)。直接在每行 TTL 输入框填入秒数即可覆盖单个工具。"
     />
 
     <!-- 加载失败 -->
@@ -29,13 +34,130 @@
       <el-button size="small" @click="load">重试</el-button>
     </el-alert>
 
-    <!-- 变更预览 (默认折叠) -->
-    <details v-if="diffCount > 0" class="cfg-section fcp-diff">
+    <!-- 全局搜索 + 计数 -->
+    <div class="fcp-toolbar">
+      <el-input
+        v-model="searchQuery"
+        :prefix-icon="Search"
+        clearable
+        placeholder="搜索工具名或简述 (跨 4 个 endpoint 过滤, 如 fund / 龙虎榜)"
+        class="fcp-search"
+        autocomplete="off"
+      />
+      <span class="fcp-toolbar-count">
+        {{ overrideCount }} 条 override · 共 {{ totalTools }} 个工具
+      </span>
+    </div>
+
+    <!-- 4 endpoint 折叠 -->
+    <div class="fcp-endpoints">
+      <details
+        v-for="ep in ENDPOINT_ORDER"
+        :key="ep"
+        class="cfg-section"
+        :open="isEpOpen(ep)"
+        @toggle="onEpToggle(ep, $event)"
+      >
+        <summary class="cfg-section-header">
+          <span class="cfg-section-toggle">▸</span>
+          <span class="cfg-section-title">{{ ENDPOINT_TITLES[ep] }}</span>
+          <span class="cfg-section-sub">
+            · {{ toolsByEp(ep).length }} 个工具 /
+            {{ overridesCountByEp(ep) }} 条 override
+          </span>
+        </summary>
+        <div class="cfg-section-body">
+          <!-- 批量设置行 -->
+          <div class="fcp-bulk-row">
+            <span class="fcp-label">批量设置</span>
+            <span class="fcp-presets" role="group" :aria-label="`批量设置 ${ENDPOINT_TITLES[ep]} TTL`">
+              <button
+                v-for="p in PRESETS"
+                :key="p.value"
+                type="button"
+                class="fcp-preset"
+                :title="`为该 endpoint 所有工具设置 ${p.label}`"
+                @click="bulkSetEp(ep, p.value)"
+              >{{ p.label }}</button>
+              <button
+                type="button"
+                class="fcp-preset fcp-preset--danger"
+                title="清空该 endpoint 所有 override"
+                @click="bulkClearEp(ep)"
+              >清空全部</button>
+            </span>
+          </div>
+
+          <!-- 全量工具表格 -->
+          <el-table
+            v-if="filteredToolsByEp(ep).length > 0"
+            :data="filteredToolsByEp(ep)"
+            class="cfg-table fcp-table"
+            scrollbar-always-on
+            row-key="name"
+            :empty-text="searchQuery ? '无匹配工具' : '该 endpoint 下未检测到 FUYAO 工具'"
+          >
+            <el-table-column label="工具名" min-width="220">
+              <template #default="{ row }">
+                <span class="tool-name">{{ row.name }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="简述" min-width="200">
+              <template #default="{ row }">
+                <span class="tool-desc">{{ row.description || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="TTL (秒)" min-width="170">
+              <template #default="{ row }">
+                <el-input-number
+                  :model-value="working[row.name]"
+                  :min="0"
+                  :step="60"
+                  :max="604800"
+                  controls-position="right"
+                  size="small"
+                  placeholder="(走全局)"
+                  @update:model-value="(v: number | undefined) => setOverride(row.name, v)"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="180">
+              <template #default="{ row }">
+                <span v-if="working[row.name] !== undefined" class="fcp-status fcp-status--set">
+                  ✓ 已覆盖 · {{ formatSeconds(working[row.name]!) }}
+                </span>
+                <span v-else class="fcp-status fcp-status--unset">
+                  走全局 cache.ttl
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="80" align="right">
+              <template #default="{ row }">
+                <el-button
+                  link
+                  type="danger"
+                  size="small"
+                  :disabled="working[row.name] === undefined"
+                  @click="removeOverride(row.name)"
+                >清空</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-else class="fcp-empty">
+            {{ searchQuery
+              ? '该 endpoint 下无匹配工具'
+              : '该 endpoint 下未检测到 FUYAO 工具, 请检查上游配置' }}
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- 变更预览 -->
+    <details v-if="diffCount > 0" class="cfg-section fcp-diff" open>
       <summary class="cfg-section-header">
-        <span class="cfg-section-title">
-          <span class="cfg-section-toggle">▾</span>
-          变更预览 ({{ diffCount }} 处)
-        </span>
+        <span class="cfg-section-toggle">▸</span>
+        <span class="cfg-section-title">变更预览</span>
+        <span class="cfg-section-sub">· {{ diffCount }} 处改动</span>
       </summary>
       <div class="cfg-section-body fcp-diff-body">
         <ul class="fcp-diff-list">
@@ -50,109 +172,9 @@
       </div>
     </details>
 
-    <!-- 4 个 endpoint 折叠区 -->
-    <div class="fcp-endpoints">
-      <details
-        v-for="ep in ENDPOINT_ORDER"
-        :key="ep"
-        class="cfg-section"
-        :open="isEpOpen(ep)"
-        @toggle="onEpToggle(ep, $event)"
-      >
-        <summary class="cfg-section-header">
-          <span class="cfg-section-title">
-            <span class="cfg-section-toggle">▾</span>
-            {{ ENDPOINT_TITLES[ep] }}
-            <span class="cfg-section-sub">
-              · {{ overridesByEndpoint(ep).length }} 条 override · 当前 default
-              <strong>{{ formatSeconds(working.defaults[ep]) }}</strong>
-            </span>
-          </span>
-        </summary>
-
-        <div class="cfg-section-body">
-          <!-- default TTL 行 -->
-          <div class="fcp-default-row">
-            <label class="fcp-label">默认 TTL (秒)</label>
-            <el-input-number
-              v-model="working.defaults[ep]"
-              :min="0"
-              :step="60"
-              :max="604800"
-              controls-position="right"
-              class="fcp-default-input"
-            />
-            <span class="fcp-default-preview">
-              ≈ {{ formatSeconds(working.defaults[ep]) }}
-            </span>
-            <div class="fcp-presets" role="group" aria-label="预设 TTL">
-              <button
-                v-for="p in PRESETS"
-                :key="p.value"
-                type="button"
-                class="fcp-preset"
-                :class="{ active: working.defaults[ep] === p.value }"
-                @click="working.defaults[ep] = p.value"
-              >{{ p.label }}</button>
-            </div>
-          </div>
-
-          <!-- override 列表 -->
-          <div class="fcp-overrides">
-            <div class="fcp-overrides-header">
-              <span class="fcp-label">工具级 override</span>
-              <el-button size="small" :icon="Plus" @click="openAddOverride(ep)">添加覆盖</el-button>
-            </div>
-
-            <el-table
-              v-if="overridesByEndpoint(ep).length > 0"
-              :data="overridesByEndpoint(ep)"
-              class="cfg-table fcp-table"
-              scrollbar-always-on
-            >
-              <el-table-column label="工具名" min-width="180">
-                <template #default="{ row }">
-                  <span class="tool-name">{{ row.tool }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="TTL (秒)" min-width="160">
-                <template #default="{ row }">
-                  <el-input-number
-                    v-model="row.seconds"
-                    :min="0"
-                    :step="60"
-                    :max="604800"
-                    controls-position="right"
-                    size="small"
-                  />
-                  <span class="fcp-default-preview">
-                    ≈ {{ formatSeconds(row.seconds) }}
-                  </span>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="100" align="right">
-                <template #default="{ row }">
-                  <el-button
-                    link
-                    type="danger"
-                    size="small"
-                    @click="removeOverride(ep, row.tool)"
-                  >删除覆盖</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-
-            <div v-else class="fcp-empty">
-              暂未自定义工具级 TTL, 全部使用 endpoint 默认值。
-            </div>
-          </div>
-        </div>
-      </details>
-    </div>
-
-    <!-- 操作栏 -->
+    <!-- 底部 actions -->
     <div class="fcp-actions">
-      <el-button @click="resetDraft" :disabled="!hasChanges || saving">放弃修改</el-button>
+      <el-button :disabled="!hasChanges || saving" @click="resetDraft">放弃修改</el-button>
       <el-button
         type="primary"
         :loading="saving"
@@ -165,16 +187,25 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { FUYAO_ENDPOINT_KEYS, FUYAO_ENDPOINT_TITLES, saveFuyaoCache } from '@/api/config'
-import type { FuyaoCacheConfig, FuyaoEndpointKey } from '@/api/config'
+import {
+  FUYAO_ENDPOINT_KEYS,
+  FUYAO_ENDPOINT_TITLES,
+  fuyaoEndpointOf,
+  saveFuyaoCache,
+} from '@/api/config'
+import type { ConfigTool, FuyaoCacheConfig, FuyaoEndpointKey } from '@/api/config'
 import { errorMessage } from '@/api/client'
 
 interface Props {
   fuyaoCache?: FuyaoCacheConfig
   /** GatewayConfig.version — 乐观锁, 提交时回带 */
   configVersion: string
+  /** 全部 gateway 工具列表 (来自 config.tools), 用于派生 FUYAO 工具及描述。 */
+  allTools?: ConfigTool[]
+  /** 工具路由映射 (来自 config.upstream_tool_mapping), 用于判断工具所属 FUYAO 端点。 */
+  upstreamToolMapping?: Record<string, Record<string, string>>
 }
 
 const props = defineProps<Props>()
@@ -195,39 +226,59 @@ const PRESETS = [
   { label: '7 天', value: 604800 },
 ] as const
 
-/** 内部编辑态 — default 按 endpoint 平铺; override 嵌套在 endpoints[ep].override */
-interface OverrideRow {
-  tool: string
-  seconds: number
-}
-interface Draft {
-  defaults: Record<FuyaoEndpointKey, number>
-  overrides: Record<FuyaoEndpointKey, OverrideRow[]>
-}
-
 const loadError = ref('')
 const saving = ref(false)
+const searchQuery = ref('')
+/** 默认全展开, 用户可手动收/展。 */
+const openSet = ref<Set<FuyaoEndpointKey>>(new Set(ENDPOINT_ORDER))
 
-/** 服务端原值快照 — 用于 diff 计算 */
-const snapshot = reactive<Draft>({
-  defaults: { fuyao_ashare: 0, fuyao_index: 0, fuyao_meta: 0, fuyao_fund: 0 },
-  overrides: { fuyao_ashare: [], fuyao_index: [], fuyao_meta: [], fuyao_fund: [] },
-})
-/** 用户当前编辑态 */
-const working = reactive<Draft>({
-  defaults: { fuyao_ashare: 0, fuyao_index: 0, fuyao_meta: 0, fuyao_fund: 0 },
-  overrides: { fuyao_ashare: [], fuyao_index: [], fuyao_meta: [], fuyao_fund: [] },
-})
+type ToolsMap = Record<string, number>
 
-function overridesByEndpoint(ep: FuyaoEndpointKey): OverrideRow[] {
-  return working.overrides[ep]
+const snapshot = reactive<ToolsMap>({})
+const working = reactive<ToolsMap>({})
+
+/** 派生: 按 endpoint 分组的 FUYAO 工具列表 (含描述)。每次 props 变化重算。 */
+interface FuyaoToolRow {
+  name: string
+  description: string
 }
 
-/** 服务端从未配置过 (endpoints 完全为空) — 用于空状态 banner 提示。
- *  用 props.fuyaoCache 直接判断, 不走 hydrate 后的 snapshot (hydrate 会填 0 占位)。 */
+function toolsByEp(ep: FuyaoEndpointKey): FuyaoToolRow[] {
+  const out: FuyaoToolRow[] = []
+  for (const tool of props.allTools || []) {
+    const tEp = fuyaoEndpointOf(tool.name, props.upstreamToolMapping)
+    if (tEp !== ep) continue
+    out.push({ name: tool.name, description: tool.description || '' })
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name))
+  return out
+}
+
+/** 受搜索过滤后的同节工具列表。 */
+function filteredToolsByEp(ep: FuyaoEndpointKey): FuyaoToolRow[] {
+  const q = searchQuery.value.trim().toLowerCase()
+  const rows = toolsByEp(ep)
+  if (!q) return rows
+  return rows.filter(
+    (r) =>
+      r.name.toLowerCase().includes(q) ||
+      (r.description && r.description.toLowerCase().includes(q)),
+  )
+}
+
+function overridesCountByEp(ep: FuyaoEndpointKey): number {
+  return toolsByEp(ep).filter((r) => Object.prototype.hasOwnProperty.call(working, r.name)).length
+}
+
+const overrideCount = computed(() => Object.keys(working).length)
+const totalTools = computed(() =>
+  ENDPOINT_ORDER.reduce((n, ep) => n + toolsByEp(ep).length, 0),
+)
+
+/** 服务端从未配置过 (tools 完全为空) — 用于空状态 banner 提示。 */
 const isUnset = computed(() => {
-  const endpoints = props.fuyaoCache?.endpoints
-  return !endpoints || Object.keys(endpoints).length === 0
+  const tools = props.fuyaoCache?.tools
+  return !tools || Object.keys(tools).length === 0
 })
 
 const hasChanges = computed(() => diffCount.value > 0)
@@ -240,42 +291,29 @@ interface DiffEntry {
 }
 
 const diffs = computed<DiffEntry[]>(() => {
+  const all = new Set<string>([...Object.keys(snapshot), ...Object.keys(working)])
   const out: DiffEntry[] = []
-  for (const ep of ENDPOINT_ORDER) {
-    const beforeDef = snapshot.defaults[ep]
-    const afterDef = working.defaults[ep]
-    if (beforeDef !== afterDef) {
+  for (const tool of all) {
+    const before = snapshot[tool]
+    const after = working[tool]
+    if (before === undefined && after !== undefined) {
       out.push({
-        path: `${ep}.default`,
-        beforeText: `${beforeDef}s (${formatSeconds(beforeDef)})`,
-        afterText: `${afterDef}s (${formatSeconds(afterDef)})`,
+        path: `tools.${tool}`,
+        beforeText: '(未设置, 走全局)',
+        afterText: `${after}s (${formatSeconds(after)})`,
       })
-    }
-    const beforeOv = new Map(snapshot.overrides[ep].map((r) => [r.tool, r.seconds]))
-    const afterOv = new Map(working.overrides[ep].map((r) => [r.tool, r.seconds]))
-    const allTools = new Set([...beforeOv.keys(), ...afterOv.keys()])
-    for (const tool of allTools) {
-      const b = beforeOv.get(tool)
-      const a = afterOv.get(tool)
-      if (b === undefined && a !== undefined) {
-        out.push({
-          path: `${ep}.override.${tool}`,
-          beforeText: '(未设置)',
-          afterText: `${a}s (${formatSeconds(a)})`,
-        })
-      } else if (b !== undefined && a === undefined) {
-        out.push({
-          path: `${ep}.override.${tool}`,
-          beforeText: `${b}s (${formatSeconds(b)})`,
-          afterText: '(已删除, 回落 default)',
-        })
-      } else if (b !== undefined && a !== undefined && b !== a) {
-        out.push({
-          path: `${ep}.override.${tool}`,
-          beforeText: `${b}s (${formatSeconds(b)})`,
-          afterText: `${a}s (${formatSeconds(a)})`,
-        })
-      }
+    } else if (before !== undefined && after === undefined) {
+      out.push({
+        path: `tools.${tool}`,
+        beforeText: `${before}s (${formatSeconds(before)})`,
+        afterText: '(已清空, 回落全局 cache.ttl)',
+      })
+    } else if (before !== undefined && after !== undefined && before !== after) {
+      out.push({
+        path: `tools.${tool}`,
+        beforeText: `${before}s (${formatSeconds(before)})`,
+        afterText: `${after}s (${formatSeconds(after)})`,
+      })
     }
   }
   return out
@@ -296,15 +334,12 @@ function formatSeconds(s: number): string {
   return `${Number.isInteger(d) ? d : d.toFixed(1)} 天`
 }
 
-/** 把服务端 FuyaoCacheConfig 拍平成 Draft (default 平铺, override 数组化)。 */
-function hydrateFromConfig(cfg: FuyaoCacheConfig | undefined, target: Draft) {
-  const endpoints = cfg?.endpoints || {}
-  for (const ep of ENDPOINT_ORDER) {
-    target.defaults[ep] = Number(endpoints[ep]?.default ?? 0)
-    const ov = endpoints[ep]?.override || {}
-    target.overrides[ep] = Object.entries(ov)
-      .map(([tool, seconds]) => ({ tool, seconds: Number(seconds) }))
-      .sort((a, b) => a.tool.localeCompare(b.tool))
+/** 把服务端 FuyaoCacheConfig 拍平到 reactive dict (snapshot/working 复用同一结构)。 */
+function hydrateFromConfig(cfg: FuyaoCacheConfig | undefined, target: ToolsMap) {
+  for (const k of Object.keys(target)) delete target[k]
+  const tools = cfg?.tools || {}
+  for (const [k, v] of Object.entries(tools)) {
+    if (typeof v === 'number' && v >= 0) target[k] = v
   }
 }
 
@@ -312,7 +347,6 @@ function resetDraft() {
   hydrateFromConfig(props.fuyaoCache, working)
 }
 
-/** 初始化 + 监听 props 变化 (config 重新拉时刷新) */
 function load() {
   loadError.value = ''
   try {
@@ -324,14 +358,10 @@ function load() {
 }
 
 watch(
-  () => props.fuyaoCache,
+  () => [props.fuyaoCache, props.allTools, props.upstreamToolMapping] as const,
   () => load(),
   { immediate: true, deep: true },
 )
-
-/** 各 endpoint 折叠状态: 默认全部展开, 用户可手动收起。
- *  修复 2.1: 4 个 endpoint 一次性全展开, panel 短, 一次性全看更友好。 */
-const openSet = ref<Set<FuyaoEndpointKey>>(new Set(ENDPOINT_ORDER))
 
 function isEpOpen(ep: FuyaoEndpointKey): boolean {
   return openSet.value.has(ep)
@@ -345,76 +375,76 @@ function onEpToggle(ep: FuyaoEndpointKey, e: Event) {
   openSet.value = next
 }
 
-function openAddOverride(ep: FuyaoEndpointKey) {
-  const existing = new Set(overridesByEndpoint(ep).map((r) => r.tool))
-  // 候选工具: 该 endpoint 已有 override + 当前 default 不为 0 时, 显示 endpoint 名称作为占位
-  // 不强求拉上游 tool list (会增加额外 API), 允许任意名称输入 — 后端只校验类型
-  ElMessageBox.prompt(
-    `为 endpoint ${ep} 添加工具级 override\n输入 MCP tool 名称 (任意字符串)`,
-    '添加覆盖',
-    {
-      confirmButtonText: '添加',
-      cancelButtonText: '取消',
-      inputPattern: /^\S+$/,
-      inputErrorMessage: '工具名不能为空或包含空白',
-    },
-  )
-    .then(({ value }) => {
-      const tool = value.trim()
-      if (existing.has(tool)) {
-        ElMessage.warning(`override[${tool}] 已存在`)
-        return
-      }
-      working.overrides[ep] = [
-        ...working.overrides[ep],
-        { tool, seconds: working.defaults[ep] },
-      ].sort((a, b) => a.tool.localeCompare(b.tool))
-    })
-    .catch(() => {
-      /* 用户取消 — 静默 */
-    })
+/** 单工具设置: undefined / null / NaN / 负值 = 清空 override (回落全局)。
+ *  有限非负数 = 设值 (整数化)。 */
+function setOverride(tool: string, seconds: number | undefined | null) {
+  if (seconds === undefined || seconds === null || Number.isNaN(seconds)) {
+    delete working[tool]
+    return
+  }
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    delete working[tool]
+    return
+  }
+  working[tool] = Math.floor(seconds)
 }
 
-function removeOverride(ep: FuyaoEndpointKey, tool: string) {
-  working.overrides[ep] = working.overrides[ep].filter((r) => r.tool !== tool)
+function removeOverride(tool: string) {
+  delete working[tool]
+}
+
+/** 批量把 endpoint 内全部工具设为同一 TTL (含已配置的, 强制覆盖)。 */
+function bulkSetEp(ep: FuyaoEndpointKey, seconds: number) {
+  if (seconds < 0 || !Number.isFinite(seconds)) return
+  for (const row of toolsByEp(ep)) {
+    working[row.name] = Math.floor(seconds)
+  }
+}
+
+function bulkClearEp(ep: FuyaoEndpointKey) {
+  for (const row of toolsByEp(ep)) {
+    delete working[row.name]
+  }
 }
 
 function buildPayload(): FuyaoCacheConfig {
-  const endpoints: NonNullable<FuyaoCacheConfig['endpoints']> = {}
-  for (const ep of ENDPOINT_ORDER) {
-    const override: Record<string, number> = {}
-    for (const row of working.overrides[ep]) {
-      override[row.tool] = row.seconds
-    }
-    endpoints[ep] = { default: working.defaults[ep], override }
-  }
-  return { endpoints }
+  return { tools: { ...working } }
 }
 
 async function onSubmit() {
-  if (!hasChanges.value) return
+  if (!hasChanges.value || saving.value) return
   saving.value = true
   try {
     const result = await saveFuyaoCache(buildPayload(), props.configVersion || '')
-    // 用服务端回值覆盖 snapshot, 让 diff 归零; 同时通过 emit 让父级更新 config.version
-    snapshot.defaults = { ...working.defaults }
-    snapshot.overrides = {
-      fuyao_ashare: [...working.overrides.fuyao_ashare],
-      fuyao_index: [...working.overrides.fuyao_index],
-      fuyao_meta: [...working.overrides.fuyao_meta],
-      fuyao_fund: [...working.overrides.fuyao_fund],
+    for (const k of Object.keys(snapshot)) delete snapshot[k]
+    for (const [k, v] of Object.entries(result.fuyao_cache.tools || {})) {
+      snapshot[k] = v
     }
     emit('saved', { fuyao_cache: result.fuyao_cache, version: result.version })
     ElMessage.success('FUYAO 缓存配置已保存, 请重启网关生效')
   } catch (e: unknown) {
-    // 409 version_conflict 由 axios 拦截器变成普通 Error, 后端 message 在 errorMessage 里
     const msg = errorMessage(e, '保存失败')
     if (msg.includes('version_conflict') || msg.includes('版本不一致')) {
-      ElMessageBox.alert(
-        '服务端配置已变更, 请刷新页面后重试',
-        '版本冲突',
-        { confirmButtonText: '我知道了', type: 'warning' },
-      )
+      try {
+        await ElMessageBox.confirm(
+          '服务端配置已变更, 你的本地编辑基于旧版本。继续保存将覆盖他人改动。\n\n点击「刷新页面」加载最新版本后重新编辑。',
+          '版本冲突',
+          {
+            confirmButtonText: '刷新页面',
+            cancelButtonText: '继续编辑',
+            type: 'warning',
+            distinguishCancelAndClose: true,
+          },
+        )
+        window.location.reload()
+      } catch {
+        // 用户选择「继续编辑」或关闭弹窗 — 保留当前 UI, 提示用户稍后手动刷新
+        void ElMessageBox.alert(
+          '你的本地编辑与服务端不同步, 重新加载页面前请勿保存。',
+          '提示',
+          { confirmButtonText: '我知道了', type: 'info' },
+        )
+      }
     } else {
       ElMessage.error(msg)
     }
@@ -431,24 +461,42 @@ async function onSubmit() {
   gap: 12px;
 }
 
-.fcp-default-row {
-  display: grid;
-  /* 修复 2.2: grid 让 label/input/preview 在窄屏仍保持固定列, 预设按钮自动换行 */
-  grid-template-columns: auto auto auto 1fr;
-  align-items: center;
-  gap: 10px 12px;
-  margin-bottom: 12px;
+/* banner 中 default / override 关键词: primary 色 + 等宽字体, 跟上下行内 code 区分 */
+.fcp-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  padding: 0 4px;
+  border-radius: 3px;
 }
 
-@media (max-width: 900px) {
-  .fcp-default-row {
-    grid-template-columns: auto auto 1fr;
-  }
-  .fcp-presets {
-    grid-column: 1 / -1;
-    margin-left: 0;
-    justify-content: flex-start;
-  }
+.fcp-unset-alert {
+  margin-top: -4px;
+}
+
+/* toolbar */
+.fcp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fcp-search {
+  flex: 1 1 320px;
+  max-width: 480px;
+}
+.fcp-toolbar-count {
+  font-size: 0.82rem;
+  color: var(--cfg-text-secondary);
+  white-space: nowrap;
+}
+
+/* 4 endpoint 折叠 */
+.fcp-endpoints {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .fcp-label {
@@ -458,23 +506,23 @@ async function onSubmit() {
   min-width: 96px;
 }
 
-.fcp-default-input {
-  width: 140px;
+/* 批量设置行 */
+.fcp-bulk-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 6px 0 8px;
+  border-bottom: 1px dashed var(--cfg-border);
+  margin-bottom: 8px;
 }
 
-.fcp-default-preview {
-  font-size: 0.78rem;
-  color: var(--cfg-text-secondary);
-}
-
+/* 预设按钮组 */
 .fcp-presets {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  /* grid 模式下不需要 margin-left: auto */
-  min-width: 0;
+  gap: 6px;
 }
-
 .fcp-preset {
   appearance: none;
   -webkit-appearance: none;
@@ -488,34 +536,58 @@ async function onSubmit() {
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
-
 .fcp-preset:hover {
   border-color: var(--el-color-primary);
   color: var(--el-color-primary);
 }
-
 .fcp-preset:focus-visible {
   outline: 2px solid var(--el-color-primary);
   outline-offset: -2px;
 }
-
 .fcp-preset.active {
   background: var(--el-color-primary-light-9);
   border-color: var(--el-color-primary);
   color: var(--el-color-primary);
   font-weight: 600;
 }
-
-.fcp-overrides {
-  border-top: 1px dashed var(--cfg-border);
-  padding-top: 10px;
+.fcp-preset--danger:hover {
+  border-color: var(--el-color-danger);
+  color: var(--el-color-danger);
 }
 
-.fcp-overrides-header {
-  display: flex;
+/* 全量工具表格 */
+.fcp-table :deep(.el-input-number) {
+  width: 130px;
+}
+
+.tool-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.tool-desc {
+  color: var(--cfg-text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+/* 状态 badge */
+.fcp-status {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  font-size: 0.78rem;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.fcp-status--set {
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+  font-weight: 500;
+}
+.fcp-status--unset {
+  color: var(--cfg-text-secondary);
+  background: var(--cfg-bg-soft);
 }
 
 .fcp-empty {
@@ -528,37 +600,36 @@ async function onSubmit() {
   text-align: center;
 }
 
-.fcp-table :deep(.el-input-number) {
-  width: 120px;
+/* 响应式 */
+@media (max-width: 900px) {
+  .fcp-bulk-row {
+    grid-template-columns: 1fr;
+  }
+  .fcp-presets {
+    grid-column: 1 / -1;
+  }
 }
 
-/* 修复 2.3: 表格外层加 max-width + 横向滚动, 避免长工具名挤压窄屏 */
-.fcp-table {
-  max-width: 100%;
-  overflow-x: auto;
+/* 640px 中间断点: 极窄屏进一步压缩 tool row (label 与 TTL 输入框 stack) */
+@media (max-width: 640px) {
+  .fcp-tool-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .fcp-tool-row .fcp-label {
+    min-width: 0;
+  }
 }
 
-.fcp-overrides {
-  /* 也给外层一个滚动保护 */
-  max-width: 100%;
-}
-
-.fcp-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
-}
-
+/* diff 预览 */
 .fcp-diff {
   border-color: var(--el-color-warning-light-7);
 }
-
 .fcp-diff-body {
   max-height: 240px;
   overflow: auto;
 }
-
 .fcp-diff-list {
   margin: 0;
   padding: 0;
@@ -567,7 +638,6 @@ async function onSubmit() {
   font-size: 0.78rem;
   line-height: 1.7;
 }
-
 .fcp-diff-list li {
   display: flex;
   flex-wrap: wrap;
@@ -575,24 +645,20 @@ async function onSubmit() {
   gap: 6px;
   padding: 2px 0;
 }
-
 .fcp-diff-path {
   background: var(--cfg-bg-soft);
   padding: 1px 6px;
   border-radius: 3px;
 }
-
 .fcp-diff-arrow {
   color: var(--cfg-text-secondary);
 }
-
 .fcp-diff-before {
   color: var(--el-color-danger);
   background: var(--el-color-danger-light-9);
   padding: 1px 6px;
   border-radius: 3px;
 }
-
 .fcp-diff-after {
   color: var(--el-color-success);
   background: var(--el-color-success-light-9);
@@ -600,17 +666,11 @@ async function onSubmit() {
   border-radius: 3px;
 }
 
-/* banner 中 default / override 关键词: primary 色 + 等宽字体, 跟上下行内 code 区分 */
-.fcp-key {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-weight: 600;
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  padding: 0 4px;
-  border-radius: 3px;
-}
-
-.fcp-unset-alert {
-  margin-top: -4px; /* 紧贴 banner */
+/* 底部 actions */
+.fcp-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
 }
 </style>

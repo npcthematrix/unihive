@@ -310,6 +310,15 @@ defineExpose({
 .query-keyword {
   width: 320px;
   max-width: 100%;
+  min-width: 200px;
+}
+
+/* 窄屏: keyword 撑满一行, 两个 select 紧跟其后; 避免 640-768px 区间
+   320+160+160 = 640 与 padding/gap 叠加撑爆 query-bar 的尴尬换行。 */
+@media (max-width: 768px) {
+  .query-keyword {
+    width: 100%;
+  }
 }
 
 .results-wrap {

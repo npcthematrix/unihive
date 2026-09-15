@@ -23,6 +23,8 @@
       <span
         class="proxy-status-value"
         :class="proxy?.tdx_quant_status || 'UNKNOWN'"
+        role="status"
+        :aria-label="`TDX_QUANT 状态: ${proxy?.tdx_quant_status || '未知'}${statusHint ? ` — ${statusHint}` : ''}`"
       >{{ proxy?.tdx_quant_status || '—' }}</span>
       <span class="proxy-status-hint">{{ statusHint }}</span>
     </div>
@@ -46,7 +48,8 @@
 
     <!-- 覆盖范围 -->
     <div class="proxy-coverage">
-      <h4>覆盖范围 (以下工具在代理启用时优先走 TDX_QUANT)</h4>
+      <h4 class="proxy-section-title">覆盖范围</h4>
+      <p class="proxy-section-hint">以下工具在代理启用时优先走 TDX_QUANT</p>
       <el-table :data="coverage" class="proxy-coverage-table" :empty-text="coverageEmpty">
         <el-table-column label="MOOTDX2 工具" min-width="200">
           <template #default="{ row }">
@@ -68,8 +71,8 @@
 
     <!-- 未代理的行情类工具 (静态说明, 无 JS 数据) -->
     <div class="proxy-section-non-proxied">
-      <h4>未代理的 mootdx2 行情类工具</h4>
-      <p>以下工具属于行情类但不在代理范围内, 继续走原 mootdx2 链路:</p>
+      <h4 class="proxy-section-title">未代理的 mootdx2 行情类工具</h4>
+      <p class="proxy-section-hint">以下工具属于行情类但不在代理范围内, 继续走原 mootdx2 链路</p>
       <ul>
         <li><code>batch_bars</code> — 批量 K 线 (候选: 待 tqcenter 多代码形式验证后加入)</li>
         <li><code>get_k_data</code> / <code>get_minutes</code> / <code>get_fzline_local</code> — 其他 K 线/分时入口</li>
@@ -154,7 +157,7 @@ async function onToggle(value: boolean | string | number) {
     saveFailed.value = true
     const msg = errorMessage(e, '保存失败')
     saveStatusText.value = `保存失败: ${msg}`
-    ElMessage.error('代理设置保存失败')
+    // 不再 ElMessage.error: saveStatusText 在面板头部持续显示, 比 toast 更醒目且不刷屏
     // 回滚
     enabled.value = !next
   } finally {
@@ -179,14 +182,14 @@ async function onToggle(value: boolean | string | number) {
 .proxy-title .sub {
   font-weight: 400;
   font-size: 0.8rem;
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
   margin-left: 6px;
 }
 
 .proxy-description {
   margin: 0;
   font-size: 0.85rem;
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
   line-height: 1.5;
 }
 
@@ -196,14 +199,14 @@ async function onToggle(value: boolean | string | number) {
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--cfg-bg-soft);
+  border: 1px solid var(--cfg-border);
   border-radius: 6px;
 }
 
 .proxy-status-label {
   font-size: 0.85rem;
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
 }
 
 .proxy-status-value {
@@ -212,40 +215,41 @@ async function onToggle(value: boolean | string | number) {
   font-size: 0.85rem;
   padding: 2px 8px;
   border-radius: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
+  background: var(--cfg-bg);
+  border: 1px solid var(--cfg-border);
+  color: var(--el-text-color-regular);
 }
 
 .proxy-status-value.ONLINE {
-  color: #16a34a;
-  background: #f0fdf4;
-  border-color: #bbf7d0;
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+  border-color: var(--el-color-success-light-7);
 }
 
 .proxy-status-value.DEGRADED {
-  color: #d97706;
-  background: #fffbeb;
-  border-color: #fde68a;
+  color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+  border-color: var(--el-color-warning-light-7);
 }
 
 .proxy-status-value.OFFLINE,
 .proxy-status-value.UNAVAILABLE,
 .proxy-status-value.MISSING,
 .proxy-status-value.FAILED {
-  color: #b91c1c;
-  background: #fef2f2;
-  border-color: #fecaca;
+  color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
+  border-color: var(--el-color-danger-light-7);
 }
 
 .proxy-status-value.DISABLED,
 .proxy-status-value.LOADING,
 .proxy-status-value.UNKNOWN {
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
 }
 
 .proxy-status-hint {
   font-size: 0.8rem;
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
   margin-left: 4px;
 }
 
@@ -254,22 +258,36 @@ async function onToggle(value: boolean | string | number) {
   align-items: center;
   gap: 14px;
   padding: 10px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--cfg-border);
   border-radius: 6px;
 }
 
 .proxy-save-status {
   font-size: 0.8rem;
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
 }
 
 .proxy-save-status.failed {
-  color: #b91c1c;
+  color: var(--el-color-danger);
 }
 
-.proxy-coverage h4 {
-  margin: 4px 0 8px;
-  font-size: 0.9rem;
+.proxy-coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.proxy-section-title {
+  margin: 4px 0 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.proxy-section-hint {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+  color: var(--cfg-text-secondary);
 }
 
 .proxy-coverage-table code {
@@ -278,25 +296,14 @@ async function onToggle(value: boolean | string | number) {
 }
 
 .proxy-arrow {
-  color: var(--text-secondary);
+  color: var(--cfg-text-secondary);
 }
 
 .proxy-section-non-proxied {
   padding: 12px 14px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--cfg-bg-soft);
+  border: 1px solid var(--cfg-border);
   border-radius: 6px;
-}
-
-.proxy-section-non-proxied h4 {
-  margin: 0 0 8px;
-  font-size: 0.9rem;
-}
-
-.proxy-section-non-proxied p {
-  margin: 0 0 6px;
-  font-size: 0.82rem;
-  color: var(--text-secondary);
 }
 
 .proxy-section-non-proxied ul {
@@ -309,9 +316,9 @@ async function onToggle(value: boolean | string | number) {
 .proxy-section-non-proxied code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.78rem;
-  background: var(--card-bg);
+  background: var(--cfg-bg);
   padding: 1px 5px;
   border-radius: 3px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--cfg-border);
 }
 </style>

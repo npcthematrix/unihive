@@ -99,3 +99,269 @@ body {
   background: var(--el-color-primary-light-9, #ecf5ff);
   color: var(--el-color-primary);
 }
+
+/* ============================================================================
+   设计 token — ConfigView 5 个 panel 共用的语义化变量。
+   原 panel scoped CSS 直接用 var(--bg) / var(--border) / var(--card-bg) /
+   var(--text-secondary) 等未声明的变量, 暗色主题会 fallback 到初始值 → 看不见。
+   这里统一定义, 浅/暗主题自动跟随 Element Plus 调色。
+   ============================================================================ */
+:root {
+  --cfg-bg: var(--el-fill-color-blank, #ffffff);
+  --cfg-bg-soft: var(--el-fill-color-light, #f5f7fa);
+  --cfg-border: var(--el-border-color-lighter, #ebeef5);
+  --cfg-text-secondary: var(--el-text-color-secondary, #909399);
+  --app-header-height: 52px;
+}
+
+/* ============================================================================
+   搜索框 — UpstreamsPanel / MappingPanel / ToolsPanel 复用
+   原 3 个 panel 都复制了同一份 HTML + 响应式逻辑, 抽公共 class。
+   ============================================================================ */
+
+.cfg-search-wrap {
+  position: relative;
+  max-width: 360px;
+  margin-bottom: 12px;
+}
+
+.cfg-search {
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 12px;
+  border: 1px solid var(--cfg-border);
+  border-radius: 4px;
+  background: var(--cfg-bg);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.cfg-search::placeholder {
+  color: var(--cfg-text-secondary);
+}
+
+.cfg-search:focus {
+  border-color: var(--el-color-primary);
+}
+
+.cfg-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--cfg-text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 50%;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cfg-search-clear:hover {
+  background: var(--cfg-bg-soft);
+  color: var(--el-text-color-regular);
+}
+
+/* ============================================================================
+   折叠区 — UpstreamsPanel (全局开关 / 日志) + CachePanel (基本配置 / TTL) 复用
+   原 panel scoped CSS 已用 class="cfg-section" / "cfg-section-header" /
+   "cfg-section-toggle" / "cfg-section-title" / "cfg-section-sub" /
+   "cfg-section-body" / "cfg-kv-grid" / "cfg-kv-key" / "cfg-kv-val" 等命名,
+   这里统一定义视觉规范。
+   ============================================================================ */
+
+.cfg-section {
+  border: 1px solid var(--cfg-border);
+  border-radius: 6px;
+  background: var(--cfg-bg);
+  overflow: hidden;
+}
+
+.cfg-section + .cfg-section {
+  margin-top: 12px;
+}
+
+.cfg-section-header {
+  cursor: pointer;
+  padding: 10px 14px;
+  background: var(--cfg-bg-soft);
+  list-style: none;
+  user-select: none;
+  transition: background-color 120ms ease;
+}
+
+.cfg-section-header::-webkit-details-marker {
+  display: none;
+}
+
+.cfg-section-header:hover {
+  background: var(--el-fill-color);
+}
+
+.cfg-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.cfg-section-toggle {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--cfg-text-secondary);
+  transition: transform 120ms ease;
+}
+
+.cfg-section[open] .cfg-section-toggle,
+details[open] .cfg-section-toggle {
+  transform: rotate(0deg);
+}
+
+.cfg-section:not([open]) .cfg-section-toggle {
+  transform: rotate(-90deg);
+}
+
+.cfg-section-sub {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--cfg-text-secondary);
+}
+
+.cfg-section-body {
+  padding: 12px 14px;
+}
+
+/* KV 网格 — 等宽 key 列对齐, value 跟随 */
+.cfg-kv-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 18px;
+  row-gap: 8px;
+  font-size: 0.85rem;
+}
+
+.cfg-kv-key {
+  color: var(--cfg-text-secondary);
+  font-weight: 500;
+}
+
+.cfg-kv-val {
+  color: var(--el-text-color-regular);
+  word-break: break-word;
+}
+
+.cfg-kv-val code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  background: var(--cfg-bg-soft);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ============================================================================
+   状态徽章 (cfg-switch) — 跨 panel 复用的 on/off 标签
+   ============================================================================ */
+
+.cfg-switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.cfg-switch.on {
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-9, #f0f9eb);
+  border: 1px solid var(--el-color-success-light-7, #e1f3d8);
+}
+
+.cfg-switch.off {
+  color: var(--cfg-text-secondary);
+  background: var(--cfg-bg-soft);
+  border: 1px solid var(--cfg-border);
+}
+
+/* ============================================================================
+   通用小元素
+   ============================================================================ */
+
+.muted {
+  color: var(--cfg-text-secondary);
+}
+
+.tool-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* ============================================================================
+   信息提示 banner — CachePanel 用, 跨 panel 复用
+   ============================================================================ */
+
+.cfg-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 6px;
+  color: var(--el-text-color-regular);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.cfg-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+  color: #fff;
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+
+.cfg-banner code {
+  background: var(--cfg-bg-soft);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ============================================================================
+   通用计数条 — MappingPanel / ToolsPanel 共用 "显示 N / M" 提示
+   ============================================================================ */
+
+.cfg-count {
+  font-size: 0.75rem;
+  color: var(--cfg-text-secondary);
+  margin-top: 4px;
+}

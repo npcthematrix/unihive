@@ -114,6 +114,8 @@
         <FuyaoCachePanel
           :fuyao-cache="config?.fuyao_cache"
           :config-version="config?.version || ''"
+          :all-tools="config?.tools"
+          :upstream-tool-mapping="config?.upstream_tool_mapping"
           @saved="onFuyaoCacheSaved"
         />
       </section>
@@ -131,6 +133,7 @@ import type { GatewayConfig, ProxySettings } from '@/api/config'
 import { getProxySettings } from '@/api/config'
 import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
+import { formatHMS } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type TabKey } from './config/format'
 import { parseHashTab } from './_shared/hashTab'
 import UpstreamsPanel from './config/UpstreamsPanel.vue'
@@ -179,15 +182,10 @@ const mappingCount = computed(() => Object.keys(config.value?.upstream_tool_mapp
 const toolsCount = computed(() => (config.value?.tools || []).length)
 const ttlCount = computed(() => Object.keys(config.value?.cache?.ttl || {}).length)
 const coverageCount = computed(() => proxy.value?.coverage?.length ?? 0)
-/** FUYAO 嵌套 TTL 计数: 全部 endpoint 的 override 总条数; 0 个显示 0。 */
+/** FUYAO 工具级 override 总条数; 0 个显示 0 (扁平 tools dict, 2026-09-15 重构)。*/
 const fuyaoOverrideCount = computed(() => {
-  const endpoints = config.value?.fuyao_cache?.endpoints
-  if (!endpoints) return 0
-  let n = 0
-  for (const ep of Object.values(endpoints)) {
-    n += Object.keys(ep?.override || {}).length
-  }
-  return n
+  const tools = config.value?.fuyao_cache?.tools
+  return tools ? Object.keys(tools).length : 0
 })
 
 const TABS = computed(() => [
@@ -250,21 +248,15 @@ function onFuyaoCacheSaved(payload: { fuyao_cache: NonNullable<GatewayConfig['fu
 const refreshLabel = computed(() => {
   if (loadError.value) return '加载失败'
   if (!lastRefresh.value) return '尚未加载'
-  return `更新于 ${formatTime(lastRefresh.value)}`
+  return `更新于 ${formatHMS(lastRefresh.value)}`
 })
 
 /** 代理独立的时间后缀; proxy 加载失败时不展示, 避免误导。 */
 const proxyRefreshSuffix = computed(() => {
   if (loadError.value || proxyError.value) return ''
   if (!proxyLastRefresh.value) return ''
-  return `代理 ${formatTime(proxyLastRefresh.value)}`
+  return `代理 ${formatHMS(proxyLastRefresh.value)}`
 })
-
-function formatTime(ts: number): string {
-  const d = new Date(ts)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
 
 async function copyJson() {
   // 防抖: 复制动作有 ElMessage 反馈, 连点会刷屏, 用 inFlight 串行化

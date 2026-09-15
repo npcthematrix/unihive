@@ -97,6 +97,7 @@ import {
   type OmniQueryParams,
 } from '@/api/omni'
 import { errorMessage } from '@/api/client'
+import { formatHMS } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type OmniTabKey } from './omni/format'
 import { parseHashTab } from './_shared/hashTab'
 import StatsPanel from './omni/StatsPanel.vue'
@@ -274,14 +275,8 @@ async function selectTab(tab: OmniTabKey) {
 const refreshLabel = computed(() => {
   if (loadError.value) return '加载失败'
   if (!lastRefresh.value) return '尚未加载'
-  return `更新于 ${formatTime(lastRefresh.value)}`
+  return `更新于 ${formatHMS(lastRefresh.value)}`
 })
-
-function formatTime(ts: number): string {
-  const d = new Date(ts)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-}
 
 onMounted(() => {
   // 首屏只加载 stats (query 等待用户操作)

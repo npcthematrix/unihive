@@ -30,6 +30,7 @@
             placeholder="用户名"
             autocomplete="username"
             :prefix-icon="User"
+            aria-label="用户名"
             autofocus
           />
         </el-form-item>
@@ -40,6 +41,7 @@
             placeholder="密码"
             autocomplete="current-password"
             :prefix-icon="Lock"
+            aria-label="密码"
             show-password
             @keyup.enter="onSubmit"
           />

@@ -14,8 +14,13 @@
         <div class="last-sync-main">
           <span class="last-sync-source">{{ displaySource(lastLog.source) }}</span>
           <span class="last-sync-type">{{ displayBoardType(lastLog.board_type) }}</span>
-          <el-tag :type="statusTagType(lastLog.status)" size="small" effect="light">
-            {{ lastLog.status }}
+          <el-tag
+            :type="statusTagType(lastLog.status)"
+            size="small"
+            effect="light"
+            :aria-label="`同步状态: ${lastLog.status}`"
+          >
+            {{ statusIcon(lastLog.status) }}{{ lastLog.status }}
           </el-tag>
         </div>
         <div class="last-sync-meta">
@@ -45,8 +50,12 @@
         <span class="ctrl-label">板块类型:</span>
         <el-select v-model="boardType" :disabled="syncing" style="width: 160px">
           <el-option label="全部" value="all" />
-          <el-option label="行业板块" value="industry" />
-          <el-option label="概念板块" value="concept" />
+          <el-option
+            v-for="key in BOARD_TYPE_KEYS"
+            :key="key"
+            :label="displayBoardType(key)"
+            :value="key"
+          />
         </el-select>
         <el-button
           type="primary"
@@ -82,8 +91,13 @@
           <span class="log-time">{{ formatTime(l.start_time) }}</span>
           <span class="log-source">{{ displaySource(l.source) }}</span>
           <span class="log-type">{{ displayBoardType(l.board_type) }}</span>
-          <el-tag :type="statusTagType(l.status)" size="small" effect="light">
-            {{ l.status }}
+          <el-tag
+            :type="statusTagType(l.status)"
+            size="small"
+            effect="light"
+            :aria-label="`同步状态: ${l.status}`"
+          >
+            {{ statusIcon(l.status) }}{{ l.status }}
           </el-tag>
           <span class="log-count">{{ l.record_count || 0 }} 条</span>
         </li>
@@ -99,10 +113,12 @@ import type { OmniSource, OmniSyncLog } from '@/api/omni'
 import { runOmniSync } from '@/api/omni'
 import { errorMessage } from '@/api/client'
 import {
+  BOARD_TYPE_KEYS,
   displayBoardType,
   displaySource,
   formatDuration,
   formatTime,
+  statusIcon,
   statusTagType,
 } from './format'
 
@@ -119,7 +135,7 @@ const emit = defineEmits<{
 const SYNC_TIMEOUT_MIN = 5 // 与后端 SYNC_TIMEOUT_SECONDS 一致
 
 const source = ref<'all' | OmniSource>('all')
-const boardType = ref<'all' | 'industry' | 'concept'>('all')
+const boardType = ref<'all' | (typeof BOARD_TYPE_KEYS)[number]>('all')
 const syncing = ref(false)
 let activeAbort: AbortController | null = null
 
