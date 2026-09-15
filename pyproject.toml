@@ -17,7 +17,6 @@ dependencies = [
     "thsdk>=2.0,<3.0",
     "mootdx2>=1.4,<2.0",
     "orjson>=3.9,<4.0",
-    "cachetools>=5.3,<6.0",
 ]
 
 [project.optional-dependencies]
