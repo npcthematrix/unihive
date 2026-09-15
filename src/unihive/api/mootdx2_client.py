@@ -1,5 +1,6 @@
 """MooTDX2 MCP Client 基于 mootdx2 库"""
 import asyncio
+import functools
 import logging
 import threading
 import time
@@ -162,9 +163,45 @@ class MooTDX2Client:
             # 仅 adjust="none" 路径使用, 与 L1 缓存 key 对齐。
             self._daily_l1_inflight: dict[tuple[str, str], asyncio.Future] = {}
             self._daily_l1_inflight_lock = asyncio.Lock()  # 索引互斥
+
+            # 2026-09-15 P0 (MOOTDX2 性能审视 H2-a):
+            # stock_top_board / stock_unusual 全市场扫描 N 个 50-batch roundtrip
+            # (~5-20s), 加 10s TTL 结果缓存 + single-flight, 命中后 0ms 返回。
+            # 行情 10s 内变化 < 0.5%, 用户感知不到差异。
+            self._TOP_BOARD_L1_TTL = 10.0
+            self._top_board_l1: TTLCache = TTLCache(maxsize=128, ttl=self._TOP_BOARD_L1_TTL)
+            self._top_board_l1_hits = 0
+            self._top_board_l1_misses = 0
+            self._top_board_l1_inflight: dict = {}
+            self._top_board_l1_inflight_lock = asyncio.Lock()
+
+            self._UNUSUAL_L1_TTL = 10.0
+            self._unusual_l1: TTLCache = TTLCache(maxsize=128, ttl=self._UNUSUAL_L1_TTL)
+            self._unusual_l1_hits = 0
+            self._unusual_l1_misses = 0
+            self._unusual_l1_inflight: dict = {}
+            self._unusual_l1_inflight_lock = asyncio.Lock()
         except ImportError:
             self._DAILY_L1_ENABLED = False
             logger.warning("cachetools not installed, get_daily L1 cache disabled")
+
+    async def _run_blocking(self, func, *args, **kwargs):
+        """把同步阻塞调用丢到 unihive-upstream 共享线程池 (非默认 executor)。
+
+        替代原本重复 30+ 处的 ``loop = asyncio.get_event_loop()`` + ``loop.run_in_executor``
+        模板。``asyncio.get_event_loop`` 在 Python 3.10+ deprecated, 3.12+ 在没
+        running loop 的线程里会 emit DeprecationWarning; ``get_running_loop`` 是
+        推荐写法, 仅在 event loop 上下文里可用 (本类的所有 tool 都是 gateway
+        server 调进来的, 必然在 loop 里)。
+
+        仍走项目自定义 `` get_blocking_executor()`` 线程池, 而不是
+        ``asyncio.to_thread`` 的默认 executor — 后者会让金融阻塞调用与其它默认
+        池任务互相挤占 (见 core/blocking_pool.py 注释)。
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            get_blocking_executor(), functools.partial(func, *args, **kwargs)
+        )
 
     def _new_request_id(self) -> str:
         """生成请求 ID"""
@@ -393,10 +430,37 @@ class MooTDX2Client:
             }
         else:
             daily_l1_block = {"enabled": False}
+        # 2026-09-15 P0 (H2-a): stock_top_board / stock_unusual L1 metrics
         return {
             **self._metrics,
             "daily_l1": daily_l1_block,
+            "top_board_l1": self._l1_metrics_block(
+                self._top_board_l1, self._top_board_l1_hits,
+                self._top_board_l1_misses, self._top_board_l1_inflight,
+                self._TOP_BOARD_L1_TTL,
+            ),
+            "unusual_l1": self._l1_metrics_block(
+                self._unusual_l1, self._unusual_l1_hits,
+                self._unusual_l1_misses, self._unusual_l1_inflight,
+                self._UNUSUAL_L1_TTL,
+            ),
             "pool_stats": self.config.pool.get_stats() if self.config.pool else {},
+        }
+
+    def _l1_metrics_block(self, cache, hits, misses, inflight, ttl):
+        """生成 L1 metrics 子块 — 4 个 L1 cache 共享同一结构。"""
+        if not self._DAILY_L1_ENABLED:
+            return {"enabled": False}
+        total = hits + misses
+        return {
+            "enabled": True,
+            "hits": hits,
+            "misses": misses,
+            "hit_rate": (hits / total) if total > 0 else None,
+            "size": len(cache),
+            "maxsize": cache.maxsize,
+            "ttl_seconds": ttl,
+            "inflight_keys": len(inflight),
         }
 
     async def get_metrics_async(self) -> ToolResult:
@@ -724,6 +788,17 @@ class MooTDX2Client:
                 if not fut.done():
                     fut.set_exception(asyncio.CancelledError())
             self._daily_l1_inflight.clear()
+            # 2026-09-15 P0 (H2-a): stock_top_board / stock_unusual L1 清理
+            for cache_attr, inflight_attr in [
+                ("_top_board_l1", "_top_board_l1_inflight"),
+                ("_unusual_l1", "_unusual_l1_inflight"),
+            ]:
+                getattr(self, cache_attr).clear()
+                inflight = getattr(self, inflight_attr)
+                for fut in inflight.values():
+                    if not fut.done():
+                        fut.set_exception(asyncio.CancelledError())
+                inflight.clear()
 
         # H1: 取消后台探活任务
         if self._health_task and not self._health_task.done():
@@ -842,8 +917,7 @@ class MooTDX2Client:
         logger.info(f"[{request_id}] get_quote({code})")
 
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_quote_sync, code)
+            data = await self._run_blocking(self._get_quote_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"股票 {code} 无行情数据（可能停牌或非交易日）")
@@ -888,8 +962,7 @@ class MooTDX2Client:
 
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_kline_sync, code, type, limit)
+            data = await self._run_blocking(self._get_kline_sync, code, type, limit)
             if data:
                 # 数据合理性校验
                 valid_data = [r for r in data if _validate_kline_record(r)]
@@ -915,8 +988,7 @@ class MooTDX2Client:
         """获取批量行情"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_batch_quote_sync, codes)
+            data = await self._run_blocking(self._get_batch_quote_sync, codes)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -952,8 +1024,7 @@ class MooTDX2Client:
             limit = 500
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_batch_bars_sync, codes, type, limit)
+            data = await self._run_blocking(self._get_batch_bars_sync, codes, type, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -974,8 +1045,7 @@ class MooTDX2Client:
     async def get_minute_data(self, code: str) -> ToolResult:
         """获取今日分时"""
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_minute_data_sync, code)
+            data = await self._run_blocking(self._get_minute_data_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -997,8 +1067,7 @@ class MooTDX2Client:
         """获取逐笔成交"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_trade_sync, code)
+            data = await self._run_blocking(self._get_trade_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1020,8 +1089,7 @@ class MooTDX2Client:
         """获取历史逐笔"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_trade_history_sync, code, date, start, count)
+            data = await self._run_blocking(self._get_trade_history_sync, code, date, start, count)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1043,8 +1111,7 @@ class MooTDX2Client:
         """获取指数K线"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_kline_sync, code, type)
+            data = await self._run_blocking(self._get_index_kline_sync, code, type)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1094,9 +1161,7 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         exchange_val = (exchange or "").strip().lower()
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
-                get_blocking_executor(), self._get_code_list_sync, exchange_val
+            data = await self._run_blocking(self._get_code_list_sync, exchange_val
             )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -1125,8 +1190,7 @@ class MooTDX2Client:
         """获取股票代码列表"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_codes_sync, limit, prefix)
+            data = await self._run_blocking(self._get_stock_codes_sync, limit, prefix)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1150,8 +1214,7 @@ class MooTDX2Client:
         """获取ETF代码列表"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_etf_codes_sync, limit, prefix)
+            data = await self._run_blocking(self._get_etf_codes_sync, limit, prefix)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1173,8 +1236,7 @@ class MooTDX2Client:
         """获取ETF列表"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_etf_list_sync, exchange, limit)
+            data = await self._run_blocking(self._get_etf_list_sync, exchange, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1193,8 +1255,7 @@ class MooTDX2Client:
         """获取市场证券数量"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_market_count_sync, market)
+            data = await self._run_blocking(self._get_market_count_sync, market)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1225,8 +1286,7 @@ class MooTDX2Client:
         """获取交易日"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_workday_sync, date, count)
+            data = await self._run_blocking(self._get_workday_sync, date, count)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1258,8 +1318,7 @@ class MooTDX2Client:
         """获取交易日范围"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_workday_range_sync, start, end)
+            data = await self._run_blocking(self._get_workday_range_sync, start, end)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1283,8 +1342,7 @@ class MooTDX2Client:
         """获取全指K线"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_all_sync, code, type, limit)
+            data = await self._run_blocking(self._get_index_all_sync, code, type, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1306,8 +1364,7 @@ class MooTDX2Client:
         """获取盘后收益"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_income_sync, code)
+            data = await self._run_blocking(self._get_income_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1406,8 +1463,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_custom_sector_list_sync)
+            data = await self._run_blocking(self._get_custom_sector_list_sync)
             return ToolResult(success=True, data=data, source="mootdx2")
         except SectorDataError as e:
             return self._sector_error_result(e)
@@ -1490,9 +1546,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
-                get_blocking_executor(), self._get_custom_sector_stocks_sync, sector_code, market
+            data = await self._run_blocking(self._get_custom_sector_stocks_sync, sector_code, market
             )
             return ToolResult(success=True, data=data, source="mootdx2")
         except SectorDataError as e:
@@ -1549,8 +1603,7 @@ class MooTDX2Client:
         """获取主要指数概览（6个指数：上证、深证、创业板、科创50、北证50、沪深300）"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._index_overview_sync)
+            data = await self._run_blocking(self._index_overview_sync)
             if not data:
                 return self._no_data_result("指数数据获取失败")
             return ToolResult(success=True, data=data, source="mootdx2")
@@ -1577,8 +1630,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_f10_sync, symbol, name)
+            data = await self._run_blocking(self._get_f10_sync, symbol, name)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1604,8 +1656,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_f10_company_sync, symbol)
+            data = await self._run_blocking(self._get_f10_company_sync, symbol)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1632,8 +1683,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_minutes_sync, symbol, date)
+            data = await self._run_blocking(self._get_minutes_sync, symbol, date)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1785,10 +1835,7 @@ class MooTDX2Client:
 
             # leader 路径 (or 非 none 路径 / inflight 旁路)
             try:
-                loop = asyncio.get_event_loop()
-                data = await loop.run_in_executor(
-                    get_blocking_executor(),
-                    self._get_daily_sync,
+                data = await self._run_blocking(self._get_daily_sync,
                     code,
                     adjust,
                     start_date,
@@ -1911,9 +1958,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(
-                get_blocking_executor(), self._get_minute_sync, code, suffix, start_date, end_date
+            data = await self._run_blocking(self._get_minute_sync, code, suffix, start_date, end_date
             )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -1956,8 +2001,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_fzline_sync, code)
+            data = await self._run_blocking(self._get_fzline_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的分时线数据")
@@ -2082,9 +2126,7 @@ class MooTDX2Client:
             )
 
         try:
-            loop = asyncio.get_event_loop()
-            records, meta = await loop.run_in_executor(
-                get_blocking_executor(),
+            records, meta = await self._run_blocking(
                 self._get_index_kline_local_sync, code, limit,
             )
             if records:
@@ -2129,8 +2171,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_index_bars_sync, symbol, frequency, start, offset)
+            data = await self._run_blocking(self._get_index_bars_sync, symbol, frequency, start, offset)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -2156,8 +2197,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_xdxr_sync, symbol)
+            data = await self._run_blocking(self._get_xdxr_sync, symbol)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -2178,8 +2218,7 @@ class MooTDX2Client:
         """获取全部股票列表"""
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_all_sync)
+            data = await self._run_blocking(self._get_stock_all_sync)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -2207,8 +2246,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_k_data_sync, code, start_date, end_date)
+            data = await self._run_blocking(self._get_k_data_sync, code, start_date, end_date)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -2231,28 +2269,38 @@ class MooTDX2Client:
                 df_block = reader.block()
                 if df_block is not None and len(df_block) > 0:
                     kw = keyword.lower()
+                    # 2026-09-15 P0 (MOOTDX2 性能审视 M3): 改用 pandas
+                    # str.contains 向量化代替 iterrows, 5000 行从 ~1s 降到
+                    # ~5ms。name 也走 str.contains, case=False 覆盖原
+                    # name.lower() 比对。
+                    code_col = df_block["code"].astype(str)
+                    name_col = df_block["name"].astype(str) if "name" in df_block.columns else None
+                    mask = code_col.str.contains(kw, case=False, na=False)
+                    if name_col is not None:
+                        mask = mask | name_col.str.contains(kw, case=False, na=False)
+                    matches = df_block[mask].head(20)
                     result = []
-                    for _, row in df_block.iterrows():
-                        code = str(row.get("code", ""))
-                        name = row.get("name", "")
-                        if not code or not name:
+                    for code, name in zip(
+                        code_col[matches.index].tolist(),
+                        (name_col[matches.index].tolist() if name_col is not None else [None] * len(matches)),
+                    ):
+                        if not code:
                             continue
-                        if kw in code or kw in name.lower():
-                            # 判断市场前缀
-                            if code.startswith(("60", "68")):
-                                market = "sh"
-                            elif code.startswith(("00", "30")):
-                                market = "sz"
-                            elif code.startswith(("8", "4")):
-                                market = "bj"
-                            else:
-                                market = "sz"
-                            result.append({
-                                "code": code,
-                                "market": market,
-                                "name": name,
-                            })
-                    return result[:20]
+                        # 判断市场前缀
+                        if code.startswith(("60", "68")):
+                            mkt = "sh"
+                        elif code.startswith(("00", "30")):
+                            mkt = "sz"
+                        elif code.startswith(("8", "4")):
+                            mkt = "bj"
+                        else:
+                            mkt = "sz"
+                        result.append({
+                            "code": code,
+                            "market": mkt,
+                            "name": name,
+                        })
+                    return result
         except Exception as e:
             logger.debug(f"search_stock reader.block() failed: {e}")
 
@@ -2308,8 +2356,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._search_stock_sync, keyword)
+            data = await self._run_blocking(self._search_stock_sync, keyword)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"search_stock failed: {e}")
@@ -2363,8 +2410,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._get_stock_info_sync, code, market, kline_period, kline_count)
+            data = await self._run_blocking(self._get_stock_info_sync, code, market, kline_period, kline_count)
             if data.get("quote") is None and not data.get("kline") and not data.get("minute"):
                 return self._no_data_result(f"股票 {market}{code} 无数据")
             return ToolResult(success=True, data=data, source="mootdx2")
@@ -2419,8 +2465,7 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._indicator_atr_sync, code, type, limit)
+            data = await self._run_blocking(self._indicator_atr_sync, code, type, limit)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"indicator_atr failed: {e}")
@@ -2609,23 +2654,114 @@ class MooTDX2Client:
         return result
 
     async def stock_top_board(self, sort_by: str = "change_pct", direction: str = "desc", limit: int = 50, market: str = "all") -> ToolResult:
-        """获取市场排行榜"""
+        """获取市场排行榜
+
+        2026-09-15 P0 (H2-a): 加 10s L1 + single-flight 防全市场扫描雪崩。
+        行情 10s 内变化 < 0.5%, 用户感知不到差异。
+        """
         self._metrics["total_requests"] += 1
+        if not self._DAILY_L1_ENABLED:
+            # cachetools 没装, 降级到直跑路径
+            try:
+                data = await self._run_blocking(
+                    self._stock_top_board_sync, sort_by, direction, limit, market
+                )
+                return ToolResult(success=True, data=data, source="mootdx2")
+            except Exception as e:
+                logger.error(f"stock_top_board failed: {e}")
+                return self._error_result(e, "stock_top_board")
+
+        cache_key = (sort_by, direction, limit, market)
+        cached = self._top_board_l1.get(cache_key)
+        if cached is not None:
+            self._top_board_l1_hits += 1
+            return cached
+
+        # miss 路径: single-flight 去重并发雪崩
+        inflight_future: asyncio.Future | None = None
+        is_leader = False
+        async with self._top_board_l1_inflight_lock:
+            existing = self._top_board_l1_inflight.get(cache_key)
+            if existing is not None:
+                inflight_future = existing
+            else:
+                inflight_future = asyncio.get_running_loop().create_future()
+                self._top_board_l1_inflight[cache_key] = inflight_future
+                is_leader = True
+
+        if inflight_future is not None and not is_leader:
+            return await inflight_future
+
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._stock_top_board_sync, sort_by, direction, limit, market)
-            return ToolResult(success=True, data=data, source="mootdx2")
+            self._top_board_l1_misses += 1
+            data = await self._run_blocking(
+                self._stock_top_board_sync, sort_by, direction, limit, market
+            )
+            result = ToolResult(success=True, data=data, source="mootdx2")
+            self._top_board_l1[cache_key] = result
+            if is_leader and not inflight_future.done():
+                inflight_future.set_result(result)
+            return result
         except Exception as e:
             logger.error(f"stock_top_board failed: {e}")
-            return self._error_result(e, "stock_top_board")
+            error_result = self._error_result(e, "stock_top_board")
+            if is_leader and not inflight_future.done():
+                inflight_future.set_result(error_result)
+            return error_result
+        finally:
+            if is_leader:
+                async with self._top_board_l1_inflight_lock:
+                    self._top_board_l1_inflight.pop(cache_key, None)
 
     async def stock_unusual(self, event_type: str = "all") -> ToolResult:
-        """获取市场异动数据（主力监控精灵）"""
+        """获取市场异动数据（主力监控精灵）
+
+        2026-09-15 P0 (H2-a): 加 10s L1 + single-flight。
+        """
         self._metrics["total_requests"] += 1
+        if not self._DAILY_L1_ENABLED:
+            try:
+                data = await self._run_blocking(self._stock_unusual_sync, event_type)
+                return ToolResult(success=True, data=data, source="mootdx2")
+            except Exception as e:
+                logger.error(f"stock_unusual failed: {e}")
+                return self._error_result(e, "stock_unusual")
+
+        cache_key = (event_type,)
+        cached = self._unusual_l1.get(cache_key)
+        if cached is not None:
+            self._unusual_l1_hits += 1
+            return cached
+
+        inflight_future: asyncio.Future | None = None
+        is_leader = False
+        async with self._unusual_l1_inflight_lock:
+            existing = self._unusual_l1_inflight.get(cache_key)
+            if existing is not None:
+                inflight_future = existing
+            else:
+                inflight_future = asyncio.get_running_loop().create_future()
+                self._unusual_l1_inflight[cache_key] = inflight_future
+                is_leader = True
+
+        if inflight_future is not None and not is_leader:
+            return await inflight_future
+
         try:
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(get_blocking_executor(), self._stock_unusual_sync, event_type)
-            return ToolResult(success=True, data=data, source="mootdx2")
+            self._unusual_l1_misses += 1
+            data = await self._run_blocking(self._stock_unusual_sync, event_type)
+            result = ToolResult(success=True, data=data, source="mootdx2")
+            self._unusual_l1[cache_key] = result
+            if is_leader and not inflight_future.done():
+                inflight_future.set_result(result)
+            return result
         except Exception as e:
             logger.error(f"stock_unusual failed: {e}")
-            return self._error_result(e, "stock_unusual")
+            error_result = self._error_result(e, "stock_unusual")
+            if is_leader and not inflight_future.done():
+                inflight_future.set_result(error_result)
+            return error_result
+        finally:
+            if is_leader:
+                async with self._unusual_l1_inflight_lock:
+                    self._unusual_l1_inflight.pop(cache_key, None)
