@@ -1045,9 +1045,6 @@ class GatewayServer:
         async def _health_api(req: Request):
             return JSONResponse(_ca.get_health())
 
-        async def _ths_local_status_api(req: Request):
-            return JSONResponse(_ca.get_ths_local_status())
-
         async def _mcp_tools_api(req: Request):
             # L3 (2026-09-07 5th-round audit): mcp 未初始化时返回 503,
             # 避免 AttributeError。实际不可达 (serve_http 必先 await init),
@@ -1121,6 +1118,7 @@ class GatewayServer:
                 Route("/console.html", _index_route),
                 Route("/api/status", _status_api),
                 *_ca.build_omni_routes(),
+                *_ca.build_mcp_browser_routes(),
                 Route("/api/upstreams/{name}/metrics", _ca.upstream_metrics_api),
                 *_proxy_routes(),
                 Route("/api/interfaces", _interfaces_api),
@@ -1129,7 +1127,6 @@ class GatewayServer:
                 Route("/api/config/fuyao-cache", _fuyao_cache_put_api, methods=["PUT"]),
                 Route("/health", _health_api),
                 Route("/api/mcp-tools-list", _mcp_tools_api),
-                Route("/api/ths-local/status", _ths_local_status_api),
             ]
         )
 

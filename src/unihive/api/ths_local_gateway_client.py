@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from .mcp_tools_fetch import RawToolsResult, fetch_all_raw_tools
 from .upstream_client import ToolResult, UpstreamStatus
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,6 @@ class ThsLocalClient:
         self.name = config.name
         self._status = UpstreamStatus.UNKNOWN
         self._client: httpx.AsyncClient | None = None
-        self._tools: list[dict] = []  # 缓存工具列表
 
     @property
     def status(self) -> UpstreamStatus:
@@ -42,13 +42,14 @@ class ThsLocalClient:
     def is_available(self) -> bool:
         return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
 
-    @property
-    def tools(self) -> list[dict]:
-        """同步获取工具列表（从缓存）"""
-        return self._tools
-
     async def start(self) -> bool:
-        """初始化连接并获取工具列表"""
+        """初始化连接并做健康检查。
+
+        刻意不在启动时拉工具清单: 旧实现会缓存 tools/list 的**首页**并打进
+        日志, 而该上游实测分 3 页, 首页计数必然误导。真实计数由控制台
+        MCP 浏览器 (/api/mcp-browser/{upstream}/tools) 按需拉取。这同时把
+        启动时的 tools/list 往返省掉了 —— 上游没起时不再被拖慢。
+        """
         try:
             timeout = httpx.Timeout(
                 self.config.timeout_seconds,
@@ -58,9 +59,7 @@ class ThsLocalClient:
             # 执行健康检查确认连接可用
             if await self.health_check():
                 self._status = UpstreamStatus.HEALTHY
-                # 获取工具列表并缓存
-                self._tools = await self.list_tools()
-                logger.info(f"[{self.name}] Connected to {self.config.base_url}, {len(self._tools)} tools")
+                logger.info(f"[{self.name}] Connected to {self.config.base_url}")
                 return True
             else:
                 self._status = UpstreamStatus.DEGRADED
@@ -141,31 +140,33 @@ class ThsLocalClient:
             )
 
     async def list_tools(self) -> list[dict]:
-        """获取工具列表"""
-        if not self._client:
+        """获取工具列表 (含全量分页)。
+
+        委托给 fetch_all_raw_tools —— 旧实现只读 tools/list 的 result.tools,
+        丢弃 nextCursor, 静默返回 87 个工具中的首页 32 个。仓库内已无调用方
+        (控制台 MCP 浏览器走 list_tools_raw), 保留此方法只为对外契约。
+
+        契约保持不变: ok=False 时记 error 并返回 []; ok=True (含截断) 返回
+        已拿到的 tools。
+        """
+        result = await self.list_tools_raw()
+        if not result.ok:
+            logger.error(f"[{self.name}] List tools failed: {result.error}")
             return []
+        return result.tools
 
-        try:
-            request = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/list",
-                "params": {}
-            }
+    async def list_tools_raw(self, **kwargs) -> RawToolsResult:
+        """原始 tools/list (含全量分页) —— 供控制台 MCP 浏览器使用。
 
-            response = await self._client.post(
-                self.config.base_url,
-                json=request
-            )
-            data = response.json()
-
-            if "result" in data and "tools" in data["result"]:
-                return data["result"]["tools"]
-            return []
-
-        except Exception as e:
-            logger.error(f"[{self.name}] List tools failed: {e}")
-            return []
+        该上游实测分 3 页 (32/32/23 = 87 个工具), 而 list_tools() 只返回首页的
+        32 个。方法的有无同时充当 "该上游是不是 MCP server" 的判据。
+        """
+        return await fetch_all_raw_tools(
+            self._client,
+            self.config.base_url,
+            self.name,
+            **kwargs,
+        )
 
     async def health_check(self) -> bool:
         """健康检查"""

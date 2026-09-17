@@ -180,6 +180,10 @@
 - **问题**: 新增 view 无任何测试，而其他 view 已有工具函数/组件测试
 - **修复**: 补 `web/tests/views/ths-local.spec.ts`，覆盖 load 成功/失败、连接状态切换、loadError 渲染
 - **依赖**: happy-dom + vitest 已就绪
+- **状态 (2026-09-17)**: **已被取代而关闭**。ThsLocalView 已被 MCP 浏览器
+  (`web/src/views/McpBrowserView.vue`) 取代并删除, 给一个不存在的组件补测试
+  没有意义。新页面的可测逻辑全部下沉在 `web/src/views/mcp-browser/tools.ts`,
+  由 `web/tests/views/mcp-browser/tools.spec.ts` (74 例) 覆盖。
 
 ### LOW (4)
 

@@ -67,7 +67,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Document, Monitor, Connection, Setting, Grid, Fold, Expand, DataLine } from '@element-plus/icons-vue'
+import { Document, Monitor, Connection, Setting, Grid, Files, Fold, Expand, DataLine } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
@@ -125,7 +125,7 @@ const MENU = [
   { path: '/interfaces', title: 'MCP APIs', icon: Connection },
   { path: '/config', title: '配置信息', icon: Setting },
   { path: '/omni', title: 'OMNI板块管理', icon: Grid },
-  { path: '/ths-local', title: 'THS Local 网关', icon: Connection },
+  { path: '/mcp-browser', title: 'MCP 浏览器', icon: Files },
 ] as const
 
 async function onLogout(): Promise<void> {

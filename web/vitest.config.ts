@@ -26,6 +26,7 @@ export default defineConfig({
         'src/api/status.ts',
         'src/api/config.ts',
         'src/api/omni.ts',
+        'src/api/mcp-browser.ts',
       ],
     },
   },

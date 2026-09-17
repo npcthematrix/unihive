@@ -551,28 +551,6 @@ def get_upstream_status() -> dict:
     }
 
 
-def get_ths_local_status() -> dict:
-    """获取 THS-LOCAL-GATEWAY 网关状态"""
-    client = _get_upstream_client("THS-LOCAL-GATEWAY")
-    if client is None:
-        return {
-            "connected": False,
-            "toolCount": 0,
-            "tools": []
-        }
-
-    # 直接从 client.tools 获取缓存的工具列表（同步属性）
-    tools: list[dict] = []
-    if hasattr(client, "tools"):
-        tools = client.tools  # 已在 start() 时缓存
-
-    return {
-        "connected": client.is_available if hasattr(client, "is_available") else False,
-        "toolCount": len(tools),
-        "tools": tools
-    }
-
-
 # ---------------------------------------------------------------------------
 # Interfaces / tool specs
 # ---------------------------------------------------------------------------
@@ -917,3 +895,125 @@ async def upstream_metrics_api(req: "Request") -> "JSONResponse":
         "metrics": metrics,
         "timestamp": int(time.time()),
     })
+
+
+# ---------------------------------------------------------------------------
+# MCP 浏览器 —— 原样展示 "本身即 MCP server" 的上游的 tools/list
+# ---------------------------------------------------------------------------
+# 这里刻意不做任何归一化: 不重命名、不平铺 params、不套 model_dump()。
+# 对照 gateway_server._mcp_tools_api (它会把工具压成 {name, description,
+# source, params}), 那套东西是给 "网关聚合视图" 用的, 不是给这里用的。
+# 控制台 MCP 浏览器要展示的就是上游到底发了什么。
+
+
+def get_mcp_browser_upstreams() -> dict:
+    """列出 "自身即 MCP server" 的已注册上游。
+
+    判据是 client 上有没有 list_tools_raw() —— 这比查配置 type 更可靠:
+    mootdx2 / tdx_quant / thsdk / omni 的 list_tools() 是返回 [] 的桩或
+    硬编码列表, 它们没有这个方法, 自然被排除。
+    """
+    upstreams: list[dict] = []
+    for name, client in _upstream_registry.items():
+        if not callable(getattr(client, "list_tools_raw", None)):
+            continue
+        status = getattr(client, "status", None)
+        upstreams.append({
+            "name": name,
+            "type": type(client).__name__,
+            # UpstreamStatus 是普通 Enum (非 str-Enum), 直接塞进 JSONResponse
+            # 会 TypeError → 500, 必须取 .value。
+            "status": getattr(status, "value", str(status)) if status is not None else "unknown",
+            "available": bool(getattr(client, "is_available", False)),
+        })
+    upstreams.sort(key=lambda u: u["name"])
+    return {"timestamp": int(time.time()), "upstreams": upstreams}
+
+
+async def fetch_upstream_raw_tools(upstream: str) -> tuple[int, dict]:
+    """拉取某个上游的原始 tools/list, 返回 (http_status, body)。
+
+    状态码:
+      200: 拉取成功 (含 "上游合法地返回 0 个工具" —— 见 ok 字段)
+      400: 上游已注册但不是 MCP server
+      404: 上游名未在 registry 注册
+      502: 上游请求失败 (连不上 / 超时 / HTTP 错误 / JSON-RPC 错误 / 响应畸形)
+    """
+    client = _get_upstream_client(upstream)
+    if client is None:
+        return 404, {
+            "error": f"upstream '{upstream}' not registered",
+            "upstream": upstream,
+        }
+
+    fetch = getattr(client, "list_tools_raw", None)
+    if not callable(fetch):
+        # 注意: 同类情形下 upstream_metrics_api 用的是 501。这里刻意选 400 ——
+        # 语义是 "这个请求对这类资源不适用", 与 "网关不支持该功能" 不同。
+        # 统一之前请先想清楚, 别顺手改成 501。
+        return 400, {
+            "error": f"upstream '{upstream}' is not an MCP server",
+            "upstream": upstream,
+        }
+
+    result = await fetch()
+    if not result.ok:
+        return 502, {
+            "error": f"上游请求失败: {result.error}",
+            "errorKind": result.error_kind,
+            "upstream": upstream,
+        }
+
+    return 200, {
+        "upstream": upstream,
+        "timestamp": int(time.time()),
+        "ok": True,
+        "error": None,
+        "errorKind": None,
+        "pages": result.pages,
+        "truncated": result.truncated,
+        "truncatedReason": result.truncated_reason,
+        "count": len(result.tools),
+        "bytes": result.total_bytes,
+        # 原样透传, 一个字段都不动。
+        "tools": result.tools,
+    }
+
+
+async def mcp_browser_upstreams_api(req: "Request") -> "JSONResponse":
+    """GET /api/mcp-browser/upstreams"""
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(get_mcp_browser_upstreams())
+
+
+async def mcp_browser_tools_api(req: "Request") -> "JSONResponse":
+    """GET /api/mcp-browser/<upstream>/tools —— 原始 tools/list, 原样返回。
+
+    上游失败刻意返回 502 而不是 200+ok:false: 前端 axios 实例
+    (web/src/api/client.ts) 只对 5xx 自动重试一次, 且 errorMessage() 已经会
+    从 body 里取 .error 渲染。这样白捡一次瞬时容错与正确的错误呈现, 前端零
+    新增管道。代价是硬失败要等约 2× 上游超时才浮出来 —— 对本地控制台可接受。
+    想 "简化" 成 200 之前请先读这段。
+    """
+    from starlette.responses import JSONResponse
+
+    upstream = req.path_params["upstream"]
+    status_code, body = await fetch_upstream_raw_tools(upstream)
+    return JSONResponse(body, status_code=status_code)
+
+
+def build_mcp_browser_routes() -> list:
+    """控制台 MCP 浏览器的 /api/* 路由 (挂载进 gateway_server)。
+
+    路径参数必须用 {upstream}。Starlette 1.6 不认 <upstream> 那种语法 ——
+    它不报错, 只是编译出 params={} 于是永远匹配不上 (实测)。仓库里
+    build_omni_routes 的 "/api/upstreams/<name>/metrics" 就是这么一条
+    死路由, 靠 gateway_server 里 {name} 的那条才真正工作。
+    """
+    from starlette.routing import Route
+
+    return [
+        Route("/api/mcp-browser/upstreams", mcp_browser_upstreams_api),
+        Route("/api/mcp-browser/{upstream}/tools", mcp_browser_tools_api),
+    ]
