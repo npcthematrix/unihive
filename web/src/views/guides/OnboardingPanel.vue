@@ -259,7 +259,7 @@ onBeforeUnmount(() => {
   position: sticky;
   /* 未来加 app header 时, 在 :root 设 --app-header-height 即可, 当前无 header = 0 */
   top: var(--app-header-height, 0);
-  z-index: 5;
+  z-index: 10;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;

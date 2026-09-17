@@ -83,7 +83,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import type {
   OmniSector,
@@ -243,13 +243,12 @@ const syncPanelRef = ref<InstanceType<typeof SyncPanel> | null>(null)
 
 // ===== tab 路由 =====
 
-activeTab.value = parseHashTab(route.query.tab, TAB_KEYS, 'stats')
-
 watch(
   () => route.query.tab,
-  (q) => {
+  (q: LocationQueryValue | LocationQueryValue[]) => {
     activeTab.value = parseHashTab(q, TAB_KEYS, 'stats')
   },
+  { immediate: true },
 )
 
 const TABS = computed(() =>
@@ -259,7 +258,7 @@ const TABS = computed(() =>
   })),
 )
 
-async function selectTab(tab: OmniTabKey) {
+async function selectTab(tab: OmniTabKey): Promise<void> {
   if (activeTab.value === tab) return
   activeTab.value = tab
   void router.replace({ query: { ...route.query, tab } })

@@ -96,6 +96,8 @@ async function onSubmit(): Promise<void> {
     await router.replace(redirect)
   } catch (error) {
     errorMsg.value = errorMessage(error, '登录失败')
+    // 失败清空密码 — 用户需重新输入, 避免反复输入用户名+旧密码
+    form.password = ''
   } finally {
     loading.value = false
   }

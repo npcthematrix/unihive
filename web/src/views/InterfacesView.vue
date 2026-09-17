@@ -357,8 +357,8 @@ watch(appliedQuery, () => {
 })
 
 watch(activeGroup, (key) => {
-  // 表格按 group key 重挂载, 展开态同步重置, 避免跨组同名残留
-  expandedNames.value = new Set()
+  // 表格按 group key 重挂载; 展开态跨分组保留 (用户展开 tool 详情后切分组仍可见),
+  // 由下方 visibleTools watcher 清理已隐式裁剪的 name, 防 el-table 按钮文案残留。
   syncQuery(key)
 })
 

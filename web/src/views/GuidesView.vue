@@ -44,6 +44,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { TAB_KEYS, TAB_TITLES, type GuidesTabKey } from './guides/format'
 import { parseHashTab } from './_shared/hashTab'
+import type { LocationQueryValue } from 'vue-router'
 import OnboardingPanel from './guides/OnboardingPanel.vue'
 import AiOnboardingPanel from './guides/AiOnboardingPanel.vue'
 
@@ -52,16 +53,15 @@ const router = useRouter()
 
 const activeTab = ref<GuidesTabKey>('human')
 
-activeTab.value = parseHashTab(route.query.tab, TAB_KEYS, 'human')
-
 watch(
   () => route.query.tab,
-  (q) => {
+  (q: LocationQueryValue | LocationQueryValue[]) => {
     activeTab.value = parseHashTab(q, TAB_KEYS, 'human')
   },
+  { immediate: true },
 )
 
-function selectTab(tab: GuidesTabKey) {
+function selectTab(tab: GuidesTabKey): void {
   if (activeTab.value === tab) return
   activeTab.value = tab
   void router.replace({ query: { ...route.query, tab } })

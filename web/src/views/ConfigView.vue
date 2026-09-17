@@ -125,7 +125,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getConfig } from '@/api/config'
@@ -164,13 +164,13 @@ const activeTab = ref<TabKey>('upstreams')
 // 用 watch + immediate 一次性处理「初始化 + 后续 hash 变化」, 避免重复 parse。
 watch(
   () => route.query.tab,
-  (q) => {
+  (q: LocationQueryValue | LocationQueryValue[]) => {
     activeTab.value = parseHashTab(q, TAB_KEYS, 'upstreams')
   },
   { immediate: true },
 )
 
-function selectTab(tab: TabKey) {
+function selectTab(tab: TabKey): void {
   if (activeTab.value === tab) return
   activeTab.value = tab
   // 只替换目标 slot, 保留其他 query 参数 (与阶段 3 深链经验一致)
@@ -226,8 +226,14 @@ async function load(isManual = false) {
     loading.value = false
     manualLoading.value = false
   }
-  // proxy 单独拉, 失败不影响 config 渲染
-  void loadProxy()
+  // proxy 单独拉, 失败不影响 config 渲染。
+  // 当前在 proxy tab 时同步等待 (用户切到该 tab 应看到立即加载的数据),
+  // 否则异步 (fire-and-forget) 不阻塞整体 load 延迟。
+  if (activeTab.value === 'proxy') {
+    await loadProxy()
+  } else {
+    void loadProxy()
+  }
 }
 
 function onProxyChange(updated: ProxySettings) {

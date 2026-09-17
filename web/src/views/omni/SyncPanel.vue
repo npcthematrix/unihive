@@ -346,4 +346,17 @@ h3 {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
+
+@media (max-width: 640px) {
+  .log-item {
+    flex-wrap: wrap;
+  }
+  .log-time {
+    min-width: 100px;
+  }
+  .log-source,
+  .log-type {
+    min-width: auto;
+  }
+}
 </style>
