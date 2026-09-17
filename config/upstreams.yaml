@@ -166,6 +166,14 @@ upstreams:
       - news
       - watchlist
 
+  THS-LOCAL-GATEWAY:
+    enabled: true
+    type: "ths_local_gateway"
+    base_url: "http://127.0.0.1:17281/mcp"
+    description: "FQGate 本地 MCP 网关"
+    timeout_seconds: 30
+    connect_timeout_seconds: 5.0
+
 # Gateway 全局性能配置
 gateway:
   per_upstream_timeout: 10  # 单个上游调用超时，防止卡死 fallback 链
@@ -237,6 +245,40 @@ upstream_tool_mapping:
   fund_portfolio_bond_report_dates:           {fuyao_fund: get_fund_portfolio_bond_report_dates}
   fund_portfolio_asset_allocation:            {fuyao_fund: get_fund_portfolio_asset_allocation}
 
+  # THS-LOCAL-GATEWAY 工具映射
+  fqgate_market_market_health:              {THS-LOCAL-GATEWAY: fqgate_market_market_health}
+  fqgate_market_search_symbols:              {THS-LOCAL-GATEWAY: fqgate_market_search_symbols}
+  fqgate_market_market_data_block:          {THS-LOCAL-GATEWAY: fqgate_market_market_data_block}
+  fqgate_market_market_data_bond:           {THS-LOCAL-GATEWAY: fqgate_market_market_data_bond}
+  fqgate_market_market_data_cn:             {THS-LOCAL-GATEWAY: fqgate_market_market_data_cn}
+  fqgate_market_market_data_forex:           {THS-LOCAL-GATEWAY: fqgate_market_market_data_forex}
+  fqgate_market_market_data_fund:           {THS-LOCAL-GATEWAY: fqgate_market_market_data_fund}
+  fqgate_market_market_data_future:         {THS-LOCAL-GATEWAY: fqgate_market_market_data_future}
+  fqgate_market_market_data_hk:             {THS-LOCAL-GATEWAY: fqgate_market_market_data_hk}
+  fqgate_market_market_data_index:          {THS-LOCAL-GATEWAY: fqgate_market_market_data_index}
+  fqgate_market_quote:                      {THS-LOCAL-GATEWAY: fqgate_market_quote}
+  fqgate_market_security_trading_status:   {THS-LOCAL-GATEWAY: fqgate_market_security_trading_status}
+  fqgate_market_market_data_uk:             {THS-LOCAL-GATEWAY: fqgate_market_market_data_uk}
+  fqgate_market_market_data_us:             {THS-LOCAL-GATEWAY: fqgate_market_market_data_us}
+  fqgate_market_cached_login:               {THS-LOCAL-GATEWAY: fqgate_market_cached_login}
+  fqgate_market_qr_login_begin:             {THS-LOCAL-GATEWAY: fqgate_market_qr_login_begin}
+  fqgate_market_intraday:                    {THS-LOCAL-GATEWAY: fqgate_market_intraday}
+  fqgate_market_klines:                      {THS-LOCAL-GATEWAY: fqgate_market_klines}
+  fqgate_market_news:                        {THS-LOCAL-GATEWAY: fqgate_market_news}
+  fqgate_market_level2_best_ask_queue:      {THS-LOCAL-GATEWAY: fqgate_market_level2_best_ask_queue}
+  fqgate_market_level2_best_bid_queue:       {THS-LOCAL-GATEWAY: fqgate_market_level2_best_bid_queue}
+  fqgate_market_bid_ask_rank:               {THS-LOCAL-GATEWAY: fqgate_market_bid_ask_rank}
+  fqgate_market_level2_buy_cancellations:    {THS-LOCAL-GATEWAY: fqgate_market_level2_buy_cancellations}
+  fqgate_market_level2_sell_cancellations:   {THS-LOCAL-GATEWAY: fqgate_market_level2_sell_cancellations}
+  fqgate_market_level2_depth:                {THS-LOCAL-GATEWAY: fqgate_market_level2_depth}
+  fqgate_market_enhanced_transactions:      {THS-LOCAL-GATEWAY: fqgate_market_enhanced_transactions}
+  fqgate_market_order_detail_by_sequence:    {THS-LOCAL-GATEWAY: fqgate_market_order_detail_by_sequence}
+  fqgate_market_level2_orders:              {THS-LOCAL-GATEWAY: fqgate_market_level2_orders}
+  fqgate_market_level2_transactions:         {THS-LOCAL-GATEWAY: fqgate_market_level2_transactions}
+  fqgate_market_order_book_ask:              {THS-LOCAL-GATEWAY: fqgate_market_order_book_ask}
+  fqgate_market_order_book_bid:              {THS-LOCAL-GATEWAY: fqgate_market_order_book_bid}
+  fqgate_market_wencai_base:                {THS-LOCAL-GATEWAY: fqgate_market_wencai_base}
+
 # 路由配置 (带 fallback 链的 gateway_tool)
 routing: {}
 
@@ -303,3 +345,37 @@ tools:
   - {name: fund_portfolio_bond_history, description: "基金债券持仓历史", routing: fund_portfolio_bond_history, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
   - {name: fund_portfolio_bond_report_dates, description: "基金债券持仓报告日", routing: fund_portfolio_bond_report_dates, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
   - {name: fund_portfolio_asset_allocation, description: "基金资产配置", routing: fund_portfolio_asset_allocation, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
+
+  # === THS-LOCAL-GATEWAY (32) ===
+  - {name: fqgate_market_market_health, description: "返回当前行情账户的登录状态", routing: fqgate_market_market_health, params: [{name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_search_symbols, description: "按证券名称或代码片段搜索证券", routing: fqgate_market_search_symbols, params: [{name: need_market, type: str, required: false, description: "限定搜索的市场代码"}, {name: pattern, type: str, required: true, description: "证券名称或代码片段"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_market_data_block, description: "返回板块实时行情", routing: fqgate_market_market_data_block, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_market_data_bond, description: "返回债券实时行情", routing: fqgate_market_market_data_bond, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_market_data_cn, description: "返回 A 股实时行情", routing: fqgate_market_market_data_cn, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_market_data_forex, description: "返回外汇实时行情", routing: fqgate_market_market_data_forex, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_market_data_fund, description: "返回基金实时行情", routing: fqgate_market_market_data_fund, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_market_data_future, description: "返回期货实时行情", routing: fqgate_market_market_data_future, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_market_data_hk, description: "返回港股实时行情", routing: fqgate_market_market_data_hk, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_market_data_index, description: "返回指数实时行情", routing: fqgate_market_market_data_index, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_quote, description: "返回指定字段的实时行情", routing: fqgate_market_quote, params: [{name: fields, type: array, required: false, description: "需要返回的行情字段编号"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "证券列表"}], data_source_type: online}
+  - {name: fqgate_market_security_trading_status, description: "返回证券交易状态", routing: fqgate_market_security_trading_status, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_market_data_uk, description: "返回英股实时行情", routing: fqgate_market_market_data_uk, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_market_data_us, description: "返回美股实时行情", routing: fqgate_market_market_data_us, params: [{name: query_key, type: any, required: false, description: "行情字段组合"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_cached_login, description: "复用本地同花顺客户端登录", routing: fqgate_market_cached_login, params: [{name: client_path, type: str, required: false, description: "同花顺安装目录"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_qr_login_begin, description: "二维码登录开始", routing: fqgate_market_qr_login_begin, params: [{name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_intraday, description: "返回当日分时走势", routing: fqgate_market_intraday, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_klines, description: "返回K线数据", routing: fqgate_market_klines, params: [{name: adjust, type: any, required: false, description: "复权类型"}, {name: code, type: str, required: false, description: "证券代码"}, {name: count, type: int, required: false, description: "返回记录数"}, {name: end_date, type: str, required: false, description: "结束日期"}, {name: interval, type: any, required: false, description: "K线周期"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: start_date, type: str, required: false, description: "开始日期"}], data_source_type: online}
+  - {name: fqgate_market_news, description: "返回资讯新闻", routing: fqgate_market_news, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: last_text_time, type: int, required: false, description: "上一次资讯时间"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: summary, type: bool, required: false, description: "是否仅返回摘要"}, {name: text_id, type: int, required: false, description: "资讯分类编号"}], data_source_type: online}
+  - {name: fqgate_market_level2_best_ask_queue, description: "返回卖一档逐项委托排队", routing: fqgate_market_level2_best_ask_queue, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_level2_best_bid_queue, description: "返回买一档逐项委托排队", routing: fqgate_market_level2_best_bid_queue, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_bid_ask_rank, description: "返回买卖盘排名", routing: fqgate_market_bid_ask_rank, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_level2_buy_cancellations, description: "返回买入撤单明细", routing: fqgate_market_level2_buy_cancellations, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: fields, type: array, required: false, description: "返回字段"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_level2_sell_cancellations, description: "返回卖出撤单明细", routing: fqgate_market_level2_sell_cancellations, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: fields, type: array, required: false, description: "返回字段"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_level2_depth, description: "返回十档盘口", routing: fqgate_market_level2_depth, params: [{name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: securities, type: array, required: false, description: "需要查询的证券"}], data_source_type: online}
+  - {name: fqgate_market_enhanced_transactions, description: "返回期货成交明细", routing: fqgate_market_enhanced_transactions, params: [{name: code, type: str, required: false, description: "合约代码"}, {name: count, type: int, required: false, description: "记录数量"}, {name: date, type: str, required: false, description: "交易日"}, {name: end_time, type: int, required: false, description: "截止时间"}, {name: fields, type: array, required: false, description: "返回字段"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: trace_detail, type: bool, required: false, description: "是否返回追踪信息"}], data_source_type: online}
+  - {name: fqgate_market_order_detail_by_sequence, description: "根据委托序号返回委托详情", routing: fqgate_market_order_detail_by_sequence, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: market, type: str, required: false, description: "市场代码"}, {name: order_sequence, type: int, required: false, description: "委托序号"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_level2_orders, description: "返回逐笔委托", routing: fqgate_market_level2_orders, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: fields, type: array, required: false, description: "返回字段"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_level2_transactions, description: "返回逐笔成交", routing: fqgate_market_level2_transactions, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: count, type: int, required: false, description: "查询数量"}, {name: end_time, type: int, required: false, description: "截止时间"}, {name: fields, type: array, required: false, description: "返回字段"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}
+  - {name: fqgate_market_order_book_ask, description: "返回卖方多档盘口", routing: fqgate_market_order_book_ask, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: end_level, type: int, required: false, description: "结束档位"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: start_level, type: int, required: false, description: "起始档位"}], data_source_type: online}
+  - {name: fqgate_market_order_book_bid, description: "返回买方多档盘口", routing: fqgate_market_order_book_bid, params: [{name: code, type: str, required: false, description: "证券代码"}, {name: end_level, type: int, required: false, description: "结束档位"}, {name: market, type: str, required: false, description: "市场代码"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}, {name: start_level, type: int, required: false, description: "起始档位"}], data_source_type: online}
+  - {name: fqgate_market_wencai_base, description: "问财选股", routing: fqgate_market_wencai_base, params: [{name: condition, type: str, required: false, description: "选股条件"}, {name: max_results, type: int, required: false, description: "最多返回结果数"}, {name: requestTimeoutMs, type: int, required: false, description: "请求超时时间(毫秒)"}], data_source_type: online}

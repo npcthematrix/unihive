@@ -148,6 +148,8 @@ def validate_config(config: dict) -> list[str]:
             pass  # OMNIDATA client, no extra fields required
         elif cfg.get("type") == "thsdk":
             pass  # THSDK client; credentials come from THS_USERNAME/THS_PASSWORD env
+        elif cfg.get("type") == "ths_local_gateway":
+            pass  # THS-LOCAL-GATEWAY HTTP MCP client
         else:
             errors.append(f"upstream {name!r} unknown type: {cfg.get('type')!r}")
 

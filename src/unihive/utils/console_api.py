@@ -531,6 +531,11 @@ def get_upstream_status() -> dict:
                 "last_error": str(e)[:_PROBE_ERROR_MAX_CHARS],
                 "description": "",
             }
+        # 2026-09-17: 覆盖运行时 client 状态 (mootdx2/tdx_quant 等非 HTTP 上游)
+        client = _get_upstream_client(name)
+        if client is not None and hasattr(client, "is_available"):
+            # client.is_available 反映真实运行时状态 (Connected/DEGRADED/Failed)
+            info["status"] = "online" if client.is_available else "offline"
         upstreams_status[name] = info
         summary["total"] += 1
         if not info.get("enabled", False):
@@ -543,6 +548,28 @@ def get_upstream_status() -> dict:
         "summary": summary,
         "upstreams": upstreams_status,
         "cache": get_cache_stats(),
+    }
+
+
+def get_ths_local_status() -> dict:
+    """获取 THS-LOCAL-GATEWAY 网关状态"""
+    client = _get_upstream_client("THS-LOCAL-GATEWAY")
+    if client is None:
+        return {
+            "connected": False,
+            "toolCount": 0,
+            "tools": []
+        }
+
+    # 直接从 client.tools 获取缓存的工具列表（同步属性）
+    tools: list[dict] = []
+    if hasattr(client, "tools"):
+        tools = client.tools  # 已在 start() 时缓存
+
+    return {
+        "connected": client.is_available if hasattr(client, "is_available") else False,
+        "toolCount": len(tools),
+        "tools": tools
     }
 
 

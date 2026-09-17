@@ -441,6 +441,25 @@ class GatewayServer:
                     # THSDK（社区 thsdk 包）客户端；凭证只从环境变量读
                     thsdk_cfg = ThsdkConfig.from_dict(name, cfg)
                     client = ThsdkClient(thsdk_cfg)
+                elif cfg.get("type") == "ths_local_gateway":
+                    # THS-LOCAL-GATEWAY HTTP JSON-RPC MCP 客户端
+                    from .api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
+
+                    client = ThsLocalClient(
+                        ThsLocalConfig(
+                            name=name,
+                            base_url=cfg.get("base_url", ""),
+                            timeout_seconds=cfg.get("timeout_seconds", 30),
+                            connect_timeout_seconds=cfg.get("connect_timeout_seconds", 5.0),
+                        )
+                    )
+                    try:
+                        await client.start()
+                    except Exception as e:
+                        logger.error(f"[{name}] Failed to start: {e}")
+                    self.upstreams[name] = client
+                    logger.info(f"[{name}] {'Connected' if client.is_available else 'Failed'}")
+                    continue
                 else:
                     # stdio MCP 客户端
                     upstream_cfg = UpstreamConfig(
@@ -1026,6 +1045,9 @@ class GatewayServer:
         async def _health_api(req: Request):
             return JSONResponse(_ca.get_health())
 
+        async def _ths_local_status_api(req: Request):
+            return JSONResponse(_ca.get_ths_local_status())
+
         async def _mcp_tools_api(req: Request):
             # L3 (2026-09-07 5th-round audit): mcp 未初始化时返回 503,
             # 避免 AttributeError。实际不可达 (serve_http 必先 await init),
@@ -1107,6 +1129,7 @@ class GatewayServer:
                 Route("/api/config/fuyao-cache", _fuyao_cache_put_api, methods=["PUT"]),
                 Route("/health", _health_api),
                 Route("/api/mcp-tools-list", _mcp_tools_api),
+                Route("/api/ths-local/status", _ths_local_status_api),
             ]
         )
 
