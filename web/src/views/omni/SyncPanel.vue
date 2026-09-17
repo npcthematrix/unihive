@@ -226,18 +226,18 @@ h3 {
 }
 
 .last-sync-success {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
+  background: var(--el-color-success-light-9);
+  border-color: var(--el-color-success-light-7);
 }
 
 .last-sync-running {
-  background: #fffbeb;
-  border-color: #fde68a;
+  background: var(--el-color-warning-light-9);
+  border-color: var(--el-color-warning-light-7);
 }
 
 .last-sync-failed {
-  background: #fef2f2;
-  border-color: #fecaca;
+  background: var(--el-color-danger-light-9);
+  border-color: var(--el-color-danger-light-7);
 }
 
 .last-sync-label {

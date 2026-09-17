@@ -202,10 +202,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { STALE_THRESHOLD_SEC } from '@/constants/time'
 import {
   getStatus,
   type CacheStats,
@@ -223,7 +225,6 @@ type SortKey = 'name' | 'status' | 'latency' | null
 type SortOrder = 'ascending' | 'descending' | null
 
 /** 与旧 console.js 完全一致的展示常量, 新上游缺映射时回退原始键/类型。 */
-const STALE_THRESHOLD_SEC = 30
 const STATUS_TEXT: Record<string, string> = {
   online: '在线',
   degraded: '降级',
@@ -257,17 +258,17 @@ const cache = ref<CacheStats | null>(null)
 const initialLoading = ref(false)
 const manualLoading = ref(false)
 const loadError = ref('')
-const lastFetchSec = ref(0)
-const nowSec = ref(Math.floor(Date.now() / 1000))
 
 const filter = ref<FilterKey>('all')
 const sortKey = ref<SortKey>(null)
 const sortAsc = ref(true)
-const autoRefresh = ref(false)
 
-let clockTimer: ReturnType<typeof setInterval> | null = null
-let pollTimer: ReturnType<typeof setInterval> | null = null
 let inFlight = false
+
+/** 自动刷新 + 时钟 + tab 可见时陈旧重拉 — 见 web/src/composables/useAutoRefresh.ts */
+const { autoRefresh, lastFetchSec, ageSec, markFetched, resetFetched } = useAutoRefresh({
+  onPoll: () => { void load(false) },
+})
 
 const summaryCards = [
   { key: 'total', label: '上游总数', cls: '' },
@@ -323,10 +324,6 @@ const tableEmptyText = computed(() => {
   if (filter.value === 'unhealthy') return '当前没有异常的上游'
   return '没有匹配的上游'
 })
-
-const ageSec = computed(() =>
-  lastFetchSec.value ? Math.max(0, nowSec.value - lastFetchSec.value) : 0,
-)
 
 const refreshLabel = computed(() => {
   if (loadError.value && lastFetchSec.value === 0) return `刷新失败 (${loadError.value})`
@@ -449,60 +446,17 @@ async function load(manual = false): Promise<void> {
     rows.value = Object.entries(data.upstreams ?? {}).map(([name, info]) => ({ name, ...info }))
     summary.value = data.summary
     cache.value = data.cache
-    lastFetchSec.value = Math.floor(Date.now() / 1000)
+    markFetched()
   } catch (error) {
     loadError.value = errorMessage(error, '请检查网关是否运行')
     // 与旧版一致: 失败后强制下次重拉
-    lastFetchSec.value = 0
+    resetFetched()
   } finally {
     initialLoading.value = false
     manualLoading.value = false
     inFlight = false
   }
 }
-
-watch(autoRefresh, (on) => {
-  if (!on) {
-    if (pollTimer) {
-      clearInterval(pollTimer)
-      pollTimer = null
-    }
-    return
-  }
-  pollTimer = setInterval(() => {
-    // 标签页隐藏时跳过, 切回时由 visibilitychange 监听补一次 (见 onVisibility)。
-    // 避免后台轮询空跑, 后端网关不至于被空请求打。
-    if (typeof document !== 'undefined' && document.hidden) return
-    void load(false)
-  }, 10_000)
-})
-
-/** 标签页重新可见且数据超过 30s 时静默重拉 (等价旧版切回面板的 stale 检查)。
- *  同时把 nowSec 立即刷新到当前时间, 避免切回时显示陈旧的「X秒前」。 */
-function onVisibility(): void {
-  if (!document.hidden) {
-    nowSec.value = Math.floor(Date.now() / 1000)
-    if (lastFetchSec.value && nowSec.value - lastFetchSec.value > STALE_THRESHOLD_SEC) {
-      void load(false)
-    }
-  }
-}
-
-onMounted(() => {
-  void load(true)
-  clockTimer = setInterval(() => {
-    // 标签页隐藏时跳过 — 切回时由 visibilitychange 监听补一次 (见 onVisibility)。
-    if (typeof document !== 'undefined' && document.hidden) return
-    nowSec.value = Math.floor(Date.now() / 1000)
-  }, 1000)
-  document.addEventListener('visibilitychange', onVisibility)
-})
-
-onUnmounted(() => {
-  if (clockTimer) clearInterval(clockTimer)
-  if (pollTimer) clearInterval(pollTimer)
-  document.removeEventListener('visibilitychange', onVisibility)
-})
 </script>
 
 <style scoped>

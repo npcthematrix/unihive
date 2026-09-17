@@ -11,6 +11,8 @@ export interface DailyL1Stats {
   maxsize?: number
   ttl_seconds?: number
   inflight_keys?: number
+  /** Reader 并发信号量上限 (后端 f768729 引入) */
+  reader_semaphore_limit?: number
 }
 
 /** 单个 upstream client 的运行时指标 (key 可能随实现扩展) */

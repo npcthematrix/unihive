@@ -77,9 +77,9 @@
         </div>
 
         <div class="mini-stat">
-          <div class="mini-label">Inflight keys</div>
-          <div class="mini-value">{{ metrics?.daily_l1?.inflight_keys ?? 0 }}</div>
-          <div class="mini-hint">single-flight 在途请求</div>
+          <div class="mini-label">并发上限</div>
+          <div class="mini-value">{{ metrics?.daily_l1?.reader_semaphore_limit ?? 4 }}</div>
+          <div class="mini-hint">Reader 并发控制</div>
         </div>
 
         <div class="mini-stat">
@@ -106,17 +106,16 @@
       </template>
       <div class="kv-grid">
         <div class="kv-key">缓存算法</div>
-        <div class="kv-val"><code>TTLCache(maxsize=2048, ttl=7200s)</code></div>
+        <div class="kv-val"><code>TTLCache(maxsize=2048, ttl=次日9:00)</code> — 当日有效</div>
         <div class="kv-key">缓存 key</div>
-        <div class="kv-val"><code>(reader_symbol, adjust)</code> — 仅 <code>adjust="none"</code> 写入</div>
+        <div class="kv-val"><code>(date, symbol, adjust, start_date, end_date)</code> — 仅 <code>adjust="none"</code> 写入</div>
         <div class="kv-key">value 形状</div>
         <div class="kv-val"><code>list[dict]</code> — get_daily_sync 原始 records</div>
-        <div class="kv-key">过滤位置</div>
-        <div class="kv-val">start_date / end_date 过滤在缓存 records 上做 (O(N) dict 遍历)</div>
-        <div class="kv-key">single-flight</div>
+        <div class="kv-key">过期策略</div>
+        <div class="kv-val">次日 9:00 自动过期，避免陈旧行情</div>
+        <div class="kv-key">并发控制</div>
         <div class="kv-val">
-          <code>asyncio.Future</code> 字典 + <code>asyncio.Lock</code> 索引互斥,
-          同 key 并发 miss 只跑 1 次 _get_daily_sync
+          <code>asyncio.Semaphore(4)</code> 限制最多 4 个 Reader 并发执行
         </div>
       </div>
     </el-card>
@@ -124,29 +123,25 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { errorMessage } from '@/api/client'
 import { getUpstreamMetrics } from '@/api/upstream-metrics'
 import type { UpstreamMetrics } from '@/api/upstream-metrics'
-
-const STALE_THRESHOLD_SEC = 30
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { STALE_THRESHOLD_SEC } from '@/constants/time'
 
 const metrics = ref<UpstreamMetrics | null>(null)
 const initialLoading = ref(false)
 const manualLoading = ref(false)
 const loadError = ref('')
-const lastFetchSec = ref(0)
-const nowSec = ref(Math.floor(Date.now() / 1000))
-const autoRefresh = ref(false)
 
-let clockTimer: ReturnType<typeof setInterval> | null = null
-let pollTimer: ReturnType<typeof setInterval> | null = null
 let inFlight = false
 
-const ageSec = computed(() =>
-  lastFetchSec.value ? Math.max(0, nowSec.value - lastFetchSec.value) : 0,
-)
+/** 自动刷新 + 时钟 + tab 可见时陈旧重拉 — 见 web/src/composables/useAutoRefresh.ts */
+const { autoRefresh, lastFetchSec, ageSec, markFetched, resetFetched } = useAutoRefresh({
+  onPoll: () => { void load(false) },
+})
 
 const refreshLabel = computed(() => {
   if (loadError.value && lastFetchSec.value === 0) return `刷新失败 (${loadError.value})`
@@ -209,54 +204,16 @@ async function load(manual = false): Promise<void> {
   try {
     const resp = await getUpstreamMetrics('mootdx2')
     metrics.value = resp.metrics
-    lastFetchSec.value = Math.floor(Date.now() / 1000)
+    markFetched()
   } catch (error) {
     loadError.value = errorMessage(error, '请检查网关是否运行')
-    lastFetchSec.value = 0
+    resetFetched()
   } finally {
     initialLoading.value = false
     manualLoading.value = false
     inFlight = false
   }
 }
-
-watch(autoRefresh, (on) => {
-  if (!on) {
-    if (pollTimer) {
-      clearInterval(pollTimer)
-      pollTimer = null
-    }
-    return
-  }
-  pollTimer = setInterval(() => {
-    if (typeof document !== 'undefined' && document.hidden) return
-    void load(false)
-  }, 10_000)
-})
-
-function onVisibility(): void {
-  if (!document.hidden) {
-    nowSec.value = Math.floor(Date.now() / 1000)
-    if (lastFetchSec.value && nowSec.value - lastFetchSec.value > STALE_THRESHOLD_SEC) {
-      void load(false)
-    }
-  }
-}
-
-onMounted(() => {
-  void load(true)
-  clockTimer = setInterval(() => {
-    if (typeof document !== 'undefined' && document.hidden) return
-    nowSec.value = Math.floor(Date.now() / 1000)
-  }, 1000)
-  document.addEventListener('visibilitychange', onVisibility)
-})
-
-onBeforeUnmount(() => {
-  if (clockTimer) clearInterval(clockTimer)
-  if (pollTimer) clearInterval(pollTimer)
-  document.removeEventListener('visibilitychange', onVisibility)
-})
 </script>
 
 <style scoped>
