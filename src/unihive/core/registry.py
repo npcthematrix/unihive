@@ -18,13 +18,22 @@ _TYPE_MAP: dict[str, type] = {
     "float": float,
     "bool": bool,
     "List[str]": list,
+    # FQGate 等上游的数组参数 (securities/fields): 上游 MCP 层的 inputSchema
+    # 常把数组误标为 string, 但运行时只收原生 JSON 数组 —— 必须以 list 透传,
+    # 回落成 str 会把调用方的数组原样当字符串转发, 上游 REST 层直接 400。
+    "array": list,
 }
 
+# 可选参数默认值：str 用 ""（_validate_and_normalize 视空串为缺失）；
+# int/float/bool 必须 None —— 数值默认 0/0.0、布尔默认 False 会被当成
+# 用户显式传入的值转发给上游（FQGate 的可选 requestTimeoutMs 带 minimum: 1,
+# 网关塞 0 直接业务 400 "请求内容不完整"）。None 才能与"调用方未提供"区分开,
+# 由 _validate_and_normalize 统一丢弃; 用户显式传 0/False 不受影响。
 _DEFAULT_MAP: dict[str, Any] = {
     "str": "",
-    "int": 0,
-    "float": 0.0,
-    "bool": False,
+    "int": None,
+    "float": None,
+    "bool": None,
 }
 
 # 日期参数名: 统一归一为 YYYYMMDD (TQ-Local strict; 其他上游也用同格式)
@@ -58,6 +67,7 @@ def _build_parameter(p: dict) -> inspect.Parameter:
             name, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=ann
         )
     # optional + 有 enum 时 default=None，避免 default="invalid_value" 被静默吃掉
+    # 数值/布尔默认 None（见 _DEFAULT_MAP 注释），缺失时不转发给上游
     if p.get("enum"):
         default = None
     else:

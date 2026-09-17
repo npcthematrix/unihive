@@ -43,12 +43,21 @@ class TestBuildSignature:
 
     def test_optional_with_default(self):
         sig = build_signature([{"name": "limit", "type": "int", "required": False}])
-        assert sig.parameters["limit"].default == 0
+        # 数值可选参数默认 None（非 0）：0 会被当显式值转发给上游（FQGate
+        # requestTimeoutMs minimum:1 直接 400），None 才表示"调用方未提供"
+        assert sig.parameters["limit"].default is None
         assert sig.parameters["limit"].annotation is int
 
     def test_unknown_type_falls_back_to_str(self):
         sig = build_signature([{"name": "x", "type": "weird", "required": True}])
         assert sig.parameters["x"].annotation is str
+
+    def test_array_type_maps_to_list(self):
+        """array 类型必须映射 list: FQGate 运行时只收原生 JSON 数组,
+        误回落成 str 会把数组当字符串转发, 上游 REST 层直接 400。"""
+        sig = build_signature([{"name": "securities", "type": "array", "required": False}])
+        assert sig.parameters["securities"].annotation is list
+        assert sig.parameters["securities"].default is None
 
 
 class TestBuildToolFunction:
@@ -113,6 +122,62 @@ class TestBuildToolFunction:
         fn = build_tool_function(spec, server)
         import asyncio
         asyncio.run(fn(symbol="sh600519", start_date=""))
+        assert server.calls[0][1] == {"symbol": "sh600519"}
+
+    def test_optional_numeric_omitted_not_forwarded(self):
+        """可选 int 省略时不许把默认值 0 转发给上游 (FQGate minimum:1 会 400)。"""
+        server = _FakeServer()
+        spec = {
+            "name": "cal",
+            "description": "d",
+            "routing": "cal",
+            "params": [
+                {"name": "start_date", "type": "str", "required": True},
+                {"name": "end_date", "type": "str", "required": True},
+                {"name": "requestTimeoutMs", "type": "int", "required": False},
+                {"name": "ratio", "type": "float", "required": False},
+                {"name": "flag", "type": "bool", "required": False},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(start_date="20260901", end_date="20260917"))
+        assert server.calls[0][1] == {"start_date": "20260901", "end_date": "20260917"}
+
+    def test_optional_numeric_explicit_zero_forwarded(self):
+        """显式传 0/0.0/False 是用户意图, 必须转发, 不与默认值混淆。"""
+        server = _FakeServer()
+        spec = {
+            "name": "m",
+            "description": "d",
+            "routing": "m",
+            "params": [
+                {"name": "offset", "type": "int", "required": False},
+                {"name": "weight", "type": "float", "required": False},
+                {"name": "include_st", "type": "bool", "required": False},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(offset=0, weight=0.0, include_st=False))
+        assert server.calls[0][1] == {"offset": 0, "weight": 0.0, "include_st": False}
+
+    def test_optional_enum_omitted_not_forwarded(self):
+        """enum 可选参数缺省走 None 默认, 不转发占位值。"""
+        server = _FakeServer()
+        spec = {
+            "name": "e",
+            "description": "d",
+            "routing": "e",
+            "params": [
+                {"name": "symbol", "type": "str", "required": True},
+                {"name": "period", "type": "str", "required": False,
+                 "enum": ["1min", "1day"]},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(symbol="sh600519"))
         assert server.calls[0][1] == {"symbol": "sh600519"}
 
     def test_normalize_date_dash_to_compact(self):
