@@ -34,10 +34,12 @@ unihive/
 │       ├── console_auth.py          # 控制台鉴权 (cookie-based, /api/* + console.html)
 │       └── gateway_server.py        # 入口 (HTTP+stdio 双模)
 ├── config/
-│   ├── upstreams.yaml           # 上游 + 路由 + 工具定义 (主配置)
+│   ├── upstreams.yaml           # 上游连接 + 路由 + fuyao 工具定义 (主配置)
 │   ├── tools_mootdx2.yaml       # MooTDX2 工具详情
 │   ├── tools_tdx_quant.yaml     # TdxQuant 工具详情
 │   ├── tools_omni.yaml          # OMNI 工具详情
+│   ├── tools_ths.yaml           # THSDK 工具详情
+│   ├── tools_ths_local.yaml     # THS-LOCAL-GATEWAY (FQGate) 工具详情, 87 条
 │   └── config.yaml              # 旧版配置 (兼容)
 ├── scripts/
 │   ├── start_gateway.ps1        # 启动网关 (HTTP 默认 :18080,或 stdio)
