@@ -45,6 +45,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'OMNI板块管理' },
       },
       {
+        path: 'ths-local',
+        name: 'ths-local',
+        component: () => import('@/views/ThsLocalView.vue'),
+        meta: { title: 'THS Local 网关' },
+      },
+      {
         path: 'guides',
         name: 'guides',
         component: () => import('@/views/GuidesView.vue'),

@@ -125,6 +125,7 @@ const MENU = [
   { path: '/interfaces', title: 'MCP APIs', icon: Connection },
   { path: '/config', title: '配置信息', icon: Setting },
   { path: '/omni', title: 'OMNI板块管理', icon: Grid },
+  { path: '/ths-local', title: 'THS Local 网关', icon: Connection },
 ] as const
 
 async function onLogout(): Promise<void> {
