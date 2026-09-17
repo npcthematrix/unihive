@@ -11,7 +11,7 @@ _GENERATED_FILENAMES = [
     "tools_tdx_quant.yaml",
     "tools_mootdx2.yaml",
     "tools_omni.yaml",
-    "tools_ths.yaml",
+    "tools_thsdk.yaml",
     "tools_ths_local.yaml",
 ]
 

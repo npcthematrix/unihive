@@ -20,7 +20,7 @@ from src.unihive.core.tool_loader import filter_specs_by_env, load_all_tools
 from src.unihive.models.thsdk_config import ThsdkConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLS_YAML = REPO_ROOT / "config" / "tools_ths.yaml"
+TOOLS_YAML = REPO_ROOT / "config" / "tools_thsdk.yaml"
 
 
 # thsdk 异常按类名匹配（见 src/exceptions/thsdk_errors.py）

@@ -38,7 +38,7 @@ unihive/
 │   ├── tools_mootdx2.yaml       # MooTDX2 工具详情
 │   ├── tools_tdx_quant.yaml     # TdxQuant 工具详情
 │   ├── tools_omni.yaml          # OMNI 工具详情
-│   ├── tools_ths.yaml           # THSDK 工具详情
+│   ├── tools_thsdk.yaml         # THSDK 工具详情
 │   ├── tools_ths_local.yaml     # THS-LOCAL-GATEWAY (FQGate) 工具详情, 87 条
 │   └── config.yaml              # 旧版配置 (兼容)
 ├── scripts/
