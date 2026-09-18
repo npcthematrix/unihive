@@ -17,10 +17,16 @@ export const http = axios.create({
 
 // ===== 5xx / 网络错误指数退避重试 =====
 // 触发条件 (与 401 拦截互补, 不冲突):
+//   - 幂等方法 (GET/HEAD)
 //   - 5xx (502/503/504 等网关瞬时错误)
 //   - timeout (ECONNABORTED)
 //   - 无 response 的网络错误 (断网/DNS 失败)
 // 不重试:
+//   - 用户/AbortController 主动取消 (CanceledError, code=ERR_CANCELED):
+//     用已 aborted 的 signal 重发只会立刻再失败, 还会把取消伪装成
+//     "网关连不上", 污染所有调用方的 name === 'CanceledError' 守卫
+//   - POST/PUT/PATCH/DELETE 等非幂等方法 (重试可能双跑同步、重复落盘
+//     或把已成功的写操作撞成 409)
 //   - 401 (鉴权失败, 走下面拦截器跳登录)
 //   - 其他 4xx (客户端错误, 重试无意义)
 //
@@ -31,6 +37,17 @@ export const http = axios.create({
 const MAX_RETRIES = 1
 const RETRY_DELAY_MS = 500
 
+const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD'])
+
+/** 请求是否被 AbortController/用户主动取消 (axios CanceledError)。
+ *  结构判断, 不 instanceof 具体类 (CanceledError 是 AxiosError 子类,
+ *  且测试环境的 axios mock 不导出该类)。 */
+export function isCanceledError(error: unknown): boolean {
+  if (axios.isCancel?.(error) === true) return true
+  const e = error as { code?: string; name?: string } | null | undefined
+  return e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError'
+}
+
 /** axios 内部用 InternalAxiosRequestConfig 走完整 dispatch; 公开 API 用 AxiosRequestConfig 即可。 */
 declare module 'axios' {
   export interface InternalAxiosRequestConfig {
@@ -40,7 +57,12 @@ declare module 'axios' {
 }
 
 function shouldRetry(error: AxiosError): boolean {
-  if ((error as { __isCanceled?: boolean }).__isCanceled) return false
+  // 主动取消绝不重试 —— 必须排在最前 (CanceledError 也带 request 字段,
+  // 否则会落入"无 response 的网络错误"分支)。
+  if (isCanceledError(error)) return false
+  // 仅幂等方法可安全重试; 写操作重试可能双跑同步/重复提交/撞 409。
+  const method = (error.config?.method ?? 'get').toUpperCase()
+  if (!IDEMPOTENT_METHODS.has(method)) return false
   const status = error.response?.status
   // 5xx
   if (status !== undefined && status >= 500 && status < 600) return true

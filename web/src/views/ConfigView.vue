@@ -66,7 +66,7 @@
         class="cfg-panel"
         aria-labelledby="cfg-tab-upstreams"
       >
-        <UpstreamsPanel :config="config" />
+        <UpstreamsPanel :config="config" @changed="onUpstreamEnabled" />
       </section>
 
       <section
@@ -135,6 +135,7 @@ import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
 import { formatHMS } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type TabKey } from './config/format'
+import type { UpstreamEnabledChanged } from './config/upstreams'
 import { parseHashTab } from './_shared/hashTab'
 import UpstreamsPanel from './config/UpstreamsPanel.vue'
 import MappingPanel from './config/MappingPanel.vue'
@@ -238,6 +239,21 @@ async function load(isManual = false) {
 
 function onProxyChange(updated: ProxySettings) {
   proxy.value = updated
+}
+
+/** 上游热开关成功 — 不可变 patch 目标上游 enabled 与乐观锁 version。 */
+function onUpstreamEnabled(payload: UpstreamEnabledChanged) {
+  const current = config.value
+  if (!current || !current.upstreams) return
+  const prev = current.upstreams[payload.name] || {}
+  config.value = {
+    ...current,
+    upstreams: {
+      ...current.upstreams,
+      [payload.name]: { ...prev, enabled: payload.enabled },
+    },
+    version: payload.version,
+  }
 }
 
 /** FUYAO 缓存保存成功 — 把新 fuyao_cache 与 version 回写到本地 config。 */

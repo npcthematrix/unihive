@@ -353,7 +353,8 @@ async function load(manual = false): Promise<void> {
 
 .mini-hint {
   font-size: 11px;
-  color: var(--el-text-color-placeholder);
+  /* placeholder(#a8abb2) 在 11px 下对比度仅 2.4:1, 提到 regular */
+  color: var(--el-text-color-regular);
   margin-top: 2px;
 }
 

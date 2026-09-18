@@ -96,17 +96,24 @@ describe('安全读取', () => {
 
 describe('rowKeyOf', () => {
   it('有 name 时用 name', () => {
-    expect(rowKeyOf(makeTool(), 0)).toBe('fqgate_market_login')
+    expect(rowKeyOf(makeTool())).toBe('fqgate_market_login')
   })
 
-  it('无名行按位置生成 key, 不会互相撞', () => {
-    expect(rowKeyOf({}, 0)).toBe('__row_0')
-    expect(rowKeyOf({}, 1)).toBe('__row_1')
-    expect(rowKeyOf({}, 0)).not.toBe(rowKeyOf({}, 1))
+  it('无名行按对象身份发稳定 id, 多个无名行不会互相撞', () => {
+    // 回归: el-table row-key 回调只收到 row 一个参数, 旧实现的 index
+    // 恒为 undefined, 2 个以上无名工具全部坍缩成 __row_undefined。
+    const a = {}
+    const b = {}
+    const keyA = rowKeyOf(a)
+    expect(keyA).toMatch(/^__row_\d+$/)
+    expect(rowKeyOf(a)).toBe(keyA) // 同一对象 → 同一 key (展开态不串)
+    expect(rowKeyOf(b)).not.toBe(keyA)
   })
 
-  it('name 是空串也走位置兜底 (空串当不了 key)', () => {
-    expect(rowKeyOf({ name: '' }, 3)).toBe('__row_3')
+  it('name 是空串也走身份兜底 (空串当不了 key)', () => {
+    const row = { name: '' }
+    expect(rowKeyOf(row)).toMatch(/^__row_\d+$/)
+    expect(rowKeyOf(row)).toBe(rowKeyOf(row))
   })
 })
 

@@ -65,10 +65,12 @@ LOGIN_HTML = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'self'; form-action 'self';">
     <title>UniHive Console — 登录</title>
+    <link rel="icon" type="image/svg+xml" href="/static/console/favicon.svg">
     <link rel="stylesheet" href="/static/console/login.css">
 </head>
 <body>
     <main class="login-card">
+        <img class="brand-icon" src="/static/console/favicon.svg" alt="" width="40" height="40">
         <h1>UniHive Console</h1>
         <p class="login-subtitle">金融数据 MCP 聚合网关</p>
         {error}

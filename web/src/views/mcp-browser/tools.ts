@@ -82,9 +82,26 @@ export function toolDescription(tool: RawTool): string {
   return typeof tool.description === 'string' ? tool.description : ''
 }
 
-/** el-table 的 row-key; 上游理论上可能发没有 name 的对象, 不能让它撞 key。 */
-export function rowKeyOf(tool: RawTool, index: number): string {
-  return toolName(tool) || `__row_${index}`
+/**
+ * el-table 的 row-key; 上游理论上可能发没有 name 的对象, 不能让它撞 key。
+ *
+ * 不能用数组下标: el-table 的 row-key 回调只收到 row 一个参数 (拿不到 index),
+ * 多个无名工具会全部坍缩成同一个 `__row_undefined`, 展开任一行会联动错乱。
+ * 用 WeakMap 给每个**对象身份**发一个稳定序号 —— 同一次拉取内 row 引用不变
+ * (filter 不拷贝), 重新拉取后旧 id 随对象一起被 GC。
+ */
+const anonRowIds = new WeakMap<RawTool, number>()
+let anonRowSeq = 0
+
+export function rowKeyOf(tool: RawTool): string {
+  const name = toolName(tool)
+  if (name) return name
+  let id = anonRowIds.get(tool)
+  if (id === undefined) {
+    id = ++anonRowSeq
+    anonRowIds.set(tool, id)
+  }
+  return `__row_${id}`
 }
 
 /** inputSchema.required 归一成字符串数组 (缺失/类型不对一律当空)。 */

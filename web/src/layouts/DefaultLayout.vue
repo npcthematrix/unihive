@@ -64,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Monitor, Connection, Setting, Grid, Files, Fold, Expand, DataLine } from '@element-plus/icons-vue'
@@ -104,19 +104,10 @@ function toggleCollapsed(): void {
   }
 }
 
-/** 路由切换后自动展开 (移动端折叠后用户点菜单, 应自动展开以便看清当前页) */
-watch(
-  () => route.path,
-  () => {
-    if (
-      typeof window !== 'undefined' &&
-      window.innerWidth < COLLAPSE_BREAKPOINT &&
-      isCollapsed.value
-    ) {
-      isCollapsed.value = false
-    }
-  },
-)
+// 注意: 不要在路由切换时自动展开/折叠。窄屏的收敛由挂载 + resize 的
+// syncCollapsedByViewport 保证 (旧实现在移动端导航后自动展开到 220px,
+// 内联非 overlay 布局会把主内容挤到 ~150px; 当前页标题顶栏已有, 折叠态
+// 菜单项有 EP tooltip)。手动 toggle 是用户显式动作, 导航不应打断。
 
 const MENU = [
   { path: '/guides', title: '接入指南', icon: Document },
@@ -251,10 +242,20 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-regular);
 }
 
+/* 允许左半区在 flex 行内收缩, 长标题才能触发省略号而非顶掉右侧操作区 */
+.topbar-left {
+  min-width: 0;
+}
+
+.topbar-right {
+  flex-shrink: 0;
+}
+
 .collapse-btn {
   padding: 4px;
   margin-right: 4px;
   color: var(--el-text-color-regular);
+  flex-shrink: 0;
 }
 
 .collapse-btn:hover {
@@ -264,6 +265,10 @@ onBeforeUnmount(() => {
 .page-title {
   font-size: 15px;
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-icon {

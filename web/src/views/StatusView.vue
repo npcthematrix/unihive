@@ -98,7 +98,6 @@
               <span class="status-icon" :class="`icon-${row.status}`" aria-hidden="true">
                 {{ statusIcon(row.status) }}
               </span>
-              <span class="status-dot" :class="dotClass(row.status)" />
               {{ STATUS_TEXT[row.status] ?? '未知' }}
             </span>
           </template>
@@ -373,20 +372,6 @@ function displayName(name: string): string {
 
 function typeText(type: string): string {
   return TYPE_TEXT[type] || type || '-'
-}
-
-function dotClass(status: UpstreamStatusValue): string {
-  switch (status) {
-    case 'online':
-      return 'status-online'
-    case 'degraded':
-      return 'status-degraded'
-    case 'offline':
-    case 'unknown':
-      return 'status-offline'
-    default:
-      return 'status-disabled'
-  }
 }
 
 /** 状态色盲友好图标 (✓ 在线 / ⚠ 降级/离线/未知 / ● 已就绪 / ⊘ 已禁用)。
@@ -672,8 +657,11 @@ async function load(manual = false): Promise<void> {
   cursor: help;
 }
 
+/* 触达目标 ≥24px (WCAG 2.5.8): 16px 图标 + 4px*2 */
 .err-btn {
-  padding: 2px;
+  padding: 4px;
+  min-width: 24px;
+  min-height: 24px;
 }
 
 .err-empty {
@@ -758,14 +746,15 @@ async function load(manual = false): Promise<void> {
 
 .mini-hint {
   font-size: 11px;
-  color: var(--el-text-color-placeholder);
+  /* placeholder(#a8abb2) 在 11px 下对比度仅 2.4:1, 提到 regular */
+  color: var(--el-text-color-regular);
   margin-top: 2px;
 }
 
 .cache-off-hint {
   margin: 10px 2px 0;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--el-text-color-regular);
 }
 
 @media (max-width: 1100px) {

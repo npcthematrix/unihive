@@ -31,12 +31,14 @@
 
     <!-- 启用开关 + 保存反馈 -->
     <div class="proxy-toggle-row">
+      <!-- 不用 inline-prompt: 文案在轨道内会被开关宽度裁掉;
+           active/inactive-text 在轨道右侧渲染, 始终完整。 -->
       <el-switch
         v-model="enabled"
         :disabled="toggleDisabled || saving"
         :loading="saving"
-        active-text="启用 TDX_QUANT 代理"
-        inline-prompt
+        active-text="TDX_QUANT 代理已启用"
+        inactive-text="TDX_QUANT 代理已停用"
         @change="onToggle"
       />
       <span

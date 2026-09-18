@@ -21,12 +21,14 @@ const h = vi.hoisted(() => {
     },
     isAxiosError: vi.fn(),
   }
+  const mockIsCancel = vi.fn(() => false)
   return {
     mockAuthClear,
     mockRouterReplace,
     mockRouterCurrentRoute,
     mockUseResponse,
     mockAxiosInstance,
+    mockIsCancel,
   }
 })
 
@@ -47,11 +49,12 @@ vi.mock('axios', () => ({
   default: {
     create: vi.fn(() => h.mockAxiosInstance),
     isAxiosError: vi.fn(),
+    isCancel: h.mockIsCancel,
   },
 }))
 
 import axios from 'axios'
-import { _shouldRetry, errorMessage, http } from '@/api/client'
+import { _shouldRetry, errorMessage, http, isCanceledError } from '@/api/client'
 
 describe('http 实例 + 401 拦截器', () => {
   beforeEach(() => {
@@ -324,16 +327,81 @@ describe('_shouldRetry', () => {
     expect(_shouldRetry(errLike({ message: 'unknown' }))).toBe(false)
   })
 
-  it('用户主动 Canceled → 不重试', () => {
+  it('ERR_CANCELED (AbortController 取消) → 不重试, 即使带 request', () => {
+    // 回归: CanceledError 带 xhr request 字段, 旧逻辑误判为网络错误,
+    // 用已 aborted 的 signal 重发后伪装成 "retry exhausted / 网关连不上"。
     expect(
       _shouldRetry(
         errLike({
+          code: 'ERR_CANCELED',
+          name: 'CanceledError',
           request: {},
           message: 'canceled',
-          __isCanceled: true,
-        } as never),
+          config: { method: 'get' } as never,
+        }),
       ),
     ).toBe(false)
+  })
+
+  it('axios.isCancel 判定为取消 → 不重试', () => {
+    h.mockIsCancel.mockImplementation((e: unknown) => e === sentinel)
+    const sentinel = { request: {}, message: 'canceled' }
+    expect(_shouldRetry(errLike(sentinel as never))).toBe(false)
+  })
+
+  it('POST/PUT/PATCH/DELETE + 5xx → 不重试 (非幂等, 可能重复落盘)', () => {
+    for (const method of ['post', 'put', 'patch', 'delete']) {
+      expect(
+        _shouldRetry(
+          errLike({ response: { status: 503 } as never, config: { method } as never }),
+        ),
+      ).toBe(false)
+    }
+  })
+
+  it('POST + timeout/网络错误 → 不重试 (同步双跑回归)', () => {
+    expect(
+      _shouldRetry(errLike({ code: 'ECONNABORTED', config: { method: 'post' } as never })),
+    ).toBe(false)
+    expect(
+      _shouldRetry(
+        errLike({ request: {}, message: 'Network Error', config: { method: 'POST' } as never }),
+      ),
+    ).toBe(false)
+  })
+
+  it('HEAD + 5xx → 重试 (幂等)', () => {
+    expect(
+      _shouldRetry(errLike({ response: { status: 500 } as never, config: { method: 'head' } as never })),
+    ).toBe(true)
+  })
+
+  it('config.method 缺失 → 按 GET 处理 (axios 默认方法)', () => {
+    expect(_shouldRetry(errLike({ response: { status: 502 } as never }))).toBe(true)
+  })
+})
+
+describe('isCanceledError', () => {
+  afterEach(() => {
+    h.mockIsCancel.mockImplementation(() => false)
+  })
+
+  it('code=ERR_CANCELED / name=CanceledError → true', () => {
+    expect(isCanceledError({ code: 'ERR_CANCELED' })).toBe(true)
+    expect(isCanceledError({ name: 'CanceledError' })).toBe(true)
+  })
+
+  it('axios.isCancel 命中 → true', () => {
+    const target = { message: 'canceled' }
+    h.mockIsCancel.mockImplementation((e: unknown) => e === target)
+    expect(isCanceledError(target)).toBe(true)
+  })
+
+  it('普通网络/超时错误 → false', () => {
+    expect(isCanceledError({ code: 'ECONNABORTED' })).toBe(false)
+    expect(isCanceledError({ name: 'Error', message: 'Network Error' })).toBe(false)
+    expect(isCanceledError(null)).toBe(false)
+    expect(isCanceledError(undefined)).toBe(false)
   })
 })
 

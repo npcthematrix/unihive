@@ -110,12 +110,21 @@ export interface OmniSyncResponse {
   [key: string]: unknown
 }
 
-/** POST /api/omni/sync — 触发同步; 调用方负责 AbortController 取消超时。 */
+/**
+ * POST /api/omni/sync — 触发同步; 调用方负责 AbortController 取消。
+ * 全量同步服务端最长约 300s, 必须覆盖全局 15s timeout (否则客户端超时
+ * 断连而服务端仍在跑); POST 不参与拦截器自动重试, 不会双发。
+ */
+const SYNC_TIMEOUT_MS = 300_000
+
 export async function runOmniSync(
   body: OmniSyncRequest,
   signal?: AbortSignal,
 ): Promise<OmniSyncResponse> {
-  const { data } = await http.post<OmniSyncResponse>('/api/omni/sync', body, { signal })
+  const { data } = await http.post<OmniSyncResponse>('/api/omni/sync', body, {
+    signal,
+    timeout: SYNC_TIMEOUT_MS,
+  })
   return data
 }
 

@@ -50,13 +50,25 @@
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="90">
+      <!-- min-width 而非固定 width: loading 态按钮多出 spinner 宽度,
+           固定 120px 会把"禁用"二字裁掉 ~5-19px。 -->
+      <el-table-column label="状态" min-width="140">
         <template #default="{ row }">
-          <span
-            class="cfg-switch"
-            :class="row.cfg.enabled ? 'on' : 'off'"
-            :title="row.cfg.enabled ? '已启用' : '已停用'"
-          >{{ row.cfg.enabled ? '启用' : '停用' }}</span>
+          <div class="ups-status-cell">
+            <span
+              class="cfg-switch"
+              :class="isEnabled(row.cfg) ? 'on' : 'off'"
+              :title="isEnabled(row.cfg) ? '已启用' : '已停用'"
+            >{{ isEnabled(row.cfg) ? '启用' : '停用' }}</span>
+            <el-button
+              size="small"
+              :type="isEnabled(row.cfg) ? 'danger' : 'success'"
+              plain
+              :loading="toggling.has(row.name)"
+              :aria-label="`${toggleLabel(isEnabled(row.cfg))}上游 ${row.name}`"
+              @click="onToggle(row)"
+            >{{ toggleLabel(isEnabled(row.cfg)) }}</el-button>
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="Endpoint" min-width="200">
@@ -162,16 +174,30 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { GatewayConfig, UpstreamConfig } from '@/api/config'
+import { setUpstreamEnabled } from '@/api/config'
+import { errorMessage } from '@/api/client'
 import { loggingToRows, retryToString } from './format'
+import {
+  isUpstreamEnabled as isEnabled,
+  toggleLabel,
+  type UpstreamEnabledChanged,
+} from './upstreams'
 
 interface Props {
   config: GatewayConfig | null
 }
 
 const props = defineProps<Props>()
+const emit = defineEmits<{
+  changed: [payload: UpstreamEnabledChanged]
+}>()
 
 const search = ref('')
+
+/** 行级热开关 in-flight 集合 (不可变替换触发 el-button loading 重渲染)。 */
+const toggling = ref<Set<string>>(new Set())
 
 interface UpstreamRow {
   name: string
@@ -234,6 +260,95 @@ function looksMasked(v: string): boolean {
   return v.includes('***')
 }
 
+/**
+ * 热切换上游启用/禁用:
+ * - 禁用是破坏性操作 (接口立即从 /mcp 消失 + 断开连接), 先弹确认框;
+ * - 成功后向 ConfigView 冒泡, 由父层不可变 patch config.upstreams 与 version;
+ * - 409 与其他错误走 ElMessage, 不本地改状态 (服务端是唯一真来源)。
+ */
+async function onToggle(row: UpstreamRow): Promise<void> {
+  if (toggling.value.has(row.name)) return
+  const next = !isEnabled(row.cfg)
+
+  if (!next) {
+    try {
+      await ElMessageBox.confirm(
+        `确认禁用上游「${row.name}」?\n\n禁用后其 MCP 接口将立即从对外 /mcp 移除, 并断开该上游的运行时连接。状态已持久化, 重新启用即可恢复 (多上游共用的接口会保留到最后一个上游禁用)。`,
+        '禁用上游确认',
+        {
+          confirmButtonText: '禁用',
+          cancelButtonText: '取消',
+          type: 'warning',
+          distinguishCancelAndClose: true,
+        },
+      )
+    } catch {
+      return // 用户取消/关闭 — 状态不变
+    }
+  }
+
+  toggling.value = new Set(toggling.value).add(row.name)
+  try {
+    const result = await setUpstreamEnabled(
+      row.name,
+      next,
+      props.config?.version || '',
+    )
+    emit('changed', {
+      name: result.name,
+      enabled: result.enabled,
+      version: result.version,
+      connected: result.connected,
+      toolsAdded: result.tools_added,
+      toolsRemoved: result.tools_removed,
+    })
+    if (next) {
+      if (result.connected) {
+        ElMessage.success(
+          `上游「${row.name}」已启用, 发布 ${result.tools_added.length} 个接口, 连接正常`,
+        )
+      } else {
+        // 与启动语义同态: enabled 已生效、工具已发布, 但 client 没连上
+        ElMessage.warning(
+          `上游「${row.name}」已启用并发布 ${result.tools_added.length} 个接口, 但连接未建立, 请检查上游配置/状态`,
+        )
+      }
+    } else {
+      ElMessage.success(
+        `上游「${row.name}」已禁用, ${result.tools_removed.length} 个接口从对外 /mcp 移除并断开连接`,
+      )
+    }
+  } catch (e: unknown) {
+    // 500 runtime toggle failed / 503 runtime unavailable: yaml 已落盘并回带
+    // 新 version。必须消费掉它并对齐 enabled 态 —— 否则 UI 仍显示旧状态、
+    // 本地 version 陈旧, 用户下一次点击必然撞 409。重启网关即收敛到目标态。
+    const errResp = (e as { response?: { data?: { version?: unknown } } })?.response
+    const newVersion = errResp?.data?.version
+    if (typeof newVersion === 'string' && newVersion) {
+      emit('changed', {
+        name: row.name,
+        enabled: next,
+        version: newVersion,
+        connected: false,
+        toolsAdded: [],
+        toolsRemoved: [],
+      })
+      ElMessage.warning('配置已保存并持久化, 但运行时热切换未完成, 重启网关后生效')
+    } else {
+      const msg = errorMessage(e, '操作失败')
+      if (msg.includes('version_conflict') || msg.includes('版本不一致')) {
+        ElMessage.error('配置版本已变更, 请刷新页面后重试')
+      } else {
+        ElMessage.error(msg)
+      }
+    }
+  } finally {
+    const pending = new Set(toggling.value)
+    pending.delete(row.name)
+    toggling.value = pending
+  }
+}
+
 const logRows = computed(() => loggingToRows(props.config?.logging))
 </script>
 
@@ -253,6 +368,17 @@ const logRows = computed(() => loggingToRows(props.config?.logging))
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.ups-status-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.ups-status-cell .el-button {
+  margin-left: 0;
 }
 
 .ups-expand-btn {

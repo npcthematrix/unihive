@@ -1,29 +1,34 @@
-/* Login page — matches console design tokens
+/* Login page — 与 SPA LoginView 同一视觉 (web/src/views/LoginView.vue)
  *
- * 用与 console.css 相同的 :root 变量, 视觉与 console 主页保持一致:
- * - 浅灰背景, 白色卡片, 蓝色主按钮
- * - 同字体栈: -apple-system / BlinkMacSystemFont / Segoe UI / Roboto
- * - 同圆角 (8px) / 同阴影 / 同 focus ring
- * - 提交按钮 hover/disabled 状态过渡
+ * 服务端直出 /login 在 SPA 加载之前, 无法复用 Element Plus 主题,
+ * 这里手工对齐 SPA 登录页:
+ * - 深色渐变页面 + 居中白色卡片 (380px / 10px 圆角)
+ * - 主色 #409eff (Element Plus primary), 而非旧 #0d6efd
+ * - 居中品牌图标 (favicon.svg) + 标题 + 副标题
+ * - 同字体栈, EP 风格输入框 focus ring
  */
 :root {
-    --bg: #f8f9fa;
+    --page-bg: linear-gradient(135deg, #1d2733 0%, #2c3e55 55%, #3a506b 100%);
     --card-bg: #ffffff;
-    --text: #212529;
-    --text-secondary: #6c757d;
-    --border: #dee2e6;
-    --primary: #0d6efd;
-    --primary-hover: #0b5ed7;
-    --primary-soft: #e7f1ff;
-    --danger: #dc3545;
-    --danger-soft: #f8d7da;
+    --text: #303133;
+    --text-secondary: #909399;
+    --text-meta: #909399;
+    --border: #dcdfe6;
+    --primary: #409eff;
+    --primary-hover: #66b1ff;
+    --primary-active: #3a8ee6;
+    --primary-soft: rgba(64, 158, 255, 0.18);
+    --danger: #b42327;
+    --danger-soft: #fef0f0;
+    --danger-border: #fde2e2;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: var(--bg);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+        'PingFang SC', 'Microsoft YaHei', Roboto, sans-serif;
+    background: var(--page-bg);
     color: var(--text);
     line-height: 1.6;
     display: flex;
@@ -35,24 +40,32 @@ body {
 
 .login-card {
     background: var(--card-bg);
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    padding: 32px;
+    border-radius: 10px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+    padding: 32px 32px 24px;
     width: 100%;
-    max-width: 360px;
+    max-width: 380px;
+}
+
+.brand-icon {
+    display: block;
+    width: 40px;
+    height: 40px;
+    margin: 0 auto 10px;
 }
 
 .login-card h1 {
-    font-size: 1.5rem;
+    font-size: 20px;
     font-weight: 700;
-    letter-spacing: -0.01em;
-    margin-bottom: 4px;
+    text-align: center;
+    margin-bottom: 2px;
 }
 
 .login-subtitle {
     color: var(--text-secondary);
-    font-size: 0.875rem;
-    margin-bottom: 24px;
+    font-size: 13px;
+    text-align: center;
+    margin-bottom: 22px;
 }
 
 .login-form { display: flex; flex-direction: column; gap: 12px; }
@@ -62,12 +75,14 @@ body {
     padding: 10px 12px;
     border: 1px solid var(--border);
     border-radius: 6px;
-    font-size: 0.95rem;
+    font-size: 14px;
     font-family: inherit;
     background: var(--card-bg);
     color: var(--text);
     transition: border-color 120ms ease, box-shadow 120ms ease;
 }
+
+.login-input::placeholder { color: #a8abb2; }
 
 .login-input:focus {
     outline: none;
@@ -82,7 +97,7 @@ body {
     color: white;
     border: 0;
     border-radius: 6px;
-    font-size: 0.95rem;
+    font-size: 14px;
     font-weight: 500;
     font-family: inherit;
     cursor: pointer;
@@ -91,6 +106,7 @@ body {
 }
 
 .login-button:hover { background: var(--primary-hover); }
+.login-button:active { background: var(--primary-active); }
 .login-button:focus-visible {
     outline: 2px solid var(--primary);
     outline-offset: 2px;
@@ -106,16 +122,14 @@ body {
     color: var(--danger);
     padding: 10px 12px;
     border-radius: 6px;
-    font-size: 0.85rem;
+    font-size: 13px;
     margin-bottom: 16px;
-    border: 1px solid #f1aeb5;
+    border: 1px solid var(--danger-border);
 }
 
 .login-meta {
-    margin-top: 24px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-    font-size: 0.75rem;
-    color: var(--text-secondary);
+    margin-top: 18px;
+    font-size: 12px;
+    color: var(--text-meta);
     text-align: center;
 }

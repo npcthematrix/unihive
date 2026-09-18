@@ -93,7 +93,6 @@
             v-if="filteredToolsByEp(ep).length > 0"
             :data="filteredToolsByEp(ep)"
             class="cfg-table fcp-table"
-            scrollbar-always-on
             row-key="name"
             :empty-text="searchQuery ? '无匹配工具' : '该 endpoint 下未检测到 FUYAO 工具'"
           >
@@ -357,10 +356,13 @@ function load() {
   }
 }
 
+// 只在服务端配置 version 变化时重新 hydrate。allTools / mapping 的引用变化
+// (父面板"立即刷新"整表替换、切子 tab 重挂 props) 只影响派生分组, 绝不能
+// 把用户未保存的 working 草稿静默拍回服务端值。
 watch(
-  () => [props.fuyaoCache, props.allTools, props.upstreamToolMapping] as const,
+  () => props.fuyaoCache?.version ?? '',
   () => load(),
-  { immediate: true, deep: true },
+  { immediate: true },
 )
 
 function isEpOpen(ep: FuyaoEndpointKey): boolean {
@@ -544,15 +546,19 @@ async function onSubmit() {
   outline: 2px solid var(--el-color-primary);
   outline-offset: -2px;
 }
-.fcp-preset.active {
-  background: var(--el-color-primary-light-9);
-  border-color: var(--el-color-primary);
-  color: var(--el-color-primary);
-  font-weight: 600;
+/* 破坏性动作 (清空全部): 静止态就给出 danger 语义, 与中性预设区分 */
+.fcp-preset--danger {
+  color: var(--el-color-danger);
+  border-color: var(--el-color-danger-light-5, #f89898);
+  background: var(--el-color-danger-light-9, #fef0f0);
 }
 .fcp-preset--danger:hover {
   border-color: var(--el-color-danger);
+  background: var(--el-color-danger-light-8, #fde2e2);
   color: var(--el-color-danger);
+}
+.fcp-preset--danger:focus-visible {
+  outline-color: var(--el-color-danger);
 }
 
 /* 全量工具表格 */
@@ -607,18 +613,6 @@ async function onSubmit() {
   }
   .fcp-presets {
     grid-column: 1 / -1;
-  }
-}
-
-/* 640px 中间断点: 极窄屏进一步压缩 tool row (label 与 TTL 输入框 stack) */
-@media (max-width: 640px) {
-  .fcp-tool-row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-  }
-  .fcp-tool-row .fcp-label {
-    min-width: 0;
   }
 }
 

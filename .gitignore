@@ -43,3 +43,6 @@ docs/superpowers/
 
 # Old handoff (kept locally, archived elsewhere)
 .handoff/
+# Local verification / test artifacts
+.verify-screenshots/
+web/coverage/

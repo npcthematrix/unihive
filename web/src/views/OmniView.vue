@@ -96,7 +96,7 @@ import {
   queryOmniSectors,
   type OmniQueryParams,
 } from '@/api/omni'
-import { errorMessage } from '@/api/client'
+import { errorMessage, isCanceledError } from '@/api/client'
 import { formatHMS } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type OmniTabKey } from './omni/format'
 import { parseHashTab } from './_shared/hashTab'
@@ -210,11 +210,14 @@ async function runQuery(page: number, trigger: QueryTrigger) {
     totalCount.value = typeof tc === 'number' ? tc : (d?.total ?? sectors.value.length)
     queryPage.value = d?.page ?? page
   } catch (e) {
-    if ((e as { name?: string })?.name === 'CanceledError') return
+    if (isCanceledError(e)) return
     queryError.value = errorMessage(e, '查询失败')
   } finally {
-    if (queryAbort === ac) queryAbort = null
-    queryLoading.value = false
+    // 归属守卫: 被新请求取代的陈旧请求落地时, 不得清掉新请求的 loading/abort
+    if (queryAbort === ac) {
+      queryAbort = null
+      queryLoading.value = false
+    }
   }
 }
 

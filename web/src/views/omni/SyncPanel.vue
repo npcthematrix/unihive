@@ -111,7 +111,7 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { OmniSource, OmniSyncLog } from '@/api/omni'
 import { runOmniSync } from '@/api/omni'
-import { errorMessage } from '@/api/client'
+import { errorMessage, isCanceledError } from '@/api/client'
 import {
   BOARD_TYPE_KEYS,
   displayBoardType,
@@ -172,7 +172,7 @@ async function onSync() {
       ElMessage.error(`同步失败: ${msg}`)
     }
   } catch (e) {
-    if ((e as { name?: string })?.name === 'CanceledError') {
+    if (isCanceledError(e)) {
       ElMessage.warning('已中止同步')
     } else {
       ElMessage.error(`同步失败: ${errorMessage(e)}`)
@@ -276,7 +276,7 @@ h3 {
 
 .last-sync-message {
   padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--el-fill-color-light);
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.78rem;

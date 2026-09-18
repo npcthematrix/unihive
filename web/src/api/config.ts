@@ -119,16 +119,22 @@ export interface FuyaoCacheConfig {
 /**
  * 派生某 gateway tool 对应的 FUYAO endpoint。
  *
- * 当前为占位实现 (返回 `undefined`),因为 FUYAO tool→endpoint 的映射
- * 需要从上游注册表派生;真实的实现留给后续 FuyaoCachePanel 专题修复。
- *
- * Why: FuyaoCachePanel 期望此 helper 存在以渲染 endpoint 分组。
- * How to apply: 后续接入上游注册表元数据时,改为基于 tool prefix 的真实路由。
+ * 数据源是后端 `config.upstream_tool_mapping`:
+ *   { gatewayToolName: { upstreamName: upstreamToolName, ... } }
+ * 上游名即 4 个固定 endpoint 之一 (fuyao_ashare/fuyao_index/fuyao_meta/
+ * fuyao_fund)。一个 gateway 工具可挂多个上游 (路由降级链), 此时按
+ * FUYAO_ENDPOINT_KEYS 的固定顺序取第一个命中的 fuyao_* backer;
+ * 没有任何 fuyao backer 返回 undefined (该工具不属于本面板)。
  */
 export function fuyaoEndpointOf(
-  _toolName: string,
-  _upstreamToolMapping?: unknown,
+  toolName: string,
+  upstreamToolMapping?: Record<string, Record<string, string>> | null,
 ): FuyaoEndpointKey | undefined {
+  const backers = upstreamToolMapping?.[toolName]
+  if (!backers) return undefined
+  for (const ep of FUYAO_ENDPOINT_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(backers, ep)) return ep
+  }
   return undefined
 }
 
@@ -153,6 +159,46 @@ export async function saveFuyaoCache(
   const { data } = await http.put<{ fuyao_cache: FuyaoCacheConfig; version: string }>(
     '/api/config/fuyao-cache',
     { fuyao_cache: payload, version },
+  )
+  return data
+}
+
+// ---------------------------------------------------------------------------
+// /api/config/upstreams/<name>/enabled — 上游启用/禁用热开关
+// ---------------------------------------------------------------------------
+
+/** PUT 热开关响应: 持久化 version + 运行时热增删/连接结果。 */
+export interface UpstreamToggleResult {
+  name: string
+  enabled: boolean
+  /** 启用时 client 是否真正连上; 禁用响应恒 false。 */
+  connected: boolean
+  tools_added: string[]
+  tools_removed: string[]
+  /** 目标态与当前态一致时后端 no-op, 前后端均不改动。 */
+  changed?: boolean
+  version: string
+}
+
+/**
+ * PUT /api/config/upstreams/{name}/enabled — 热切换上游启用态。
+ *
+ * 后端先持久化 upstreams.yaml (保格式定向改写), 再实时增删对外 /mcp
+ * 的接口并连接/断开上游 client, 无需重启。
+ *
+ * Throws:
+ *   409 (version_conflict) — 配置已被其他会话改动, 应提示刷新后重试
+ *   404 — 未知上游名
+ *   500 — yaml 已落盘但运行时热切换失败 (重启可收敛到目标态)
+ */
+export async function setUpstreamEnabled(
+  name: string,
+  enabled: boolean,
+  version: string,
+): Promise<UpstreamToggleResult> {
+  const { data } = await http.put<UpstreamToggleResult>(
+    `/api/config/upstreams/${encodeURIComponent(name)}/enabled`,
+    { enabled, version },
   )
   return data
 }

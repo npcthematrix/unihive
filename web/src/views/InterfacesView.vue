@@ -88,7 +88,6 @@
 
         <el-table
           v-else
-          :key="activeGroup"
           ref="tableRef"
           :data="visibleTools"
           row-key="name"
@@ -357,15 +356,15 @@ watch(appliedQuery, () => {
 })
 
 watch(activeGroup, (key) => {
-  // 表格按 group key 重挂载; 展开态跨分组保留 (用户展开 tool 详情后切分组仍可见),
-  // 由下方 visibleTools watcher 清理已隐式裁剪的 name, 防 el-table 按钮文案残留。
+  // 不按 group 重挂载 el-table (无 :key): 行对象引用稳定 (filter 不拷贝),
+  // el-table 的展开态以 row 对象为准, 切组/过滤后再回来自动恢复展开。
   syncQuery(key)
 })
 
-// visibleTools 变化时把不存在的 name 从 expandedNames 剪掉,
-// 避免 el-table 内部已隐式裁剪但按钮文案仍显示"收起"。
-watch(visibleTools, (rows) => {
-  const live = new Set(rows.map((r) => r.name))
+// 仅在"全量工具清单"里消失的 name 才剪掉 (数据刷新后某工具真的不存在了)。
+// 不能按当前可见行裁剪 —— 否则切分组/勾过滤会把跨分组保留的展开态永久删掉。
+watch(tools, (all) => {
+  const live = new Set(all.map((r) => r.name))
   let changed = false
   for (const name of [...expandedNames.value]) {
     if (!live.has(name)) {
@@ -463,6 +462,9 @@ async function load(): Promise<void> {
     return
   }
   tools.value = ifsRes.value.tools || []
+  // 刷新后是一批全新 row 对象, el-table 内部展开态必然全部折叠;
+  // 同步清空 name 集, 避免按钮文案残留为"收起"。
+  expandedNames.value = new Set()
   timestamp.value = ifsRes.value.timestamp
   const wanted = typeof route.query.tools === 'string' ? route.query.tools : ''
   activeGroup.value = wanted === ALL_KEY || groupOrder.value.includes(wanted) ? wanted : ALL_KEY
@@ -567,6 +569,11 @@ onUnmounted(() => {
   gap: 12px;
   position: sticky;
   top: 0;
+  /* 矮视口下侧栏 (筛选卡 + 291 工具分组导航) 会比视口高, sticky 失效且
+     整页被侧栏撑高; 限制为视口高并在侧栏内部滚动。 */
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .ifs-toggles {

@@ -51,7 +51,6 @@ const tools = ref<RawTool[]>([])
 const payload = ref<RawToolsResponse | null>(null)
 const loading = ref(false)
 const loadError = ref('')
-const errorKind = ref('')
 /** 只记录本次会话真正拉取过的上游计数; 没拉过就显示占位, 不猜。 */
 const counts = ref<Record<string, number>>({})
 
@@ -139,7 +138,6 @@ async function fetchTools(name: string): Promise<void> {
   const seq = ++reqSeq
   loading.value = true
   loadError.value = ''
-  errorKind.value = ''
   try {
     const res = await getUpstreamRawTools(name)
     if (seq !== reqSeq) return
@@ -157,7 +155,10 @@ async function fetchTools(name: string): Promise<void> {
 }
 
 function refresh(): void {
+  // 没有已选上游 = 首屏 upstreams 列表就失败了, 重试必须重走 loadUpstreams;
+  // 旧实现这里静默 return, 横幅"重试"按钮是死的, 只能整页 F5。
   if (selected.value) void fetchTools(selected.value)
+  else void loadUpstreams()
 }
 
 async function loadUpstreams(): Promise<void> {
@@ -210,10 +211,10 @@ watch(
 )
 
 // ---- 展开 / 复制 ----
-function onExpandChange(row: RawTool, expandedRows: RawTool[] | RawTool, index: number): void {
-  const key = rowKeyOf(row, index)
+function onExpandChange(row: RawTool, expandedRows: RawTool[] | RawTool): void {
+  const key = rowKeyOf(row)
   const expanded = Array.isArray(expandedRows)
-    ? expandedRows.some((r, i) => rowKeyOf(r, i) === key)
+    ? expandedRows.some((r) => rowKeyOf(r) === key)
     : Boolean(expandedRows)
   const next = new Set(expandedNames.value)
   if (expanded) next.add(key)
@@ -356,8 +357,8 @@ onUnmounted(() => {
 
         <div v-if="visibleTools.length" class="mcp-tool-nav" aria-label="工具导航">
           <button
-            v-for="(t, i) in visibleTools"
-            :key="rowKeyOf(t, i)"
+            v-for="t in visibleTools"
+            :key="rowKeyOf(t)"
             type="button"
             class="mcp-tool-item"
             :title="toolName(t)"
@@ -379,7 +380,6 @@ onUnmounted(() => {
           :title="`上游请求失败：${loadError}`"
         >
           <div class="mcp-error-actions">
-            <span v-if="errorKind" class="mcp-error-kind">errorKind: {{ errorKind }}</span>
             <el-button size="small" @click="refresh">重试</el-button>
           </div>
         </el-alert>
@@ -522,6 +522,10 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* 同 InterfacesView: 矮视口下侧栏内部滚动, 不把整页撑高 */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .mcp-content {
@@ -546,12 +550,6 @@ onUnmounted(() => {
   margin-top: 6px;
 }
 
-.mcp-error-kind {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  color: var(--el-text-color-secondary);
-}
-
 .mcp-toggles {
   display: flex;
   flex-direction: column;
@@ -561,7 +559,8 @@ onUnmounted(() => {
 .toggle-count {
   margin-left: 6px;
   font-size: 11px;
-  color: var(--el-text-color-placeholder);
+  /* placeholder 在 11px 下对比度不足, 用 regular */
+  color: var(--el-text-color-regular);
 }
 
 .mcp-nav {
@@ -637,6 +636,10 @@ onUnmounted(() => {
 }
 
 .mcp-tool-item {
+  /* 触达目标 ≥24px (WCAG 2.5.8), 列表最长 87 行靠滚动承载 */
+  display: flex;
+  align-items: center;
+  min-height: 24px;
   padding: 3px 8px;
   border: none;
   border-radius: 4px;

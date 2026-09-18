@@ -51,7 +51,7 @@
     <!-- 3. MCP APIs -->
     <section :id="SECTIONS[2].id" class="onboarding-section">
       <h3>{{ SECTIONS[2].title }}</h3>
-      <p>当前网关对外暴露约 <strong>160</strong> 个 MCP 接口, 按上游自动分组、路由与缓存。完整列表 (含每个 tool 的描述、参数、缓存策略) 都在 <strong>"MCP APIs"</strong> 标签页。</p>
+      <p>当前网关对外暴露约 <strong>290</strong> 个 MCP 接口 (5 套上游, 精确数量以 <strong>"MCP APIs"</strong> 标签页运行时列表为准), 按上游自动分组、路由与缓存。完整列表 (含每个 tool 的描述、参数、缓存策略) 都在该标签页。</p>
     </section>
 
     <!-- 4. 常用示例 -->
@@ -85,7 +85,7 @@
       <ul>
         <li>查看控制台"上游状态"标签页, 确认对应上游是否在线</li>
         <li>查看返回的 <code>last_error</code> 字段</li>
-        <li>对应上游若被禁用, 需修改 <code>config/upstreams.yaml</code> 并重启</li>
+        <li>对应上游若被禁用, 可在控制台"配置信息 → 上游"标签页直接热切换启用 (实时生效并持久化到 <code>config/upstreams.yaml</code>), 无需重启</li>
       </ul>
       <h4>5.3 参数错误</h4>
       <ul>
@@ -257,8 +257,9 @@ onBeforeUnmount(() => {
 
 .onboarding-nav {
   position: sticky;
-  /* 未来加 app header 时, 在 :root 设 --app-header-height 即可, 当前无 header = 0 */
-  top: var(--app-header-height, 0);
+  /* topbar 是普通文档流 (随页面滚走), 不是 fixed —— 偏移必须是 0,
+     否则吸顶时上方留 52px 缝隙, 页面内容会从缝隙里滚过。 */
+  top: 0;
   z-index: 10;
   display: flex;
   flex-wrap: wrap;

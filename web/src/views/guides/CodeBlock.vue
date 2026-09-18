@@ -1,12 +1,14 @@
 <template>
   <div class="code-block">
-    <el-button
-      size="small"
-      :icon="CopyDocument"
-      class="copy-btn"
-      :loading="copying"
-      @click="onCopy"
-    >{{ copied ? '已复制' : '复制' }}</el-button>
+    <div class="code-block-bar">
+      <el-button
+        size="small"
+        :icon="CopyDocument"
+        class="copy-btn"
+        :loading="copying"
+        @click="onCopy"
+      >{{ copied ? '已复制' : '复制' }}</el-button>
+    </div>
     <pre><code>{{ code }}</code></pre>
   </div>
 </template>
@@ -51,16 +53,16 @@ async function onCopy() {
   border-radius: 6px;
 }
 
-.code-block .copy-btn {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 1;
+/* 按钮独立工具条而非浮在 pre 上: 短片段与横向滚动时代码都不会被遮挡 */
+.code-block-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 6px 0;
 }
 
 .code-block pre {
   margin: 0;
-  padding: 14px 14px 14px 16px;
+  padding: 8px 14px 14px 16px;
   overflow-x: auto;
   font-family: var(--el-font-family-monospace, 'Consolas', 'Monaco', monospace);
   font-size: 13px;
@@ -76,12 +78,8 @@ async function onCopy() {
 /* 窄屏(< 480px) 压缩 padding + 字号, 避免横向占满整屏 */
 @media (max-width: 480px) {
   .code-block pre {
-    padding: 10px 12px;
+    padding: 6px 12px 10px;
     font-size: 12px;
-  }
-  .code-block .copy-btn {
-    top: 4px;
-    right: 4px;
   }
 }
 </style>

@@ -110,8 +110,18 @@ body {
   --cfg-bg: var(--el-fill-color-blank, #ffffff);
   --cfg-bg-soft: var(--el-fill-color-light, #f5f7fa);
   --cfg-border: var(--el-border-color-lighter, #ebeef5);
-  --cfg-text-secondary: var(--el-text-color-secondary, #909399);
-  --app-header-height: 52px;
+  /* EP secondary #909399 在白底仅 ~2.9:1, 不达 WCAG AA; 用 regular (#606266 ~5.9:1) */
+  --cfg-text-secondary: var(--el-text-color-regular, #606266);
+
+  /*
+   * 兼容层 — 早期 panel (MappingPanel/ToolsPanel/StatsPanel/SyncPanel) 直接
+   * 引用的通用名。未声明时整条声明作废: chain-pill 透明无边框、card 透明、
+   * secondary 文本回退继承色。统一别名到 cfg token, 浅/暗主题跟随 EP 调色。
+   */
+  --bg: var(--cfg-bg);
+  --border: var(--cfg-border);
+  --card-bg: var(--cfg-bg);
+  --text-secondary: var(--cfg-text-secondary);
 }
 
 /* ============================================================================
@@ -128,7 +138,8 @@ body {
 .cfg-search {
   width: 100%;
   height: 32px;
-  padding: 0 28px 0 12px;
+  /* 右侧 24px 清除按钮 (right:4px) + 4px 间距 */
+  padding: 0 32px 0 12px;
   border: 1px solid var(--cfg-border);
   border-radius: 4px;
   background: var(--cfg-bg);
@@ -136,7 +147,9 @@ body {
   font-size: 13px;
   font-family: inherit;
   outline: none;
-  transition: border-color 120ms ease;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .cfg-search::placeholder {
@@ -145,20 +158,23 @@ body {
 
 .cfg-search:focus {
   border-color: var(--el-color-primary);
+  /* 与 EP input focus 同强度的外环, 仅换边框色在浅灰边框上太弱 */
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-8, #d9ecff);
 }
 
 .cfg-search-clear {
+  /* 触达目标 24px (WCAG 2.5.8), 输入框高 32px 内垂直居中 */
   position: absolute;
-  right: 6px;
+  right: 4px;
   top: 50%;
   transform: translateY(-50%);
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--cfg-text-secondary);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1;
   border-radius: 50%;
   cursor: pointer;
@@ -295,6 +311,13 @@ details[open] .cfg-section-toggle {
   color: var(--cfg-text-secondary);
   background: var(--cfg-bg-soft);
   border: 1px solid var(--cfg-border);
+}
+
+/* 开关行 — UpstreamsPanel 全局开关折叠区 (类此前无任何样式, 标签挤在一起) */
+.cfg-toggles-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
 }
 
 /* ============================================================================

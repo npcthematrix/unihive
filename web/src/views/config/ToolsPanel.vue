@@ -175,8 +175,9 @@ const emptyText = computed(() => {
   font-size: 0.75rem;
 }
 
+/* Element Plus danger-dark-2: 比 base danger 更适合小字正文, 暗色主题自动适配 */
 .tools-param.required {
-  color: #b91c1c;
+  color: var(--el-color-danger-dark-2, #c45656);
 }
 
 .tools-param:not(.required) {

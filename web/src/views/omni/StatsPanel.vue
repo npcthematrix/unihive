@@ -176,4 +176,19 @@ const emit = defineEmits<{
   font-variant-numeric: tabular-nums;
   color: var(--el-text-color-regular);
 }
+
+/* ≤640px: 与 SyncPanel 同一套规则 — 固定 min-width 的时间/源/类型列
+   (140+80+90+gap) 在 ≤375px 屏会把行撑爆, 改为换行并解除列宽。 */
+@media (max-width: 640px) {
+  .log-item {
+    flex-wrap: wrap;
+  }
+  .log-time {
+    min-width: 100px;
+  }
+  .log-source,
+  .log-type {
+    min-width: auto;
+  }
+}
 </style>

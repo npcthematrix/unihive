@@ -58,10 +58,12 @@
             </template>
           </el-table-column>
           <el-table-column label="秒" width="100" align="right" header-align="right">
-            <template #default="{ row }">{{ row.seconds }}</template>
+            <template #default="{ row }"><span class="num">{{ row.seconds }}</span></template>
           </el-table-column>
           <el-table-column label="人类可读">
-            <template #default="{ row }">{{ humanizeDuration(row.seconds) }}</template>
+            <template #default="{ row }">
+              <span class="ttl-human">{{ humanizeDuration(row.seconds) }}</span>
+            </template>
           </el-table-column>
         </el-table>
       </div>
@@ -125,13 +127,15 @@ const ttlEmptyText = computed(() => (ttlEntries.value.length ? '' : '无 TTL 配
 }
 
 .cache-banner code {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--cfg-bg-soft);
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 0.78rem;
 }
 
-.cache-ttl-table :deep(.num) {
+/* 秒列与人类可读列都含数字, 等宽数字避免排序后上下行跳动 */
+.cache-ttl-table :deep(.num),
+.cache-ttl-table :deep(.ttl-human) {
   font-variant-numeric: tabular-nums;
 }
 </style>

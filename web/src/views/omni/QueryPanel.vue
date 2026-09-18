@@ -92,12 +92,14 @@
         </el-table>
 
         <div v-if="totalPages > 1" class="pagination">
+          <!-- 不放 jumper/total: 窄屏会横向溢出; 页数/总条数下方 page-info 已展示 -->
           <el-pagination
             :current-page="page"
             :page-size="pageSize"
             :total="totalCount"
             :pager-count="5"
-            layout="prev, pager, next, jumper, ->, total"
+            layout="prev, pager, next"
+            background
             @current-change="onPageChange"
           />
           <span class="page-info">第 {{ page }} / {{ totalPages }} 页 (共 {{ totalCount }} 条)</span>
@@ -109,7 +111,7 @@
     <el-dialog
       v-model="modalOpen"
       :title="modalTitle"
-      width="600px"
+      width="min(600px, calc(100vw - 32px))"
       :close-on-click-modal="false"
       destroy-on-close
       @open="onModalOpen"
@@ -162,7 +164,7 @@ import {
   type OmniSectorStocksResponse,
   type OmniSource,
 } from '@/api/omni'
-import { errorMessage } from '@/api/client'
+import { errorMessage, isCanceledError } from '@/api/client'
 import { displayBoardType, displaySource, formatDate } from './format'
 
 interface Props {
@@ -262,17 +264,22 @@ async function fetchStocks() {
   modalLoading.value = true
   modalError.value = ''
   const ac = new AbortController()
-  modalRequest.value = { cancel: () => ac.abort() }
+  const reqHandle = { cancel: () => ac.abort() }
+  modalRequest.value = reqHandle
   try {
     const res = await getOmniSectorStocks({ sector_id: sector.id, code: sector.code, source: sector.source }, ac.signal)
+    // 弹窗已关/已被新请求取代 → 不回写, 避免关闭后错误被 watch 清空又复活
+    if (ac.signal.aborted || modalRequest.value !== reqHandle) return
     modalSector.value = res.sector
     modalStocks.value = res.stocks || []
   } catch (e) {
-    if ((e as { name?: string })?.name === 'CanceledError') return
+    if (isCanceledError(e)) return
     modalError.value = errorMessage(e, '未知错误')
   } finally {
-    modalLoading.value = false
-    modalRequest.value = null
+    if (modalRequest.value === reqHandle) {
+      modalLoading.value = false
+      modalRequest.value = null
+    }
   }
 }
 
@@ -347,9 +354,10 @@ defineExpose({
 }
 
 .feedback-error {
-  background: #fef2f2;
-  color: #b91c1c;
-  border: 1px solid #fecaca;
+  /* Element Plus danger 语义色, 浅/暗主题自动适配 (旧硬编码红在暗色下刺眼) */
+  background: var(--el-color-danger-light-9, #fef0f0);
+  color: var(--el-color-danger, #f56c6c);
+  border: 1px solid var(--el-color-danger-light-7, #fbc4c4);
 }
 
 .feedback-meta {
