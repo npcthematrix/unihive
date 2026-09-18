@@ -29,6 +29,30 @@ _TYPE_MAP: dict[str, type] = {
 # 用户显式传入的值转发给上游（FQGate 的可选 requestTimeoutMs 带 minimum: 1,
 # 网关塞 0 直接业务 400 "请求内容不完整"）。None 才能与"调用方未提供"区分开,
 # 由 _validate_and_normalize 统一丢弃; 用户显式传 0/False 不受影响。
+def resolve_python_type(type_str: str | None) -> type | None:
+    """spec ``type`` 字符串 → MCP 边界实际使用的 Python 类型。
+
+    - ``_TYPE_MAP`` 中的精确名按表映射;
+    - tqcenter codegen 产物的裸 ``List`` / 任意 ``List[...]``
+      (含 ``List[List[str]]``) 统一按 JSON 数组透传; ``Dict`` 系按对象透传
+      (调用链 ``getattr(tq, tool)(**arguments)`` 原样进 tqcenter,
+      无需还原元素类型; 标注成 ``list``/``dict`` 只决定 JSON schema 的
+      type: array/object);
+    - 未知名返回 None, 调用方回落 str 并由 config_lint 报 W001。
+    """
+    if type_str in _TYPE_MAP:
+        return _TYPE_MAP[type_str]
+    if type_str == "List" or (
+        isinstance(type_str, str) and type_str.startswith("List[")
+    ):
+        return list
+    if type_str in ("Dict", "dict") or (
+        isinstance(type_str, str) and type_str.startswith("Dict[")
+    ):
+        return dict
+    return None
+
+
 _DEFAULT_MAP: dict[str, Any] = {
     "str": "",
     "int": None,
@@ -49,7 +73,8 @@ def _annotation_for(p: dict) -> Any:
     - 有 enum → Literal[*values]，FastMCP 会把它转成 JSON Schema enum
     - 有 description → Annotated[X, Field(description=...)]，Pydantic FastMCP 会提取
     """
-    base = _TYPE_MAP.get(p.get("type", "str"), str)
+    resolved = resolve_python_type(p.get("type", "str"))
+    base = resolved if resolved is not None else str
     enum_values = p.get("enum")
     description = p.get("description")
     if enum_values:

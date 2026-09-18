@@ -312,3 +312,57 @@ def test_codegen_roundtrip_idempotent():
     specs1 = build_tool_specs(methods)
     specs2 = build_tool_specs(methods)
     assert specs1 == specs2
+
+
+class TestNormalizeParamType:
+    """类型规范化: 让生成的 spec 与 tqcenter 实际形态/注册器边界一致。"""
+
+    def test_bare_list_becomes_list_of_str(self):
+        from scripts.gen_tdx_quant_tools import normalize_param_type
+        assert normalize_param_type("get_more_info", "field_list", "List") == "List[str]"
+
+    def test_list_of_list_passes_through(self):
+        from scripts.gen_tdx_quant_tools import normalize_param_type
+        assert normalize_param_type("send_bt_data", "data_list", "List[List[str]]") == "List[List[str]]"
+
+    def test_dict_passes_through(self):
+        from scripts.gen_tdx_quant_tools import normalize_param_type
+        assert normalize_param_type("formula_format_data", "data_dict", "Dict") == "Dict"
+
+    def test_none_default_optional_falls_back_to_str(self):
+        from scripts.gen_tdx_quant_tools import normalize_param_type
+        assert normalize_param_type("some_method", "mystery", "Optional") == "str"
+
+    def test_function_type_dropped(self):
+        from scripts.gen_tdx_quant_tools import normalize_param_type
+        assert normalize_param_type("other", "cb", "function") is None
+
+    def test_subscribe_callback_dropped_by_override(self):
+        from scripts.gen_tdx_quant_tools import normalize_param_type
+        assert normalize_param_type("subscribe_hq", "callback", "function") is None
+
+    def test_print_to_tdx_overrides(self):
+        from scripts.gen_tdx_quant_tools import normalize_param_type
+        assert normalize_param_type("print_to_tdx", "df_list", "Any") == "List[dict]"
+        assert normalize_param_type("print_to_tdx", "vertical", "Optional") == "int"
+        assert normalize_param_type("print_to_tdx", "height", "Optional") == "List[str]"
+        assert normalize_param_type("print_to_tdx", "table_names", "Optional") == "List[str]"
+
+    def test_formula_set_data_stock_data_is_structured(self):
+        from scripts.gen_tdx_quant_tools import normalize_param_type
+        assert normalize_param_type("formula_set_data", "stock_data", "List") == "List[dict]"
+
+
+def test_build_tool_specs_drops_unpassable_callback():
+    """function 参数不进入对外 schema, 其余参数保留。"""
+    methods = [{
+        "name": "subscribe_hq",
+        "description": "订阅",
+        "params": [
+            {"name": "stock_list", "required": True, "type": "List[str]", "description": "x"},
+            {"name": "callback", "required": False, "type": "function", "description": "y"},
+        ],
+    }]
+    specs = build_tool_specs(methods)
+    param_names = [p["name"] for p in specs[0]["params"]]
+    assert param_names == ["stock_list"]

@@ -26,7 +26,11 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .storage.cache import Cache, CacheConfig
-from .utils.config_loader import load_config, validate_config
+from .utils.config_loader import (
+    load_config,
+    merge_config_overlay,
+    validate_config,
+)
 from .utils.log_config import configure_logging
 from .core.normalizer import Normalizer
 from .core.registry import register_tool, register_tools_from_config, validate_specs
@@ -266,14 +270,9 @@ class GatewayServer:
         if config_yaml_path.exists():
             try:
                 config_yaml = load_config(str(config_yaml_path), strict_env=strict_env)
-                # Merge: config.yaml overrides upstreams.yaml
-                for key, value in config_yaml.items():
-                    if key not in self.config:
-                        self.config[key] = value
-                    elif isinstance(self.config[key], dict) and isinstance(value, dict):
-                        self.config[key].update(value)
-                    else:
-                        self.config[key] = value
+                # Merge: config.yaml overrides upstreams.yaml (浅层合并,
+                # 与 `unihive config lint` 共用 merge_config_overlay)
+                merge_config_overlay(self.config, config_yaml)
             except Exception as e:
                 logger.warning(f"Failed to load config.yaml: {e}")
         errors = validate_config(self.config)

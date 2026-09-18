@@ -406,6 +406,58 @@ def extract_enum_from_description(desc: str) -> list[str] | None:
     return sorted(values)
 
 
+# ---------- 类型规范化 ----------
+
+_UNSET = object()
+
+# 无法跨 MCP JSON 边界传递的 Python 形参类型 (callable 等), 生成时直接丢弃。
+# 调用链 getattr(tq, tool)(**arguments) 拿不到回调, 这类参数只能走默认值。
+_DROPPED_TYPES = frozenset({"function", "callable", "Callable", "typing.Callable"})
+
+# 按 (方法, 参数) 的精确覆盖: 源文档 (skills/SKILL.md) 丢了泛型实参/注解,
+# 以文档说明里的真实语义补齐。None 表示该参数不对外发布。
+_TYPE_OVERRIDES: dict[str, dict[str, str | None]] = {
+    "subscribe_hq": {
+        # Python 回调函数, MCP 侧无法表达; tq.subscribe_hq(callback=None)
+        # 退化为只订阅不回调, 参数直接不出现在对外 schema。
+        "callback": None,
+    },
+    "print_to_tdx": {
+        # df_list 实际是 DataFrame 列表; MCP 边界最近似为对象数组
+        # (tqcenter 仍需要真正的 DataFrame, 见工具描述; 这里只保证 schema 诚实)。
+        "df_list": "List[dict]",
+        "jsn_filenames": "List[str]",   # JSON 文件名列表, 长度等于 df_list
+        "vertical": "int",             # 纵向排列组数, 与 horizontal 二选一
+        "horizontal": "int",           # 横向排列组数 (优先级更高)
+        "height": "List[str]",         # 各 gridctrl 高度, 如 ["0.4","0.6"]
+        "table_names": "List[str]",    # 各组表格标题列表
+    },
+    "formula_set_data": {
+        # formula_format_data 格式化后的结构化数据, 非字符串数组
+        "stock_data": "List[dict]",
+    },
+}
+
+
+def normalize_param_type(method: str, param_name: str, raw_type: str | None) -> str | None:
+    """把源文档的类型写法规范化为注册器可识别的 spec 类型。
+
+    返回 None 表示该参数应被丢弃 (无法跨 MCP 边界表达)。
+    """
+    override = _TYPE_OVERRIDES.get(method, {}).get(param_name, _UNSET)
+    if override is not _UNSET:
+        return override
+    if raw_type in _DROPPED_TYPES:
+        return None
+    if raw_type == "List":
+        # 文档常见裸 List (= []), 元素语义均为 str; 数组边界行为与 List[str] 一致
+        return "List[str]"
+    if raw_type == "Optional":
+        # 仅出现在 "x = None" 且无注解的兜底推断; MCP 边界实际按 str 透传
+        return "str"
+    return raw_type or "str"
+
+
 # ---------- 构造 spec ----------
 
 def build_tool_specs(methods: list[dict]) -> list[dict]:
@@ -414,10 +466,13 @@ def build_tool_specs(methods: list[dict]) -> list[dict]:
         name = m["name"]
         params_out: list[dict] = []
         for p in m["params"]:
+            normalized_type = normalize_param_type(name, p["name"], p["type"])
+            if normalized_type is None:
+                continue  # 无法跨 MCP 边界表达 (如 callback), 走 tq 默认值
             param: dict = {
                 "name": p["name"],
                 "required": p["required"],
-                "type": p["type"],
+                "type": normalized_type,
                 "description": p["description"],
             }
             enum_vals = extract_enum_from_description(p["description"])

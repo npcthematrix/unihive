@@ -113,6 +113,25 @@ def load_config(
     return resolved
 
 
+def merge_config_overlay(base: dict, overlay: dict) -> dict:
+    """把 config.yaml 的覆盖合并进 upstreams.yaml (就地修改并返回 base)。
+
+    语义刻意保持**浅层**合并 (与历史行为一致, gateway_server 与
+    ``unihive config lint`` 共用, 避免启动与校验两条链路合并结果漂移):
+
+    - 两边都是 dict 的顶层键: ``update`` 浅合并一层;
+    - 其余情况 (标量/列表/类型不同): overlay 整体覆盖。
+    """
+    for key, value in overlay.items():
+        if key not in base:
+            base[key] = value
+        elif isinstance(base[key], dict) and isinstance(value, dict):
+            base[key].update(value)
+        else:
+            base[key] = value
+    return base
+
+
 def validate_config(config: dict) -> list[str]:
     """校验配置结构。返回错误信息列表，空表示无错。"""
     errors: list[str] = []

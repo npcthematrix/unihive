@@ -204,3 +204,37 @@ class TestDotenvLoadedOnce:
         cl.load_config(cfg_file, strict_env=False)
 
         assert call_count["n"] == 1, f"dotenv 应只 load 一次, 实际 {call_count['n']}"
+
+
+class TestMergeConfigOverlay:
+    """config.yaml → upstreams.yaml 的浅层覆盖合并 (gateway 与 config lint 共用)。"""
+
+    def test_new_key_added(self):
+        from src.unihive.utils.config_loader import merge_config_overlay
+        base = {"a": 1}
+        merge_config_overlay(base, {"b": 2})
+        assert base == {"a": 1, "b": 2}
+
+    def test_scalar_overridden(self):
+        from src.unihive.utils.config_loader import merge_config_overlay
+        base = {"a": 1, "nested": {"x": 1, "y": 2}}
+        merge_config_overlay(base, {"a": 9, "nested": {"y": 9}})
+        # 浅层: nested 只 update 一层, x 保留
+        assert base == {"a": 9, "nested": {"x": 1, "y": 9}}
+
+    def test_list_replaced_not_extended(self):
+        from src.unihive.utils.config_loader import merge_config_overlay
+        base = {"items": [1, 2]}
+        merge_config_overlay(base, {"items": [3]})
+        assert base == {"items": [3]}
+
+    def test_type_mismatch_overlay_wins(self):
+        from src.unihive.utils.config_loader import merge_config_overlay
+        base = {"k": {"x": 1}}
+        merge_config_overlay(base, {"k": 5})
+        assert base == {"k": 5}
+
+    def test_returns_same_base_object(self):
+        from src.unihive.utils.config_loader import merge_config_overlay
+        base: dict = {}
+        assert merge_config_overlay(base, {"a": 1}) is base

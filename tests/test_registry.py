@@ -346,3 +346,30 @@ class TestValidateSpecs:
         specs = [{"name": "a", "routing": "missing"}]
         with pytest.raises(ValueError, match="validation failed"):
             validate_specs(specs, {}, {}, strict=True)
+
+
+class TestResolvePythonType:
+    """spec type 字符串 → 注册器实际使用的 Python 类型 (与 config_lint 共用真值)。"""
+
+    def test_known_exact_types(self):
+        from unihive.core.registry import resolve_python_type
+        assert resolve_python_type("str") is str
+        assert resolve_python_type("int") is int
+        assert resolve_python_type("List[str]") is list
+        assert resolve_python_type("array") is list
+
+    def test_generic_list_variants_all_arrays(self):
+        from unihive.core.registry import resolve_python_type
+        assert resolve_python_type("List") is list
+        assert resolve_python_type("List[List[str]]") is list
+        assert resolve_python_type("List[dict]") is list
+
+    def test_dict_variants_are_objects(self):
+        from unihive.core.registry import resolve_python_type
+        assert resolve_python_type("Dict") is dict
+        assert resolve_python_type("Dict[str, Any]") is dict
+
+    def test_unknown_returns_none(self):
+        from unihive.core.registry import resolve_python_type
+        assert resolve_python_type("DateTime") is None
+        assert resolve_python_type("function") is None

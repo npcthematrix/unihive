@@ -30,7 +30,12 @@ def filter_specs_by_env(specs: list[dict]) -> list[dict]:
     ]
 
 
-def load_all_tools(config_path: Path, config: dict) -> list[dict]:
+def load_all_tools(
+    config_path: Path,
+    config: dict,
+    *,
+    include_env_gated: bool = False,
+) -> list[dict]:
     """Merge ``config[upstreams.yaml].tools`` with the generated tools file
     (``tools_tdx_quant.yaml`` looked up next to ``config_path`` or in
     ``./config/``). For every generated spec, copy its inline
@@ -38,8 +43,18 @@ def load_all_tools(config_path: Path, config: dict) -> list[dict]:
     downstream consumers can look up the source by routing key.
 
     Mutates ``config`` in place. Returns the merged tool-spec list.
+
+    Args:
+        include_env_gated: 连 ``requires_env`` 门控的 spec 一并加载。
+            运行时注册保持门控 (默认 False); ``unihive config lint`` 传 True,
+            因为目录正确性校验不应依赖本机是否打开了写工具开关。
     """
-    tools: list[dict] = filter_specs_by_env(list(config.get("tools", []) or []))
+    source_tools = list(config.get("tools", []) or [])
+    tools: list[dict] = (
+        list(source_tools)
+        if include_env_gated
+        else filter_specs_by_env(source_tools)
+    )
     top_mapping = config.setdefault("upstream_tool_mapping", {})
     base_dir = config_path.parent.resolve()
     for filename in _GENERATED_FILENAMES:
@@ -51,7 +66,12 @@ def load_all_tools(config_path: Path, config: dict) -> list[dict]:
             if candidate.exists():
                 with candidate.open(encoding="utf-8") as f:
                     gen_cfg = yaml.safe_load(f) or {}
-                gen_tools = filter_specs_by_env(list(gen_cfg.get("tools", []) or []))
+                gen_source = list(gen_cfg.get("tools", []) or [])
+                gen_tools = (
+                    gen_source
+                    if include_env_gated
+                    else filter_specs_by_env(gen_source)
+                )
                 tools.extend(gen_tools)
                 for spec in gen_tools:
                     rk = spec.get("routing")

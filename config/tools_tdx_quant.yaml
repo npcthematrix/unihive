@@ -68,7 +68,7 @@ tools:
     description: 单个股票代码，如 `'300505.SZ'`
   - name: field_list
     required: false
-    type: List
+    type: List[str]
     description: 可选，指定返回字段（大小写不敏感）；空列表返回所有字段
 - name: get_stock_info
   description: 获取股票基础信息
@@ -84,7 +84,7 @@ tools:
     description: 股票代码，如 `'600519.SH'` 或 `'000001.SZ'`
   - name: field_list
     required: false
-    type: List
+    type: List[str]
     description: 字段列表，不能为空，必须明确指定字段（如 `['Name', 'Market']`）
 - name: get_relation
   description: 获取指定股票所属的全部板块信息。
@@ -132,7 +132,7 @@ tools:
     description: 股票代码，如 `'600519.SH'`
   - name: field_list
     required: false
-    type: List
+    type: List[str]
     description: 字段列表，空则返回所有字段
 - name: get_gb_info
   description: 获取股本信息
@@ -599,10 +599,6 @@ tools:
     required: true
     type: List[str]
     description: 股票代码列表，最多 100 只
-  - name: callback
-    required: false
-    type: function
-    description: 回调函数，行情变化时触发
 - name: unsubscribe_hq
   description: 取消订阅
   routing: unsubscribe_hq
@@ -760,7 +756,7 @@ tools:
   params:
   - name: df_list
     required: true
-    type: Any
+    type: List[dict]
     description: ''
   - name: sp_name
     required: false
@@ -772,23 +768,23 @@ tools:
     description: ''
   - name: jsn_filenames
     required: false
-    type: Optional
+    type: List[str]
     description: ''
   - name: vertical
     required: false
-    type: Optional
+    type: int
     description: ''
   - name: horizontal
     required: false
-    type: Optional
+    type: int
     description: ''
   - name: height
     required: false
-    type: Optional
+    type: List[str]
     description: ''
   - name: table_names
     required: false
-    type: Optional
+    type: List[str]
     description: ''
 - name: get_trading_dates
   description: 获取交易日列表
@@ -844,7 +840,7 @@ tools:
     description: ''
   - name: stock_data
     required: false
-    type: List
+    type: List[dict]
     description: '`formula_format_data` 格式化后的数据'
   - name: count
     required: false
