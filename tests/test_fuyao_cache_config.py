@@ -1,20 +1,17 @@
-"""FUYAO cache 配置模型 + save_fuyao_cache (PATCH 写盘 + 乐观锁) + cache_strategy 命中路径。"""
+"""FUYAO 工具级 TTL 覆盖: pydantic 模型 + save/get (config.db overlay) + cache_strategy 命中。
+
+2026-09-18 P1: 持久化从 YAML endpoints 模型改为 config.db 薄 overlay
+(fuyao_cache.tools.<tool> 点路径, 全局整数 revision 乐观锁)。
+"""
 from __future__ import annotations
 
-import importlib
-import sys
-import textwrap
-from pathlib import Path
-
 import pytest
-import yaml
+from pydantic import ValidationError
 
 from src.unihive.core import cache_strategy
-from src.unihive.models.fuyao_cache import (
-    FUYAO_ENDPOINT_NAMES,
-    FuyaoCacheConfig,
-    default_fuyao_cache_config,
-)
+from src.unihive.models.fuyao_cache import FuyaoCacheConfig
+from src.unihive.storage.config_store import ConfigStore
+from src.unihive.utils import console_api as ca
 
 
 # ---------------------------------------------------------------------------
@@ -23,246 +20,211 @@ from src.unihive.models.fuyao_cache import (
 
 
 class TestFuyaoCacheConfigSchema:
-    def test_default_factory_returns_four_endpoints(self):
-        cfg = default_fuyao_cache_config()
-        assert set(cfg.endpoints.keys()) == set(FUYAO_ENDPOINT_NAMES)
+    def test_default_is_empty_tools(self):
+        cfg = FuyaoCacheConfig()
+        assert cfg.tools == {}
+        assert cfg.is_empty() is True
+        assert cfg.override_count() == 0
 
-    def test_endpoints_known_only(self):
-        with pytest.raises(ValueError, match="未知的 fuyao endpoint"):
-            FuyaoCacheConfig.model_validate({
-                "endpoints": {"fuyao_unknown": {"default": 60, "override": {}}}
-            })
+    def test_tools_map_accepted(self):
+        cfg = FuyaoCacheConfig(tools={"get_a_share_history": 60, "get_fund_nav": 0})
+        assert cfg.override_count() == 2
+        assert cfg.is_empty() is False
 
-    def test_default_must_be_non_negative_int(self):
-        with pytest.raises(ValueError):
-            FuyaoCacheConfig.model_validate({
-                "endpoints": {"fuyao_ashare": {"default": -1, "override": {}}}
-            })
+    @pytest.mark.parametrize("bad", [-1, -60])
+    def test_negative_ttl_rejected(self, bad):
+        with pytest.raises(ValidationError):
+            FuyaoCacheConfig(tools={"t": bad})
 
-    def test_override_seconds_must_be_non_negative(self):
-        with pytest.raises(ValueError):
-            FuyaoCacheConfig.model_validate({
-                "endpoints": {"fuyao_ashare": {"default": 60, "override": {"foo": -1}}}
-            })
+    def test_bool_rejected(self):
+        # bool 是 int 子类 — 必须显式挡掉, 否则 True 会被当成 1 秒
+        with pytest.raises(ValidationError):
+            FuyaoCacheConfig(tools={"t": True})  # type: ignore[dict-item]
 
-    def test_override_keys_sorted_after_validation(self):
-        cfg = FuyaoCacheConfig.model_validate({
-            "endpoints": {
-                "fuyao_ashare": {"default": 60, "override": {"zeta": 10, "alpha": 20}}
-            }
-        })
-        assert list(cfg.endpoints["fuyao_ashare"].override.keys()) == ["alpha", "zeta"]
+    @pytest.mark.parametrize("bad", ["60", 1.5, None])
+    def test_non_int_ttl_rejected(self, bad):
+        with pytest.raises(ValidationError):
+            FuyaoCacheConfig(tools={"t": bad})
 
-    def test_extra_keys_rejected(self):
-        with pytest.raises(ValueError):
-            FuyaoCacheConfig.model_validate({
-                "endpoints": {
-                    "fuyao_ashare": {"default": 60, "override": {}, "rogue": 1}
-                }
-            })
+    def test_empty_tool_name_rejected(self):
+        with pytest.raises(ValidationError):
+            FuyaoCacheConfig(tools={"": 60})
 
-    def test_total_override_count(self):
-        cfg = FuyaoCacheConfig.model_validate({
-            "endpoints": {
-                "fuyao_ashare": {"default": 60, "override": {"a": 1, "b": 2}},
-                "fuyao_index": {"default": 300, "override": {"c": 3}},
-                "fuyao_meta": {"default": 86400, "override": {}},
-                "fuyao_fund": {"default": 600, "override": {}},
-            }
-        })
-        assert cfg.total_override_count() == 3
+    def test_extra_field_forbidden(self):
+        with pytest.raises(ValidationError):
+            FuyaoCacheConfig(tools={"t": 60}, endpoints={})  # type: ignore[call-arg]
+
+    def test_zero_means_explicit_no_cache(self):
+        cfg = FuyaoCacheConfig(tools={"t": 0})
+        assert cfg.is_empty() is False
+        assert cfg.override_count() == 1
 
 
 # ---------------------------------------------------------------------------
-# cache_strategy.get_fuyao_endpoint_for_tool
+# console_api save/get — config.db overlay 语义
 # ---------------------------------------------------------------------------
 
-
-class TestGetFuyaoEndpoint:
-    def test_single_fuyao_upstream(self):
-        cfg = {"upstream_tool_mapping": {"foo": {"fuyao_ashare": "x"}}}
-        assert cache_strategy.get_fuyao_endpoint_for_tool(cfg, "foo") == "fuyao_ashare"
-
-    def test_picks_first_endpoint_in_chain_order(self):
-        cfg = {
-            "upstream_tool_mapping": {
-                "foo": {"fuyao_index": "x", "fuyao_ashare": "y"}
-            }
-        }
-        assert cache_strategy.get_fuyao_endpoint_for_tool(cfg, "foo") == "fuyao_index"
-
-    def test_mixed_chain_returns_none(self):
-        cfg = {"upstream_tool_mapping": {"foo": {"fuyao_ashare": "x", "mootdx2": "y"}}}
-        assert cache_strategy.get_fuyao_endpoint_for_tool(cfg, "foo") is None
-
-    def test_no_mapping_returns_none(self):
-        assert cache_strategy.get_fuyao_endpoint_for_tool({}, "foo") is None
-
-    def test_empty_tool_returns_none(self):
-        assert cache_strategy.get_fuyao_endpoint_for_tool({"upstream_tool_mapping": {"foo": {}}}, "") is None
-
-
-# ---------------------------------------------------------------------------
-# cache_strategy.fuyao_ttl_for (override → default → None 三级回退)
-# ---------------------------------------------------------------------------
-
-
-class TestFuyaoTtlFor:
-    @pytest.fixture
-    def cfg(self):
-        return {
-            "upstream_tool_mapping": {
-                "tool_a": {"fuyao_ashare": "x"},
-                "tool_b": {"fuyao_index": "x"},
-                "tool_c": {"fuyao_meta": "x"},
-            },
-            "fuyao_cache": {
-                "endpoints": {
-                    "fuyao_ashare": {"default": 300, "override": {"tool_a": 60}},
-                    "fuyao_index": {"default": 3600, "override": {}},
-                    "fuyao_meta": {"default": 0, "override": {}},
-                }
-            },
-        }
-
-    def test_override_wins_over_default(self, cfg):
-        assert cache_strategy.fuyao_ttl_for(cfg, "tool_a") == 60
-
-    def test_default_used_when_no_override(self, cfg):
-        assert cache_strategy.fuyao_ttl_for(cfg, "tool_b") == 3600
-
-    def test_zero_default_returned_as_zero(self, cfg):
-        """TTL=0 有效 (实时/不缓存), 必须返回 0 而非 None。"""
-        assert cache_strategy.fuyao_ttl_for(cfg, "tool_c") == 0
-
-    def test_unknown_tool_returns_none(self, cfg):
-        assert cache_strategy.fuyao_ttl_for(cfg, "tool_unknown") is None
-
-    def test_endpoint_explicit_override(self, cfg):
-        """显式传入 endpoint 可跳过 mapping 查询, 用于调用方已确认场景。"""
-        assert cache_strategy.fuyao_ttl_for(cfg, "tool_a", endpoint="fuyao_ashare") == 60
-
-    def test_no_fuyao_cache_section(self):
-        cfg = {"upstream_tool_mapping": {"tool_a": {"fuyao_ashare": "x"}}}
-        assert cache_strategy.fuyao_ttl_for(cfg, "tool_a") is None
-
-    def test_mixed_chain_returns_none(self):
-        cfg = {
-            "upstream_tool_mapping": {"foo": {"fuyao_ashare": "x", "mootdx2": "y"}},
-            "fuyao_cache": {"endpoints": {"fuyao_ashare": {"default": 60, "override": {}}}},
-        }
-        assert cache_strategy.fuyao_ttl_for(cfg, "foo") is None
-
-    def test_fallback_to_global_ttl_when_fuyao_returns_none(self):
-        """fuyao_ttl_for 返回 None 时, 调用方应回退 ttl_for(cache.ttl[ttl_key])。"""
-        config = {"cache": {"ttl": {"fundamentals": 3600}}}
-        assert cache_strategy.ttl_for(config, "fundamentals") == 3600
-        # fuyao 未配置 → None, 不会污染全局
-        assert cache_strategy.fuyao_ttl_for(config, "foo") is None
-
-
-# ---------------------------------------------------------------------------
-# save_fuyao_cache (落盘 + 乐观锁)
-# ---------------------------------------------------------------------------
+YAML_BASE = (
+    "upstreams:\n"
+    "  fuyao_a_share:\n"
+    "    enabled: true\n"
+    "    type: http\n"
+    "upstream_tool_mapping:\n"
+    "  t_fuyao_only:\n"
+    "    fuyao_a_share: t_fuyao_only\n"
+    "  t_mixed:\n"
+    "    mootdx2: t_mixed\n"
+    "    fuyao_a_share: t_mixed\n"
+)
 
 
 @pytest.fixture
-def upstream_yaml(tmp_path: Path, monkeypatch) -> Path:
-    """写一份最小 upstreams.yaml + 加载 console_api 模块, 用 monkeypatch 切 GATEWAY_CONFIG_PATH。"""
-    p = tmp_path / "upstreams.yaml"
-    p.write_text(
-        textwrap.dedent("""\
-            upstreams:
-              fuyao_ashare:
-                enabled: true
-                type: http
-                base_url: "https://example.com/mcp"
-                api_key: "test"
-            cache:
-              ttl:
-                fundamentals: 3600
-            """),
-        encoding="utf-8",
+async def fuyao_env(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "upstreams.yaml"
+    cfg_file.write_text(YAML_BASE, encoding="utf-8")
+    monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(cfg_file))
+    store = ConfigStore(tmp_path / "config.db")
+    await store.initialize()
+    ca.set_config_store(store, [], 0)
+    yield store
+    ca.set_config_store(None)
+    await store.close()
+
+
+async def test_save_creates_overlay_rows_single_revision(fuyao_env):
+    result = await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 60}})
+    assert result == {
+        "fuyao_cache": {"tools": {"t_fuyao_only": 60}},
+        "version": 1,
+    }
+    assert await fuyao_env.revision() == 1
+    row = await fuyao_env.get_overlay("fuyao_cache.tools.t_fuyao_only")
+    assert row is not None and row.value == 60
+
+
+async def test_get_reflects_overlays_with_int_version(fuyao_env):
+    assert ca.get_fuyao_cache() == {"tools": {}, "version": 0}
+    await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 0}})
+    got = ca.get_fuyao_cache()
+    assert got["tools"] == {"t_fuyao_only": 0}
+    assert isinstance(got["version"], int) and got["version"] == 1
+
+
+async def test_dropped_tool_row_is_deleted(fuyao_env):
+    await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 60, "other": 10}})
+    await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 60}})
+    rows = {r.path for r in await fuyao_env.list_overlays(prefix="fuyao_cache.tools.")}
+    assert rows == {"fuyao_cache.tools.t_fuyao_only"}
+
+
+async def test_value_equal_to_yaml_baseline_deletes_row(tmp_path, monkeypatch):
+    yaml_text = YAML_BASE + "fuyao_cache:\n  tools:\n    t_fuyao_only: 30\n"
+    cfg_file = tmp_path / "upstreams.yaml"
+    cfg_file.write_text(yaml_text, encoding="utf-8")
+    monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(cfg_file))
+    store = ConfigStore(tmp_path / "config.db")
+    await store.initialize()
+    ca.set_config_store(store, [], 0)
+    try:
+        # 出厂 30: 改成 60 落覆盖, 再改回 30 行被删, 生效值回落 30
+        await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 60}})
+        await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 30}})
+        assert await store.list_overlays() == []
+        assert ca.get_fuyao_cache()["tools"] == {"t_fuyao_only": 30}
+    finally:
+        ca.set_config_store(None)
+        await store.close()
+
+
+async def test_save_stale_revision_raises_conflict(fuyao_env):
+    with pytest.raises(ca.VersionConflict):
+        await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 60}}, expected_version=99)
+    # 事务回滚, 不留行
+    assert await fuyao_env.list_overlays() == []
+
+
+async def test_numeric_string_version_accepted(fuyao_env):
+    result = await ca.save_fuyao_cache(
+        {"tools": {"t_fuyao_only": 60}}, expected_version="0"
     )
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent.parent))
-    # 强制 reload console_api, 让 GATEWAY_CONFIG_PATH 指向 tmp
-    if "src.unihive.utils.console_api" in sys.modules:
-        del sys.modules["src.unihive.utils.console_api"]
-    import src.unihive.utils.console_api as ca
-
-    monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(p))
-    return p
+    assert result["version"] == 1
 
 
-class TestSaveFuyaoCache:
-    def test_writes_endpoints_and_preserves_other_sections(self, upstream_yaml):
-        ca = importlib.import_module("src.unihive.utils.console_api")
-        result = ca.save_fuyao_cache(
-            {
-                "endpoints": {
-                    "fuyao_ashare": {"default": 120, "override": {"tool_a": 30}}
-                }
-            },
-            expected_version=None,
-        )
-        assert result["fuyao_cache"]["endpoints"]["fuyao_ashare"]["default"] == 120
-        assert result["fuyao_cache"]["endpoints"]["fuyao_ashare"]["override"]["tool_a"] == 30
-        # 其他顶层段必须保留
-        data = yaml.safe_load(upstream_yaml.read_text(encoding="utf-8"))
-        assert "upstreams" in data
-        assert data["cache"]["ttl"]["fundamentals"] == 3600
-        assert "fuyao_cache" in data
+async def test_save_validates_payload(fuyao_env):
+    with pytest.raises(ValueError):
+        await ca.save_fuyao_cache({"tools": {"t": -5}})
+    with pytest.raises(ValueError):
+        await ca.save_fuyao_cache({"tools": {"t": "60"}})
 
-    def test_version_conflict_raises(self, upstream_yaml):
-        ca = importlib.import_module("src.unihive.utils.console_api")
-        with pytest.raises(ca.VersionConflict, match="版本不一致"):
-            ca.save_fuyao_cache(
-                {"endpoints": {"fuyao_ashare": {"default": 60, "override": {}}}},
-                expected_version="wrong-version",
-            )
 
-    def test_validation_error_for_negative_default(self, upstream_yaml):
-        ca = importlib.import_module("src.unihive.utils.console_api")
-        with pytest.raises(ValueError, match="校验失败"):
-            ca.save_fuyao_cache(
-                {"endpoints": {"fuyao_ashare": {"default": -10, "override": {}}}},
-                expected_version=None,
-            )
+async def test_save_without_store_raises_unavailable(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "upstreams.yaml"
+    cfg_file.write_text(YAML_BASE, encoding="utf-8")
+    monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(cfg_file))
+    ca.set_config_store(None)
+    with pytest.raises(ca.ConfigStoreUnavailable):
+        await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 60}})
 
-    def test_validation_error_for_unknown_endpoint(self, upstream_yaml):
-        ca = importlib.import_module("src.unihive.utils.console_api")
-        with pytest.raises(ValueError, match="校验失败"):
-            ca.save_fuyao_cache(
-                {"endpoints": {"fuyao_bogus": {"default": 60, "override": {}}}},
-                expected_version=None,
-            )
 
-    def test_load_config_includes_version(self, upstream_yaml):
-        ca = importlib.import_module("src.unihive.utils.console_api")
-        result = ca.load_config()
-        assert "version" in result
-        assert len(result["version"]) == 16
+async def test_save_hot_updates_injected_runtime_config(fuyao_env, monkeypatch):
+    runtime = {"cache": {"ttl": {}}}
+    monkeypatch.setattr(ca, "_GW_CFG", runtime)
+    monkeypatch.setattr(ca, "_INJECTED", True)
+    await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 60, "other": 0}})
+    assert runtime["fuyao_cache"]["tools"] == {"t_fuyao_only": 60, "other": 0}
+    # 清空保存 → 运行时也清空
+    await ca.save_fuyao_cache({"tools": {}})
+    assert runtime["fuyao_cache"]["tools"] == {}
 
-    def test_get_fuyao_cache_returns_empty_when_unset(self, upstream_yaml):
-        ca = importlib.import_module("src.unihive.utils.console_api")
-        result = ca.get_fuyao_cache()
-        assert result["endpoints"] == {}
 
-    def test_round_trip(self, upstream_yaml):
-        ca = importlib.import_module("src.unihive.utils.console_api")
-        version1 = ca.load_config()["version"]
-        saved = ca.save_fuyao_cache(
-            {
-                "endpoints": {
-                    "fuyao_ashare": {"default": 200, "override": {"x": 50}},
-                    "fuyao_index": {"default": 1200, "override": {}},
-                }
-            },
-            expected_version=version1,
-        )
-        # version 必须变化 (mtime 变化)
-        assert saved["version"] != version1
-        # 再读 — 一致
-        loaded = ca.get_fuyao_cache()
-        assert loaded["endpoints"]["fuyao_ashare"]["default"] == 200
-        assert loaded["endpoints"]["fuyao_ashare"]["override"]["x"] == 50
+async def test_yaml_baseline_file_never_written(fuyao_env, tmp_path):
+    import time
+
+    cfg_file = tmp_path / "upstreams.yaml"
+    before = cfg_file.stat().st_mtime_ns
+    time.sleep(0.01)
+    await ca.save_fuyao_cache({"tools": {"t_fuyao_only": 60}})
+    assert cfg_file.stat().st_mtime_ns == before
+
+
+# ---------------------------------------------------------------------------
+# cache_strategy.fuyao_ttl_for — 新 shape 命中路径
+# ---------------------------------------------------------------------------
+
+
+def _cfg_with(tools: dict) -> dict:
+    return {
+        "upstream_tool_mapping": {
+            "t_fuyao_only": {"fuyao_a_share": "x"},
+            "t_mixed": {"mootdx2": "x", "fuyao_a_share": "x"},
+        },
+        "fuyao_cache": {"tools": tools},
+    }
+
+
+def test_ttl_returns_tool_override_including_zero():
+    cfg = _cfg_with({"t_fuyao_only": 60})
+    assert cache_strategy.fuyao_ttl_for(cfg, "t_fuyao_only") == 60
+    cfg0 = _cfg_with({"t_fuyao_only": 0})
+    assert cache_strategy.fuyao_ttl_for(cfg0, "t_fuyao_only") == 0
+
+
+def test_ttl_none_when_unmapped():
+    assert cache_strategy.fuyao_ttl_for(_cfg_with({"other": 60}), "t_fuyao_only") is None
+    assert cache_strategy.fuyao_ttl_for({}, "t_fuyao_only") is None
+
+
+def test_ttl_none_for_mixed_chain():
+    # 多源混合链不加 fuyao 工具级 TTL, 回退全局 ttl_key
+    cfg = _cfg_with({"t_mixed": 60})
+    assert cache_strategy.fuyao_ttl_for(cfg, "t_mixed") is None
+
+
+def test_endpoint_gate_pure_fuyao_only():
+    cfg = _cfg_with({})
+    assert (
+        cache_strategy.get_fuyao_endpoint_for_tool(cfg, "t_fuyao_only")
+        == "fuyao_a_share"
+    )
+    assert cache_strategy.get_fuyao_endpoint_for_tool(cfg, "t_mixed") is None
+    assert cache_strategy.get_fuyao_endpoint_for_tool(cfg, "missing") is None

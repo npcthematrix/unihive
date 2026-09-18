@@ -1,8 +1,9 @@
-"""上游启用/禁用热开关测试 (2026-09-18)。
+"""上游启用/禁用热开关测试 (2026-09-18, P1 后持久化走 config.db overlay)。
 
 覆盖三层:
 1. tool_loader 纯函数: backer 解析 / enabled 过滤 (含多 backer 兜底语义);
-2. console_api: yaml 保格式定向改写 + save_upstream_enabled 乐观锁/校验;
+2. console_api: save_upstream_enabled / save_fuyao_cache 写 SQLite overlay,
+   乐观锁 revision、恢复出厂 (与出厂值相同则删行)、镜像合并读;
 3. GatewayServer.set_upstream_enabled: 热摘除/发布工具 + 断连/重连差集。
 """
 from __future__ import annotations
@@ -11,7 +12,6 @@ import asyncio
 import inspect
 
 import pytest
-import yaml
 
 from src.unihive.core.tool_loader import (
     backing_upstreams,
@@ -19,6 +19,7 @@ from src.unihive.core.tool_loader import (
     filter_specs_by_enabled,
 )
 from src.unihive.core.registry import register_tool, register_tools_from_config
+from src.unihive.storage.config_store import ConfigStore
 from src.unihive.utils import console_api as ca
 
 
@@ -99,7 +100,7 @@ def test_filter_hides_shared_tool_when_all_backers_disabled():
 
 
 # ---------------------------------------------------------------------------
-# 2. console_api yaml 改写 + 持久化
+# 2. console_api: SQLite overlay 持久化
 # ---------------------------------------------------------------------------
 
 SAMPLE_YAML = (
@@ -116,85 +117,18 @@ SAMPLE_YAML = (
 )
 
 
-def test_rewrite_flips_only_target_scalar():
-    out = ca.rewrite_upstream_enabled(SAMPLE_YAML, "alpha", False)
-    parsed = yaml.safe_load(out)
-    assert parsed["upstreams"]["alpha"]["enabled"] is False
-    # 其他块与顶层段原样
-    assert parsed["upstreams"]["beta"] == {"type": "stdio"}
-    assert parsed["routing"] == {}
-    changed = [
-        (i, a, b)
-        for i, (a, b) in enumerate(
-            zip(SAMPLE_YAML.splitlines(), out.splitlines()), start=1
-        )
-        if a != b
-    ]
-    assert changed == [(3, "    enabled: true", "    enabled: false")]
-
-
-def test_rewrite_inserts_enabled_when_missing():
-    out = ca.rewrite_upstream_enabled(SAMPLE_YAML, "beta", True)
-    parsed = yaml.safe_load(out)
-    assert parsed["upstreams"]["beta"]["enabled"] is True
-    # 插入位置在块头 (lines[4]='  beta:') 之后、type 之前
-    lines = out.splitlines()
-    assert lines[5] == "    enabled: true"
-    assert lines[6] == "    type: stdio"
-
-
-def test_rewrite_preserves_inline_comment_and_roundtrips():
-    out = ca.rewrite_upstream_enabled(SAMPLE_YAML, "gamma", True)
-    assert "# 行内注释保留" in out
-    assert yaml.safe_load(out)["upstreams"]["gamma"]["enabled"] is True
-    # 翻回去与原文逐字节一致
-    assert ca.rewrite_upstream_enabled(out, "gamma", False) == SAMPLE_YAML
-
-
-def test_rewrite_unknown_upstream_raises():
-    with pytest.raises(KeyError):
-        ca.rewrite_upstream_enabled(SAMPLE_YAML, "nope", True)
-
-
-def test_save_upstream_enabled_persists_and_versions(tmp_path, monkeypatch):
+@pytest.fixture
+async def store_env(tmp_path, monkeypatch):
+    """tmp YAML 基线 + 真 ConfigStore 注入 console_api。"""
     cfg_file = tmp_path / "upstreams.yaml"
     cfg_file.write_text(SAMPLE_YAML, encoding="utf-8")
     monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(cfg_file))
-
-    result = ca.save_upstream_enabled("alpha", False)
-    assert "version" in result and len(result["version"]) == 16
-    on_disk = yaml.safe_load(cfg_file.read_text(encoding="utf-8"))
-    assert on_disk["upstreams"]["alpha"]["enabled"] is False
-    # 注释/手工格式未被整文件 dump 破坏
-    assert "# 行内注释保留" in cfg_file.read_text(encoding="utf-8")
-
-
-def test_save_upstream_enabled_stale_version_conflicts(tmp_path, monkeypatch):
-    cfg_file = tmp_path / "upstreams.yaml"
-    cfg_file.write_text(SAMPLE_YAML, encoding="utf-8")
-    monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(cfg_file))
-    with pytest.raises(ca.VersionConflict):
-        ca.save_upstream_enabled("alpha", False, expected_version="stale-hash")
-    # 冲突时不得落盘
-    assert yaml.safe_load(cfg_file.read_text(encoding="utf-8"))[
-        "upstreams"
-    ]["alpha"]["enabled"] is True
-
-
-def test_rewrite_preserves_crlf_newline_style():
-    crlf_text = SAMPLE_YAML.replace("\n", "\r\n")
-    out = ca.rewrite_upstream_enabled(crlf_text, "alpha", False)
-    assert "\r\n" in out
-    # 不得混入裸 LF (除被 CRLF 包裹的之外)
-    assert "\n" not in out.replace("\r\n", "")
-    assert yaml.safe_load(out)["upstreams"]["alpha"]["enabled"] is False
-
-
-def test_rewrite_preserves_single_space_comment_gap():
-    text = "upstreams:\n  x:\n    enabled: true # 注释\nrouting: {}\n"
-    out = ca.rewrite_upstream_enabled(text, "x", False)
-    assert "    enabled: false # 注释" in out
-    assert ca.rewrite_upstream_enabled(out, "x", True) == text
+    store = ConfigStore(tmp_path / "config.db")
+    await store.initialize()
+    ca.set_config_store(store, [], 0)
+    yield {"store": store, "cfg_file": cfg_file}
+    ca.set_config_store(None)
+    await store.close()
 
 
 def test_registry_aliases_live_dict_not_snapshot():
@@ -212,14 +146,119 @@ def test_registry_aliases_live_dict_not_snapshot():
         ca.set_upstream_registry({})
 
 
-def test_save_upstream_enabled_validates_inputs(tmp_path, monkeypatch):
+async def test_save_disable_upserts_overlay_and_read_back(store_env):
+    result = await ca.save_upstream_enabled("alpha", False)
+    assert isinstance(result["version"], int) and result["version"] == 1
+
+    row = await store_env["store"].get_overlay("upstreams.alpha.enabled")
+    assert row is not None and row.value is False
+
+    # 同步读路径 (镜像刷新后) 立即反映
+    config = ca.load_config()
+    assert config["upstreams"]["alpha"]["enabled"] is False
+    assert config["version"] == 1
+    # 兄弟字段不丢
+    assert config["upstreams"]["alpha"]["type"] == "http"
+    # YAML 出厂文件一个字节都不动
+    assert store_env["cfg_file"].read_text(encoding="utf-8") == SAMPLE_YAML
+
+
+async def test_save_re_enable_to_factory_deletes_overlay(store_env):
+    await ca.save_upstream_enabled("gamma", True)   # factory false → upsert
+    assert await store_env["store"].revision() == 1
+    result = await ca.save_upstream_enabled("gamma", False)  # 回出厂 → delete
+    assert result["version"] == 2
+    assert await store_env["store"].list_overlays() == []
+    assert ca.load_config()["upstreams"]["gamma"]["enabled"] is False
+
+
+async def test_save_upstream_stale_revision_conflicts(store_env):
+    with pytest.raises(ca.VersionConflict):
+        await ca.save_upstream_enabled("alpha", False, expected_version=42)
+    # 冲突不留痕
+    assert await store_env["store"].list_overlays() == []
+
+
+async def test_save_upstream_validates_inputs(store_env):
+    with pytest.raises(KeyError):
+        await ca.save_upstream_enabled("ghost", True)
+    with pytest.raises(ValueError):
+        await ca.save_upstream_enabled("alpha", "true")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        await ca.save_upstream_enabled("alpha", True, expected_version="abc")
+
+
+async def test_save_without_store_is_503_class(tmp_path, monkeypatch):
     cfg_file = tmp_path / "upstreams.yaml"
     cfg_file.write_text(SAMPLE_YAML, encoding="utf-8")
     monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(cfg_file))
-    with pytest.raises(KeyError):
-        ca.save_upstream_enabled("ghost", True)
+    ca.set_config_store(None)
+    with pytest.raises(ca.ConfigStoreUnavailable):
+        await ca.save_upstream_enabled("alpha", False)
+
+
+async def test_fuyao_save_upserts_tool_rows_and_hot_updates_runtime(store_env, monkeypatch):
+    runtime_cfg = {"cache": {"ttl": {}}}
+    monkeypatch.setattr(ca, "_GW_CFG", runtime_cfg)
+    monkeypatch.setattr(ca, "_INJECTED", True)
+
+    result = await ca.save_fuyao_cache(
+        {"tools": {"get_x": 60, "get_y": 0}}, expected_version=0
+    )
+    assert result["version"] == 1
+    paths = {r.path: r.value for r in await store_env["store"].list_overlays()}
+    assert paths == {
+        "fuyao_cache.tools.get_x": 60,
+        "fuyao_cache.tools.get_y": 0,
+    }
+    got = ca.get_fuyao_cache()
+    assert got["tools"] == {"get_x": 60, "get_y": 0}
+    assert got["version"] == 1
+    # 热改进程内 config, fuyao_ttl_for 下次调用即生效
+    assert runtime_cfg["fuyao_cache"]["tools"] == {"get_x": 60, "get_y": 0}
+
+
+async def test_fuyao_save_dropped_tool_deletes_row(store_env, monkeypatch):
+    monkeypatch.setattr(ca, "_GW_CFG", {})
+    monkeypatch.setattr(ca, "_INJECTED", True)
+    await ca.save_fuyao_cache({"tools": {"get_x": 60, "get_y": 10}})
+    result = await ca.save_fuyao_cache({"tools": {"get_x": 60}})
+    rows = {r.path for r in await store_env["store"].list_overlays()}
+    assert rows == {"fuyao_cache.tools.get_x"}
+    assert result["version"] == 2
+
+
+async def test_fuyao_save_equal_to_baseline_deletes_row(tmp_path, monkeypatch):
+    yaml_text = SAMPLE_YAML + "fuyao_cache:\n  tools:\n    get_x: 30\n"
+    cfg_file = tmp_path / "upstreams.yaml"
+    cfg_file.write_text(yaml_text, encoding="utf-8")
+    monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(cfg_file))
+    store = ConfigStore(tmp_path / "config.db")
+    await store.initialize()
+    ca.set_config_store(store, [], 0)
+    try:
+        await ca.save_fuyao_cache({"tools": {"get_x": 60}})
+        # 改成出厂值 30 → 覆盖行删除, 生效值回落 YAML 30
+        await ca.save_fuyao_cache({"tools": {"get_x": 30}})
+        assert await store.list_overlays() == []
+        assert ca.get_fuyao_cache()["tools"] == {"get_x": 30}
+    finally:
+        ca.set_config_store(None)
+        await store.close()
+
+
+async def test_fuyao_save_validation(store_env):
     with pytest.raises(ValueError):
-        ca.save_upstream_enabled("alpha", "true")  # type: ignore[arg-type]
+        await ca.save_fuyao_cache({"tools": {"get_x": -1}})
+    with pytest.raises(ValueError):
+        await ca.save_fuyao_cache({"tools": {"get_x": "60"}})
+    with pytest.raises(ValueError):
+        await ca.save_fuyao_cache({"endpoints": {}})  # 旧 shape, extra forbid
+
+
+async def test_fuyao_batch_save_is_single_revision(store_env):
+    await ca.save_fuyao_cache({"tools": {f"t{i}": 10 + i for i in range(5)}})
+    assert await store_env["store"].revision() == 1
 
 
 # ---------------------------------------------------------------------------

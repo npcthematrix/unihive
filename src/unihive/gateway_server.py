@@ -26,6 +26,8 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .storage.cache import Cache, CacheConfig
+from .storage.config_store import ConfigStore
+from .core.config_merge import apply_config_overlays
 from .utils.config_loader import (
     load_config,
     merge_config_overlay,
@@ -298,6 +300,9 @@ class GatewayServer:
         # toggle 锁串行化并发的启用/禁用操作。
         self.tool_specs: list[dict] = []
         self._published_tools: set[str] = set()
+        # SQLite 薄覆盖层 (data/config.db), _do_initialize 早期装配;
+        # None 表示 UNIHIVE_CONFIG_SOURCE=yaml 逃生模式或尚未初始化。
+        self.config_store: ConfigStore | None = None
         self._upstream_toggle_lock = asyncio.Lock()
         self._running = False
         # initialize() 幂等位 + stop() 取消 health loop 的事件。
@@ -358,6 +363,54 @@ class GatewayServer:
                 return
             await self._do_initialize()
 
+    async def _apply_db_config_overlays(self) -> None:
+        """加载 data/config.db 薄覆盖层并合并进 self.config。
+
+        YAML (upstreams.yaml + config.yaml) 是出厂基线; SQLite 只存本机
+        差异 (upstreams.<n>.enabled / fuyao_cache.tools.<tool> ...),
+        设计见 docs/design/2026-09-18-sqlite-config-overlay.md。
+
+        - ``UNIHIVE_CONFIG_SOURCE=yaml`` 完全绕过 DB (故障逃生通道);
+        - ``UNIHIVE_CONFIG_DB`` 覆盖默认路径 data/config.db;
+        - 必须在任何 cache/client 构造之前执行: enabled 覆盖决定是否连上游。
+          合并后配置若过不了 validate_config, 直接 fail-closed, 避免在错误
+          配置上悄悄建连。
+        """
+        from .utils import console_api as _ca
+
+        source = os.environ.get("UNIHIVE_CONFIG_SOURCE", "db").strip().lower()
+        if source == "yaml":
+            logger.info("UNIHIVE_CONFIG_SOURCE=yaml, 跳过 SQLite 配置覆盖层")
+            _ca.set_config_store(None)
+            return
+        db_path = os.environ.get("UNIHIVE_CONFIG_DB", "data/config.db")
+        store = ConfigStore(db_path)
+        await store.initialize()
+        self.config_store = store
+        rows = await store.list_overlays()
+        revision = await store.revision()
+        # 同步读路径 (load_config / get_interfaces ...) 用行镜像合并, 不走 DB;
+        # 控制台写路径直接用这个 store 实例。
+        _ca.set_config_store(store, rows, revision)
+        if not rows:
+            return
+        merged = apply_config_overlays(self.config, rows)
+        errors = validate_config(merged)
+        if errors:
+            await store.close()
+            self.config_store = None
+            _ca.set_config_store(None)
+            raise ValueError(
+                f"Config overlay validation failed ({len(errors)} error(s)): "
+                + "; ".join(errors)
+            )
+        self.config = merged
+        _ca.set_config(self.config)
+        logger.info(
+            "Applied %d SQLite config overlay row(s) (revision=%d, db=%s)",
+            len(rows), await store.revision(), db_path,
+        )
+
     async def _do_initialize(self):
         logger.info("Initializing UniHive Gateway Server...")
 
@@ -367,6 +420,10 @@ class GatewayServer:
         from .utils import console_api as _ca
 
         try:
+            # SQLite 配置薄覆盖层: 必须在 cache/client 构造前合并,
+            # enabled 覆盖决定上游是否建连。
+            await self._apply_db_config_overlays()
+
             # 初始化缓存
             cache_cfg = self.config.get("cache", {})
             self.cache = Cache(CacheConfig(
@@ -1293,9 +1350,14 @@ class GatewayServer:
             payload = body.get("fuyao_cache") or {}
             expected_version = body.get("version")
             try:
-                result = _ca.save_fuyao_cache(
+                result = await _ca.save_fuyao_cache(
                     payload,
                     expected_version=expected_version,
+                )
+            except _ca.ConfigStoreUnavailable as e:
+                return JSONResponse(
+                    {"error": "config_store_unavailable", "message": str(e)},
+                    status_code=503,
                 )
             except _ca.VersionConflict as e:
                 return JSONResponse(
@@ -1467,6 +1529,8 @@ class GatewayServer:
         _ca.set_omni_client(None)
         # 2026-09-18: 摘掉热开关回调目标, 防止 stop 后 /api 仍调到死 server
         _ca.set_gateway_server(None)
+        # P1: 摘掉 config.db 写目标与 overlay 镜像, 支持同实例 stop/start
+        _ca.set_config_store(None)
         # LOW-1 (2026-09-14 audit): 显式关掉 probe executor, 不依赖 atexit
         # (stdio transport 下 atexit 不保证触发)。
         _ca._shutdown_probe_executor()
@@ -1516,6 +1580,13 @@ class GatewayServer:
                 except asyncio.TimeoutError:
                     logger.warning("cache close() timed out after 2s")
                 self.cache = None
+
+            # 关闭 SQLite 配置覆盖层连接池
+            # getattr 兜底: 测试用 __new__ 跳过 __init__ 时字段不存在
+            config_store = getattr(self, "config_store", None)
+            if config_store is not None:
+                await config_store.close()
+                self.config_store = None
 
             # 取消周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4)。
             # cache.close() 之后做, 确保最后一次 tick 不会与 close 抢锁。

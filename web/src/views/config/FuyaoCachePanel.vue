@@ -8,7 +8,8 @@
         <code class="fcp-key">TTL</code>
         处直接设置秒数 (留空 = 走全局
         <code class="fcp-key">cache.ttl[cache_ttl_key]</code>)。
-        提交后需重启网关生效。
+        只保存与出厂配置不同的差异, 保存后立即生效 (无需重启);
+        与出厂值相同的行会自动删除, 升级 YAML 基线不被本地覆盖挡住。
       </span>
     </div>
 
@@ -194,13 +195,19 @@ import {
   fuyaoEndpointOf,
   saveFuyaoCache,
 } from '@/api/config'
-import type { ConfigTool, FuyaoCacheConfig, FuyaoEndpointKey } from '@/api/config'
+import type {
+  ConfigRevision,
+  ConfigTool,
+  FuyaoCacheConfig,
+  FuyaoEndpointKey,
+} from '@/api/config'
 import { errorMessage } from '@/api/client'
+import { revisionOrSkip } from './revisions'
 
 interface Props {
   fuyaoCache?: FuyaoCacheConfig
-  /** GatewayConfig.version — 乐观锁, 提交时回带 */
-  configVersion: string
+  /** GatewayConfig.version — 乐观锁 revision, 提交时原样回带 (含 0) */
+  configVersion?: ConfigRevision
   /** 全部 gateway 工具列表 (来自 config.tools), 用于派生 FUYAO 工具及描述。 */
   allTools?: ConfigTool[]
   /** 工具路由映射 (来自 config.upstream_tool_mapping), 用于判断工具所属 FUYAO 端点。 */
@@ -209,7 +216,10 @@ interface Props {
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
-  (e: 'saved', payload: { fuyao_cache: NonNullable<FuyaoCacheConfig>; version: string }): void
+  (e: 'saved', payload: {
+    fuyao_cache: NonNullable<FuyaoCacheConfig>
+    version: ConfigRevision
+  }): void
 }>()
 
 const ENDPOINT_ORDER = FUYAO_ENDPOINT_KEYS
@@ -417,16 +427,19 @@ async function onSubmit() {
   if (!hasChanges.value || saving.value) return
   saving.value = true
   try {
-    const result = await saveFuyaoCache(buildPayload(), props.configVersion || '')
+    const result = await saveFuyaoCache(
+      buildPayload(),
+      revisionOrSkip(props.configVersion),
+    )
     for (const k of Object.keys(snapshot)) delete snapshot[k]
     for (const [k, v] of Object.entries(result.fuyao_cache.tools || {})) {
       snapshot[k] = v
     }
     emit('saved', { fuyao_cache: result.fuyao_cache, version: result.version })
-    ElMessage.success('FUYAO 缓存配置已保存, 请重启网关生效')
+    ElMessage.success('FUYAO 缓存配置已保存并立即生效')
   } catch (e: unknown) {
     const msg = errorMessage(e, '保存失败')
-    if (msg.includes('version_conflict') || msg.includes('版本不一致')) {
+    if (msg.includes('version_conflict') || msg.includes('revision 不一致')) {
       try {
         await ElMessageBox.confirm(
           '服务端配置已变更, 你的本地编辑基于旧版本。继续保存将覆盖他人改动。\n\n点击「刷新页面」加载最新版本后重新编辑。',

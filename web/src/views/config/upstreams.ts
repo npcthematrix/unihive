@@ -1,4 +1,4 @@
-import type { UpstreamConfig } from '@/api/config'
+import type { ConfigRevision, UpstreamConfig } from '@/api/config'
 
 /** 上游启用态判定。缺省 (enabled 字段缺失) 与后端一致视为禁用。 */
 export function isUpstreamEnabled(cfg: unknown): boolean {
@@ -18,8 +18,8 @@ export function toggleLabel(enabled: boolean): string {
 export interface UpstreamEnabledChanged {
   name: string
   enabled: boolean
-  /** 乐观锁新版本, ConfigView 必须回写到本地 config.version。 */
-  version: string
+  /** 乐观锁新版本 (config.db 整数 revision), ConfigView 必须回写本地 config.version。 */
+  version: ConfigRevision
   /** 启用时上游 client 是否真的连上 (禁用态恒为 false)。 */
   connected: boolean
   toolsAdded: string[]

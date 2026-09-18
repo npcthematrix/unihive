@@ -113,10 +113,24 @@
       >
         <FuyaoCachePanel
           :fuyao-cache="config?.fuyao_cache"
-          :config-version="config?.version || ''"
+          :config-version="config?.version"
           :all-tools="config?.tools"
           :upstream-tool-mapping="config?.upstream_tool_mapping"
           @saved="onFuyaoCacheSaved"
+        />
+      </section>
+
+      <section
+        v-show="activeTab === 'overlays'"
+        class="cfg-panel"
+        aria-labelledby="cfg-tab-overlays"
+      >
+        <OverlayPanel
+          :overlays="overlays"
+          :revision="overlayRevision"
+          :disabled="overlayDisabled"
+          :loading="overlayLoading"
+          @changed="onOverlayChanged"
         />
       </section>
     </div>
@@ -128,8 +142,13 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getConfig } from '@/api/config'
-import type { GatewayConfig, ProxySettings } from '@/api/config'
+import { getConfig, getConfigOverlays } from '@/api/config'
+import type {
+  ConfigOverlayRow,
+  ConfigRevision,
+  GatewayConfig,
+  ProxySettings,
+} from '@/api/config'
 import { getProxySettings } from '@/api/config'
 import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
@@ -143,6 +162,7 @@ import ToolsPanel from './config/ToolsPanel.vue'
 import CachePanel from './config/CachePanel.vue'
 import ProxyPanel from './config/ProxyPanel.vue'
 import FuyaoCachePanel from './config/FuyaoCachePanel.vue'
+import OverlayPanel from './config/OverlayPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -159,6 +179,12 @@ const lastRefresh = ref<number | null>(null)
 /** proxy 单独的时间戳 — 顶栏让用户区分 "config / 代理" 各自的加载时点。 */
 const proxyLastRefresh = ref<number | null>(null)
 const copyInFlight = ref(false)
+
+/** config.db 薄覆盖层 (P1): 行列表/revision/只读模式独立于 /api/config 拉取。 */
+const overlays = ref<ConfigOverlayRow[]>([])
+const overlayRevision = ref<number | null>(null)
+const overlayDisabled = ref(false)
+const overlayLoading = ref(false)
 
 const activeTab = ref<TabKey>('upstreams')
 
@@ -188,6 +214,8 @@ const fuyaoOverrideCount = computed(() => {
   const tools = config.value?.fuyao_cache?.tools
   return tools ? Object.keys(tools).length : 0
 })
+/** config.db 本地覆盖行数 (yaml 逃生模式下恒 0, 面板自身展示只读告警)。 */
+const overlayCount = computed(() => overlays.value.length)
 
 const TABS = computed(() => [
   { key: 'upstreams' as const, title: TAB_TITLES.upstreams, count: upstreamsCount.value },
@@ -196,6 +224,7 @@ const TABS = computed(() => [
   { key: 'cache' as const, title: TAB_TITLES.cache, count: ttlCount.value },
   { key: 'proxy' as const, title: TAB_TITLES.proxy, count: coverageCount.value },
   { key: 'fuyaoCache' as const, title: TAB_TITLES.fuyaoCache, count: fuyaoOverrideCount.value },
+  { key: 'overlays' as const, title: TAB_TITLES.overlays, count: overlayCount.value },
 ])
 
 async function loadProxy() {
@@ -213,6 +242,29 @@ async function loadProxy() {
   }
 }
 
+/** 拉 config.db 覆盖层列表; 503 = 网关以 yaml 逃生模式启动 (只读)。 */
+async function loadOverlays() {
+  overlayLoading.value = true
+  try {
+    const data = await getConfigOverlays()
+    overlays.value = data.overlays
+    overlayRevision.value = data.revision
+    overlayDisabled.value = false
+  } catch (e) {
+    const status = (e as { response?: { status?: number } })?.response?.status
+    if (status === 503) {
+      overlayDisabled.value = true
+      overlays.value = []
+      overlayRevision.value = null
+    } else {
+      // 非 503 的瞬时失败: 保留旧数据, toast 提示, 不动 disabled 态
+      ElMessage.error(errorMessage(e, '加载本地覆盖失败'))
+    }
+  } finally {
+    overlayLoading.value = false
+  }
+}
+
 async function load(isManual = false) {
   if (isManual) manualLoading.value = true
   else loading.value = true
@@ -227,6 +279,8 @@ async function load(isManual = false) {
     loading.value = false
     manualLoading.value = false
   }
+  // 覆盖层列表随 config 一起刷新 (独立失败, 不阻塞渲染)。
+  void loadOverlays()
   // proxy 单独拉, 失败不影响 config 渲染。
   // 当前在 proxy tab 时同步等待 (用户切到该 tab 应看到立即加载的数据),
   // 否则异步 (fire-and-forget) 不阻塞整体 load 延迟。
@@ -241,7 +295,7 @@ function onProxyChange(updated: ProxySettings) {
   proxy.value = updated
 }
 
-/** 上游热开关成功 — 不可变 patch 目标上游 enabled 与乐观锁 version。 */
+/** 上游热开关成功 — 不可变 patch 目标上游 enabled 与乐观锁 revision。 */
 function onUpstreamEnabled(payload: UpstreamEnabledChanged) {
   const current = config.value
   if (!current || !current.upstreams) return
@@ -254,10 +308,15 @@ function onUpstreamEnabled(payload: UpstreamEnabledChanged) {
     },
     version: payload.version,
   }
+  // enabled 覆盖行已增删, 刷新「本地覆盖」tab 的行数与 revision
+  void loadOverlays()
 }
 
-/** FUYAO 缓存保存成功 — 把新 fuyao_cache 与 version 回写到本地 config。 */
-function onFuyaoCacheSaved(payload: { fuyao_cache: NonNullable<GatewayConfig['fuyao_cache']>; version: string }) {
+/** FUYAO 缓存保存成功 — 把新 fuyao_cache 与 revision 回写到本地 config。 */
+function onFuyaoCacheSaved(payload: {
+  fuyao_cache: NonNullable<GatewayConfig['fuyao_cache']>
+  version: ConfigRevision
+}) {
   if (config.value) {
     config.value = {
       ...config.value,
@@ -265,6 +324,12 @@ function onFuyaoCacheSaved(payload: { fuyao_cache: NonNullable<GatewayConfig['fu
       version: payload.version,
     }
   }
+  void loadOverlays()
+}
+
+/** 覆盖层删除/清空成功 — revision 已变, 整表重拉 (生效 enabled/TTL 随之刷新)。 */
+function onOverlayChanged(_revision: ConfigRevision) {
+  void load()
 }
 
 const refreshLabel = computed(() => {

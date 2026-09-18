@@ -184,6 +184,7 @@ import {
   toggleLabel,
   type UpstreamEnabledChanged,
 } from './upstreams'
+import { isUsableRevision } from './revisions'
 
 interface Props {
   config: GatewayConfig | null
@@ -292,7 +293,8 @@ async function onToggle(row: UpstreamRow): Promise<void> {
     const result = await setUpstreamEnabled(
       row.name,
       next,
-      props.config?.version || '',
+      // revision 0 是合法初值, 不能用 || 把它吞成 '' (空串会跳过乐观锁校验)
+      props.config?.version ?? '',
     )
     emit('changed', {
       name: result.name,
@@ -319,24 +321,30 @@ async function onToggle(row: UpstreamRow): Promise<void> {
       )
     }
   } catch (e: unknown) {
-    // 500 runtime toggle failed / 503 runtime unavailable: yaml 已落盘并回带
-    // 新 version。必须消费掉它并对齐 enabled 态 —— 否则 UI 仍显示旧状态、
-    // 本地 version 陈旧, 用户下一次点击必然撞 409。重启网关即收敛到目标态。
-    const errResp = (e as { response?: { data?: { version?: unknown } } })?.response
-    const newVersion = errResp?.data?.version
-    if (typeof newVersion === 'string' && newVersion) {
+    const errData = (
+      e as { response?: { data?: { error?: string; version?: unknown } } }
+    )?.response?.data
+    // 503 config_store_unavailable: yaml 逃生模式, 覆盖层只读, 什么都没落库
+    if (errData?.error === 'config_store_unavailable') {
+      ElMessage.error(
+        '配置覆盖层未启用 (网关以 YAML 模式启动), 无法热切换; 请以默认模式重启网关',
+      )
+    } else if (isUsableRevision(errData?.version)) {
+      // 500 runtime toggle failed: overlay 已落库并回带新 revision。
+      // 必须消费掉它并对齐 enabled 态 —— 否则 UI 仍显示旧状态、
+      // 本地 revision 陈旧, 用户下一次点击必然撞 409。重启网关即收敛到目标态。
       emit('changed', {
         name: row.name,
         enabled: next,
-        version: newVersion,
+        version: errData!.version as string | number,
         connected: false,
         toolsAdded: [],
         toolsRemoved: [],
       })
-      ElMessage.warning('配置已保存并持久化, 但运行时热切换未完成, 重启网关后生效')
+      ElMessage.warning('配置已保存到覆盖层, 但运行时热切换未完成, 重启网关后生效')
     } else {
       const msg = errorMessage(e, '操作失败')
-      if (msg.includes('version_conflict') || msg.includes('版本不一致')) {
+      if (msg.includes('version_conflict') || msg.includes('revision 不一致')) {
         ElMessage.error('配置版本已变更, 请刷新页面后重试')
       } else {
         ElMessage.error(msg)

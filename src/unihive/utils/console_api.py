@@ -24,6 +24,12 @@ import httpx
 import yaml
 from cachetools import TTLCache
 
+from ..core.config_merge import apply_config_overlays
+from ..storage.config_store import (
+    RevisionConflict as _StoreRevisionConflict,
+    validate_path as _validate_overlay_path,
+)
+
 logger = logging.getLogger(__name__)
 
 # 项目根目录 (src/unihive/utils/console_api.py 向上 4 层)
@@ -41,6 +47,14 @@ CACHE_DB_PATH = str(_PROJECT_ROOT / "logs" / "cache.db")
 # 从配置文件读取，避免硬编码
 _GW_CFG: dict | None = None
 _INJECTED: bool = False
+
+# SQLite 配置薄覆盖层 (data/config.db), 由 GatewayServer._apply_db_config_overlays
+# 装配后注入。同步读路径 (load_config 等) 不碰 DB, 只合并 _overlay_rows 镜像;
+# 镜像在启动注入与每次写操作后刷新。None + 空镜像 = UNIHIVE_CONFIG_SOURCE=yaml
+# 逃生模式, 此时所有配置写接口返回 503。
+_config_store: Any = None
+_overlay_rows: list = []
+_overlay_revision: int = 0
 
 # OmniClient instance (injected by gateway_server)
 _OMNI_CLIENT: "OmniClient | None" = None
@@ -88,6 +102,27 @@ def set_config(config: dict) -> None:
     global _GW_CFG, _INJECTED
     _GW_CFG = config
     _INJECTED = True
+
+
+def set_config_store(store: Any, rows: list | None = None, revision: int = 0) -> None:
+    """注入 SQLite ConfigStore 与当前 overlay 行镜像 (Gateway 启动时)。
+
+    rows 元素只需有 ``.path`` / ``.value`` (ConfigStore.OverlayRow)。
+    传 ``store=None`` 进入 yaml 逃生模式 (UNIHIVE_CONFIG_SOURCE=yaml / stop)。
+    """
+    global _config_store, _overlay_rows, _overlay_revision
+    _config_store = store
+    _overlay_rows = list(rows or [])
+    _overlay_revision = int(revision)
+
+
+async def _refresh_overlay_snapshot() -> None:
+    """写操作后重新拉全量行 + revision, 更新同步读路径镜像。"""
+    global _overlay_rows, _overlay_revision
+    if _config_store is None:
+        return
+    _overlay_rows = list(await _config_store.list_overlays())
+    _overlay_revision = int(await _config_store.revision())
 
 
 def _load_gateway_config() -> dict:
@@ -178,8 +213,8 @@ def _mask_config_secrets(node: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def load_config() -> dict:
-    """加载并脱敏 config。复用 config_loader 解析 ${VAR} 占位符.
+def _read_yaml_config() -> dict:
+    """读 YAML 出厂基线 (upstreams.yaml + config.yaml), 未脱敏、不含 overlay。
 
     每次现取现读盘 — 不复用 GatewayServer.set_config() 注入的 _GW_CFG,
     因为:
@@ -218,11 +253,24 @@ def load_config() -> dict:
         with open(config_path, encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
 
+    return config
+
+
+def load_config() -> dict:
+    """当前生效配置快照: YAML 出厂基线 + SQLite overlay 镜像, 已脱敏。
+
+    overlay 行镜像由 Gateway 启动注入、每次控制台写操作后刷新, 因此本函数
+    保持同步、零 DB IO, get_upstream_status / get_interfaces 等同步调用方
+    无需改成 async。乐观锁 version 在 overlay 模式下是 config.db 的整数
+    revision; yaml 逃生模式 (store=None) 回落到文件元信息 hash。
+    """
+    config = _read_yaml_config()
+    if _overlay_rows:
+        config = apply_config_overlays(config, _overlay_rows)
     masked = _mask_config_secrets({**config})
-    # 乐观锁 version: 用两 yaml 文件 size+mtime 算一个轻量 hash。
-    # 客户端提交时附带 version, 后端 PUT 检测到不匹配 → 409。
-    # 故意不带内容 hash: 内容大且每次脱敏都生成新 dict, 用文件元信息足够。
-    masked["version"] = _compute_config_version()
+    masked["version"] = (
+        _overlay_revision if _config_store is not None else _compute_config_version()
+    )
     return masked
 
 
@@ -250,77 +298,120 @@ def _compute_config_version() -> str:
 
 
 def get_fuyao_cache() -> dict:
-    """读取 fuyao_cache 段, 不存在返回默认值。
+    """读取生效中的 fuyao 工具级 TTL: ``{"tools": {...}, "version": int}``。
 
-    2026-09-15 重构后新 shape: ``{"tools": {...}, "version": "..."}``。
-    读侧容错: 若 on-disk 仍是旧 shape (含 ``endpoints.<ep>.default``),
-    flatten ``endpoints[*].override`` 成 ``tools`` 后返回, 旧 ``default`` 字段丢弃。
+    来源 = YAML 基线 fuyao_cache.tools 合并 data/config.db 覆盖行
+    (经 load_config 镜像合并), 不直接读盘/读 DB。
     """
     config = load_config()
     fc = config.get("fuyao_cache")
-    if not isinstance(fc, dict):
-        return {"tools": {}, "version": config.get("version", "")}
-    # 旧 shape 容错: 有 endpoints 没 tools, flatten 一下
-    if "endpoints" in fc and "tools" not in fc:
-        tools: dict[str, int] = {}
-        for ep_cfg in fc.get("endpoints", {}).values():
-            if not isinstance(ep_cfg, dict):
-                continue
-            override = ep_cfg.get("override")
-            if isinstance(override, dict):
-                for k, v in override.items():
-                    if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
-                        tools[str(k)] = int(v)
-        return {"tools": tools, "version": config.get("version", "")}
-    return fc  # 新格式直通
+    tools = dict(fc.get("tools") or {}) if isinstance(fc, dict) else {}
+    return {"tools": tools, "version": config.get("version", 0)}
 
 
-def save_fuyao_cache(payload: dict, *, expected_version: str | None = None) -> dict:
-    """写入 fuyao_cache 段到 upstreams.yaml (新 shape: { tools: {...} })。
+async def save_fuyao_cache(payload: dict, *, expected_version: int | str | None = None) -> dict:
+    """把 fuyao 工具级 TTL 覆盖写入 data/config.db (事务化, 单 revision bump)。
 
-    - 只覆盖 fuyao_cache 子树, 其他顶层段 (upstreams / cache / tools / ...)
-      原样保留
-    - 启动期 config.yaml 已合并进 upstreams.yaml 的内容, 此处直接改 upstreams.yaml
-    - expected_version 与当前文件 version 不一致 → 抛 VersionConflict
+    - payload: ``{"tools": {gateway 工具名: 秒数}}``, pydantic 校验;
+    - 与 YAML 出厂值相同 (或出厂无此键且值缺失) 的行删除而非写入, overlay 只留差异;
+    - 面板未提交的旧覆盖行 (tools 里已没有) 一并删除;
+    - 成功后热改进程内 config, TTL 即时生效 (无需重启网关)。
     """
     from pydantic import ValidationError
 
     from ..models.fuyao_cache import FuyaoCacheConfig
 
+    store = _require_store()
     try:
         new_cfg = FuyaoCacheConfig.model_validate(payload)
     except ValidationError as e:
         raise ValueError(f"fuyao_cache 校验失败: {e}") from e
 
-    # 乐观锁
-    current_version = _compute_config_version()
-    if expected_version and expected_version != current_version:
-        raise VersionConflict(
-            f"config 版本不一致 (expected={expected_version}, current={current_version}); "
-            "请刷新页面后重试"
+    expected = _coerce_revision(expected_version)
+    baseline_tools = dict(
+        ((_read_yaml_config().get("fuyao_cache") or {}).get("tools") or {})
+    )
+
+    prefix = "fuyao_cache.tools."
+    existing = await store.list_overlays(prefix=prefix)
+    upserts: dict[str, int] = {}
+    deletes: list[str] = []
+    for tool, seconds in new_cfg.tools.items():
+        path = prefix + tool
+        _validate_overlay_path(path)
+        base = baseline_tools.get(tool)
+        same_as_baseline = (
+            isinstance(base, int)
+            and not isinstance(base, bool)
+            and int(base) == int(seconds)
         )
+        if same_as_baseline:
+            # 恢复出厂: 删行 (行不存在时 apply_changes 是 no-op)
+            deletes.append(path)
+        else:
+            upserts[path] = int(seconds)
+    for row in existing:
+        tool = row.path[len(prefix):]
+        if tool not in new_cfg.tools:
+            deletes.append(row.path)
 
-    config_path = Path(GATEWAY_CONFIG_PATH)
-    with open(config_path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    try:
+        revision = await store.apply_changes(upserts, deletes, expected)
+    except _StoreRevisionConflict as e:
+        raise VersionConflict(
+            f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
+            "请刷新页面后重试"
+        ) from e
 
-    raw["fuyao_cache"] = {
-        "tools": dict(new_cfg.tools),
-    }
-    # 用 default_flow_style=False 保持块格式; sort_keys=False 保留 key 顺序
-    with open(config_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+    await _refresh_overlay_snapshot()
 
-    # 失效 in-memory 缓存 (interfaces 30s cache / mcp-tools)
+    # 热改进程内 config: 用 load_config() 算出的生效 tools 直接同步,
+    # 保证 fuyao_ttl_for 下一次调用即读到新值。
+    effective = load_config()
+    effective_tools = (effective.get("fuyao_cache") or {}).get("tools") or {}
+    _sync_runtime_fuyao_tools(effective_tools)
+
     _interfaces_cache.clear()
     _mcp_tools_cache.clear()
-    # 触发 fuyao 客户端下次拿新 TTL: 不直接 reload (Gateway 进程内配置不动),
-    # 让运维重启生效 — 与 CachePanel banner "需重启网关" 一致。
 
-    return {
-        "fuyao_cache": raw["fuyao_cache"],
-        "version": _compute_config_version(),
-    }
+    return {"fuyao_cache": {"tools": dict(new_cfg.tools)}, "version": revision}
+
+
+def _sync_runtime_fuyao_tools(tools: dict) -> None:
+    """TTL 保存后热改 GatewayServer 注入的运行时 config (同一引用)。"""
+    cfg = _GW_CFG if _INJECTED and isinstance(_GW_CFG, dict) else None
+    if cfg is None:
+        return
+    fc = cfg.get("fuyao_cache")
+    if not isinstance(fc, dict):
+        fc = {}
+        cfg["fuyao_cache"] = fc
+    fc["tools"] = dict(tools)
+
+
+class ConfigStoreUnavailable(RuntimeError):
+    """overlay store 未注入 (UNIHIVE_CONFIG_SOURCE=yaml / 未启动) — 只读模式。"""
+
+
+def _require_store() -> Any:
+    if _config_store is None:
+        raise ConfigStoreUnavailable(
+            "配置覆盖层未启用 (UNIHIVE_CONFIG_SOURCE=yaml 或网关未初始化)"
+        )
+    return _config_store
+
+
+def _coerce_revision(raw: int | str | None) -> int | None:
+    """乐观锁 revision: None/空串跳过校验; 接受 int 与纯数字字符串。"""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool):
+        raise ValueError("version 必须是整数 revision")
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str) and re.fullmatch(r"\d+", raw):
+        return int(raw)
+    raise ValueError(f"无法识别的 version: {raw!r}; 请刷新页面后重试")
 
 
 class VersionConflict(Exception):
@@ -342,106 +433,146 @@ def set_gateway_server(server: Any) -> None:
     _gateway_server = server
 
 
-def _unquote_yaml_key(token: str) -> str:
-    token = token.strip()
-    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
-        return token[1:-1]
-    return token
-
-
-def rewrite_upstream_enabled(text: str, name: str, enabled: bool) -> str:
-    """定向改写 upstreams.yaml 文本中某上游块的 ``enabled`` 标量。
-
-    块定位: 恰好 2 空格缩进的 ``  <name>:`` 顶层 upstream 键, 区间到下一个
-    同级键; ``enabled`` 锚定恰好 4 空格缩进, 不会误改 retry 等嵌套子段。
-    块内无 enabled 时在块头后插入一行。刻意不整文件 yaml.safe_dump —— 那会
-    冲垮 mapping 段的手工对齐列与全部注释。文件换行风格 (LF/CRLF) 原样保留;
-    仅被改的那一行, 标量前规范化为单空格、注释间距保留原值。
-
-    Raises:
-        KeyError: 文本中找不到该 upstream 块
-    """
-    newline = "\r\n" if "\r\n" in text else "\n"
-    lines = text.splitlines()
-    header_idx: int | None = None
-    block_end = len(lines)
-    for i, line in enumerate(lines):
-        # 同级键: 恰好 2 空格 + 非空白, 形如 "  foo:" / "  foo:  # x"
-        m = re.match(r"^  ([^\s:#][^:]*):\s*(?:#.*)?$", line)
-        if not m:
-            continue
-        key = _unquote_yaml_key(m.group(1))
-        if key == name:
-            header_idx = i
-            for j in range(i + 1, len(lines)):
-                if re.match(r"^  \S", lines[j]):
-                    block_end = j
-                    break
-            break
-    if header_idx is None:
-        raise KeyError(f"upstream block {name!r} not found in config")
-
-    # 只换标量 token。注意 ": false" 中冒号后空格不可省 (YAML 里 "enabled:false"
-    # 会被当成普通字符串标量), 故统一输出单个空格; 尾部行内注释原样保留。
-    enabled_re = re.compile(r"^    enabled:\s*\S*([ \t]*)?(#.*)?$")
-    scalar = "true" if enabled else "false"
-    for i in range(header_idx + 1, block_end):
-        m = enabled_re.match(lines[i])
-        if m:
-            gap, comment = m.group(1) or "", m.group(2)
-            lines[i] = f"    enabled: {scalar}" + (f"{gap}{comment}" if comment else "")
-            break
-    else:
-        lines.insert(header_idx + 1, f"    enabled: {scalar}")
-
-    out = newline.join(lines)
-    if text.endswith("\n"):
-        out += newline
-    return out
-
-
-def save_upstream_enabled(
-    name: str, enabled: bool, *, expected_version: str | None = None
+async def save_upstream_enabled(
+    name: str, enabled: bool, *, expected_version: int | str | None = None
 ) -> dict:
-    """把某上游 enabled 持久化进 upstreams.yaml (保格式定向改写)。
+    """把某上游 enabled 以点路径覆盖持久化进 data/config.db。
 
-    只落盘, 不动运行态 —— HTTP handler 随后调
-    ``GatewayServer.set_upstream_enabled()`` 完成热增删/断连。
+    - 与出厂值相同 → 删除覆盖行 (恢复出厂, 升级时不挡基线新默认值);
+    - 不同 → upsert ``upstreams.<name>.enabled``, 整数 revision 乐观锁;
+    - 只落库; HTTP handler 随后调 GatewayServer.set_upstream_enabled()
+      完成热增删 / 断连。
     """
     if not isinstance(enabled, bool):
         raise ValueError("'enabled' must be a boolean")
-
-    current_version = _compute_config_version()
-    if expected_version and expected_version != current_version:
-        raise VersionConflict(
-            f"config 版本不一致 (expected={expected_version}, current={current_version}); "
-            "请刷新页面后重试"
-        )
-
-    path = Path(GATEWAY_CONFIG_PATH)
-    text = path.read_text(encoding="utf-8")
-    raw = yaml.safe_load(text) or {}
-    if name not in (raw.get("upstreams") or {}):
+    store = _require_store()
+    expected = _coerce_revision(expected_version)
+    upstreams = _read_yaml_config().get("upstreams") or {}
+    cfg = upstreams.get(name)
+    if not isinstance(cfg, dict):
         raise KeyError(f"Unknown upstream: {name}")
+    path = f"upstreams.{name}.enabled"
+    _validate_overlay_path(path)
+    factory_enabled = bool(cfg.get("enabled", False))
+    try:
+        if enabled == factory_enabled:
+            revision = await store.delete_overlay(
+                path, expected_revision=expected
+            )
+        else:
+            revision = await store.upsert_overlay(
+                path, enabled, expected_revision=expected
+            )
+    except _StoreRevisionConflict as e:
+        raise VersionConflict(
+            f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
+            "请刷新页面后重试"
+        ) from e
 
-    new_text = rewrite_upstream_enabled(text, name, enabled)
+    await _refresh_overlay_snapshot()
+    _interfaces_cache.clear()
+    _mcp_tools_cache.clear()
+    return {"version": revision}
 
-    # 落盘前语义复核: 目标位确实变成期望值
-    verified = yaml.safe_load(new_text) or {}
-    actual = bool((verified.get("upstreams") or {}).get(name, {}).get("enabled", False))
-    if actual != enabled:
-        raise RuntimeError(
-            f"enabled rewrite verification failed for {name!r}: got {actual}"
-        )
 
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(new_text)
-
-    # GET 侧缓存失效 (config 视图 / mcp-tools)
+async def _after_overlay_write() -> None:
+    """任意 overlay 写操作后的统一收尾: 刷新镜像 + fuyao TTL 热同步 + 清缓存。"""
+    await _refresh_overlay_snapshot()
+    effective = load_config()
+    effective_tools = (effective.get("fuyao_cache") or {}).get("tools") or {}
+    _sync_runtime_fuyao_tools(effective_tools)
     _interfaces_cache.clear()
     _mcp_tools_cache.clear()
 
-    return {"version": _compute_config_version()}
+
+async def _reconcile_enabled_overlays(paths: list[str]) -> list[str]:
+    """覆盖行删除后, 对 ``upstreams.<name>.enabled`` 路径做运行时热收敛。
+
+    行被删 = 恢复 YAML 出厂值, 据此调 GatewayServer.set_upstream_enabled。
+    GatewayServer 未注入 (stdio) 时跳过并登记提示; 运行时热改失败不阻断
+    请求 (行已落库, 重启后启动链按 overlay 收敛)。
+    """
+    warnings_list: list[str] = []
+    server = _gateway_server
+    for raw_path in paths:
+        m = re.fullmatch(r"upstreams\.([A-Za-z0-9_-]+)\.enabled", raw_path)
+        if m is None:
+            continue
+        if server is None:
+            warnings_list.append(f"{raw_path}: 运行时未注入, 重启后生效")
+            continue
+        name = m.group(1)
+        factory = bool(
+            ((_read_yaml_config().get("upstreams") or {}).get(name) or {}).get(
+                "enabled", False
+            )
+        )
+        try:
+            await server.set_upstream_enabled(name, factory)
+        except Exception as e:  # noqa: BLE001 - 行已落库, 重启收敛
+            logger.warning("enabled overlay reconcile failed for %s: %s", raw_path, e)
+            warnings_list.append(f"{raw_path}: {type(e).__name__}: {e}"[:200])
+    return warnings_list
+
+
+def list_config_overlays() -> dict:
+    """覆盖层全量行 (同步读镜像, 零 DB IO)。
+
+    返回 ``{"revision": int, "overlays": [{path, value, revision, updated_at}]}``。
+    """
+    _require_store()
+    return {
+        "revision": _overlay_revision,
+        "overlays": [
+            {
+                "path": row.path,
+                "value": row.value,
+                "revision": row.revision,
+                "updated_at": row.updated_at,
+            }
+            for row in _overlay_rows
+        ],
+    }
+
+
+async def delete_config_overlay(
+    path: str, *, expected_version: int | str | None = None
+) -> dict:
+    """删除单行覆盖 (恢复该路径出厂值), 返回 ``{"path", "version", "warnings"}``。"""
+    store = _require_store()
+    _validate_overlay_path(path)
+    expected = _coerce_revision(expected_version)
+    try:
+        revision = await store.delete_overlay(path, expected_revision=expected)
+    except _StoreRevisionConflict as e:
+        raise VersionConflict(
+            f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
+            "请刷新页面后重试"
+        ) from e
+
+    await _after_overlay_write()
+    warnings_list = await _reconcile_enabled_overlays([path])
+    return {"path": path, "version": revision, "warnings": warnings_list}
+
+
+async def reset_config_overlays(
+    *, expected_version: int | str | None = None
+) -> dict:
+    """清空全部覆盖行 (一键恢复出厂), 返回 ``{"version", "warnings"}``。"""
+    store = _require_store()
+    affected = [row.path for row in _overlay_rows]
+    expected = _coerce_revision(expected_version)
+    try:
+        revision = await store.reset(expected_revision=expected)
+    except _StoreRevisionConflict as e:
+        raise VersionConflict(
+            f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
+            "请刷新页面后重试"
+        ) from e
+
+    await _after_overlay_write()
+    warnings_list = await _reconcile_enabled_overlays(affected)
+    return {"version": revision, "warnings": warnings_list}
 
 
 # ---------------------------------------------------------------------------
@@ -1176,7 +1307,7 @@ def _validate_toggle_enabled_body(body: object) -> tuple[bool | None, str | None
 async def upstream_enabled_api(req: "Request") -> "JSONResponse":
     """PUT /api/config/upstreams/{name}/enabled
 
-    body: ``{"enabled": bool, "version": str}`` —— 先持久化 yaml, 再调
+    body: ``{"enabled": bool, "version": int}`` —— 先写 config.db overlay, 再调
     GatewayServer 热改 /mcp 发布集与运行时连接。
 
     状态码:
@@ -1185,7 +1316,8 @@ async def upstream_enabled_api(req: "Request") -> "JSONResponse":
       400: body 非法或 enabled 非布尔
       404: 上游不存在
       409: 乐观锁 version 不匹配
-      500: 运行时热切换部分失败 (yaml 已落盘, body 带 version; 原样重试可自愈)
+      500: 运行时热切换部分失败 (overlay 已落库, body 带 version; 原样重试可自愈)
+      503: config.db overlay 未启用 (UNIHIVE_CONFIG_SOURCE=yaml)
       503: GatewayServer 未注入 (stdio 模式不可达, 防御性)
     """
     from starlette.responses import JSONResponse
@@ -1201,30 +1333,29 @@ async def upstream_enabled_api(req: "Request") -> "JSONResponse":
         return JSONResponse({"error": body_error}, status_code=400)
 
     try:
-        # yaml 读/解析/校验/写是阻塞文件 IO, 放线程池避免卡住事件循环
-        # (全量 safe_load + 写盘在慢盘/杀软扫描时可达数十毫秒)。
-        persisted = await asyncio.to_thread(
-            save_upstream_enabled,
-            name,
-            enabled,
-            expected_version=body.get("version"),
+        persisted = await save_upstream_enabled(
+            name, enabled, expected_version=body.get("version")
         )
     except VersionConflict as e:
         return JSONResponse(
             {"error": "version_conflict", "message": str(e)},
             status_code=409,
         )
+    except ConfigStoreUnavailable as e:
+        return JSONResponse(
+            {"error": "config_store_unavailable", "message": str(e)},
+            status_code=503,
+        )
     except KeyError:
         return JSONResponse(
             {"error": f"unknown upstream: {name}"},
             status_code=404,
         )
-    except (ValueError, yaml.YAMLError, OSError, RuntimeError) as e:
-        # 写后解析复核失败 / 配置块定位歧义 / IO 错误: 保持 JSON 错误契约,
-        # 不落 500 纯文本 (前端 errorMessage 才能解析)。
-        logger.exception("save_upstream_enabled(%r, %s) failed", name, enabled)
-        msg = f"config persist failed: {type(e).__name__}: {e}"[:300]
-        return JSONResponse({"error": msg}, status_code=500)
+    except ValueError as e:
+        # revision 格式非法 / 点路径含非法字符
+        logger.warning("save_upstream_enabled(%r, %s) bad request: %s", name, enabled, e)
+        msg = f"invalid request: {type(e).__name__}: {e}"[:300]
+        return JSONResponse({"error": msg}, status_code=400)
 
     server = _gateway_server
     if server is None:
@@ -1242,7 +1373,7 @@ async def upstream_enabled_api(req: "Request") -> "JSONResponse":
             status_code=404,
         )
     except Exception as e:
-        # yaml 已落盘但热切换失败: 不回滚磁盘 (重启即收敛到目标态),
+        # overlay 已落库但热切换失败: 不回滚 (重启即收敛到目标态),
         # 返回 500 + 新 version, 让前端提示用户可重试或重启。
         logger.exception(f"set_upstream_enabled({name!r}, {enabled}) failed")
         return JSONResponse(
@@ -1256,8 +1387,79 @@ async def upstream_enabled_api(req: "Request") -> "JSONResponse":
     return JSONResponse({**runtime, "version": persisted["version"]})
 
 
+async def config_overlays_list_api(req: "Request") -> "JSONResponse":
+    """GET /api/config/overlays — 全量覆盖行 + 当前 revision。
+
+    503: config.db overlay 未启用 (UNIHIVE_CONFIG_SOURCE=yaml)。
+    """
+    from starlette.responses import JSONResponse
+
+    try:
+        return JSONResponse(list_config_overlays())
+    except ConfigStoreUnavailable as e:
+        return JSONResponse(
+            {"error": "config_store_unavailable", "message": str(e)}, status_code=503
+        )
+
+
+async def config_overlay_reset_api(req: "Request") -> "JSONResponse":
+    """DELETE /api/config/overlays/{path} — 删除单行覆盖。
+
+    body 可选 ``{"version": int}`` (乐观锁)。409 冲突 / 400 路径非法 /
+    503 overlay 未启用; ``warnings`` 列出运行时热收敛失败但重启会收敛的路径。
+    """
+    from starlette.responses import JSONResponse
+
+    path = req.path_params["path"]
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    version = body.get("version") if isinstance(body, dict) else None
+    try:
+        result = await delete_config_overlay(path, expected_version=version)
+    except VersionConflict as e:
+        return JSONResponse(
+            {"error": "version_conflict", "message": str(e)}, status_code=409
+        )
+    except ConfigStoreUnavailable as e:
+        return JSONResponse(
+            {"error": "config_store_unavailable", "message": str(e)}, status_code=503
+        )
+    except ValueError as e:
+        return JSONResponse({"error": f"invalid request: {e}"[:300]}, status_code=400)
+    return JSONResponse(result)
+
+
+async def config_overlays_reset_all_api(req: "Request") -> "JSONResponse":
+    """POST /api/config/overlays/reset — 一键清空全部覆盖行。
+
+    body ``{"version": int}`` (乐观锁, 可空)。
+    """
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    version = body.get("version") if isinstance(body, dict) else None
+    try:
+        result = await reset_config_overlays(expected_version=version)
+    except VersionConflict as e:
+        return JSONResponse(
+            {"error": "version_conflict", "message": str(e)}, status_code=409
+        )
+    except ConfigStoreUnavailable as e:
+        return JSONResponse(
+            {"error": "config_store_unavailable", "message": str(e)}, status_code=503
+        )
+    except ValueError as e:
+        return JSONResponse({"error": f"invalid request: {e}"[:300]}, status_code=400)
+    return JSONResponse(result)
+
+
 def build_upstream_routes() -> list:
-    """上游热开关路由 (挂载进 gateway_server)。路径参数用 {name} (Starlette 1.6)。"""
+    """配置写路由 (挂载进 gateway_server)。路径参数用 {name}/{path} (Starlette 1.6)。"""
     from starlette.routing import Route
 
     return [
@@ -1265,5 +1467,21 @@ def build_upstream_routes() -> list:
             "/api/config/upstreams/{name}/enabled",
             upstream_enabled_api,
             methods=["PUT"],
+        ),
+        Route(
+            "/api/config/overlays",
+            config_overlays_list_api,
+            methods=["GET"],
+        ),
+        # 静态路径必须排在 {path} 之前注册, 避免 "reset" 被当作 path 段
+        Route(
+            "/api/config/overlays/reset",
+            config_overlays_reset_all_api,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/config/overlays/{path}",
+            config_overlay_reset_api,
+            methods=["DELETE"],
         ),
     ]

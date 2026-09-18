@@ -52,36 +52,33 @@ def fuyao_ttl_for(
     *,
     endpoint: str | None = None,
 ) -> int | None:
-    """FUYAO 嵌套配置 TTL 查询。命中顺序：
+    """FUYAO 工具级 TTL override 查询 (2026-09-18 P1 shape)。
 
-    1. fuyao_cache.endpoints[endpoint].override[tool_name]  (工具级 override)
-    2. fuyao_cache.endpoints[endpoint].default             (endpoint 级默认)
-    3. None — 调用方应回退到 ttl_for(cache.ttl[ttl_key])
+    命中顺序:
+
+    1. 该工具路由必须是纯 fuyao_* 链 (endpoint gate, 混合链不加 fuyao TTL);
+    2. ``fuyao_cache.tools[tool_name]`` 工具级秒数 (0 = 显式不缓存);
+    3. None — 调用方回退到 ttl_for(cache.ttl[ttl_key])。
 
     Args:
-        config: 已加载的 gateway 配置 (含 fuyao_cache / upstream_tool_mapping)
+        config: 已加载的 gateway 配置 (含 fuyao_cache / upstream_tool_mapping;
+            运行时为 YAML 基线合并 data/config.db 覆盖层后的 dict)
         tool_name: MCP tool 名称 (gateway 层, 非 routing_key)
         endpoint: 可选 — 外部已查到时直接传入, 节省一次 mapping 查询
 
     Returns:
-        秒数 (含 0 表示「不缓存」) 或 None (未配置任何 fuyao endpoint TTL)
+        秒数 (含 0 表示「不缓存」) 或 None (未配置工具级 override)
     """
     if endpoint is None:
         endpoint = get_fuyao_endpoint_for_tool(config, tool_name)
     if not endpoint:
         return None
     fuyao_cache = config.get("fuyao_cache") or {}
-    endpoints = fuyao_cache.get("endpoints") or {}
-    ep_cfg = endpoints.get(endpoint)
-    if not isinstance(ep_cfg, dict):
+    tools = fuyao_cache.get("tools") or {}
+    value = tools.get(tool_name)
+    if value is None:
         return None
-    override = ep_cfg.get("override") or {}
-    if tool_name in override:
-        return int(override[tool_name])
-    default = ep_cfg.get("default")
-    if default is None:
-        return None
-    return int(default)
+    return int(value)
 
 
 def is_fuyao_source(source: str | None) -> bool:

@@ -140,7 +140,11 @@ class TestConsoleLoadConfigMasksSecrets:
     def test_load_config_returns_empty_when_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr("src.unihive.utils.console_api.GATEWAY_CONFIG_PATH", str(tmp_path / "nope.yaml"))
         from src.unihive.utils.console_api import load_config
-        assert load_config() == {}
+        # 2026-09-18: load_config 恒带乐观锁 version (yaml 模式为文件 hash),
+        # 剥掉 version 后其余配置为空。
+        cfg = load_config()
+        assert "version" in cfg
+        assert {k: v for k, v in cfg.items() if k != "version"} == {}
 
     def test_load_config_resolves_env_placeholder(self, tmp_path, monkeypatch):
         """shared loader 应解析 ${VAR}, 避免占位符原样泄漏到前端。"""
