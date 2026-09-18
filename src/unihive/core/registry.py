@@ -168,21 +168,28 @@ def build_tool_function(spec: dict, server: Any) -> Callable:
     return _runtime
 
 
+def register_tool(server: Any, spec: dict) -> str:
+    """注册单个 spec 为 FastMCP tool, 返回工具名。
+
+    启动批量注册与运行时热启用共用此函数, 避免两处注册逻辑漂移。
+    FastMCP 4 的 mcp.tool() 直接写入 live local provider, server 启动后
+    调用同样即时对 tools/list 生效。
+    """
+    fn = build_tool_function(spec, server)
+    annotations = spec.get("annotations")
+    if annotations:
+        server.mcp.tool(annotations=annotations)(fn)
+    else:
+        server.mcp.tool()(fn)
+    return spec["name"]
+
+
 def register_tools_from_config(
     server: Any,
     specs: list[dict],
 ) -> list[str]:
     """注册所有 spec 为 FastMCP tool。返回注册的 name 列表。"""
-    registered: list[str] = []
-    for spec in specs:
-        fn = build_tool_function(spec, server)
-        annotations = spec.get("annotations")
-        if annotations:
-            server.mcp.tool(annotations=annotations)(fn)
-        else:
-            server.mcp.tool()(fn)
-        registered.append(spec["name"])
-    return registered
+    return [register_tool(server, spec) for spec in specs]
 
 
 def validate_specs(

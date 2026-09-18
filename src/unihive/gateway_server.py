@@ -4,6 +4,7 @@ UniHive MCP Gateway Server - 统一 MCP 网关
 """
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from .storage.cache import Cache, CacheConfig
 from .utils.config_loader import load_config, validate_config
 from .utils.log_config import configure_logging
 from .core.normalizer import Normalizer
-from .core.registry import register_tools_from_config, validate_specs
+from .core.registry import register_tool, register_tools_from_config, validate_specs
 from .core.router import Router
 from .core.proxy_settings import ProxySettings
 from .api.upstream_client import UpstreamClient, UpstreamConfig
@@ -291,6 +292,14 @@ class GatewayServer:
         self.cache: Cache | None = None
         self.router: Router | None = None
         self.mcp: FastMCP | None = None
+        # 上游启用/禁用热开关 (2026-09-18):
+        # tool_specs 存全量 spec (validate 对全部生效, 与 enabled 无关);
+        # _published_tools 是当前真正发布到对外 /mcp 的 spec 工具名集合
+        # (不含 get_server_status/get_health 手写工具), 热增删以此为真来源;
+        # toggle 锁串行化并发的启用/禁用操作。
+        self.tool_specs: list[dict] = []
+        self._published_tools: set[str] = set()
+        self._upstream_toggle_lock = asyncio.Lock()
         self._running = False
         # initialize() 幂等位 + stop() 取消 health loop 的事件。
         # 之前 initialize 在 start/serve_http 都调一次, 部分 client (stdio UpstreamClient
@@ -379,144 +388,22 @@ class GatewayServer:
 
             # 初始化上游客户端
             # 用 `or {}` 归一化, 防 YAML `upstreams: null` 让 .items() 抛 AttributeError (HIGH #2)
+            # 构造/启动拆成 _construct_upstream_client / _start_upstream_client,
+            # 供上游启用/禁用热开关复用 (2026-09-18)。
             for name, cfg in (self.config.get("upstreams") or {}).items():
                 if not cfg.get("enabled", False):
                     continue
-
-                if cfg.get("type") == "http":
-                    # HTTP MCP 客户端
-                    fuyao_cfg = FuyaoConfig(
-                        name=name,
-                        base_url=cfg["base_url"],
-                        api_key=cfg.get("api_key", ""),
-                        timeout_seconds=cfg.get("timeout_seconds", 30),
-                        max_retry=cfg.get("retry", {}).get("max_attempts", 3),
-                    )
-                    client = FuyaoClient(fuyao_cfg)
-                elif cfg.get("type") == "tdx_quant":
-                    # TdxQuant 进程内客户端
-                    tdx_quant_settings = TdxQuantSettings(
-                        tdx_root=cfg.get("tdx_root", ""),
-                        strategy_id=cfg.get("strategy_id", ""),
-                        health_check_interval_sec=cfg.get("health_check_interval_sec", 60),
-                        call_timeout_sec=cfg.get("call_timeout_sec", 10),
-                        reconnect_threshold=cfg.get("reconnect_threshold", 3),
-                        unavailable_threshold=cfg.get("unavailable_threshold", 10),
-                    )
-                    tdx_quant_cfg = TdxQuantConfig(
-                        name=name,
-                        market=cfg.get("market", "std"),
-                        settings=tdx_quant_settings,
-                    )
-                    client = TdxQuantClient(tdx_quant_cfg)
-                elif cfg.get("type") == "mootdx2":
-                    # MooTDX2 客户端
-                    from .models.mootdx2_config import MooTDX2Settings
-
-                    # tdxdir 为空时让 mootdx2 自动探测 C:/new_tdx
-                    pinned_servers = _parse_mootdx2_servers(cfg.get("servers") or [])
-                    mootdx2_settings = MooTDX2Settings(
-                        market=cfg.get("market", "std"),
-                        tdxdir=cfg.get("tdxdir", ""),
-                        servers=pinned_servers,
-                        # 指定了服务器就关闭 bestip 全网测速, 固定连配置的 IP
-                        auto_select_fastest_server=not pinned_servers,
-                        connect_timeout_seconds=cfg.get("connect_timeout_seconds", 3),
-                        read_timeout_seconds=cfg.get("read_timeout_seconds", 5),
-                    )
-                    mootdx2_cfg = MooTDX2Config(
-                        name=name,
-                        market=cfg.get("market", "std"),
-                        settings=mootdx2_settings,
-                    )
-                    client = MooTDX2Client(mootdx2_cfg)
-                elif cfg.get("type") == "omni":
-                    # OMNIDATA 板块数据客户端
-                    omni_cfg = OmniConfig(
-                        name=name,
-                        db_path=cfg.get("db_path", "./data/board.db"),
-                    )
-                    client = OmniClient(omni_cfg)
-                elif cfg.get("type") == "thsdk":
-                    # THSDK（社区 thsdk 包）客户端；凭证只从环境变量读
-                    thsdk_cfg = ThsdkConfig.from_dict(name, cfg)
-                    client = ThsdkClient(thsdk_cfg)
-                elif cfg.get("type") == "ths_local_gateway":
-                    # THS-LOCAL-GATEWAY HTTP JSON-RPC MCP 客户端
-                    from .api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
-
-                    client = ThsLocalClient(
-                        ThsLocalConfig(
-                            name=name,
-                            base_url=cfg.get("base_url", ""),
-                            timeout_seconds=cfg.get("timeout_seconds", 30),
-                            connect_timeout_seconds=cfg.get("connect_timeout_seconds", 5.0),
-                        )
-                    )
-                    try:
-                        await client.start()
-                    except Exception as e:
-                        logger.error(f"[{name}] Failed to start: {e}")
-                    self.upstreams[name] = client
-                    logger.info(f"[{name}] {'Connected' if client.is_available else 'Failed'}")
-                    continue
-                else:
-                    # stdio MCP 客户端
-                    upstream_cfg = UpstreamConfig(
-                        name=name,
-                        enabled=True,
-                        package=cfg.get("package", ""),
-                        command=cfg.get("command", []),
-                        env=cfg.get("env", {}),
-                        timeout_seconds=cfg.get("timeout_seconds", 30),
-                        max_retry=cfg.get("retry", {}).get("max_attempts", 3),
-                        backoff_base=cfg.get("retry", {}).get("backoff_base", 2),
-                    )
-                    client = UpstreamClient(upstream_cfg)
-
-                try:
-                    await asyncio.wait_for(client.start(), timeout=self._upstream_start_timeout)
-                except asyncio.CancelledError:
-                    # L2 (2026-09-07 5th-round audit): CancelledError 是 BaseException,
-                    # 下面 except Exception 漏掉它。如果不把 client 加进
-                    # self.upstreams, 进程退出时 stop() 拿不到这个 client,
-                    # subprocess / httpx 连接泄漏。re-raise 让 cancellation
-                    # 继续传播 (不要 swallow)。
-                    logger.error(
-                        f"[{name}] upstream start() cancelled, registering "
-                        f"client for cleanup and propagating"
-                    )
-                    self.upstreams[name] = client
-                    raise
-                except asyncio.TimeoutError:
-                    # 单 upstream 超时不应中断其他 upstream 初始化 (HIGH1).
-                    # 仍记录到 self.upstreams (status 由 client 内部标记),
-                    # 这样 get_server_status / health loop 仍能看到这个客户端.
-                    logger.error(
-                        f"[{name}] upstream start() timed out after "
-                        f"{self._upstream_start_timeout}s, marking unavailable "
-                        f"and continuing with other upstreams"
-                    )
-                    self.upstreams[name] = client
-                    continue
-                except Exception as e:
-                    # 非超时异常 (FileNotFoundError / OSError / 等) 也会泄漏
-                    # 子进程 / 连接 — 必须把 client 加进 self.upstreams, 让
-                    # outer-except 的 cleanup / stop() 能调 client.stop() 关掉
-                    # subprocess/httpx 连接 (HIGH #1, 2026-09-07 audit C1).
-                    logger.error(
-                        f"[{name}] upstream start() raised {type(e).__name__}: {e}; "
-                        f"marking unavailable and continuing with other upstreams"
-                    )
-                    self.upstreams[name] = client
-                    continue
-                self.upstreams[name] = client
-                logger.info(f"[{name}] {'Connected' if client.is_available else 'Failed'}")
+                client = self._construct_upstream_client(name, cfg)
+                await self._start_upstream_client(name, cfg, client)
 
             # 2026-09-15: 让 console_api 能查到已注册的 upstream client,
             # 服务 /api/upstreams/<name>/metrics 端点。必须在装配循环结束、
             # HTTP server 启动前注入 (HTTP server 启动前不会有请求, 安全)。
             _ca.set_upstream_registry(self.upstreams)
+            # 2026-09-18: 注入 server 自身, 供 /api/config/upstreams/<name>/enabled
+            # 热开关调用 set_upstream_enabled()。stdio 模式下 console_api 无路由,
+            # 注入无副作用。
+            _ca.set_gateway_server(self)
 
             # Inject OmniClient into console_api
             _omni = self._find_omni_client()
@@ -524,6 +411,8 @@ class GatewayServer:
 
             # 初始化路由前先合并生成工具的 mapping（_load_all_tools 会写回顶层 config）
             tool_specs = self._load_all_tools()
+            # 存全量 spec 供热开关重算发布集; validate/注册逻辑不变。
+            self.tool_specs = tool_specs
 
             # 2026-09-14: ProxySettings — 读 config/proxy_settings.yaml,
             # 控制 mootdx2 → tdx_quant 透明代理. yaml 不存在时自动 fallback
@@ -579,6 +468,374 @@ class GatewayServer:
 
         self._initialized = True
         logger.info(f"Gateway initialized with {len(self.upstreams)} upstreams")
+
+    def _construct_upstream_client(self, name: str, cfg: dict):
+        """按 cfg.type 构造 (但不启动) 一个上游 client。
+
+        启动循环与热启用共用, 避免两处 client 构造参数漂移。
+        """
+        if cfg.get("type") == "http":
+            # HTTP MCP 客户端
+            fuyao_cfg = FuyaoConfig(
+                name=name,
+                base_url=cfg["base_url"],
+                api_key=cfg.get("api_key", ""),
+                timeout_seconds=cfg.get("timeout_seconds", 30),
+                max_retry=cfg.get("retry", {}).get("max_attempts", 3),
+            )
+            return FuyaoClient(fuyao_cfg)
+        if cfg.get("type") == "tdx_quant":
+            # TdxQuant 进程内客户端
+            tdx_quant_settings = TdxQuantSettings(
+                tdx_root=cfg.get("tdx_root", ""),
+                strategy_id=cfg.get("strategy_id", ""),
+                health_check_interval_sec=cfg.get("health_check_interval_sec", 60),
+                call_timeout_sec=cfg.get("call_timeout_sec", 10),
+                reconnect_threshold=cfg.get("reconnect_threshold", 3),
+                unavailable_threshold=cfg.get("unavailable_threshold", 10),
+            )
+            tdx_quant_cfg = TdxQuantConfig(
+                name=name,
+                market=cfg.get("market", "std"),
+                settings=tdx_quant_settings,
+            )
+            return TdxQuantClient(tdx_quant_cfg)
+        if cfg.get("type") == "mootdx2":
+            # MooTDX2 客户端
+            from .models.mootdx2_config import MooTDX2Settings
+
+            # tdxdir 为空时让 mootdx2 自动探测 C:/new_tdx
+            pinned_servers = _parse_mootdx2_servers(cfg.get("servers") or [])
+            mootdx2_settings = MooTDX2Settings(
+                market=cfg.get("market", "std"),
+                tdxdir=cfg.get("tdxdir", ""),
+                servers=pinned_servers,
+                # 指定了服务器就关闭 bestip 全网测速, 固定连配置的 IP
+                auto_select_fastest_server=not pinned_servers,
+                connect_timeout_seconds=cfg.get("connect_timeout_seconds", 3),
+                read_timeout_seconds=cfg.get("read_timeout_seconds", 5),
+            )
+            mootdx2_cfg = MooTDX2Config(
+                name=name,
+                market=cfg.get("market", "std"),
+                settings=mootdx2_settings,
+            )
+            return MooTDX2Client(mootdx2_cfg)
+        if cfg.get("type") == "omni":
+            # OMNIDATA 板块数据客户端
+            omni_cfg = OmniConfig(
+                name=name,
+                db_path=cfg.get("db_path", "./data/board.db"),
+            )
+            return OmniClient(omni_cfg)
+        if cfg.get("type") == "thsdk":
+            # THSDK（社区 thsdk 包）客户端；凭证只从环境变量读
+            thsdk_cfg = ThsdkConfig.from_dict(name, cfg)
+            return ThsdkClient(thsdk_cfg)
+        if cfg.get("type") == "ths_local_gateway":
+            # THS-LOCAL-GATEWAY HTTP JSON-RPC MCP 客户端
+            from .api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
+
+            return ThsLocalClient(
+                ThsLocalConfig(
+                    name=name,
+                    base_url=cfg.get("base_url", ""),
+                    timeout_seconds=cfg.get("timeout_seconds", 30),
+                    connect_timeout_seconds=cfg.get("connect_timeout_seconds", 5.0),
+                )
+            )
+        # stdio MCP 客户端
+        upstream_cfg = UpstreamConfig(
+            name=name,
+            enabled=True,
+            package=cfg.get("package", ""),
+            command=cfg.get("command", []),
+            env=cfg.get("env", {}),
+            timeout_seconds=cfg.get("timeout_seconds", 30),
+            max_retry=cfg.get("retry", {}).get("max_attempts", 3),
+            backoff_base=cfg.get("retry", {}).get("backoff_base", 2),
+        )
+        return UpstreamClient(upstream_cfg)
+
+    async def _start_upstream_client(self, name: str, cfg: dict, client) -> bool:
+        """启动已构造的 client 并登记进 self.upstreams, 返回 is_available。
+
+        复刻原启动循环语义: 单 client 超时/异常不抛出 (CancelledError 除外),
+        client 仍登记进 self.upstreams 供健康检查与 stop() 清理; ths_local_gateway
+        保留原特例 (不走 wait_for 超时)。
+        """
+        if cfg.get("type") == "ths_local_gateway":
+            try:
+                await client.start()
+            except Exception as e:
+                logger.error(f"[{name}] Failed to start: {e}")
+            self.upstreams[name] = client
+            connected = bool(client.is_available)
+            logger.info(f"[{name}] {'Connected' if connected else 'Failed'}")
+            return connected
+
+        try:
+            await asyncio.wait_for(
+                client.start(), timeout=self._upstream_start_timeout
+            )
+        except asyncio.CancelledError:
+            # CancelledError 是 BaseException, 下面 except Exception 接不住。
+            # 先登记 client 防 subprocess / httpx 连接泄漏, 再让取消继续传播。
+            logger.error(
+                f"[{name}] upstream start() cancelled, registering "
+                f"client for cleanup and propagating"
+            )
+            self.upstreams[name] = client
+            raise
+        except asyncio.TimeoutError:
+            # 单 upstream 超时不中断其他 upstream; 仍登记 (状态由 client 内部标记),
+            # get_server_status / health loop / stop() 都能看到这个客户端。
+            logger.error(
+                f"[{name}] upstream start() timed out after "
+                f"{self._upstream_start_timeout}s, marking unavailable"
+            )
+            self.upstreams[name] = client
+            return False
+        except Exception as e:
+            # 非超时异常 (FileNotFoundError / OSError / 等) 同样登记 client,
+            # 让 stop() 能关掉 subprocess/httpx 连接。
+            logger.error(
+                f"[{name}] upstream start() raised {type(e).__name__}: {e}; "
+                f"marking unavailable"
+            )
+            self.upstreams[name] = client
+            return False
+        self.upstreams[name] = client
+        connected = bool(client.is_available)
+        logger.info(f"[{name}] {'Connected' if connected else 'Failed'}")
+        return connected
+
+    async def set_upstream_enabled(self, name: str, enabled: bool) -> dict:
+        """热切换单个上游启用态, 实时增删对外 /mcp 工具并连接/断开 client。
+
+        - 禁用: 先把该上游参与的、失去全部启用 backer 的工具从 /mcp 摘除,
+          再从 self.upstreams pop 并 stop() —— 先摘工具后断连, 杜绝新请求
+          落到正在关闭的 client。
+        - 启用: 先构造+启动 client 登记进 self.upstreams, 再把新获得启用
+          backer 的工具发布到 /mcp。发布只取决于 enabled 而非连接健康,
+          与启动时"配了但连不上工具仍注册"同态; connected=False 由前端提示。
+        - 多 backer 工具只在全部 backer 禁用时才隐藏 (filter_specs_by_enabled)。
+        - 单工具发布/摘除失败不中断整批: 错误收集后继续, 末尾抛 RuntimeError
+          (yaml 已落盘, HTTP 层返 500 带 version); 下次同态点击走 reconcile
+          自愈补完, 不再被 no-op 短路。
+
+        持久化 (upstreams.yaml) 由调用方 console_api 先完成, 本方法只改运行态
+        self.config (与 console_api 共享同一 dict) 与已发布工具集。
+        """
+        upstreams_cfg = self.config.get("upstreams") or {}
+        if name not in upstreams_cfg:
+            raise KeyError(f"Unknown upstream: {name}")
+        cfg = upstreams_cfg[name]
+
+        if self.mcp is None or not getattr(self, "tool_specs", None):
+            raise RuntimeError("Gateway not initialized")
+
+        async with self._upstream_toggle_lock:
+            current = bool(cfg.get("enabled", False))
+            if current == enabled:
+                # 状态已一致: 常规零动作 no-op; 同时承担上次部分失败后的运行态自愈
+                return await self._reconcile_upstream_locked(name, cfg, enabled)
+
+            cfg["enabled"] = bool(enabled)
+            if enabled:
+                return await self._enable_upstream_locked(name, cfg)
+            return await self._disable_upstream_locked(name)
+
+    # ------------------------------------------------------------------
+    # 热开关内部步骤 (调用方须持 _upstream_toggle_lock)
+    # ------------------------------------------------------------------
+
+    def _toggle_tool_diff_locked(self, name: str) -> tuple[set[str], set[str]]:
+        """计算单个上游背书工具的发布差集 → (to_add, to_remove)。
+
+        全局期望集经 filter_specs_by_enabled (多 backer 语义), 再与
+        backing_upstreams 含 name 的工具取交 —— 自愈重放时只碰本上游的
+        工具, 不顺手摘补其他上游的漂移。
+        """
+        from .core.tool_loader import backing_upstreams, filter_specs_by_enabled
+
+        wanted = {
+            s["name"] for s in filter_specs_by_enabled(self.tool_specs, self.config)
+        }
+        affected: set[str] = set()
+        for spec in self.tool_specs:
+            routing_key = spec.get("routing") or spec["name"]
+            if name in backing_upstreams(routing_key, self.config):
+                affected.add(spec["name"])
+        to_add = (wanted & affected) - self._published_tools
+        to_remove = (self._published_tools & affected) - wanted
+        return to_add, to_remove
+
+    def _publish_tools_locked(self, tool_names: set[str], errors: list[str]) -> list[str]:
+        """逐个发布, 单工具失败收集进 errors 后继续 (不中断整批)。"""
+        spec_by_name = {s["name"]: s for s in self.tool_specs}
+        added: list[str] = []
+        for tool_name in sorted(tool_names):
+            spec = spec_by_name.get(tool_name)
+            if spec is None:
+                continue
+            try:
+                register_tool(self, spec)
+            except Exception as e:  # noqa: BLE001 — 收集后继续, 末尾统一抛
+                errors.append(f"publish {tool_name}: {type(e).__name__}: {e}")
+                logger.exception("toggle: publish tool %r failed", tool_name)
+                continue
+            self._published_tools.add(tool_name)
+            added.append(tool_name)
+        return added
+
+    def _unpublish_tools_locked(
+        self, tool_names: set[str], errors: list[str]
+    ) -> list[str]:
+        """逐个摘除, KeyError (provider 已无此工具) 幂等视为成功;
+        其他异常收集后继续, 且不把该工具移出 _published_tools (集合仍反映
+        provider 真实状态, 下次 reconcile 重试)。"""
+        removed: list[str] = []
+        for tool_name in sorted(tool_names):
+            try:
+                self.mcp.local_provider.remove_tool(tool_name)
+            except KeyError:
+                logger.warning(
+                    "toggle: tool %r not on local provider (idempotent)", tool_name
+                )
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"unpublish {tool_name}: {type(e).__name__}: {e}")
+                logger.exception("toggle: remove tool %r failed", tool_name)
+                continue
+            self._published_tools.discard(tool_name)
+            removed.append(tool_name)
+        return removed
+
+    @staticmethod
+    def _raise_if_toggle_errors(name: str, errors: list[str]) -> None:
+        if errors:
+            detail = "; ".join(errors[:5])
+            if len(errors) > 5:
+                detail += f"; …(+{len(errors) - 5} more)"
+            raise RuntimeError(f"runtime toggle {name!r} partial failure: {detail}")
+
+    async def _attach_upstream_client_locked(self, name: str, cfg: dict):
+        """构造+启动 client 并切换 console_api 的 omni 指针。返回 client, connected。"""
+        client = self._construct_upstream_client(name, cfg)
+        connected = await self._start_upstream_client(name, cfg, client)
+        if isinstance(client, OmniClient):
+            from .utils import console_api as _ca
+
+            _ca.set_omni_client(client)
+        return client, connected
+
+    async def _detach_upstream_client_locked(self, name: str) -> None:
+        """pop + stop client, 并清 console_api 的 omni 指针。先摘工具后断连。
+
+        _stop_one_upstream 内部已吞掉超时/异常, client 一律按已脱离处理。
+        在途请求不做 drain: HTTP client 关池错误转成 ToolResult(success=False)
+        由 Router 回落下一 backer (人工低频管理动作, 可接受)。
+        """
+        client = self.upstreams.pop(name, None)
+        if client is not None:
+            await self._stop_one_upstream(name, client)
+        # console_api 单独持有的 OmniClient 指针也要清, 否则禁用后
+        # /api/omni* (含 POST sync) 仍打在已停 client 上, 与启动时
+        # enabled:false 注入 None 的语义对齐。
+        if isinstance(client, OmniClient):
+            from .utils import console_api as _ca
+
+            _ca.set_omni_client(None)
+
+    async def _enable_upstream_locked(self, name: str, cfg: dict) -> dict:
+        errors: list[str] = []
+        _, connected = await self._attach_upstream_client_locked(name, cfg)
+        to_add, _ = self._toggle_tool_diff_locked(name)
+        tools_added = self._publish_tools_locked(to_add, errors)
+        self._raise_if_toggle_errors(name, errors)
+        logger.info(
+            "Upstream %s enabled: tools_added=%d connected=%s",
+            name,
+            len(tools_added),
+            connected,
+        )
+        return {
+            "name": name,
+            "enabled": True,
+            "connected": connected,
+            "tools_added": tools_added,
+            "tools_removed": [],
+            "changed": True,
+        }
+
+    async def _disable_upstream_locked(self, name: str) -> dict:
+        errors: list[str] = []
+        _, to_remove = self._toggle_tool_diff_locked(name)
+        tools_removed = self._unpublish_tools_locked(to_remove, errors)
+        if errors:
+            # 有工具没摘下来: 保留 client, 让残存发布的工具仍可服务;
+            # 下次同态点击 (reconcile) 重试摘除, 避免半残废状态。
+            self._raise_if_toggle_errors(name, errors)
+        await self._detach_upstream_client_locked(name)
+        logger.info(
+            "Upstream %s disabled: tools_removed=%d", name, len(tools_removed)
+        )
+        return {
+            "name": name,
+            "enabled": False,
+            "connected": False,
+            "tools_added": [],
+            "tools_removed": tools_removed,
+            "changed": True,
+        }
+
+    async def _reconcile_upstream_locked(
+        self, name: str, cfg: dict, enabled: bool
+    ) -> dict:
+        """请求态与 cfg 已一致时的收敛入口。
+
+        健康态是零动作纯 no-op (changed=False); 若上次切换在中途失败
+        (HTTP 500/yaml 已落盘), 这里补做漂移: 缺发布的工具补发、应消失的
+        工具补摘、缺失/残留的 client 补连/补断, 让前端的同态重试真正自愈。
+        """
+        errors: list[str] = []
+        to_add, to_remove = self._toggle_tool_diff_locked(name)
+        existing = self.upstreams.get(name)
+        client_attached = False
+
+        if enabled:
+            if existing is None:
+                existing, _ = await self._attach_upstream_client_locked(name, cfg)
+                client_attached = True
+            connected = bool(existing is not None and existing.is_available)
+            tools_added = self._publish_tools_locked(to_add, errors)
+            tools_removed = self._unpublish_tools_locked(to_remove, errors)
+        else:
+            tools_added = self._publish_tools_locked(to_add, errors)
+            tools_removed = self._unpublish_tools_locked(to_remove, errors)
+            if existing is not None and not errors:
+                await self._detach_upstream_client_locked(name)
+                client_attached = True
+            connected = False
+
+        self._raise_if_toggle_errors(name, errors)
+        healed = bool(tools_added or tools_removed or client_attached)
+        if healed:
+            logger.info(
+                "Upstream %s reconcile: added=%d removed=%d client_attached=%s",
+                name,
+                len(tools_added),
+                len(tools_removed),
+                client_attached,
+            )
+        return {
+            "name": name,
+            "enabled": enabled,
+            "connected": connected,
+            "tools_added": tools_added,
+            "tools_removed": tools_removed,
+            "changed": False if not healed else True,
+        }
 
     async def _execute_cached(
         self,
@@ -789,7 +1046,10 @@ class GatewayServer:
         # 通用工具：合并手工 tools 与生成的 tools_tdx_quant.yaml
         if specs is None:
             specs = self._load_all_tools()
+            self.tool_specs = specs
         if specs:
+            # validate 对全量 spec 生效 —— 配置写错与上游是否启用无关,
+            # 禁用上游不能把 routing/mapping 配置错误静默藏起来。
             strict = self.config.get("strict_registry", True)
             validate_specs(
                 specs,
@@ -797,10 +1057,18 @@ class GatewayServer:
                 self.config.get("upstream_tool_mapping", {}),
                 strict=strict,
             )
-            registered = register_tools_from_config(self, specs)
+            # 发布集按上游 enabled 过滤: 全部 backer 禁用的工具不进对外 /mcp。
+            # 热开关见 set_upstream_enabled(), 启动语义与其差集计算一致。
+            from .core.tool_loader import filter_specs_by_enabled
+
+            publishable = filter_specs_by_enabled(specs, self.config)
+            registered = register_tools_from_config(self, publishable)
+            self._published_tools = set(registered)
+            hidden = len(specs) - len(registered)
             logger.info(
                 f"Registered {len(registered)} tools from config "
-                f"(dangerous={any(s.get('dangerous') for s in specs)})"
+                f"(dangerous={any(s.get('dangerous') for s in publishable)}, "
+                f"hidden_by_disabled_upstream={hidden})"
             )
 
     def _register_search_stock(self):
@@ -1125,6 +1393,8 @@ class GatewayServer:
                 Route("/api/config", _config_api),
                 Route("/api/config/fuyao-cache", _fuyao_cache_get_api),
                 Route("/api/config/fuyao-cache", _fuyao_cache_put_api, methods=["PUT"]),
+                # 2026-09-18: 上游启用/禁用热开关 (鉴权随 /api/* 中间件继承)
+                *_ca.build_upstream_routes(),
                 Route("/health", _health_api),
                 Route("/api/mcp-tools-list", _mcp_tools_api),
             ]
@@ -1196,6 +1466,8 @@ class GatewayServer:
         # 一次保持一致 (避免隐式依赖 __init__ 的局部变量)。
         from .utils import console_api as _ca
         _ca.set_omni_client(None)
+        # 2026-09-18: 摘掉热开关回调目标, 防止 stop 后 /api 仍调到死 server
+        _ca.set_gateway_server(None)
         # LOW-1 (2026-09-14 audit): 显式关掉 probe executor, 不依赖 atexit
         # (stdio transport 下 atexit 不保证触发)。
         _ca._shutdown_probe_executor()
@@ -1215,51 +1487,62 @@ class GatewayServer:
             logger.info(f"Waiting for {active} in-flight requests to complete...")
             await asyncio.sleep(0.5)
 
-        # 关闭所有上游客户端 (L1, 2026-09-07 5th-round audit): 并行 gather
-        # 替代顺序循环, 总关闭时间从 O(N) 降到 O(1)。
-        if self.upstreams:
-            await asyncio.gather(
-                *[self._stop_one_upstream(name, client)
-                  for name, client in list(self.upstreams.items())],
-                return_exceptions=True,
-            )
+        # 与热开关互斥: 否则禁用/启用可能在 gather 快照后才 pop/登记 client,
+        # 新 client 被最后的 upstreams.clear() 丢弃而未 stop (httpx/子进程泄漏)。
+        # 锁内协程若在关停止于 _start_upstream_client, 等其结束后一并 gather。
+        # 与热开关互斥到 upstreams 清空: 禁用/启用可能在 gather 快照后才
+        # pop/登记 client, 新 client 若不被 gather 覆盖就会被 clear() 丢弃
+        # 而未 stop (httpx/子进程泄漏)。锁内 toggle 若止于 _start, 此处一并关。
+        toggle_lock = getattr(self, "_upstream_toggle_lock", None)
+        async with toggle_lock if toggle_lock is not None else contextlib.nullcontext():
+            # 关闭所有上游客户端 (L1, 2026-09-07 5th-round audit): 并行 gather
+            # 替代顺序循环, 总关闭时间从 O(N) 降到 O(1)。
+            if self.upstreams:
+                await asyncio.gather(
+                    *[self._stop_one_upstream(name, client)
+                      for name, client in list(self.upstreams.items())],
+                    return_exceptions=True,
+                )
 
-        # 关闭阻塞上游调用专用线程池 (2026-09-15 MCP 二次审视 M2):
-        # 在 upstream 客户端之后关闭, 避免它们还在 await run_in_executor 时被强杀。
-        # shutdown_blocking_executor 是模块级单例, 显式调用避免 atexit 依赖 (stdio 下不可靠)。
-        from .core.blocking_pool import shutdown_blocking_executor
-        shutdown_blocking_executor()
+            # 关闭阻塞上游调用专用线程池 (2026-09-15 MCP 二次审视 M2):
+            # 在 upstream 客户端之后关闭, 避免它们还在 await run_in_executor 时被强杀。
+            # shutdown_blocking_executor 是模块级单例, 显式调用避免 atexit 依赖 (stdio 下不可靠)。
+            from .core.blocking_pool import shutdown_blocking_executor
+            shutdown_blocking_executor()
 
-        # 关闭缓存
-        if self.cache:
-            try:
-                await asyncio.wait_for(self.cache.close(), timeout=2.0)
-            except asyncio.TimeoutError:
-                logger.warning("cache close() timed out after 2s")
-            self.cache = None
+            # 关闭缓存
+            if self.cache:
+                try:
+                    await asyncio.wait_for(self.cache.close(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("cache close() timed out after 2s")
+                self.cache = None
 
-        # 取消周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4)。
-        # cache.close() 之后做, 确保最后一次 tick 不会与 close 抢锁。
-        # 用 getattr 兜底: 测试用 __new__ 跳过 __init__ 时字段不存在。
-        cleanup_task = getattr(self, "_cache_cleanup_task", None)
-        if cleanup_task is not None:
-            cleanup_task.cancel()
-            try:
-                await cleanup_task
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.warning(f"cache cleanup task ended with error: {e}")
-            self._cache_cleanup_task = None
+            # 取消周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4)。
+            # cache.close() 之后做, 确保最后一次 tick 不会与 close 抢锁。
+            # 用 getattr 兜底: 测试用 __new__ 跳过 __init__ 时字段不存在。
+            cleanup_task = getattr(self, "_cache_cleanup_task", None)
+            if cleanup_task is not None:
+                cleanup_task.cancel()
+                try:
+                    await cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.warning(f"cache cleanup task ended with error: {e}")
+                self._cache_cleanup_task = None
 
-        # 重置状态以支持同实例 restart (HIGH B1, 2026-09-07 audit):
-        # 不清掉的话, 第二次 initialize() 会因 _initialized=True 短路,
-        # 用已经 stop 过的死 upstreams / router / mcp 路由 → 全程失败。
-        # 生产路径通常 stop 后进程退出, 重置是无害的; stop/start 循环
-        # (supervisor 重启 / 热重载配置) 则依赖这些归零。
-        self.upstreams.clear()
+            # 重置状态以支持同实例 restart (HIGH B1, 2026-09-07 audit):
+            # 不清掉的话, 第二次 initialize() 会因 _initialized=True 短路,
+            # 用已经 stop 过的死 upstreams / router / mcp 路由 → 全程失败。
+            # 生产路径通常 stop 后进程退出, 重置是无害的; stop/start 循环
+            # (supervisor 重启 / 热重载配置) 则依赖这些归零。
+            self.upstreams.clear()
         self.router = None
         self.mcp = None
+        # 热开关状态一并归零, 支持同实例 stop/start 循环
+        self._published_tools = set()
+        self.tool_specs = []
         self._initialized = False
 
         # M1 (2026-09-15 MCP 二次审视): 重置全局限流器单例，支持 stop/start 循环

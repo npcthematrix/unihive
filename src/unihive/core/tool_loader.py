@@ -61,6 +61,56 @@ def load_all_tools(config_path: Path, config: dict) -> list[dict]:
     return tools
 
 
+def backing_upstreams(routing_key: str, config: dict) -> list[str]:
+    """返回网关工具运行时实际会尝试的上游名 (与 ``router.route()`` 同规则)。
+
+    ``routing[routing_key].chain`` 非空时以 chain 为权威 (chain 里允许出现
+    mapping 未列出的上游, router 会以上游工具名=网关工具名兜底);
+    chain 缺失/为空时回落到 ``upstream_tool_mapping[routing_key]`` 的键。
+
+    注意与上方 ``derive_routing_chain`` 的区别: 后者是控制台**展示**用,
+    对"有 routing 块但没写 chain"刻意返回 ``[]`` 以暴露未决路由; 本函数用于
+    启用态过滤, 必须复刻 router 的实际回落行为, 不能跟着展示逻辑走。
+    """
+    routing = config.get("routing") or {}
+    entry = routing.get(routing_key)
+    chain = entry.get("chain") if isinstance(entry, dict) else None
+    if chain:
+        return list(chain)
+    mapping = config.get("upstream_tool_mapping") or {}
+    return list((mapping.get(routing_key) or {}).keys())
+
+
+def enabled_upstream_names(config: dict) -> set[str]:
+    """``config.upstreams`` 中 ``enabled`` 为真的上游名集合。
+
+    缺省 (字段缺失) 视为禁用, 与启动循环 ``cfg.get("enabled", False)`` 一致。
+    """
+    upstreams = config.get("upstreams") or {}
+    return {
+        name
+        for name, cfg in upstreams.items()
+        if isinstance(cfg, dict) and cfg.get("enabled", False)
+    }
+
+
+def filter_specs_by_enabled(specs: list[dict], config: dict) -> list[dict]:
+    """只保留"至少一个 backer 上游处于启用态"的工具 spec。
+
+    用于启动注册与运行时热开关: 全部 backer 都禁用的工具不发布到对外 /mcp。
+    无 backer 的 spec 防御性保留 —— 正常配置经 validate_specs 后不应出现,
+    但不能因配置缺映射把工具静默吞掉。
+    """
+    enabled = enabled_upstream_names(config)
+    kept: list[dict] = []
+    for spec in specs:
+        routing_key = spec.get("routing") or spec.get("name")
+        backers = backing_upstreams(routing_key, config)
+        if not backers or any(b in enabled for b in backers):
+            kept.append(spec)
+    return kept
+
+
 def get_cache_ttl(config: dict, ttl_key: str | None) -> int | None:
     """Resolve ``cache.ttl[ttl_key]`` → seconds. Returns ``None`` when
     the key is empty, missing from config, or the cache section itself

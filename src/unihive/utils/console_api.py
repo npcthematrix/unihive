@@ -30,7 +30,12 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 CONSOLE_HTML_PATH = str(_PROJECT_ROOT / "console.html")
-GATEWAY_CONFIG_PATH = str(_PROJECT_ROOT / "config" / "upstreams.yaml")
+# 可经环境变量指向替代配置 (隔离实例/验证脚本用); 默认项目正式配置。
+# 必须与 GatewayServer 启动时的 --config 指向同一文件, 否则 PUT 落盘与运行态脱节。
+GATEWAY_CONFIG_PATH = os.getenv(
+    "UNIHIVE_UPSTREAMS_CONFIG",
+    str(_PROJECT_ROOT / "config" / "upstreams.yaml"),
+)
 CACHE_DB_PATH = str(_PROJECT_ROOT / "logs" / "cache.db")
 
 # 从配置文件读取，避免硬编码
@@ -39,6 +44,10 @@ _INJECTED: bool = False
 
 # OmniClient instance (injected by gateway_server)
 _OMNI_CLIENT: "OmniClient | None" = None
+
+# OMNI 全量同步 in-flight 互斥: run_sync 最长约 300s 且写同一个 board.db,
+# 并发 (双击/旧客户端超时重发) 会触发 SQLite locked 与重复入库。
+_omni_sync_lock = asyncio.Lock()
 
 
 def set_omni_client(client: "OmniClient | None") -> None:
@@ -55,11 +64,15 @@ _upstream_registry: dict[str, object] = {}
 
 
 def set_upstream_registry(registry: dict[str, object]) -> None:
-    """gateway_server 在 upstreams 装配完成后调用一次。
-    注册表只用于查找 client 引用, 不持有任何 client 内部状态。
+    """注入 gateway 的 upstreams dict。
+
+    必须传**同一引用**而非拷贝: 热开关 (set_upstream_enabled) 通过
+    pop/新 client 赋值实时改这个 dict, MCP Browser / metrics / 状态叠加
+    都经 _get_upstream_client 解析, 快照拷贝会在禁用→重新启用后仍指向
+    已 stop 的旧 client (对比 proxy_api 也是别名化 live dict)。
     """
-    _upstream_registry.clear()
-    _upstream_registry.update(registry)
+    global _upstream_registry
+    _upstream_registry = registry
 
 
 def _get_upstream_client(name: str) -> object | None:
@@ -312,6 +325,123 @@ def save_fuyao_cache(payload: dict, *, expected_version: str | None = None) -> d
 
 class VersionConflict(Exception):
     """PUT 时客户端 version 与服务端不一致。"""
+
+
+# ---------------------------------------------------------------------------
+# 上游启用/禁用热开关 (2026-09-18)
+# ---------------------------------------------------------------------------
+
+# GatewayServer 实例, _do_initialize 后注入、stop() 置 None。
+# 仅 /api/config/upstreams/<name>/enabled 回调使用; stdio 模式下无路由可达。
+_gateway_server: Any = None
+
+
+def set_gateway_server(server: Any) -> None:
+    """GatewayServer 初始化完成后注入自身。"""
+    global _gateway_server
+    _gateway_server = server
+
+
+def _unquote_yaml_key(token: str) -> str:
+    token = token.strip()
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+        return token[1:-1]
+    return token
+
+
+def rewrite_upstream_enabled(text: str, name: str, enabled: bool) -> str:
+    """定向改写 upstreams.yaml 文本中某上游块的 ``enabled`` 标量。
+
+    块定位: 恰好 2 空格缩进的 ``  <name>:`` 顶层 upstream 键, 区间到下一个
+    同级键; ``enabled`` 锚定恰好 4 空格缩进, 不会误改 retry 等嵌套子段。
+    块内无 enabled 时在块头后插入一行。刻意不整文件 yaml.safe_dump —— 那会
+    冲垮 mapping 段的手工对齐列与全部注释。文件换行风格 (LF/CRLF) 原样保留;
+    仅被改的那一行, 标量前规范化为单空格、注释间距保留原值。
+
+    Raises:
+        KeyError: 文本中找不到该 upstream 块
+    """
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines()
+    header_idx: int | None = None
+    block_end = len(lines)
+    for i, line in enumerate(lines):
+        # 同级键: 恰好 2 空格 + 非空白, 形如 "  foo:" / "  foo:  # x"
+        m = re.match(r"^  ([^\s:#][^:]*):\s*(?:#.*)?$", line)
+        if not m:
+            continue
+        key = _unquote_yaml_key(m.group(1))
+        if key == name:
+            header_idx = i
+            for j in range(i + 1, len(lines)):
+                if re.match(r"^  \S", lines[j]):
+                    block_end = j
+                    break
+            break
+    if header_idx is None:
+        raise KeyError(f"upstream block {name!r} not found in config")
+
+    # 只换标量 token。注意 ": false" 中冒号后空格不可省 (YAML 里 "enabled:false"
+    # 会被当成普通字符串标量), 故统一输出单个空格; 尾部行内注释原样保留。
+    enabled_re = re.compile(r"^    enabled:\s*\S*([ \t]*)?(#.*)?$")
+    scalar = "true" if enabled else "false"
+    for i in range(header_idx + 1, block_end):
+        m = enabled_re.match(lines[i])
+        if m:
+            gap, comment = m.group(1) or "", m.group(2)
+            lines[i] = f"    enabled: {scalar}" + (f"{gap}{comment}" if comment else "")
+            break
+    else:
+        lines.insert(header_idx + 1, f"    enabled: {scalar}")
+
+    out = newline.join(lines)
+    if text.endswith("\n"):
+        out += newline
+    return out
+
+
+def save_upstream_enabled(
+    name: str, enabled: bool, *, expected_version: str | None = None
+) -> dict:
+    """把某上游 enabled 持久化进 upstreams.yaml (保格式定向改写)。
+
+    只落盘, 不动运行态 —— HTTP handler 随后调
+    ``GatewayServer.set_upstream_enabled()`` 完成热增删/断连。
+    """
+    if not isinstance(enabled, bool):
+        raise ValueError("'enabled' must be a boolean")
+
+    current_version = _compute_config_version()
+    if expected_version and expected_version != current_version:
+        raise VersionConflict(
+            f"config 版本不一致 (expected={expected_version}, current={current_version}); "
+            "请刷新页面后重试"
+        )
+
+    path = Path(GATEWAY_CONFIG_PATH)
+    text = path.read_text(encoding="utf-8")
+    raw = yaml.safe_load(text) or {}
+    if name not in (raw.get("upstreams") or {}):
+        raise KeyError(f"Unknown upstream: {name}")
+
+    new_text = rewrite_upstream_enabled(text, name, enabled)
+
+    # 落盘前语义复核: 目标位确实变成期望值
+    verified = yaml.safe_load(new_text) or {}
+    actual = bool((verified.get("upstreams") or {}).get(name, {}).get("enabled", False))
+    if actual != enabled:
+        raise RuntimeError(
+            f"enabled rewrite verification failed for {name!r}: got {actual}"
+        )
+
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(new_text)
+
+    # GET 侧缓存失效 (config 视图 / mcp-tools)
+    _interfaces_cache.clear()
+    _mcp_tools_cache.clear()
+
+    return {"version": _compute_config_version()}
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +912,16 @@ async def run_omni_sync(source: str = "all", board_type: str = "all") -> dict[st
     if omni is None:
         return {"status": "failed", "message": "OMNI 客户端未初始化", "record_count": 0}
 
-    return await omni.run_sync(source, board_type)
+    # 快速失败, 不排队等待: 前端按钮在 running 期间本就禁用, 走到这里说明
+    # 是并发/重放请求, 直接告知即可。
+    if _omni_sync_lock.locked():
+        return {
+            "status": "failed",
+            "message": "已有同步任务在执行, 请等待当前同步完成",
+            "record_count": 0,
+        }
+    async with _omni_sync_lock:
+        return await omni.run_sync(source, board_type)
 
 
 def get_omni_sector_stocks(
@@ -1016,4 +1155,115 @@ def build_mcp_browser_routes() -> list:
     return [
         Route("/api/mcp-browser/upstreams", mcp_browser_upstreams_api),
         Route("/api/mcp-browser/{upstream}/tools", mcp_browser_tools_api),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 上游启用/禁用热开关 HTTP 层 (2026-09-18)
+# ---------------------------------------------------------------------------
+
+
+def _validate_toggle_enabled_body(body: object) -> tuple[bool | None, str | None]:
+    """校验热开关请求体。成功返 (enabled, None), 失败返 (None, error_msg)。"""
+    if not isinstance(body, dict):
+        return None, "body must be a JSON object"
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        return None, "'enabled' must be a boolean (true/false)"
+    return enabled, None
+
+
+async def upstream_enabled_api(req: "Request") -> "JSONResponse":
+    """PUT /api/config/upstreams/{name}/enabled
+
+    body: ``{"enabled": bool, "version": str}`` —— 先持久化 yaml, 再调
+    GatewayServer 热改 /mcp 发布集与运行时连接。
+
+    状态码:
+      200: 成功 (body 含 enabled/connected/tools_added/tools_removed/version;
+           部分失败后的同态重试由运行时 reconcile 自愈, 同样返回 200)
+      400: body 非法或 enabled 非布尔
+      404: 上游不存在
+      409: 乐观锁 version 不匹配
+      500: 运行时热切换部分失败 (yaml 已落盘, body 带 version; 原样重试可自愈)
+      503: GatewayServer 未注入 (stdio 模式不可达, 防御性)
+    """
+    from starlette.responses import JSONResponse
+
+    name = req.path_params["name"]
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    enabled, body_error = _validate_toggle_enabled_body(body)
+    if enabled is None:
+        return JSONResponse({"error": body_error}, status_code=400)
+
+    try:
+        # yaml 读/解析/校验/写是阻塞文件 IO, 放线程池避免卡住事件循环
+        # (全量 safe_load + 写盘在慢盘/杀软扫描时可达数十毫秒)。
+        persisted = await asyncio.to_thread(
+            save_upstream_enabled,
+            name,
+            enabled,
+            expected_version=body.get("version"),
+        )
+    except VersionConflict as e:
+        return JSONResponse(
+            {"error": "version_conflict", "message": str(e)},
+            status_code=409,
+        )
+    except KeyError:
+        return JSONResponse(
+            {"error": f"unknown upstream: {name}"},
+            status_code=404,
+        )
+    except (ValueError, yaml.YAMLError, OSError, RuntimeError) as e:
+        # 写后解析复核失败 / 配置块定位歧义 / IO 错误: 保持 JSON 错误契约,
+        # 不落 500 纯文本 (前端 errorMessage 才能解析)。
+        logger.exception("save_upstream_enabled(%r, %s) failed", name, enabled)
+        msg = f"config persist failed: {type(e).__name__}: {e}"[:300]
+        return JSONResponse({"error": msg}, status_code=500)
+
+    server = _gateway_server
+    if server is None:
+        return JSONResponse(
+            {"error": "gateway runtime not available", "version": persisted["version"]},
+            status_code=503,
+        )
+
+    try:
+        runtime = await server.set_upstream_enabled(name, enabled)
+    except KeyError:
+        # 磁盘有但运行态 config 没有 (极端双轨), 按未知上游处理
+        return JSONResponse(
+            {"error": f"unknown upstream: {name}", "version": persisted["version"]},
+            status_code=404,
+        )
+    except Exception as e:
+        # yaml 已落盘但热切换失败: 不回滚磁盘 (重启即收敛到目标态),
+        # 返回 500 + 新 version, 让前端提示用户可重试或重启。
+        logger.exception(f"set_upstream_enabled({name!r}, {enabled}) failed")
+        return JSONResponse(
+            {
+                "error": f"runtime toggle failed: {type(e).__name__}: {e}"[:300],
+                "version": persisted["version"],
+            },
+            status_code=500,
+        )
+
+    return JSONResponse({**runtime, "version": persisted["version"]})
+
+
+def build_upstream_routes() -> list:
+    """上游热开关路由 (挂载进 gateway_server)。路径参数用 {name} (Starlette 1.6)。"""
+    from starlette.routing import Route
+
+    return [
+        Route(
+            "/api/config/upstreams/{name}/enabled",
+            upstream_enabled_api,
+            methods=["PUT"],
+        ),
     ]
