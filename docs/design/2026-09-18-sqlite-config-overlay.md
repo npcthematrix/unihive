@@ -1,7 +1,12 @@
 # 设计: YAML 基线 + SQLite 覆盖层的配置体系
 
+> **2026-09-18 方向更新: 本文档的薄 overlay 终态已被 v2 取代** —
+> 用户明确诉求是"配置全量解构入 DB, 平时不维护 YAML, YAML 仅作模板"。
+> 见 [2026-09-18-sqlite-config-full-database.md](./2026-09-18-sqlite-config-full-database.md)。
+> 本文档的 P0(已提交 d37ca6f)/ P1(已实现未提交)代码不废弃, 是 v2 的存储/事务/热生效/golden 基础。
+
 日期: 2026-09-18
-状态: 设计讨论稿 (待评审, 未实现)
+状态: P0 + P1 已实现 (2026-09-18, 未提交); 终态方向被 v2 全量入库取代, P2/P3 按 v2 重定义
 
 ## 1. 背景与动机
 
@@ -221,12 +226,35 @@ P0 先建 (此时只校验 YAML), P1 后增加 overlay 维度:
 
 ### P1 — 薄 overlay 上线 (运营态: enabled + TTL)
 
-3. `config_store.py` + 建表/迁移 (`schema_version`) + `data/config.db` (gitignore)。
-4. `config_merge.py` 纯函数 + 单测; 加载链接入, `--config-source` 逃生开关。
-5. **等价性测试**: 空 overlay 时 effective dict/specs 与现状 YAML 路径 golden 全量一致
-   (291 工具、mapping、TTL), 不一致不许合并。
-6. 两个控制台写路径切 store, 删除 YAML 写法; 前端乐观锁改 revision。
-7. 控制台"覆盖列表 / 单条恢复默认 / 清空全部"。
+3. ~~`config_store.py` + 建表/迁移 (`schema_version`) + `data/config.db` (gitignore)。~~
+   **已落 (2026-09-18)**: `storage/config_store.py` — `config_overlay` + `config_meta`
+   (全局整数 `revision`, schema_version=1); WAL / synchronous=NORMAL / busy_timeout=5000;
+   `apply_changes(upserts, deletes, expected_revision)` 事务化, 同值 upsert / 删不存在行
+   / 空 reset 不 bump; 点路径字符集 `[A-Za-z0-9_-]+(.[…])*` (需容纳 `THS-LOCAL-GATEWAY`)。
+4. ~~`config_merge.py` 纯函数 + 单测; 加载链接入, `--config-source` 逃生开关。~~
+   **已落**: `core/config_merge.py` (`overlay_tree` + `apply_config_overlays`, 深拷贝不 mutate,
+   结构冲突 fail-closed); 加载链 `_do_initialize` 最前面 merge 后再跑 `validate_config`;
+   env `UNIHIVE_CONFIG_SOURCE=yaml` 逃生、`UNIHIVE_CONFIG_DB` 覆盖默认路径
+   (`data/config.db`, 已随 `data/` gitignore); console_api 持行镜像保证同步读零 DB IO。
+5. ~~**等价性测试**: 空 overlay 时 effective dict/specs 与现状 YAML 路径 golden 全量一致
+   (291 工具、mapping、TTL), 不一致不许合并。~~ **已落**:
+   `tests/test_config_overlay_golden.py` — 空覆盖 = 与 YAML dict 深等;
+   `load_all_tools` 全字段相等, 实测 **290 spec**; 真实空库 roundtrip;
+   yaml 逃生模式 server.config_store is None; enabled 覆盖 seed 后启动翻转且兄弟字段保留。
+6. ~~两个控制台写路径切 store, 删除 YAML 写法; 前端乐观锁改 revision。~~ **已落**:
+   `save_upstream_enabled` / `save_fuyao_cache` 全 async 化、只存差异 (与出厂相同即删行);
+   删掉 `rewrite_upstream_enabled` / `_unquote_yaml_key` 正则文本手术;
+   `models/fuyao_cache.py` 定稿单层 tools (StrictInt, extra=forbid, 0=显式不缓存);
+   顺带修掉 `fuyao_ttl_for` 运行时读旧 endpoints shape 导致 TTL override 从未生效的潜伏 bug;
+   乐观锁改整数 revision (yaml 模式回落 16 位文件 hash, 前端 number|string 双收);
+   503 `config_store_unavailable` 贯穿开关/TTL/覆盖管理三类写端点。
+7. ~~控制台"覆盖列表 / 单条恢复默认 / 清空全部"。~~ **已落**:
+   `GET /api/config/overlays`、`DELETE /api/config/overlays/{path}`、
+   `POST /api/config/overlays/reset` (静态 reset 路由排在 {path} 前);
+   enabled 行删除后按出厂值做运行时热收敛, 失败进 warnings 不阻断;
+   前端配置页新增「本地覆盖」tab (`OverlayPanel.vue` + `overlays.ts` 纯函数)。
+   测试: backend **734 passed / 1 skipped** (新增 ~86 例), web vitest **240 passed**,
+   `npm run build` (vue-tsc) 绿, `config lint` 0 issue。
 
 ### P2 — 工具描述/参数可编辑
 
@@ -254,6 +282,9 @@ P0 先建 (此时只校验 YAML), P1 后增加 overlay 维度:
 
 ## 11. 待确认/遗留
 
-- DB 文件位置: 建议 `data/config.db` (与 `data/board.db` 同类), 非默认路径进 bootstrap YAML。
-- P0 是直接上 ruamel 做过渡, 还是接受短暂窗口期尽快推进 P1 (过渡代码写完即删)。
-- `annotations` 是否长期保持只读。
+- ~~DB 文件位置~~: 已定 `data/config.db` (与 `data/board.db` 同类, 随 `data/` gitignore),
+  可用 `UNIHIVE_CONFIG_DB` 覆盖; 引导配置不进 DB。
+- ~~P0 是否上 ruamel 过渡~~: 已拍板跳过, 直接 P1 删 YAML 写路径。
+- `annotations` 是否长期保持只读 — P2 再评审, 当前禁改。
+- P1 遗留 (小): console 读路径目前不暴露 fuyao 工具的「基线值 vs 覆盖值」差异
+  (GET 返回合并后的生效值); 覆盖来源在「本地覆盖」tab 可查, P2 做工具编辑时再合并视图。
