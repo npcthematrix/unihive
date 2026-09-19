@@ -13,6 +13,9 @@ htmlcov/
 venv/
 env/
 
+# Node (web/ 另有自己的 .gitignore; 根目录误生成的 node_modules 也要挡住)
+node_modules/
+
 # THSDK 登录会话文件（thsdk 包写入进程工作目录，内含账号会话，禁止提交）
 account.session
 *.session
@@ -20,13 +23,10 @@ account.session
 # curl/libcurl cookie jar（手动抓包脚本产物，可能含会话凭据）
 cookies.txt
 
-# Logs & runtime data
-logs/*.log
-logs/*.db
-logs/*.db-shm
-logs/*.db-wal
-logs/cache_stats.json
-logs/tdx_quant_strategy_id
+# Logs & runtime data — 目录整体默认忽略 (调试抓包 .sse/.out/.hdr/*.py 等产物
+# 一律不入库), 仅白名单放行明确需要跟踪的文件
+logs/*
+!logs/proxy-tab-verified.png
 data/
 
 # Session / planning artifacts (not part of the product)
