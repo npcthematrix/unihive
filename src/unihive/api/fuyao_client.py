@@ -86,6 +86,27 @@ class FuyaoClient:
                 timeout=timeout,
                 limits=limits,
             )
+            # M8 (round 9 audit): 旧实现仅构造完 httpx client 即标 HEALTHY,
+            # 上游死着 boot 也报可用, 首次 call_tool 才暴露 (router 误路由)。
+            # 这里做一次轻量可达性探测: GET base_url (不发 JSON-RPC, 不耗
+            # 上游配额), 任何 HTTP 响应即视为可达; 连接拒绝/超时 → UNAVAILABLE。
+            # 仅 start 期探一次; 周期 health_check 维持本地判定, 不引入
+            # 60s 一次的网络往返 (保留既有"不烧配额"决策)。
+            probe_timeout = max(self.config.connect_timeout_seconds, 1.0)
+            try:
+                await asyncio.wait_for(
+                    self._client.get(self.config.base_url),
+                    timeout=probe_timeout,
+                )
+            except (httpx.HTTPError, asyncio.TimeoutError):
+                logger.warning(
+                    f"[{self.name}] startup reachability probe failed for "
+                    f"{self.config.base_url}; status=UNAVAILABLE"
+                )
+                self._status = UpstreamStatus.UNAVAILABLE
+                await self._client.aclose()
+                self._client = None
+                return False
             self._status = UpstreamStatus.HEALTHY
             logger.info(f"[{self.name}] Configured for {self.config.base_url}")
             return True

@@ -55,21 +55,23 @@ async def test_stock_top_board_l1_hit_does_not_rescan(client):
 
 
 @pytest.mark.asyncio
-async def test_stock_top_board_l1_concurrent_single_flight(client):
-    """5 个并发同参数请求: sync 只跑 1 次, 全部 result 共享同一引用。"""
+async def test_stock_top_board_l1_concurrent_all_succeed(client):
+    """5 个并发同参数请求: 无 single-flight, 全部成功, L1 最终可命中。
+
+    2026-09-16 移除 single-flight 后, 并发同 key 的 miss 计数存在竞态
+    (先计算的线程可能先写好 L1, 后调度的任务读到缓存), 因此不再断言
+    "全共享同一引用 / 精确 miss==1", 只断言功能正确 + L1 最终命中。
+    """
     mock_q = _mock_quotes_client(stock_count=10)
     with patch.object(client, "_get_quotes", return_value=mock_q):
         results = await asyncio.gather(*[client.stock_top_board() for _ in range(5)])
     assert all(r.success for r in results)
-    # 全部 5 个共享同一 ToolResult.data 引用 (single-flight 等到的不是缓存命中,
-    # 而是 leader 算完后塞进 inflight_future 的同一个值)
-    assert all(r.data is results[0].data for r in results)
-    # 同步函数只跑 1 次
-    assert client._top_board_l1_misses == 1
-    # 后续再调一次才是真正的 cache hit
+    # 至少一次同步计算把结果写入 L1
+    assert client._top_board_l1_misses >= 1
+    # 批内完成后, 同 key 单次请求命中 L1 (~10s TTL)
     extra = await client.stock_top_board()
     assert extra.success is True
-    assert client._top_board_l1_hits == 1
+    assert client._top_board_l1_hits >= 1
 
 
 @pytest.mark.asyncio
@@ -84,7 +86,7 @@ async def test_stock_top_board_metrics_block(client):
     assert block["enabled"] is True
     assert block["ttl_seconds"] == 10.0
     assert block["size"] == 2
-    assert block["inflight_keys"] == 0
+    assert block["maxsize"] == block["size"] or block["maxsize"] >= 2
 
 
 # ============ H2-a: stock_unusual L1 ============
@@ -105,14 +107,15 @@ async def test_stock_unusual_l1_hit_does_not_rescan(client):
 
 
 @pytest.mark.asyncio
-async def test_stock_unusual_l1_concurrent_single_flight(client):
+async def test_stock_unusual_l1_concurrent_all_succeed(client):
+    """3 个并发同参数请求: 无 single-flight, 全部成功, 至少一次算入 L1。"""
     mock_q = MagicMock()
     mock_q.block.return_value = pd.DataFrame([{"name": "概念1", "code_list": "600000"}])
     mock_q.quotes.return_value = pd.DataFrame([{"price": 10, "vol": 100, "pct_chg": 9.9}])
     with patch.object(client, "_get_quotes", return_value=mock_q):
         results = await asyncio.gather(*[client.stock_unusual() for _ in range(3)])
     assert all(r.success for r in results)
-    assert client._unusual_l1_misses == 1
+    assert client._unusual_l1_misses >= 1
 
 
 @pytest.mark.asyncio

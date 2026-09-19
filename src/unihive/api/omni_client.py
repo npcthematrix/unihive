@@ -78,7 +78,24 @@ class OmniClient:
         # 既慢又浪费句柄。改用 threading.local 每线程缓存一个长连接，
         # 查询路径零 connect/disconnect 开销。
         self._tls = threading.local()
-        self._ensure_db()
+        # L10 (round 9 audit): threading.local 无法跨线程枚举 → stop() 只
+        # 关得到当前线程的连接, worker thread (asyncio.to_thread) 缓存的
+        # 连接留在 tls 永不关 (句柄泄漏)。用 _all_conns 登记每条已开连接,
+        # stop() 统一关闭。
+        self._all_conns: list[sqlite3.Connection] = []
+        self._conns_lock = threading.Lock()
+        # L2 (round 10 audit): stop() 后 _close_all_conns() 会换新 threading.local,
+        # _get_conn() 的 tls 复检由此失效 → stop 后的 health_check/在途调用会重开
+        # 并重新登记一条永远没人关的连接 (句柄泄漏)。_stopped 闸在 stop 后直接
+        # 拒绝开新连接, start() 复位以支持 stop/start 循环。
+        self._stopped = False
+        # M2 (round 10 audit): 仅在库文件**已存在**时补表 (CREATE TABLE IF NOT
+        # EXISTS 对老库无损)。旧实现无条件 _ensure_db() 会 mkdir + 物化一个空
+        # board.db → start() 的 "文件缺失 → UNAVAILABLE" 分支永不触发, 且拼错
+        # 路径时会在错误位置静默建空库。缺库的建表由写路径 run_sync() 负责
+        # (board_sync CLI 本来就在构造 client 前先 init_db)。
+        if Path(self._db_path).exists():
+            self._ensure_db()
 
         # 指标收集
         self._metrics = {
@@ -88,6 +105,10 @@ class OmniClient:
 
     def _get_conn(self) -> sqlite3.Connection:
         """获取当前线程的 SQLite 连接（懒初始化）。"""
+        # L2 (round 10 audit): stop() 之后拒绝重开。health_check 以
+        # except Exception: return False 兜底, 捕获 RuntimeError 后返回不健康。
+        if self._stopped:
+            raise RuntimeError("OmniClient has been stopped; call start() first")
         conn = getattr(self._tls, "conn", None)
         if conn is None:
             conn = sqlite3.connect(
@@ -98,6 +119,9 @@ class OmniClient:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA temp_store=MEMORY")
             self._tls.conn = conn
+            # L10: 登记新连接供 stop() 统一关闭 (threading.local 不可枚举)。
+            with self._conns_lock:
+                self._all_conns.append(conn)
         return conn
 
     def _close_thread_conn(self) -> None:
@@ -109,6 +133,47 @@ class OmniClient:
             except Exception:
                 pass
             self._tls.conn = None
+
+    def _close_all_conns(self) -> None:
+        """L10 (round 9 audit): 关闭所有已登记连接 (含 worker thread 的)。
+
+        threading.local 无法跨线程枚举, stop() 单靠 _close_thread_conn 只
+        关得到当前线程的连接, asyncio.to_thread 跑过的 worker thread 连接
+        会泄漏。这里遍历 _all_conns 统一关闭, 再重置 tls 让任何线程下次
+        调用 _get_conn 时重开新连接 (而非复用已关连接对象)。
+        """
+        with self._conns_lock:
+            conns = list(self._all_conns)
+            self._all_conns.clear()
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        # 重置 tls: 各线程 tls 里残留的 conn 引用已 close, 下次 _get_conn
+        # 会因 getattr(...) is None 复检——但 tls 旧对象仍持有 stale 引用,
+        # 不会被 None。直接换一个新 threading.local 让 per-thread slot 失效。
+        self._tls = threading.local()
+
+    def _sector_count(self) -> int:
+        """H3 (round 9 audit): 独立短连接探测 sectors 行数。
+
+        不复用 _get_conn (会污染事件循环线程的 tls 长连接), 开一条专用
+        连接查完即关。返回值: >=0 为行数; -1 表示表缺失 / DB 不可读。
+        """
+        try:
+            conn = sqlite3.connect(self._db_path, timeout=5.0)
+            try:
+                cur = conn.execute("SELECT COUNT(*) FROM sectors")
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+            except sqlite3.OperationalError:
+                # sectors 表不存在或 DB 损坏
+                return -1
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            return -1
 
     def _ensure_db(self) -> None:
         """确保数据库和表结构存在"""
@@ -284,6 +349,10 @@ class OmniClient:
         Returns:
             {"status": "success"|"failed", "message": str, "record_count": int, "log_id": int}
         """
+        # M2 (round 10 audit): 写路径自建表 —— __init__ 不再为缺库物化空文件,
+        # 控制台在未预同步 (board.db 不存在) 时触发同步必须能落 sync_log;
+        # board_sync CLI 在构造 client 前已 init_db, 重复 ensure 是 IF NOT EXISTS 幂等。
+        self._ensure_db()
         log_id = self._insert_running_log(source, board_type)
 
         try:
@@ -335,23 +404,49 @@ class OmniClient:
         设为 UNAVAILABLE (而非 DEGRADED), 配合 is_available=False 让 router 跳过
         fallback, 也避免 console status 误显示"degraded 但可用"。DEGRADED 留给
         "部分可用" 场景 (DB 有但同步未跑完整)。
+
+        H3 (round 9 audit): 探测 SELECT COUNT(*) FROM sectors: 文件缺失 →
+        UNAVAILABLE; 0 行 → DEGRADED; 表缺失/DB 损坏 → UNAVAILABLE; >0 → HEALTHY。
+        M2 (round 10 audit): __init__ 不再物化缺库, 文件缺失分支由此真正可达。
+        L2 (round 10 audit): 复位 stopped 闸, 允许 stop() 后的同实例重启。
         """
+        self._stopped = False
         db_path = Path(self._db_path)
-        if db_path.exists():
-            self._status = UpstreamStatus.HEALTHY
-        else:
+        if not db_path.exists():
             self._status = UpstreamStatus.UNAVAILABLE
             logger.warning(
                 f"OmniClient: board data DB not found at {db_path}; "
                 f"status=UNAVAILABLE. Run `python -m src.unihive.sync.board_sync` "
                 f"to populate."
             )
+            return True
+        count = await asyncio.to_thread(self._sector_count)
+        if count < 0:
+            self._status = UpstreamStatus.UNAVAILABLE
+            logger.warning(
+                f"OmniClient: sectors table missing or DB unreadable at "
+                f"{db_path}; status=UNAVAILABLE."
+            )
+        elif count == 0:
+            self._status = UpstreamStatus.DEGRADED
+            logger.warning(
+                f"OmniClient: board data DB empty at {db_path} "
+                f"(sectors=0, sync not run); status=DEGRADED. "
+                f"Run `python -m src.unihive.sync.board_sync` to populate."
+            )
+        else:
+            self._status = UpstreamStatus.HEALTHY
         return True
 
     async def stop(self) -> None:
         """关闭客户端"""
         # L2 (2026-09-15 MCP 二次审视): 关闭当前线程的 SQLite 长连接
-        self._close_thread_conn()
+        # L10 (round 9 audit): 仅关当前线程会泄漏 worker thread 的连接;
+        # 改为关闭所有已登记连接。
+        # L2 (round 10 audit): 先置 stopped 闸再关连接, 杜绝 stop 后的
+        # health_check / 在途查询经 _get_conn 重开并登记无人关闭的连接。
+        self._stopped = True
+        self._close_all_conns()
         self._status = UpstreamStatus.UNKNOWN
 
     async def call_tool(self, tool_name: str, params: dict[str, Any]) -> ToolResult:

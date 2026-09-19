@@ -32,27 +32,76 @@ from ..storage.config_store import (
 
 logger = logging.getLogger(__name__)
 
-# 项目根目录 (src/unihive/utils/console_api.py 向上 4 层)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# 运行时资源根 (布局感知):
+# - dev / editable: <repo>/src/unihive/utils/console_api.py → 向上 4 层 = repo 根
+#   (标记: 该目录下有 console.html);
+# - installed (非 editable wheel): site-packages/unihive/utils/console_api.py,
+#   console.html + static/ 经 hatchling force-include 落在 site-packages (向上 3 层)。
+# M1 (round 10 audit): 旧实现固定 4 parents, installed 下指向 venv 根 (多爬一层),
+# 与网关侧 config_db.project_root() 不同根 → cache.db/config 读写 split-brain。
+def resolve_runtime_root(file_path: Path) -> Path:
+    """定位运行时资源根, dev 与 installed 两布局。以 console.html 为布局标记。"""
+    f = Path(file_path).resolve()
+    dev_root = f.parent.parent.parent.parent
+    if (dev_root / "console.html").exists():
+        return dev_root
+    # installed: site-packages 根 (向上 3 层)
+    return f.parent.parent.parent
 
-CONSOLE_HTML_PATH = str(_PROJECT_ROOT / "console.html")
-# 可经环境变量指向替代配置 (隔离实例/验证脚本用); 默认项目正式配置。
-# 必须与 GatewayServer 启动时的 --config 指向同一文件, 否则 PUT 落盘与运行态脱节。
+
+_RUNTIME_ROOT = resolve_runtime_root(Path(__file__))
+# 向后兼容别名 (旧消费方直接读 _PROJECT_ROOT)。
+_PROJECT_ROOT = _RUNTIME_ROOT
+
+
+def resolve_console_html_path(file_path: Path) -> Path:
+    """L13 (round 9 audit): 定位 console.html, 兼容 dev 与 installed 布局。
+
+    环境变量 UNIHIVE_CONSOLE_HTML 覆盖 (隔离实例)。
+    """
+    env = os.getenv("UNIHIVE_CONSOLE_HTML")
+    if env:
+        return Path(env)
+    return resolve_runtime_root(file_path) / "console.html"
+
+
+def resolve_static_dir(file_path: Path) -> Path:
+    """H1 (round 10 audit): 定位 static/ 目录, 与 console.html 同一个运行时根。
+
+    旧实现 gateway 挂载写死 ``_PROJECT_ROOT / 'static'`` (4 parents),
+    installed 布局下目录不存在 → Starlette StaticFiles 构造期 raise, 网关拒启。
+    环境变量 UNIHIVE_STATIC_DIR 覆盖。
+    """
+    env = os.getenv("UNIHIVE_STATIC_DIR")
+    if env:
+        return Path(env)
+    return resolve_runtime_root(file_path) / "static"
+
+
+STATIC_DIR = str(resolve_static_dir(Path(__file__)))
+CONSOLE_HTML_PATH = str(resolve_console_html_path(Path(__file__)))
+# 可经环境变量指向替代配置 (隔离实例/验证脚本用); 默认锚定运行时根, 与网关
+# resolve_project_path / project_root 同根, 否则 PUT 落盘与运行态脱节。
 GATEWAY_CONFIG_PATH = os.getenv(
     "UNIHIVE_UPSTREAMS_CONFIG",
-    str(_PROJECT_ROOT / "config" / "upstreams.yaml"),
+    str(_RUNTIME_ROOT / "config" / "upstreams.yaml"),
 )
-CACHE_DB_PATH = str(_PROJECT_ROOT / "logs" / "cache.db")
+CACHE_DB_PATH = str(_RUNTIME_ROOT / "logs" / "cache.db")
 
 # 从配置文件读取，避免硬编码
 _GW_CFG: dict | None = None
 _INJECTED: bool = False
 
-# SQLite 配置薄覆盖层 (data/config.db), 由 GatewayServer._apply_db_config_overlays
-# 装配后注入。同步读路径 (load_config 等) 不碰 DB, 只合并 _overlay_rows 镜像;
-# 镜像在启动注入与每次写操作后刷新。None + 空镜像 = UNIHIVE_CONFIG_SOURCE=yaml
-# 逃生模式, 此时所有配置写接口返回 503。
+# SQLite 配置库 (data/config.db), 由 GatewayServer._load_db_config 装配后注入。
+# 两种模式:
+# - v2 实体模式 (_db_mode=True): DB 是配置事实源, 同步读路径直接用 gateway
+#   注入的 live 装配 config (_GW_CFG, 同一引用), 写路径走实体 CRUD;
+# - P1 薄覆盖层模式 (set_config_store 注入, 现仅测试/yaml 逃生模式使用):
+#   YAML 是基线, 同步读路径合并 _overlay_rows 行镜像。
+# None + 空镜像 = UNIHIVE_CONFIG_SOURCE=yaml 逃生模式, 配置写接口返回 503。
 _config_store: Any = None
+_db_mode: bool = False
+_db_revision: int = 0
 _overlay_rows: list = []
 _overlay_revision: int = 0
 
@@ -105,15 +154,43 @@ def set_config(config: dict) -> None:
 
 
 def set_config_store(store: Any, rows: list | None = None, revision: int = 0) -> None:
-    """注入 SQLite ConfigStore 与当前 overlay 行镜像 (Gateway 启动时)。
+    """注入 P1 薄覆盖层 ConfigStore 与 overlay 行镜像 (测试/兼容入口)。
 
     rows 元素只需有 ``.path`` / ``.value`` (ConfigStore.OverlayRow)。
-    传 ``store=None`` 进入 yaml 逃生模式 (UNIHIVE_CONFIG_SOURCE=yaml / stop)。
+    传 ``store=None`` 进入 yaml 逃生模式 (stop/重置)。运行时网关改走
+    :func:`set_config_db` (v2 实体模式); 两者互斥, 本函数会复位实体模式。
     """
-    global _config_store, _overlay_rows, _overlay_revision
+    global _config_store, _overlay_rows, _overlay_revision, _db_mode, _db_revision
     _config_store = store
     _overlay_rows = list(rows or [])
     _overlay_revision = int(revision)
+    _db_mode = False
+    _db_revision = 0
+
+
+def set_config_db(store: Any, revision: int = 0) -> None:
+    """注入 v2 实体模式 ConfigStore (Gateway 启动时) 或复位 (store=None)。
+
+    实体模式下 DB 是事实源: 同步读路径用 gateway 注入的 live 装配 config,
+    写路径走 ``update_upstream_enabled`` / ``upsert_section`` 实体 CRUD。
+    """
+    global _config_store, _db_mode, _db_revision, _overlay_rows, _overlay_revision
+    _config_store = store
+    _db_mode = store is not None
+    _db_revision = int(revision)
+    # 实体模式不允许混入 P1 行镜像 (两套写路径互斥)。
+    _overlay_rows = []
+    _overlay_revision = int(revision)
+
+
+def invalidate_config_caches() -> None:
+    """实体热编辑/出厂更新后丢弃派生缓存 (interfaces 5s / mcp tools 30s)。
+
+    与 5 个既有写站点同手法, 集中成一个入口供 GatewayServer 热编辑调用,
+    避免新写路径漏清导致控制台/浏览器看到旧工具集。
+    """
+    _interfaces_cache.clear()
+    _mcp_tools_cache.clear()
 
 
 async def _refresh_overlay_snapshot() -> None:
@@ -256,14 +333,34 @@ def _read_yaml_config() -> dict:
     return config
 
 
-def load_config() -> dict:
-    """当前生效配置快照: YAML 出厂基线 + SQLite overlay 镜像, 已脱敏。
+def _effective_runtime_config() -> dict | None:
+    """v2 实体模式下 gateway 注入的 live 装配 config (同一引用), 否则 None。
 
-    overlay 行镜像由 Gateway 启动注入、每次控制台写操作后刷新, 因此本函数
-    保持同步、零 DB IO, get_upstream_status / get_interfaces 等同步调用方
-    无需改成 async。乐观锁 version 在 overlay 模式下是 config.db 的整数
-    revision; yaml 逃生模式 (store=None) 回落到文件元信息 hash。
+    热开关/TTL 热改直接作用在这份 dict 上, 因此读它即读当前生效配置,
+    零文件/DB IO; 未注入 (stdio 独立调用/单元测试) 时回落 None。
     """
+    if _db_mode and _INJECTED and isinstance(_GW_CFG, dict):
+        return _GW_CFG
+    return None
+
+
+def load_config() -> dict:
+    """当前生效配置快照, 已脱敏, 带乐观锁 version。
+
+    - v2 实体模式: gateway 启动时装配的 live config (库内实体 + config.yaml
+      bootstrap) 即生效配置, 不回读 YAML。290 条 tool spec 由
+      /api/interfaces 提供, /api/config 快照不重复携带 ``tools``。
+      version 是 config.db 的整数 revision。
+    - P1/yaml 模式: YAML 出厂基线 + overlay 行镜像, 零 DB IO; yaml 逃生
+      模式 (store=None) version 回落到文件元信息 hash。
+    """
+    runtime = _effective_runtime_config()
+    if runtime is not None:
+        snapshot = {k: v for k, v in runtime.items() if k != "tools"}
+        masked = _mask_config_secrets(snapshot)
+        masked["version"] = _db_revision
+        return masked
+
     config = _read_yaml_config()
     if _overlay_rows:
         config = apply_config_overlays(config, _overlay_rows)
@@ -300,8 +397,9 @@ def _compute_config_version() -> str:
 def get_fuyao_cache() -> dict:
     """读取生效中的 fuyao 工具级 TTL: ``{"tools": {...}, "version": int}``。
 
-    来源 = YAML 基线 fuyao_cache.tools 合并 data/config.db 覆盖行
-    (经 load_config 镜像合并), 不直接读盘/读 DB。
+    实体模式来源 = config.db 的 fuyao_cache section (经 live 装配 config);
+    P1 模式 = YAML 基线合并 config_overlay 行镜像。两种模式都不直接读 DB,
+    保持同步零 IO。
     """
     config = load_config()
     fc = config.get("fuyao_cache")
@@ -309,14 +407,39 @@ def get_fuyao_cache() -> dict:
     return {"tools": tools, "version": config.get("version", 0)}
 
 
-async def save_fuyao_cache(payload: dict, *, expected_version: int | str | None = None) -> dict:
-    """把 fuyao 工具级 TTL 覆盖写入 data/config.db (事务化, 单 revision bump)。
+def parse_fuyao_cache_put_body(body: Any) -> tuple[dict, Any]:
+    """解析 PUT /api/config/fuyao-cache 请求体, 返回 ``(fuyao_cache, version)``。
 
+    M3: ``fuyao_cache`` 必须显式是 JSON object。旧实现用
+    ``body.get("fuyao_cache") or {}`` 兜底, 前端发错体 (字段缺失 / null /
+    非法 JSON 解析成空) 会被静默解释成"清空全部 TTL 覆盖"; 显式传
+    ``{"tools": {}}`` 仍是合法的有意清空。形态非法抛 ValueError → 400。
+    """
+    if not isinstance(body, dict):
+        raise ValueError("请求体必须是 JSON object")
+    payload = body.get("fuyao_cache")
+    if not isinstance(payload, dict):
+        raise ValueError(
+            "'fuyao_cache' 缺失或不是 object; 如需清空请显式传 "
+            '{"fuyao_cache": {"tools": {}}}'
+        )
+    return payload, body.get("version")
+
+
+async def save_fuyao_cache(payload: dict, *, expected_version: int | str | None = None) -> dict:
+    """保存 fuyao 工具级 TTL 配置 (事务化, 乐观锁 version)。
+
+    v2 实体模式: 整段 ``fuyao_cache`` 作为 config_section 行写入 config.db
+    (DB 是事实源, 不再做"与出厂值比较后删行"的差异覆盖); 成功后热改
+    进程内 config, TTL 即时生效。
+
+    P1 薄覆盖层模式 (兼容/测试):
     - payload: ``{"tools": {gateway 工具名: 秒数}}``, pydantic 校验;
     - 与 YAML 出厂值相同 (或出厂无此键且值缺失) 的行删除而非写入, overlay 只留差异;
-    - 面板未提交的旧覆盖行 (tools 里已没有) 一并删除;
-    - 成功后热改进程内 config, TTL 即时生效 (无需重启网关)。
+    - 面板未提交的旧覆盖行 (tools 里已没有) 一并删除。
     """
+    global _db_revision
+
     from pydantic import ValidationError
 
     from ..models.fuyao_cache import FuyaoCacheConfig
@@ -328,6 +451,26 @@ async def save_fuyao_cache(payload: dict, *, expected_version: int | str | None 
         raise ValueError(f"fuyao_cache 校验失败: {e}") from e
 
     expected = _coerce_revision(expected_version)
+
+    if _db_mode:
+        try:
+            revision = await store.upsert_section(
+                "fuyao_cache",
+                {"tools": dict(new_cfg.tools)},
+                origin="user",
+                expected_revision=expected,
+            )
+        except _StoreRevisionConflict as e:
+            raise VersionConflict(
+                f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
+                "请刷新页面后重试"
+            ) from e
+        _db_revision = int(revision)
+        # 热改进程内 live config (同一引用), fuyao_ttl_for 下一次调用即读到。
+        _sync_runtime_fuyao_tools(dict(new_cfg.tools))
+        _interfaces_cache.clear()
+        _mcp_tools_cache.clear()
+        return {"fuyao_cache": {"tools": dict(new_cfg.tools)}, "version": revision}
     baseline_tools = dict(
         ((_read_yaml_config().get("fuyao_cache") or {}).get("tools") or {})
     )
@@ -436,17 +579,37 @@ def set_gateway_server(server: Any) -> None:
 async def save_upstream_enabled(
     name: str, enabled: bool, *, expected_version: int | str | None = None
 ) -> dict:
-    """把某上游 enabled 以点路径覆盖持久化进 data/config.db。
+    """持久化某上游 enabled 位。
 
-    - 与出厂值相同 → 删除覆盖行 (恢复出厂, 升级时不挡基线新默认值);
-    - 不同 → upsert ``upstreams.<name>.enabled``, 整数 revision 乐观锁;
-    - 只落库; HTTP handler 随后调 GatewayServer.set_upstream_enabled()
-      完成热增删 / 断连。
+    v2 实体模式: 直接更新 ``upstream`` 实体行 (DB 是事实源, 同值不 bump,
+    未知上游 KeyError), 整数 revision 乐观锁。
+    P1 薄覆盖层模式 (兼容/测试): 与出厂值相同 → 删除覆盖行 (恢复出厂),
+    不同 → upsert ``upstreams.<name>.enabled``。
+    两种模式都只落库; HTTP handler 随后调 GatewayServer.set_upstream_enabled()
+    完成热增删 / 断连。
     """
+    global _db_revision
+
     if not isinstance(enabled, bool):
         raise ValueError("'enabled' must be a boolean")
     store = _require_store()
     expected = _coerce_revision(expected_version)
+
+    if _db_mode:
+        try:
+            revision = await store.update_upstream_enabled(
+                name, bool(enabled), expected_revision=expected
+            )
+        except _StoreRevisionConflict as e:
+            raise VersionConflict(
+                f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
+                "请刷新页面后重试"
+            ) from e
+        _db_revision = int(revision)
+        _interfaces_cache.clear()
+        _mcp_tools_cache.clear()
+        return {"version": revision}
+
     upstreams = _read_yaml_config().get("upstreams") or {}
     cfg = upstreams.get(name)
     if not isinstance(cfg, dict):
@@ -515,11 +678,24 @@ async def _reconcile_enabled_overlays(paths: list[str]) -> list[str]:
     return warnings_list
 
 
+def _require_overlay_mode() -> None:
+    """v2 实体模式下停用 P1 覆盖行接口 (config_overlay 表已与运行时解耦)。
+
+    覆盖管理 UI 在 v2 切换时一并退役; 保留这层守卫避免旧前端/脚本误写
+    一张运行时不再读取的表。
+    """
+    if _db_mode:
+        raise ConfigStoreUnavailable(
+            "v2 实体模式下覆盖行接口已停用, 配置事实源为实体表"
+        )
+
+
 def list_config_overlays() -> dict:
     """覆盖层全量行 (同步读镜像, 零 DB IO)。
 
     返回 ``{"revision": int, "overlays": [{path, value, revision, updated_at}]}``。
     """
+    _require_overlay_mode()
     _require_store()
     return {
         "revision": _overlay_revision,
@@ -539,6 +715,7 @@ async def delete_config_overlay(
     path: str, *, expected_version: int | str | None = None
 ) -> dict:
     """删除单行覆盖 (恢复该路径出厂值), 返回 ``{"path", "version", "warnings"}``。"""
+    _require_overlay_mode()
     store = _require_store()
     _validate_overlay_path(path)
     expected = _coerce_revision(expected_version)
@@ -559,6 +736,7 @@ async def reset_config_overlays(
     *, expected_version: int | str | None = None
 ) -> dict:
     """清空全部覆盖行 (一键恢复出厂), 返回 ``{"version", "warnings"}``。"""
+    _require_overlay_mode()
     store = _require_store()
     affected = [row.path for row in _overlay_rows]
     expected = _coerce_revision(expected_version)
@@ -751,20 +929,40 @@ def _do_probe(upstream_type: str, base_url: str, cfg: dict) -> dict:
     return result
 
 
-_probe_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="upstream-probe")
+# L9 (round 9 audit): probe executor 改惰性单例 (仿 blocking_pool)。
+# 旧实现在模块级 eager 构造 + _shutdown_probe_executor 不置 None →
+# stop() 关掉后 get_upstream_status 仍向已关闭的 executor submit, 抛
+# RuntimeError; 同进程 restart 后状态页直接崩。惰性 getter 关后置 None,
+# 下次取重建。
+_probe_executor: ThreadPoolExecutor | None = None
+
+
+def _get_probe_executor() -> ThreadPoolExecutor:
+    """返回进程内共享的 probe executor (惰性创建, 关后可重建)。"""
+    global _probe_executor
+    if _probe_executor is None:
+        _probe_executor = ThreadPoolExecutor(
+            max_workers=8, thread_name_prefix="upstream-probe"
+        )
+    return _probe_executor
 
 
 def _shutdown_probe_executor() -> None:
-    """进程退出时关掉 probe executor, 避免 worker 线程泄漏。
+    """进程退出 / GatewayServer.stop() 时关掉 probe executor, 避免 worker 线程泄漏。
 
     LOW-1 (2026-09-14 audit): 之前挂在 atexit 上, 但 stdio transport
     下 FastMCP 可能拦截退出流程, atexit 不保证触发。GatewayServer.stop()
     现在显式调一次, 保证 worker 线程在正常退出路径下被关掉。
+    L9 (round 9 audit): 关后置 None, 让 _get_probe_executor 下次惰性重建,
+    支持同进程 stop/start 循环。
     """
-    try:
-        _probe_executor.shutdown(wait=False, cancel_futures=True)
-    except Exception:
-        pass
+    global _probe_executor
+    if _probe_executor is not None:
+        try:
+            _probe_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        _probe_executor = None
 
 
 # 保留 atexit 兜底: standalone 使用 (无 gateway_server) 仍依赖它。
@@ -776,7 +974,7 @@ def get_upstream_status() -> dict:
     upstreams_cfg = {
         name: cfg for name, cfg in config.get("upstreams", {}).items() if isinstance(cfg, dict)
     }
-    futures = {name: _probe_executor.submit(_probe_upstream, name, cfg) for name, cfg in upstreams_cfg.items()}
+    futures = {name: _get_probe_executor().submit(_probe_upstream, name, cfg) for name, cfg in upstreams_cfg.items()}
     upstreams_status = {}
     summary = {"total": 0, "online": 0, "degraded": 0, "offline": 0, "disabled": 0, "configured": 0}
     for name, fut in futures.items():
@@ -833,18 +1031,31 @@ _INTERFACES_CACHE_KEY = "interfaces"
 def get_interfaces() -> dict:
     """返回工具清单 + routing chain + cache TTL。
 
-    5s TTL 缓存: load_all_tools 要遍历 YAML + 跑 codegen, 每次 /api/interfaces
-    都重跑是浪费。前端每几秒轮询时尤其明显。
+    5s TTL 缓存: yaml 模式下 load_all_tools 要遍历 YAML + 跑 codegen,
+    每次 /api/interfaces 都重跑是浪费; db 模式只读 live 装配 config。
+    前端每几秒轮询时尤其明显。
     """
     cached = _interfaces_cache.get(_INTERFACES_CACHE_KEY)
     if cached is not None:
         return cached  # type: ignore[return-value]
 
     config_path = Path(GATEWAY_CONFIG_PATH)
-    config = load_config()
-    from ..core.tool_loader import load_all_tools, get_cache_ttl, derive_routing_chain
+    runtime = _effective_runtime_config()
+    from ..core.tool_loader import (
+        filter_specs_by_env,
+        get_cache_ttl,
+        derive_routing_chain,
+        load_all_tools,
+    )
 
-    tools = load_all_tools(config_path, config)
+    if runtime is not None:
+        # v2 实体模式: 290 条 spec 已在装配 config 中, 只补运行时 env 门控,
+        # 不回读 tools_*.yaml; 用未脱敏 live config 算 TTL/chain。
+        config = runtime
+        tools = filter_specs_by_env(list(runtime.get("tools") or []))
+    else:
+        config = load_config()
+        tools = load_all_tools(config_path, config)
     upstream_tool_mapping = config.get("upstream_tool_mapping", {}) or {}
     result = []
     for spec in tools:
@@ -884,13 +1095,22 @@ _MCP_TOOLS_TIMEOUT = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)
 
 
 def _build_source_map() -> dict[str, str]:
-    """从 load_all_tools 填充后的 config 构建 routing_key → upstream 的映射。"""
-    config = load_config()
-    # load_all_tools 会将 tools_*.yaml 中的 upstream_tool_mapping 合并进 config
-    from ..core.tool_loader import load_all_tools
-    from pathlib import Path
-    load_all_tools(Path(GATEWAY_CONFIG_PATH), config)
-    mapping = config.get("upstream_tool_mapping") or {}
+    """构建 routing_key → upstream 的映射。
+
+    v2 实体模式: mapping 已在装配 config 中按工具行重建, 直接读 live config;
+    yaml/P1 模式: load_all_tools 会把 tools_*.yaml 中的 mapping 合并进 config。
+    """
+    runtime = _effective_runtime_config()
+    if runtime is not None:
+        mapping = runtime.get("upstream_tool_mapping") or {}
+    else:
+        config = load_config()
+        from pathlib import Path
+
+        from ..core.tool_loader import load_all_tools
+
+        load_all_tools(Path(GATEWAY_CONFIG_PATH), config)
+        mapping = config.get("upstream_tool_mapping") or {}
     source_map = {}
     for routing_key, upstream_dict in mapping.items():
         if isinstance(upstream_dict, dict):
@@ -1122,7 +1342,9 @@ def build_omni_routes() -> list:
         Route("/api/omni/sync", omni_sync_api, methods=["POST"]),
         Route("/api/omni/query", omni_query_api),
         Route("/api/omni/sector-stocks", omni_sector_stocks_api),
-        Route("/api/upstreams/<name>/metrics", upstream_metrics_api),
+        # L5 (round 9 audit): 删除死路由 "/api/upstreams/<name>/metrics"
+        # (Flask 语法 <name>, Starlette 1.6 编译出 params={} 永不匹配)。
+        # 真正工作的是 gateway_server 里 {name} 那条; handler 保留供其挂载。
     ]
 
 
@@ -1387,54 +1609,354 @@ async def upstream_enabled_api(req: "Request") -> "JSONResponse":
     return JSONResponse({**runtime, "version": persisted["version"]})
 
 
-async def config_overlays_list_api(req: "Request") -> "JSONResponse":
-    """GET /api/config/overlays — 全量覆盖行 + 当前 revision。
+async def config_entities_api(req: "Request") -> "JSONResponse":
+    """GET /api/config/entities — v2 实体表只读浏览摘要。
 
-    503: config.db overlay 未启用 (UNIHIVE_CONFIG_SOURCE=yaml)。
+    db 模式: revision / 出厂模板版本与导入时间 / 每个 upstream 实体行的
+    origin+updated_at / section 列表 / 工具按 origin 聚合计数。
+    yaml 逃生模式: 200 + ``{"source": "yaml"}`` (前端只渲染提示横幅)。
     """
     from starlette.responses import JSONResponse
 
+    if not _db_mode or _config_store is None:
+        return JSONResponse({"source": "yaml"})
     try:
-        return JSONResponse(list_config_overlays())
-    except ConfigStoreUnavailable as e:
-        return JSONResponse(
-            {"error": "config_store_unavailable", "message": str(e)}, status_code=503
-        )
+        summary = await _config_store.entities_summary()
+    except Exception as e:  # noqa: BLE001 - 只读浏览接口, 错误不外泄堆栈
+        logger.exception("config entities summary failed")
+        return JSONResponse({"error": f"entities load failed: {e}"[:300]}, status_code=500)
+    return JSONResponse({"source": "db", **summary})
 
 
-async def config_overlay_reset_api(req: "Request") -> "JSONResponse":
-    """DELETE /api/config/overlays/{path} — 删除单行覆盖。
+async def config_tool_detail_api(req: "Request") -> "JSONResponse":
+    """GET /api/config/tools/{name} — 单个工具实体详情 (编辑表单数据源)。
 
-    body 可选 ``{"version": int}`` (乐观锁)。409 冲突 / 400 路径非法 /
-    503 overlay 未启用; ``warnings`` 列出运行时热收敛失败但重启会收敛的路径。
+    200: ``{"source":"db","revision":N,"tool":{...完整行...}}``
+    200: ``{"source":"yaml"}`` (逃生模式, 前端不打开编辑入口)
+    404: 工具名不存在
     """
     from starlette.responses import JSONResponse
 
-    path = req.path_params["path"]
+    if not _db_mode or _config_store is None:
+        return JSONResponse({"source": "yaml"})
+    name = req.path_params["name"]
+    try:
+        tool = await _config_store.get_tool(name)
+        revision = await _config_store.revision()
+    except Exception as e:  # noqa: BLE001 - 不外泄堆栈
+        logger.exception("config tool detail failed: %s", name)
+        return JSONResponse({"error": f"tool load failed: {e}"[:300]}, status_code=500)
+    if tool is None:
+        return JSONResponse({"error": f"unknown tool: {name}"}, status_code=404)
+    return JSONResponse({"source": "db", "revision": revision, "tool": tool})
+
+
+async def config_upstream_detail_api(req: "Request") -> "JSONResponse":
+    """GET /api/config/upstreams/{name} — 单个上游实体详情 (编辑表单数据源)。
+
+    与 /api/config 快照不同, 这里回 config_json **实体原值** (密钥是
+    ``${VAR}`` 占位符, 不脱敏) — 连接块整体替换编辑必须基于实体值,
+    否则会把脱敏串当明文密钥写回并被写入门拒绝。
+
+    200: ``{"source":"db","revision":N,"upstream":{...完整行...}}``
+    200: ``{"source":"yaml"}`` (逃生模式, 前端不打开编辑入口)
+    404: 上游名不存在
+    """
+    from starlette.responses import JSONResponse
+
+    if not _db_mode or _config_store is None:
+        return JSONResponse({"source": "yaml"})
+    name = req.path_params["name"]
+    try:
+        upstream = await _config_store.get_upstream(name)
+        revision = await _config_store.revision()
+    except Exception as e:  # noqa: BLE001 - 不外泄堆栈
+        logger.exception("config upstream detail failed: %s", name)
+        return JSONResponse({"error": f"upstream load failed: {e}"[:300]}, status_code=500)
+    if upstream is None:
+        return JSONResponse({"error": f"unknown upstream: {name}"}, status_code=404)
+    return JSONResponse({"source": "db", "revision": revision, "upstream": upstream})
+
+
+def _parse_revision(body: dict):
+    """从请求体取可选乐观锁 revision; 返回 (revision, error_response)。"""
+    from starlette.responses import JSONResponse
+
+    revision = body.get("revision")
+    if revision is None:
+        return None, None
+    if isinstance(revision, bool) or not isinstance(revision, int):
+        return None, JSONResponse(
+            {"error": "revision must be an integer when provided"}, status_code=400
+        )
+    return revision, None
+
+
+def _entity_edit_error_response(exc: Exception) -> "JSONResponse":
+    """热编辑异常 → HTTP 状态码映射 (tool / upstream 两个写接口共用)。"""
+    from starlette.responses import JSONResponse
+
+    from ..core.config_lint import LintRejected
+    from ..core.entity_edit import DangerousConfirmationRequired
+
+    if isinstance(exc, DangerousConfirmationRequired):
+        return JSONResponse(
+            {
+                "error": "dangerous_confirmation_required",
+                "message": str(exc),
+                "contract_fields": list(exc.contract_fields),
+            },
+            status_code=400,
+        )
+    if isinstance(exc, LintRejected):
+        return JSONResponse(
+            {
+                "error": "lint_rejected",
+                "message": str(exc),
+                "issues": [
+                    {
+                        "severity": issue.severity,
+                        "code": issue.code,
+                        "message": issue.message,
+                    }
+                    for issue in exc.issues
+                ],
+            },
+            status_code=422,
+        )
+    if isinstance(exc, _StoreRevisionConflict):
+        return JSONResponse(
+            {
+                "error": "revision_conflict",
+                "message": str(exc),
+                "expected": exc.expected,
+                "actual": exc.actual,
+            },
+            status_code=409,
+        )
+    if isinstance(exc, KeyError):
+        return JSONResponse({"error": f"unknown entity: {exc}"[:300]}, status_code=404)
+    if isinstance(exc, ValueError):
+        # EntityEditError / LintRejected 之外的形态错误 (明文密钥等)。
+        logger.warning("entity edit rejected: %s: %s", type(exc).__name__, exc)
+        return JSONResponse(
+            {"error": f"invalid request: {type(exc).__name__}: {exc}"[:300]},
+            status_code=400,
+        )
+    if isinstance(exc, RuntimeError) and "config.db" in str(exc):
+        return JSONResponse(
+            {"error": "config_store_unavailable", "message": str(exc)},
+            status_code=503,
+        )
+    logger.exception("entity edit failed")
+    # M2: 热路径 500 (运行态切换/回滚失败等) 带上库内当前 revision, 前端据此
+    # 判断是否需要整表刷新 —— 此时库通常未变, 但调用方持有的可能是旧快照。
+    envelope = {"error": f"runtime failure: {type(exc).__name__}: {exc}"[:300]}
+    if _db_mode:
+        envelope["revision"] = _db_revision
+    return JSONResponse(envelope, status_code=500)
+
+
+async def config_tool_update_api(req: "Request") -> "JSONResponse":
+    """PUT /api/config/tools/{name} — 单工具白名单编辑 + 热重注册。
+
+    body: ``{"patch": {字段白名单}, "confirm_dangerous"?: bool,
+    "revision"?: int}``
+
+    状态码:
+      200: 成功 (body 为 apply_tool_edit 结果; changed=false 为 no-op)
+      400: JSON/body 非法, 或契约层字段缺 confirm (带 contract_fields)
+      404: 工具不存在
+      409: revision 过期
+      422: lint 门拒绝 (body.issues 列出全部 error)
+      503: yaml 逃生模式 / GatewayServer 未注入
+    """
+    from starlette.responses import JSONResponse
+
+    name = req.path_params["name"]
     try:
         body = await req.json()
     except Exception:
-        body = {}
-    version = body.get("version") if isinstance(body, dict) else None
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    patch = body.get("patch")
+    if not isinstance(patch, dict) or not patch:
+        return JSONResponse(
+            {"error": "patch must be a non-empty object of whitelisted fields"},
+            status_code=400,
+        )
+    revision, error_response = _parse_revision(body)
+    if error_response is not None:
+        return error_response
+    if not _db_mode or _config_store is None:
+        return JSONResponse(
+            {"error": "config_store_unavailable (UNIHIVE_CONFIG_SOURCE=yaml)"},
+            status_code=503,
+        )
+    server = _gateway_server
+    if server is None:
+        return JSONResponse(
+            {"error": "gateway runtime not available (stdio mode)"}, status_code=503
+        )
+
     try:
-        result = await delete_config_overlay(path, expected_version=version)
-    except VersionConflict as e:
-        return JSONResponse(
-            {"error": "version_conflict", "message": str(e)}, status_code=409
+        result = await server.apply_tool_edit(
+            name,
+            patch,
+            confirm_dangerous=bool(body.get("confirm_dangerous")),
+            expected_revision=revision,
         )
-    except ConfigStoreUnavailable as e:
-        return JSONResponse(
-            {"error": "config_store_unavailable", "message": str(e)}, status_code=503
-        )
-    except ValueError as e:
-        return JSONResponse({"error": f"invalid request: {e}"[:300]}, status_code=400)
+    except Exception as e:  # noqa: BLE001 - 统一映射见 _entity_edit_error_response
+        return _entity_edit_error_response(e)
     return JSONResponse(result)
 
 
-async def config_overlays_reset_all_api(req: "Request") -> "JSONResponse":
-    """POST /api/config/overlays/reset — 一键清空全部覆盖行。
+async def config_upstream_update_api(req: "Request") -> "JSONResponse":
+    """PUT /api/config/upstreams/{name} — 整体替换上游连接块 (热重连)。
 
-    body ``{"version": int}`` (乐观锁, 可空)。
+    body: ``{"config": {异型连接块, 不含 enabled/type}, "type"?: str,
+    "confirm_dangerous": bool, "revision"?: int}``。连接块是建连契约,
+    本接口始终要求确认; 明文密钥字段 400 拒绝。
+    """
+    from starlette.responses import JSONResponse
+
+    name = req.path_params["name"]
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    config = body.get("config")
+    if not isinstance(config, dict):
+        return JSONResponse(
+            {"error": "config must be an object of connection settings"},
+            status_code=400,
+        )
+    upstream_type = body.get("type")
+    if upstream_type is not None and (
+        not isinstance(upstream_type, str) or not upstream_type
+    ):
+        return JSONResponse(
+            {"error": "type must be a non-empty string when provided"},
+            status_code=400,
+        )
+    revision, error_response = _parse_revision(body)
+    if error_response is not None:
+        return error_response
+    if not _db_mode or _config_store is None:
+        return JSONResponse(
+            {"error": "config_store_unavailable (UNIHIVE_CONFIG_SOURCE=yaml)"},
+            status_code=503,
+        )
+    server = _gateway_server
+    if server is None:
+        return JSONResponse(
+            {"error": "gateway runtime not available (stdio mode)"}, status_code=503
+        )
+
+    try:
+        result = await server.apply_upstream_edit(
+            name,
+            config,
+            type=upstream_type,
+            confirm_dangerous=bool(body.get("confirm_dangerous")),
+            expected_revision=revision,
+        )
+    except Exception as e:  # noqa: BLE001 - 统一映射见 _entity_edit_error_response
+        return _entity_edit_error_response(e)
+    return JSONResponse(result)
+
+
+async def config_template_status_api(req: "Request") -> "JSONResponse":
+    """GET /api/config/template-status — 出厂 YAML 模板相对库内快照是否已变化。
+
+    只给信号 (hash 比对), **不**自动升级: 是否吸收出厂更新由用户在
+    「出厂更新中心」审阅字段级 diff 后决定 (设计决策④)。
+
+    200: db 模式 ``{source, revision, seeded_version, current_version,
+    template_changed, factory_counts}``; YAML 重建失败 (语法/明文密钥)
+    时 200 带 ``build_error``, 由面板提示; yaml 逃生模式回 ``{source:"yaml"}``。
+    """
+    from starlette.responses import JSONResponse
+
+    if not _db_mode or _config_store is None:
+        return JSONResponse({"source": "yaml"})
+
+    def _build_factory() -> tuple[str, int, int, int]:
+        from ..core.config_db import build_template
+        from ..core.template_normalize import template_version as _tv
+
+        template = build_template(GATEWAY_CONFIG_PATH)
+        return (
+            _tv(template),
+            len(template.upstreams),
+            len(template.tools),
+            len(template.sections),
+        )
+
+    try:
+        revision = await _config_store.revision()
+        seeded_version = await _config_store.template_version_seeded()
+        current_version, n_upstreams, n_tools, n_sections = await asyncio.to_thread(
+            _build_factory
+        )
+    except Exception as e:  # noqa: BLE001 - 不外泄堆栈, 面板内展示
+        logger.exception("template-status: factory template build failed")
+        return JSONResponse(
+            {
+                "source": "db",
+                "revision": locals().get("revision"),
+                "seeded_version": locals().get("seeded_version"),
+                "current_version": None,
+                "template_changed": False,
+                "build_error": f"{type(e).__name__}: {e}"[:300],
+            }
+        )
+    return JSONResponse(
+        {
+            "source": "db",
+            "revision": revision,
+            "seeded_version": seeded_version,
+            "current_version": current_version,
+            "template_changed": seeded_version != current_version,
+            "factory_counts": {
+                "upstreams": n_upstreams,
+                "tools": n_tools,
+                "sections": n_sections,
+            },
+        }
+    )
+
+
+def _parse_resolutions(body: dict):
+    """从请求体取 resolutions 并交核心层校验形态; 返回 (dict, error_response)。"""
+    from starlette.responses import JSONResponse
+
+    resolutions = body.get("resolutions")
+    if resolutions is None:
+        return {}, None
+    if not isinstance(resolutions, dict):
+        return None, JSONResponse(
+            {"error": "resolutions must be an object keyed by conflict path"},
+            status_code=400,
+        )
+    try:
+        from ..core.config_db import validate_resolutions
+
+        return validate_resolutions(resolutions), None
+    except ValueError as e:
+        return None, JSONResponse({"error": str(e)[:300]}, status_code=400)
+
+
+async def config_upgrade_dry_run_api(req: "Request") -> "JSONResponse":
+    """POST /api/config/upgrade/dry-run — 出厂更新字段级三方合并预览 (零写入)。
+
+    body: ``{"resolutions"?: {"<kind>:<name>:<path>": "keep_cur"|"accept_new"}}``
+
+    返回 server.preview_config_upgrade 结果: 逐实体台账 + 冲突三向值
+    (old/cur/new) + lint + 运行态影响面 (热增删/重注册工具、重连上游)。
     """
     from starlette.responses import JSONResponse
 
@@ -1442,19 +1964,263 @@ async def config_overlays_reset_all_api(req: "Request") -> "JSONResponse":
         body = await req.json()
     except Exception:
         body = {}
-    version = body.get("version") if isinstance(body, dict) else None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    resolutions, error_response = _parse_resolutions(body)
+    if error_response is not None:
+        return error_response
+    if not _db_mode or _config_store is None:
+        return JSONResponse(
+            {"error": "config_store_unavailable (UNIHIVE_CONFIG_SOURCE=yaml)"},
+            status_code=503,
+        )
+    server = _gateway_server
+    if server is None:
+        return JSONResponse(
+            {"error": "gateway runtime not available (stdio mode)"}, status_code=503
+        )
     try:
-        result = await reset_config_overlays(expected_version=version)
-    except VersionConflict as e:
+        result = await server.preview_config_upgrade(resolutions)
+    except Exception as e:  # noqa: BLE001 - 统一映射见 _entity_edit_error_response
+        return _entity_edit_error_response(e)
+    return JSONResponse(result)
+
+
+async def config_upgrade_apply_api(req: "Request") -> "JSONResponse":
+    """POST /api/config/upgrade/apply — 热应用出厂更新 (需显式确认)。
+
+    body: ``{"confirm": true, "resolutions"?: {...}, "revision"?: int}``。
+    未裁决冲突 400、lint 不过 422、revision 过期 409; 成功体附带备份文件路径。
+    """
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    if body.get("confirm") is not True:
         return JSONResponse(
-            {"error": "version_conflict", "message": str(e)}, status_code=409
+            {
+                "error": "dangerous_confirmation_required",
+                "message": (
+                    "factory upgrade rewrites config entities and hot re-registers "
+                    "tools; resend with {\"confirm\": true} after reviewing the dry-run"
+                ),
+            },
+            status_code=400,
         )
-    except ConfigStoreUnavailable as e:
+    resolutions, error_response = _parse_resolutions(body)
+    if error_response is not None:
+        return error_response
+    revision, error_response = _parse_revision(body)
+    if error_response is not None:
+        return error_response
+    if not _db_mode or _config_store is None:
         return JSONResponse(
-            {"error": "config_store_unavailable", "message": str(e)}, status_code=503
+            {"error": "config_store_unavailable (UNIHIVE_CONFIG_SOURCE=yaml)"},
+            status_code=503,
         )
-    except ValueError as e:
-        return JSONResponse({"error": f"invalid request: {e}"[:300]}, status_code=400)
+    server = _gateway_server
+    if server is None:
+        return JSONResponse(
+            {"error": "gateway runtime not available (stdio mode)"}, status_code=503
+        )
+    try:
+        result = await server.apply_config_upgrade(
+            resolutions=resolutions,
+            expected_revision=revision,
+        )
+    except Exception as e:  # noqa: BLE001 - 统一映射见 _entity_edit_error_response
+        return _entity_edit_error_response(e)
+    return JSONResponse(result)
+
+
+async def config_upgrade_backup_api(req: "Request") -> "JSONResponse":
+    """GET /api/config/upgrade/backup/latest — 下载最近一份升级前 JSON 备份。
+
+    备份目录固定为 config.db 同级 ``backups/`` (不从请求取路径, 杜绝目录穿越);
+    无备份 404。
+    """
+    from starlette.responses import FileResponse, JSONResponse
+
+    if not _db_mode or _config_store is None:
+        return JSONResponse(
+            {"error": "config_store_unavailable (UNIHIVE_CONFIG_SOURCE=yaml)"},
+            status_code=503,
+        )
+    backup_dir = Path(str(_config_store.db_path)).parent / "backups"
+    try:
+        files = sorted(
+            backup_dir.glob("config-upgrade-*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        files = []
+    if not files:
+        return JSONResponse({"error": "no upgrade backup found"}, status_code=404)
+    latest = files[0]
+    return FileResponse(
+        str(latest), media_type="application/json", filename=latest.name
+    )
+
+
+# ---------------------------------------------------------------------------
+# P4: FQGate OpenAPI 实时导入 (活拉上游 openapi.json + tools/list → origin=user)
+# ---------------------------------------------------------------------------
+
+DEFAULT_IMPORT_UPSTREAM = "THS-LOCAL-GATEWAY"
+
+
+def _parse_import_tools(body: dict):
+    """校验 import body 的 upstream/tools 白名单 → (kwargs, error_response)。"""
+    from starlette.responses import JSONResponse
+
+    upstream = body.get("upstream", DEFAULT_IMPORT_UPSTREAM)
+    if not isinstance(upstream, str) or not upstream.strip():
+        return None, JSONResponse(
+            {"error": "upstream must be a non-empty string"}, status_code=400
+        )
+    tools = body.get("tools")
+    if tools is None:
+        selected: list[str] | None = None
+    elif (
+        not isinstance(tools, list)
+        or not tools
+        or not all(isinstance(t, str) and t.strip() for t in tools)
+    ):
+        return None, JSONResponse(
+            {"error": "tools must be a non-empty array of non-empty strings"},
+            status_code=400,
+        )
+    else:
+        if len(set(tools)) != len(tools):
+            return None, JSONResponse(
+                {"error": "tools must not contain duplicates"}, status_code=400
+            )
+        selected = tools
+    return {"upstream": upstream, "tools": selected}, None
+
+
+def _openapi_import_error_response(exc: Exception) -> "JSONResponse":
+    """OpenAPI 导入专用状态码: 上游拉取 502 / 未连接未初始化 503, 其余走通用映射。"""
+    from starlette.responses import JSONResponse
+
+    from ..api.ths_local_gateway_client import OpenApiFetchError
+
+    message = str(exc)
+    if isinstance(exc, OpenApiFetchError):
+        return JSONResponse(
+            {"error": "openapi_fetch_failed", "message": message[:300]},
+            status_code=502,
+        )
+    if isinstance(exc, RuntimeError) and (
+        "Gateway not initialized" in message
+        or "not connected" in message
+        or "tools/list failed" in message
+    ):
+        # tools/list 失败是上游侧问题 → 502; 本地未就绪/未连接 → 503。
+        status = 502 if "tools/list failed" in message else 503
+        error_code = "upstream_unavailable" if status == 502 else "gateway_unavailable"
+        return JSONResponse(
+            {"error": error_code, "message": message[:300]}, status_code=status
+        )
+    return _entity_edit_error_response(exc)
+
+
+async def config_import_preview_api(req: "Request") -> "JSONResponse":
+    """POST /api/config/import/preview — 活拉上游 OpenAPI 生成导入计划 (零写入)。
+
+    body: ``{"upstream"?: "THS-LOCAL-GATEWAY", "tools"?: ["fqgate_...", ...]}``。
+    返回 server.preview_openapi_import 结果: added/changed/unmapped/removed
+    台账 + lint + 发布影响面 + 可评审的 YAML 片段。
+
+    状态码: 200 / 400 body 或白名单非法 / 404 上游未注册 / 422 lint /
+    502 上游拉取失败 / 503 yaml 逃生模式、网关未注入、上游未连接。
+    """
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    kwargs, error_response = _parse_import_tools(body)
+    if error_response is not None:
+        return error_response
+    if not _db_mode or _config_store is None:
+        return JSONResponse(
+            {"error": "config_store_unavailable (UNIHIVE_CONFIG_SOURCE=yaml)"},
+            status_code=503,
+        )
+    server = _gateway_server
+    if server is None:
+        return JSONResponse(
+            {"error": "gateway runtime not available (stdio mode)"}, status_code=503
+        )
+    try:
+        result = await server.preview_openapi_import(**kwargs)
+    except Exception as e:  # noqa: BLE001 - 映射见 _openapi_import_error_response
+        return _openapi_import_error_response(e)
+    return JSONResponse(result)
+
+
+async def config_import_apply_api(req: "Request") -> "JSONResponse":
+    """POST /api/config/import/apply — 热应用 OpenAPI 导入 (契约层强确认)。
+
+    body: ``{"upstream"?: ..., "tools"?: [...], "confirm_dangerous": true,
+    "revision"?: int}``。导入工具以 origin='user' 单事务写 config.db 并即时
+    热注册; provider 切换失败/乐观锁冲突 → 运行态回滚, 库不动, 映射 500/409。
+    """
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    if body.get("confirm_dangerous") is not True:
+        return JSONResponse(
+            {
+                "error": "dangerous_confirmation_required",
+                "message": (
+                    "OpenAPI import rewrites tool contract entities "
+                    "(params/mapping/routing) and hot re-registers tools; "
+                    'resend with {"confirm_dangerous": true} after reviewing '
+                    "the preview and its YAML fragment"
+                ),
+            },
+            status_code=400,
+        )
+    kwargs, error_response = _parse_import_tools(body)
+    if error_response is not None:
+        return error_response
+    revision, error_response = _parse_revision(body)
+    if error_response is not None:
+        return error_response
+    if not _db_mode or _config_store is None:
+        return JSONResponse(
+            {"error": "config_store_unavailable (UNIHIVE_CONFIG_SOURCE=yaml)"},
+            status_code=503,
+        )
+    server = _gateway_server
+    if server is None:
+        return JSONResponse(
+            {"error": "gateway runtime not available (stdio mode)"}, status_code=503
+        )
+    try:
+        result = await server.apply_openapi_import(
+            upstream=kwargs["upstream"],
+            tools=kwargs["tools"],
+            confirm_dangerous=True,
+            expected_revision=revision,
+        )
+    except Exception as e:  # noqa: BLE001 - 映射见 _openapi_import_error_response
+        return _openapi_import_error_response(e)
     return JSONResponse(result)
 
 
@@ -1468,20 +2234,63 @@ def build_upstream_routes() -> list:
             upstream_enabled_api,
             methods=["PUT"],
         ),
+        # P3: 单实体编辑 (工具白名单热编辑 + 上游连接块热重连)
         Route(
-            "/api/config/overlays",
-            config_overlays_list_api,
+            "/api/config/tools/{name}",
+            config_tool_detail_api,
             methods=["GET"],
         ),
-        # 静态路径必须排在 {path} 之前注册, 避免 "reset" 被当作 path 段
         Route(
-            "/api/config/overlays/reset",
-            config_overlays_reset_all_api,
+            "/api/config/tools/{name}",
+            config_tool_update_api,
+            methods=["PUT"],
+        ),
+        Route(
+            "/api/config/upstreams/{name}",
+            config_upstream_detail_api,
+            methods=["GET"],
+        ),
+        Route(
+            "/api/config/upstreams/{name}",
+            config_upstream_update_api,
+            methods=["PUT"],
+        ),
+        # P3: 出厂更新中心 (模板 hash 信号 / dry-run 三方合并 / 热 apply / 备份)
+        Route(
+            "/api/config/template-status",
+            config_template_status_api,
+            methods=["GET"],
+        ),
+        Route(
+            "/api/config/upgrade/dry-run",
+            config_upgrade_dry_run_api,
             methods=["POST"],
         ),
         Route(
-            "/api/config/overlays/{path}",
-            config_overlay_reset_api,
-            methods=["DELETE"],
+            "/api/config/upgrade/apply",
+            config_upgrade_apply_api,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/config/upgrade/backup/latest",
+            config_upgrade_backup_api,
+            methods=["GET"],
+        ),
+        # P4: FQGate OpenAPI 实时导入 (差异预览 / 热应用 origin='user' 工具行)
+        Route(
+            "/api/config/import/preview",
+            config_import_preview_api,
+            methods=["POST"],
+        ),
+        Route(
+            "/api/config/import/apply",
+            config_import_apply_api,
+            methods=["POST"],
+        ),
+        # v2: 实体表只读浏览 (P1 /api/config/overlays 路由随覆盖管理 UI 一并退役)
+        Route(
+            "/api/config/entities",
+            config_entities_api,
+            methods=["GET"],
         ),
     ]

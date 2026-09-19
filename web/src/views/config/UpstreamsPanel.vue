@@ -21,10 +21,12 @@
     <!-- 上游表 -->
     <div class="ups-table-scroll">
     <el-table
+      ref="tableRef"
       :data="filteredEntries"
       :empty-text="emptyText"
       class="cfg-table ups-table"
       row-key="name"
+      @expand-change="onExpandChange"
     >
       <el-table-column label="名称" min-width="140">
         <template #default="{ row }">
@@ -36,7 +38,7 @@
               :class="{ expanded: expandedNames.has(row.name) }"
               :aria-expanded="expandedNames.has(row.name)"
               :aria-label="expandedNames.has(row.name) ? '收起详情' : '展开详情'"
-              @click="toggleExpand(row.name)"
+              @click="toggleDetail(row)"
             >▸</button>
             <span class="tool-name">{{ row.name }}</span>
           </div>
@@ -94,6 +96,17 @@
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
+      <el-table-column v-if="editable" label="操作" width="80" align="center">
+        <template #default="{ row }">
+          <el-button
+            size="small"
+            text
+            type="primary"
+            :aria-label="`编辑上游 ${row.name} 连接块`"
+            @click="openEdit(row.name)"
+          >编辑</el-button>
+        </template>
+      </el-table-column>
       <el-table-column type="expand" v-if="anyExpandable">
         <template #default="{ row }">
           <div v-if="envEntries(row.cfg).length" class="ups-detail-block">
@@ -141,12 +154,12 @@
           <span
             class="cfg-switch"
             :class="config?.disable_dangerous ? 'on' : 'off'"
-            :title="`启用后跳过所有 dangerous: true 的 tool (只读 — 修改 YAML 后重启生效)`"
+            :title="`启用后跳过所有 dangerous: true 的 tool (只读全局开关, 启动时读取生效, 暂不支持热修改)`"
           >disable_dangerous</span>
           <span
             class="cfg-switch"
             :class="config?.strict_registry ? 'on' : 'off'"
-            :title="`启用后启动校验 YAML 工具名都在上游 tools/list 中实际出现 (只读 — 修改 YAML 后重启生效)`"
+            :title="`启用后启动期校验配置库/YAML 中的工具名都在上游 tools/list 中实际出现 (只读全局开关, 启动时读取生效, 暂不支持热修改)`"
           >strict_registry</span>
         </div>
       </div>
@@ -169,12 +182,18 @@
         <div v-else class="muted">无日志配置</div>
       </div>
     </details>
+
+    <UpstreamEditDialog
+      v-model="editDialogOpen"
+      :upstream-name="editingName"
+      @saved="onConnectionSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
 import type { GatewayConfig, UpstreamConfig } from '@/api/config'
 import { setUpstreamEnabled } from '@/api/config'
 import { errorMessage } from '@/api/client'
@@ -185,15 +204,45 @@ import {
   type UpstreamEnabledChanged,
 } from './upstreams'
 import { isUsableRevision } from './revisions'
+import UpstreamEditDialog from './UpstreamEditDialog.vue'
 
 interface Props {
   config: GatewayConfig | null
+  /** db 实体模式才出连接块编辑入口 (yaml 逃生模式只读)。 */
+  editable?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { editable: false })
 const emit = defineEmits<{
   changed: [payload: UpstreamEnabledChanged]
+  connectionSaved: [payload: {
+    name: string
+    revision: number
+    enabled: boolean
+    connected: boolean
+    changed: boolean
+  }]
 }>()
+
+/** 连接块编辑弹窗状态。 */
+const editDialogOpen = ref(false)
+const editingName = ref<string | null>(null)
+
+function openEdit(name: string): void {
+  editingName.value = name
+  editDialogOpen.value = true
+}
+
+function onConnectionSaved(payload: {
+  name: string
+  revision: number
+  enabled: boolean
+  connected: boolean
+  changed: boolean
+}): void {
+  emit('connectionSaved', payload)
+  editingName.value = null
+}
 
 const search = ref('')
 
@@ -237,14 +286,29 @@ const emptyText = computed(() => {
   return `无匹配项 (${filteredEntries.value.length} / ${totalUpstreams.value})`
 })
 
-/** 记录已展开的 upstream name (Vue 自带 expand 列会自管, 此 ref 仅做反向标记/aria) */
+/** el-table 实例: 名称列的自定义 ▸ 按钮通过它驱动真 expand 列。 */
+const tableRef = ref<TableInstance | null>(null)
+
+/** 记录已展开的 upstream name, 仅用于 ▸ 旋转态/aria; 展开真源是 el-table。 */
 const expandedNames = ref(new Set<string>())
 
-function toggleExpand(name: string) {
+function onExpandChange(
+  row: UpstreamRow,
+  expandedRows: UpstreamRow[] | UpstreamRow,
+): void {
+  // Element Plus 第二参传 expandedRows 数组或当前 row, 两种形态都兼容
+  // (同 InterfacesView 既有写法)。
+  const expanded = Array.isArray(expandedRows)
+    ? expandedRows.some((r) => r.name === row.name)
+    : Boolean(expandedRows)
   const next = new Set(expandedNames.value)
-  if (next.has(name)) next.delete(name)
-  else next.add(name)
+  if (expanded) next.add(row.name)
+  else next.delete(row.name)
   expandedNames.value = next
+}
+
+function toggleDetail(row: UpstreamRow): void {
+  tableRef.value?.toggleRowExpansion(row)
 }
 
 interface EnvRow {
@@ -324,13 +388,13 @@ async function onToggle(row: UpstreamRow): Promise<void> {
     const errData = (
       e as { response?: { data?: { error?: string; version?: unknown } } }
     )?.response?.data
-    // 503 config_store_unavailable: yaml 逃生模式, 覆盖层只读, 什么都没落库
+    // 503 config_store_unavailable: yaml 逃生模式, 配置库不可用, 什么都没落库
     if (errData?.error === 'config_store_unavailable') {
       ElMessage.error(
-        '配置覆盖层未启用 (网关以 YAML 模式启动), 无法热切换; 请以默认模式重启网关',
+        '配置库不可用 (网关以 YAML 逃生模式启动), 无法热切换; 请移除 UNIHIVE_CONFIG_SOURCE=yaml 后以默认模式重启网关',
       )
     } else if (isUsableRevision(errData?.version)) {
-      // 500 runtime toggle failed: overlay 已落库并回带新 revision。
+      // 500 runtime toggle failed: enabled 已写实体行并回带新 revision。
       // 必须消费掉它并对齐 enabled 态 —— 否则 UI 仍显示旧状态、
       // 本地 revision 陈旧, 用户下一次点击必然撞 409。重启网关即收敛到目标态。
       emit('changed', {
@@ -341,7 +405,7 @@ async function onToggle(row: UpstreamRow): Promise<void> {
         toolsAdded: [],
         toolsRemoved: [],
       })
-      ElMessage.warning('配置已保存到覆盖层, 但运行时热切换未完成, 重启网关后生效')
+      ElMessage.warning('配置已写入配置库, 但运行时热切换未完成, 重启网关后生效')
     } else {
       const msg = errorMessage(e, '操作失败')
       if (msg.includes('version_conflict') || msg.includes('revision 不一致')) {

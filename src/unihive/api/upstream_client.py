@@ -66,6 +66,8 @@ class UpstreamClient:
         self._last_error: UpstreamError | None = None
         self._retry_count = 0
         self._lock = asyncio.Lock()
+        # M7 (round 9 audit): 后台 drain 子进程 stderr, 防 64KB 管道自锁。
+        self._stderr_drain_task: asyncio.Task | None = None
 
     @property
     def status(self) -> UpstreamStatus:
@@ -139,6 +141,13 @@ class UpstreamClient:
                 self._status = UpstreamStatus.HEALTHY
                 self._retry_count = 0
                 logger.info(f"[{self.name}] Started successfully")
+                # M7 (round 9 audit): 后台 drain stderr, 防止子进程写满 64KB
+                # 管道后在 write() 阻塞、整个上游假死。readline 到 EOF, 每行 log。
+                if self._process and self._process.stderr:
+                    self._stderr_drain_task = asyncio.create_task(
+                        self._drain_stderr(),
+                        name=f"{self.name}-stderr-drain",
+                    )
                 return True
 
             except Exception as e:
@@ -151,6 +160,16 @@ class UpstreamClient:
     async def stop(self):
         """停止上游进程"""
         async with self._lock:
+            # M7 (round 9 audit): 先停 drain 任务, 再 terminate 进程,
+            # 防止 drain 还在 readline 已关闭的 stderr。
+            drain = self._stderr_drain_task
+            if drain is not None and not drain.done():
+                drain.cancel()
+                try:
+                    await drain
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._stderr_drain_task = None
             if self._process:
                 try:
                     self._process.terminate()
@@ -161,6 +180,28 @@ class UpstreamClient:
                 finally:
                     self._process = None
                     self._status = UpstreamStatus.UNAVAILABLE
+
+    async def _drain_stderr(self):
+        """后台消费子进程 stderr 到 EOF, 防 64KB 管道自锁。
+
+        子进程 (stdio MCP server) 往 stderr 写诊断信息, 若从不 drain,
+        写满 OS 管道缓冲 (典型 64KB) 后会在 write() 永久阻塞, 上游假死。
+        """
+        if not self._process or not self._process.stderr:
+            return
+        try:
+            while True:
+                line = await self._process.stderr.readline()
+                if not line:
+                    break
+                logger.info(
+                    f"[{self.name}] stderr: "
+                    f"{line.decode('utf-8', errors='replace').rstrip()}"
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[{self.name}] stderr drain ended: {e}")
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
         """通过 MCP JSON-RPC 调用工具"""

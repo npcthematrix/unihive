@@ -30,6 +30,19 @@ class LintIssue:
     message: str
 
 
+class LintRejected(ValueError):
+    """单实体写入门: 候选配置产生 error 级 lint issue, 拒绝写入。"""
+
+    def __init__(self, issues: list[LintIssue]):
+        self.issues = list(issues)
+        detail = "; ".join(f"{i.code}: {i.message}" for i in issues[:5])
+        if len(issues) > 5:
+            detail += f"; …(+{len(issues) - 5} more)"
+        super().__init__(
+            f"entity lint rejected ({len(issues)} error(s)): {detail}"
+        )
+
+
 def lint_config(config: dict, specs: list[dict]) -> list[LintIssue]:
     """对合并后的完整配置与全量工具 spec 跑静态校验。
 

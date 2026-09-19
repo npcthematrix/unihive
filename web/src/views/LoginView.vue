@@ -2,7 +2,7 @@
   <div class="login-page">
     <el-card class="login-card" shadow="always">
       <div class="login-head">
-        <span class="brand-mark">UH</span>
+        <img class="brand-mark" :src="brandMark" alt="UniHive" />
         <h1>UniHive Console</h1>
         <p class="subtitle">金融数据 MCP 聚合网关</p>
       </div>
@@ -68,6 +68,7 @@ import { Lock, User } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { errorMessage } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import brandMark from '@/assets/unihive-mark-light.svg'
 
 const route = useRoute()
 const router = useRouter()
@@ -130,15 +131,8 @@ async function onSubmit(): Promise<void> {
 }
 
 .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 9px;
-  background: var(--el-color-primary);
-  color: #fff;
-  font-weight: 700;
+  width: 48px;
+  height: 48px;
   margin-bottom: 10px;
 }
 

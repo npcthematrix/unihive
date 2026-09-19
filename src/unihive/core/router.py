@@ -69,6 +69,7 @@ class Router:
         # 格式: {tool_name: {data_source_type: "offline"|"online", ...}}
         self.tool_specs = tool_specs or []
         self._tool_metadata = {spec.get("name"): spec for spec in self.tool_specs}
+
         # H2 (2026-09-08 6th-round audit): 单个 upstream.call_tool() 超时,
         # 防止上游卡死把整条 chain 拖住, 后续 fallback 永远走不到。
         # 之前没有 per-upstream timeout, 整条 chain 总时间受 outer
@@ -88,6 +89,15 @@ class Router:
         # provided, proxy is disabled and routing behavior is unchanged.
         self.proxy_settings = proxy_settings
         self._proxy_adapter = Mootdx2ToTdxQuantAdapter()
+
+    def replace_tool_specs(self, tool_specs: list[dict] | None) -> None:
+        """热编辑后整体替换 spec 列表与 name→spec 索引 (P3, 2026-09-18)。
+
+        routing_config / upstream_tool_mapping 在 GatewayServer 侧与
+        self.config 同引用, 改名/改映射后无需经此函数重绑。
+        """
+        self.tool_specs = tool_specs or []
+        self._tool_metadata = {spec.get("name"): spec for spec in self.tool_specs}
 
     def _get_routing_chain(self, gateway_tool: str) -> list[str]:
         """获取路由链"""

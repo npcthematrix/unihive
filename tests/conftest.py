@@ -14,6 +14,19 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config_source(tmp_path, monkeypatch):
+    """测试默认走 YAML 事实源, 避免 db 模式自动 seed 真实 data/config.db。
+
+    生产默认事实源是 config.db (v2, 2026-09-18); 但绝大多数测试用例自带
+    tmp YAML fixture, 实体模式会把这些一次性 fixture 解构进库并替换
+    self.config。因此测试进程默认回到 yaml 逃生模式, 并把库路径钉到 tmp;
+    v2 实体链路的测试在用例内显式 ``monkeypatch.delenv`` + 指向自己的库。
+    """
+    monkeypatch.setenv("UNIHIVE_CONFIG_SOURCE", "yaml")
+    monkeypatch.setenv("UNIHIVE_CONFIG_DB", str(tmp_path / "config.db"))
+
+
 @pytest.fixture
 def gateway_server_minimal():
     """返回一个 GatewayServer.__new__ 出来的实例, 已注入 __init__ 里初始化

@@ -592,6 +592,58 @@ async def test_concurrent_toggles_serialize_through_lock():
     assert server._published_tools == set()
 
 
+async def test_toggle_rereads_live_block_inside_lock_after_concurrent_replace():
+    """H3: cfg 必须在 toggle 锁内从 live config 重读。
+
+    旧实现在锁外捕获 cfg: 等待锁期间若 apply_upstream_edit/出厂升级整块替换
+    了 self.config['upstreams'][name], toggle 会在孤儿 dict 上翻 enabled,
+    用旧连接块建 client, 却返回 enabled=True/tools_added=[] —— live 真值仍是
+    禁用。锁内重读后必须操作新块 (新 base_url), live enabled 同步翻转。
+    """
+    import copy as _copy
+
+    server = _make_server()
+    server.config["upstreams"]["B"]["base_url"] = "http://old"
+
+    real_lock = server._upstream_toggle_lock
+    new_config = _copy.deepcopy(server.config)
+    new_config["upstreams"]["B"] = {
+        "enabled": False,
+        "type": "http",
+        "base_url": "http://new",
+    }
+
+    class _RacyLock:
+        async def __aenter__(self):
+            await real_lock.acquire()
+            # 模拟本协程等待锁期间, 另一写者整块替换了 live config
+            server.config = new_config
+
+        async def __aexit__(self, *exc):
+            real_lock.release()
+
+    server._upstream_toggle_lock = _RacyLock()
+
+    captured: list[dict] = []
+    server._construct_upstream_client = (
+        lambda name, cfg: captured.append(cfg) or _FakeClient(name)
+    )
+
+    async def _fake_start(name, cfg, client) -> bool:
+        server.upstreams[name] = client
+        return True
+
+    server._start_upstream_client = _fake_start
+
+    result = await server.set_upstream_enabled("B", True)
+
+    assert result["enabled"] is True
+    # live 真值必须真的被翻转 (旧实现只改了孤儿 dict)
+    assert server.config["upstreams"]["B"]["enabled"] is True
+    # client 必须按新块构造 (旧实现用的是锁外捕获的 http://old)
+    assert captured and captured[0]["base_url"] == "http://new"
+
+
 def test_route_mounted_in_serve_http():
     from src.unihive.gateway_server import GatewayServer
 

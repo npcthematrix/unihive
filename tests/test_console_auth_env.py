@@ -62,7 +62,14 @@ class TestConsoleAuthEnv:
         cfg, reason = _console_auth_config_from_env()
         assert cfg is not None, f"expected enabled; reason={reason!r}"
         assert cfg["username"] == "admin"
-        assert cfg["password"] == "secret"
+        # H4 (round 9 audit): env 路径就地 hash 明文 → password_hash (PBKDF2),
+        # 不再把明文塞 cfg (setup_console_auth 拒绝明文, 旧实现会让 serve_http 崩)。
+        assert "password" not in cfg
+        assert cfg["password_hash"].startswith("pbkdf2_sha256$")
+        # 哈希必须能验证明文
+        from src.unihive.console_auth import verify_password
+
+        assert verify_password("secret", cfg["password_hash"]) is True
         assert cfg["session_secret"] == _SECRET_32
 
     def test_strips_whitespace(self):
@@ -72,7 +79,11 @@ class TestConsoleAuthEnv:
         os.environ["UNIHIVE_CONSOLE_SESSION_SECRET"] = _SECRET_32
         cfg, _ = _console_auth_config_from_env()
         assert cfg["username"] == "admin"
-        assert cfg["password"] == "secret"
+        # 明文 strip 后被 hash; 验证去掉空白后的明文能匹配
+        assert "password" not in cfg
+        from src.unihive.console_auth import verify_password
+
+        assert verify_password("secret", cfg["password_hash"]) is True
 
     def test_empty_string_treated_as_unset(self):
         """Empty string is treated the same as missing — opt-in via setting them."""

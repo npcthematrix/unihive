@@ -92,7 +92,6 @@ class ConsoleAuthMiddleware:
     # 这样会话过期后前端仍能完成退出。/api/auth/me 不在此列 — 未登录拿到
     # 401 正是前端判断会话状态的依据。
     PUBLIC_PATHS = (
-        "/mcp",
         "/health",
         "/login",
         "/logout",
@@ -101,8 +100,12 @@ class ConsoleAuthMiddleware:
         "/static",
     )
 
-    def __init__(self, app):
+    def __init__(self, app, mcp_path: str = "/mcp"):
         self.app = app
+        # M10 (round 9 audit): mcp_path 可配 (config.yaml gateway.mcp_path)。
+        # 旧实现把 "/mcp" 写死进 PUBLIC_PATHS → 配 "/api/mcp" 后该路径吃
+        # /api/ 鉴权门 401, 上游假死。这里按配置动态豁免。尾斜杠归一。
+        self.mcp_path = (mcp_path or "/mcp").rstrip("/") or "/"
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -110,8 +113,9 @@ class ConsoleAuthMiddleware:
 
         path = scope.get("path", "")
 
-        # Allow public paths
-        if any(path == p or path.startswith(p + "/") for p in self.PUBLIC_PATHS):
+        # Allow public paths (含配置的 mcp_path)
+        public = self.PUBLIC_PATHS + (self.mcp_path,)
+        if any(path == p or path.startswith(p + "/") for p in public):
             return await self.app(scope, receive, send)
 
         # 只有 /api/* 需要会话: 未登录返回 401 JSON, 由前端 axios 拦截器
@@ -219,12 +223,13 @@ async def api_me(request: Request) -> JSONResponse:
     return JSONResponse({"username": request.session.get("user")})
 
 
-def setup_console_auth(app: Starlette, console_cfg: dict) -> None:
+def setup_console_auth(app: Starlette, console_cfg: dict, mcp_path: str = "/mcp") -> None:
     """Set up console authentication.
 
     Args:
         app: Starlette application
         console_cfg: Console configuration dict with username, password_hash, session_secret
+        mcp_path: 对外 MCP 端点路径 (来自 config.yaml gateway.mcp_path), 免鉴权
 
     Note:
         Only ``password_hash`` is accepted. Plaintext ``password`` is
@@ -264,7 +269,8 @@ def setup_console_auth(app: Starlette, console_cfg: dict) -> None:
     }
 
     # Add auth middleware first (inner - runs after session is populated)
-    app.add_middleware(ConsoleAuthMiddleware)
+    # M10: 传 mcp_path 让配置的 MCP 端点免鉴权 (不再写死 /mcp)。
+    app.add_middleware(ConsoleAuthMiddleware, mcp_path=mcp_path)
 
     # Add session middleware last (outer - runs first to populate session)
     app.add_middleware(

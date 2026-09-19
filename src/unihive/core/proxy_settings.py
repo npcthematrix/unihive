@@ -2,6 +2,17 @@
 
 Loads `config/proxy_settings.yaml` and exposes a simple `enabled` bool.
 Hot reloads on mtime change. Atomic write via tmp + rename.
+
+Why this is a standalone file and not part of config.yaml / config.db
+(2026-09-19 决策):
+- Router.route() 在每次工具调用的热路径上读 is_enabled(), 需要逐调用热生效;
+  config.yaml 是启动时一次性合并的静态 bootstrap, config.db 的 config_section
+  只在启动/reconcile 时装配, 两者都不提供逐调用读语义。
+- 控制台热切换必须持久化; config.yaml 含 password_hash/session_secret, 不应
+  被控制台写 (整文件 dump 冲掉注释/格式, 定向文本手术已在 P1 刻意删除)。
+- 本开关在 db 与 yaml 逃生模式下行为一致 (永远可写), 并入 config.db section
+  会让 yaml 模式失效或引入双写; 也刻意不参与 revision/lint/出厂三方合并。
+待 proxy 从单 bool 长成多字段配置时, 再评估迁入 config.db + Router 注入钩子。
 """
 from __future__ import annotations
 

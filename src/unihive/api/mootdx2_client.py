@@ -147,40 +147,42 @@ class MooTDX2Client:
         self._metrics_lock = threading.Lock()
 
         # 2026-09-15 get_daily_local 内存缓存 (思路 3):
-        # 仅缓存 adjust=none 的 records (list[dict]), TTL 2h, maxsize 2048。
-        # 99% 不复权 + 50% 同 symbol 重复 → TTL 主导淘汰, 命中率高。
-        # 不动 Reader/Quotes/线程池, 不动 SQLite, 失败模式 = 走原路径。
-        # 设计稿: docs/superpowers/specs/2026-09-15-get-daily-local-cache-design.md
+        # 2026-09-16: 缓存策略改为当日有效（到次日 9:00 过期）
+        # 方案：用日期作为缓存 key 的一部分，同一天内命中，次日自动 miss
+        # 这是为了避免缓存隔日陈旧行情数据（如停牌/退市/复权价）
+        import datetime
         try:
             from cachetools import TTLCache
-            self._daily_l1 = TTLCache(maxsize=2048, ttl=7200.0)
+            # 次日 9:00 过期 = 计算到次日 9:00 的秒数
+            now = datetime.datetime.now()
+            tomorrow_9am = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            if now.hour >= 9:
+                tomorrow_9am += datetime.timedelta(days=1)
+            ttl_seconds = (tomorrow_9am - now).total_seconds()
+            self._daily_l1 = TTLCache(maxsize=2048, ttl=ttl_seconds)
             self._daily_l1_hits = 0
             self._daily_l1_misses = 0
             self._DAILY_L1_ENABLED = True
-            # 2026-09-15 single-flight 去重 first-miss 雪崩:
-            #   key = (reader_symbol_key, "none"), value = asyncio.Future[ToolResult]
-            # 首个 miss 占位 Future 跑 _get_daily_sync, 后续 miss 共享同一 Future 结果。
-            # 仅 adjust="none" 路径使用, 与 L1 缓存 key 对齐。
-            self._daily_l1_inflight: dict[tuple[str, str], asyncio.Future] = {}
-            self._daily_l1_inflight_lock = asyncio.Lock()  # 索引互斥
+            logger.info(f"get_daily L1 cache initialized: ttl={ttl_seconds}s (expires at {tomorrow_9am.strftime('%Y-%m-%d %H:%M')})")
+
+            # 2026-09-16: Reader 并发控制 - 限制同时执行的 Reader 数量
+            # 防止过多并发 Reader 导致 TDX 库性能下降或超时
+            self._READER_SEMAPHORE_LIMIT = 4  # 最多 4 个并发 Reader
+            self._reader_semaphore = asyncio.Semaphore(self._READER_SEMAPHORE_LIMIT)
 
             # 2026-09-15 P0 (MOOTDX2 性能审视 H2-a):
             # stock_top_board / stock_unusual 全市场扫描 N 个 50-batch roundtrip
-            # (~5-20s), 加 10s TTL 结果缓存 + single-flight, 命中后 0ms 返回。
+            # (~5-20s), 加 10s TTL 结果缓存, 命中后 0ms 返回。
             # 行情 10s 内变化 < 0.5%, 用户感知不到差异。
             self._TOP_BOARD_L1_TTL = 10.0
             self._top_board_l1: TTLCache = TTLCache(maxsize=128, ttl=self._TOP_BOARD_L1_TTL)
             self._top_board_l1_hits = 0
             self._top_board_l1_misses = 0
-            self._top_board_l1_inflight: dict = {}
-            self._top_board_l1_inflight_lock = asyncio.Lock()
 
             self._UNUSUAL_L1_TTL = 10.0
             self._unusual_l1: TTLCache = TTLCache(maxsize=128, ttl=self._UNUSUAL_L1_TTL)
             self._unusual_l1_hits = 0
             self._unusual_l1_misses = 0
-            self._unusual_l1_inflight: dict = {}
-            self._unusual_l1_inflight_lock = asyncio.Lock()
         except ImportError:
             self._DAILY_L1_ENABLED = False
             logger.warning("cachetools not installed, get_daily L1 cache disabled")
@@ -411,6 +413,15 @@ class MooTDX2Client:
             msg = f"未找到 {code} 的日线数据"
         return self._no_data_result(msg)
 
+    def _get_ttl_until_tomorrow_9am(self) -> float:
+        """计算到次日 9:00 的剩余秒数（动态 TTL）"""
+        import datetime
+        now = datetime.datetime.now()
+        tomorrow_9am = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now.hour >= 9:
+            tomorrow_9am += datetime.timedelta(days=1)
+        return (tomorrow_9am - now).total_seconds()
+
     def get_metrics(self) -> dict:
         """获取客户端指标 — 含 L1 缓存运行时统计 (2026-09-15)."""
         daily_l1_block: dict
@@ -425,8 +436,9 @@ class MooTDX2Client:
                 "hit_rate": (hits / total) if total > 0 else None,
                 "size": len(self._daily_l1),
                 "maxsize": 2048,
-                "ttl_seconds": 7200,
-                "inflight_keys": len(self._daily_l1_inflight),
+                # 动态计算到次日 9:00 的剩余秒数
+                "ttl_seconds": self._get_ttl_until_tomorrow_9am(),
+                "reader_semaphore_limit": self._READER_SEMAPHORE_LIMIT,
             }
         else:
             daily_l1_block = {"enabled": False}
@@ -436,19 +448,17 @@ class MooTDX2Client:
             "daily_l1": daily_l1_block,
             "top_board_l1": self._l1_metrics_block(
                 self._top_board_l1, self._top_board_l1_hits,
-                self._top_board_l1_misses, self._top_board_l1_inflight,
-                self._TOP_BOARD_L1_TTL,
+                self._top_board_l1_misses, self._TOP_BOARD_L1_TTL,
             ),
             "unusual_l1": self._l1_metrics_block(
                 self._unusual_l1, self._unusual_l1_hits,
-                self._unusual_l1_misses, self._unusual_l1_inflight,
-                self._UNUSUAL_L1_TTL,
+                self._unusual_l1_misses, self._UNUSUAL_L1_TTL,
             ),
             "pool_stats": self.config.pool.get_stats() if self.config.pool else {},
         }
 
-    def _l1_metrics_block(self, cache, hits, misses, inflight, ttl):
-        """生成 L1 metrics 子块 — 4 个 L1 cache 共享同一结构。"""
+    def _l1_metrics_block(self, cache, hits, misses, ttl):
+        """生成 L1 metrics 子块 — 3 个 L1 cache 共享同一结构。"""
         if not self._DAILY_L1_ENABLED:
             return {"enabled": False}
         total = hits + misses
@@ -460,7 +470,6 @@ class MooTDX2Client:
             "size": len(cache),
             "maxsize": cache.maxsize,
             "ttl_seconds": ttl,
-            "inflight_keys": len(inflight),
         }
 
     async def get_metrics_async(self) -> ToolResult:
@@ -591,7 +600,7 @@ class MooTDX2Client:
         """同步获取实时行情"""
         q = self._get_quotes()
         sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        df = q.quotes(symbols=[sym])
+        df = q.quotes(symbol=[sym])
         if df is not None and len(df) > 0:
             latest = df.iloc[-1]
             return {
@@ -630,7 +639,15 @@ class MooTDX2Client:
         # 早于 Quotes init, 方便用户在日志里立刻看到本地数据目录错配。
         self._probe_tdxdir()
         try:
-            self._ensure_quotes_initialized()
+            # H1 (round 9 audit): _ensure_quotes_initialized 同步触发
+            # Quotes.factory() 测速所有 TDX 服务器 (阻塞 IO)。直接同步调
+            # 会冻结事件循环, gateway 的 asyncio.wait_for(client.start())
+            # 在无 await 点的同步段上无法打断 → TDX 卡死时整个 boot 挂。
+            # 包进 worker thread 后 factory 不冻结事件循环, wait_for 的超时/
+            # 取消才能真正生效。L1 (round 10): 走专用 unihive-upstream 阻塞池
+            # (_run_blocking), 不落 asyncio.to_thread 默认池 — factory 固定
+            # 服务器失败时重试预算可达 90s, 不应与默认池任务互相挤占。
+            await self._run_blocking(self._ensure_quotes_initialized)
         except Exception as e:
             logger.warning(
                 f"{self.name}: Quotes init failed ({type(e).__name__}: {e}); "
@@ -694,18 +711,15 @@ class MooTDX2Client:
         后续 probe 复用, 避免每次都重新 factory 触发测速叠加延迟。
 
         2026-09-14 round 11 audit: 这里是同步调用 Quotes.factory(), factory
-        内部要测速所有 TDX 服务器 (阻塞 IO)。如果 start() 路径上直接调
-        _ensure_quotes_initialized, 会卡住 gateway 启动 event loop N 秒。
+        内部要测速所有 TDX 服务器 (阻塞 IO)。
 
-        调用方 (start() line 327) 已经在 async 上下文中, 这里建议改用
-        asyncio.to_thread 包装。但 start() 本身是 awaited, 调用方是
-        gateway_server 的并行 startup 任务, 阻塞这一个 client 的 start
-        不阻塞其它 upstream — 实际不会卡 gateway 整体启动, 仅是这一个
-        upstream 的 ready 信号晚 N 秒。
-
-        折中: 此函数保持同步 (接口简单), caller 负责用 to_thread 包。
-        start() 当前是 sync 直接调, 因上面分析不影响其它上游, 暂不修。
-        但加注释提醒后续调用方注意。
+        H1 (round 9 audit): 此函数保持同步 (接口简单), 但 start() 必须
+        经 _run_blocking 丢到 worker thread 调用。原因: gateway startup 循环
+        是顺序 await _start_upstream_client → asyncio.wait_for(client.start()),
+        而同步段没有 await 点, wait_for 无法打断 → TDX 卡死时冻结整个
+        事件循环 (health loop / cache cleanup 全停), 而非仅推迟本上游
+        ready。factory 跑在 worker thread 后 wait_for 的超时/取消才能真正生效。
+        L1 (round 10): 走专用 unihive-upstream 池而非 asyncio.to_thread 默认池。
         """
         self._get_quotes()  # 触发 lazy init (可能阻塞 N 秒)
 
@@ -724,10 +738,11 @@ class MooTDX2Client:
             q = self._quotes
             if q is None:
                 return False
-            df = q.quotes(symbols=["000001"])
+            df = q.quotes(symbol=["000001"])
             return df is not None and len(df) > 0
 
-        return await asyncio.to_thread(_do_probe)
+        # L1 (round 10): probe 同样是 TDX 同步阻塞调用, 走专用阻塞池。
+        return await self._run_blocking(_do_probe)
 
     def _start_health_loop(self) -> None:
         """H1 (round 8 audit): 启动后台周期探活, 让 DEGRADED 状态有机会
@@ -780,25 +795,14 @@ class MooTDX2Client:
             pass
 
     async def stop(self):
-        # 2026-09-15: 清理 get_daily L1 缓存
+        # 2026-09-16: 清理 L1 缓存 (去掉了 single-flight)
         if self._DAILY_L1_ENABLED and hasattr(self, '_daily_l1'):
             self._daily_l1.clear()
-            # 取消所有 in-flight future, 防止 waiter 在 stop 后挂起
-            for fut in self._daily_l1_inflight.values():
-                if not fut.done():
-                    fut.set_exception(asyncio.CancelledError())
-            self._daily_l1_inflight.clear()
             # 2026-09-15 P0 (H2-a): stock_top_board / stock_unusual L1 清理
-            for cache_attr, inflight_attr in [
-                ("_top_board_l1", "_top_board_l1_inflight"),
-                ("_unusual_l1", "_unusual_l1_inflight"),
-            ]:
-                getattr(self, cache_attr).clear()
-                inflight = getattr(self, inflight_attr)
-                for fut in inflight.values():
-                    if not fut.done():
-                        fut.set_exception(asyncio.CancelledError())
-                inflight.clear()
+            if hasattr(self, '_top_board_l1'):
+                self._top_board_l1.clear()
+            if hasattr(self, '_unusual_l1'):
+                self._unusual_l1.clear()
 
         # H1: 取消后台探活任务
         if self._health_task and not self._health_task.done():
@@ -813,7 +817,9 @@ class MooTDX2Client:
             try:
                 close_method = getattr(self._quotes, "close", None)
                 if close_method:
-                    await asyncio.to_thread(close_method)
+                    # L1 (round 10): Quotes.close 同为 TDX 同步阻塞调用,
+                    # 走专用阻塞池而非 asyncio.to_thread 默认池。
+                    await self._run_blocking(close_method)
             except Exception as e:
                 logger.debug(f"{self.name}: Quotes.close failed: {e}")
             self._quotes = None
@@ -979,7 +985,7 @@ class MooTDX2Client:
         """同步批量行情"""
         q = self._get_quotes()
         code_list = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in codes.split(",")]
-        df = q.quotes(symbols=code_list)
+        df = q.quotes(symbol=code_list)
         if df is not None and len(df) > 0:
             return df.to_dict(orient="records")
         return None
@@ -1578,7 +1584,7 @@ class MooTDX2Client:
                 code_list.append(f"bj{c}")
         # Strip prefixes for quotes API
         stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in code_list]
-        df = q.quotes(symbols=stripped)
+        df = q.quotes(symbol=stripped)
         if df is None or len(df) == 0:
             return []
         records = df.to_dict(orient="records")
@@ -1776,8 +1782,9 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
         try:
             # 2026-09-15: get_daily_local L1 缓存 (仅 adjust=none)
-            # 复用用户原 adjust 入参 (经过 _get_daily_sync 内会按 kind 改写)。
-            # 缓存 key 用 reader_symbol + adjust 入参, 命中后按 start/end 过滤。
+            # 2026-09-16: 修复缓存 key 与实际 adjust 不一致问题
+            #   - 指数代码传 qfq/hfq 会被 _get_daily_sync 强制覆盖为 none
+            #   - 缓存 key 必须使用实际执行的 adjust 值，否则永远 miss
             from .index_registry import parse_symbol, STOCK_KIND, INDEX_KIND
             cache_hit = False
             cached_records = None
@@ -1792,7 +1799,16 @@ class MooTDX2Client:
                         if parsed_for_key.kind == INDEX_KIND
                         else parsed_for_key.code
                     )
-                    cache_key = (reader_symbol_key, adjust)
+                    # 2026-09-16: 缓存 key 加入日期 + 日期范围，实现当日有效
+                    import datetime
+                    today = datetime.date.today().isoformat()  # "2026-09-16"
+                    # 与 _get_daily_sync 保持一致：指数强制 none
+                    actual_adjust = adjust
+                    if parsed_for_key.kind == INDEX_KIND and adjust in ("qfq", "hfq"):
+                        actual_adjust = "none"
+                    # cache_key = (date, symbol, adjust, start_date, end_date)
+                    # 不同日期范围请求 → 不同缓存
+                    cache_key = (today, reader_symbol_key, actual_adjust, start_date or "", end_date or "")
                     cached_records = self._daily_l1.get(cache_key)
                     if cached_records is not None:
                         self._daily_l1_hits += 1
@@ -1805,92 +1821,50 @@ class MooTDX2Client:
                 filtered = self._filter_records_by_date(cached_records, start_date, end_date)
                 return ToolResult(success=True, data=filtered, source="mootdx2")
 
-            # miss 路径: 仅 adjust=none + 解析成功 → 走 single-flight 去重
-            inflight_future: asyncio.Future | None = None
-            is_leader = False
-            if (
-                self._DAILY_L1_ENABLED
-                and adjust == "none"
-                and parsed_for_key is not None
-            ):
-                async with self._daily_l1_inflight_lock:
-                    existing = self._daily_l1_inflight.get(
-                        (reader_symbol_key, adjust)
+            # 缓存 miss 或 adjust != none：需要执行 Reader
+            # 2026-09-16: 用信号量限制并发 Reader 数量，防止雪崩
+            async with self._reader_semaphore:
+                try:
+                    data = await self._run_blocking(self._get_daily_sync,
+                        code,
+                        adjust,
+                        start_date,
+                        end_date,
                     )
-                    if existing is not None:
-                        inflight_future = existing
-                    else:
-                        inflight_future = (
-                            asyncio.get_running_loop().create_future()
-                        )
-                        self._daily_l1_inflight[
-                            (reader_symbol_key, adjust)
-                        ] = inflight_future
-                        is_leader = True
-
-            if inflight_future is not None and not is_leader:
-                # waiter: 共享 leader 的 ToolResult
-                shared = await inflight_future
-                return shared
-
-            # leader 路径 (or 非 none 路径 / inflight 旁路)
-            try:
-                data = await self._run_blocking(self._get_daily_sync,
-                    code,
-                    adjust,
-                    start_date,
-                    end_date,
-                )
-                meta = getattr(
-                    self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None}
-                )
-                result = self._build_daily_tool_result(
-                    code=code,
-                    data=data,
-                    meta=meta,
-                    adjust=adjust,
-                    parsed_for_key=parsed_for_key,
-                    reader_symbol_key=reader_symbol_key,
-                )
-                # 写 L1 (仅 adjust=none + 有数据 + 解析成功)
-                if (
-                    self._DAILY_L1_ENABLED
-                    and is_leader
-                    and adjust == "none"
-                    and data
-                    and parsed_for_key is not None
-                ):
-                    self._daily_l1[(reader_symbol_key, adjust)] = data
-
-                if is_leader and inflight_future is not None:
-                    if not inflight_future.done():
-                        inflight_future.set_result(result)
-
-                return result
-            except ValueError as e:
-                # ValueError 来自 _get_daily_sync 内部 parse_symbol 抛出,
-                # 转为 error_result 让 waiter 拿到, 然后 re-raise 给外层
-                # (外层会再转为 invalid_symbol ToolResult)
-                error_result = self._error_result(e, f"get_daily({code})")
-                if is_leader and inflight_future is not None:
-                    if not inflight_future.done():
-                        inflight_future.set_result(error_result)
-                raise
-            except Exception as e:
-                # leader 异常: 转为 error ToolResult, 让 waiter 拿同一结果
-                error_result = self._error_result(e, f"get_daily({code})")
-                if is_leader and inflight_future is not None:
-                    if not inflight_future.done():
-                        inflight_future.set_result(error_result)
-                return error_result
-            finally:
-                # 必须在所有路径 (success / ValueError / Exception) 清理 inflight,
-                # 否则 leader 释放后, 后续同 key 请求会把过期 Future 当成 leader 复用。
-                if is_leader and inflight_future is not None:
-                    async with self._daily_l1_inflight_lock:
-                        self._daily_l1_inflight.pop(
-                            (reader_symbol_key, adjust), None
-                        )
+                    meta = getattr(
+                        self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None}
+                    )
+                    result = self._build_daily_tool_result(
+                        code=code,
+                        data=data,
+                        meta=meta,
+                        adjust=adjust,
+                        parsed_for_key=parsed_for_key,
+                        reader_symbol_key=reader_symbol_key,
+                    )
+                    # 写 L1 (仅 actual_adjust=none + 有数据 + 解析成功)
+                    if (
+                        self._DAILY_L1_ENABLED
+                        and actual_adjust == "none"
+                        and data
+                        and parsed_for_key is not None
+                    ):
+                        self._daily_l1[(today, reader_symbol_key, actual_adjust, start_date or "", end_date or "")] = data
+                    return result
+                except ValueError as e:
+                    self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
+                    return ToolResult(
+                        success=False,
+                        error=str(e),
+                        error_detail={
+                            "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
+                            "message": str(e),
+                            "recoverable": False,
+                        },
+                    )
+                except Exception as e:
+                    logger.error(f"get_daily failed: {e}")
+                    return self._error_result(e, f"get_daily({code})")
         except ValueError as e:
             # parse_symbol 抛: 后缀非法 / 后缀冲突 / 主体非 6 位数字
             self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
@@ -2515,7 +2489,7 @@ class MooTDX2Client:
                 else:
                     prefixed.append(f"sz{c}")
             stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in prefixed]
-            batch_df = q.quotes(symbols=stripped)
+            batch_df = q.quotes(symbol=stripped)
             if batch_df is not None and len(batch_df) > 0:
                 results.extend(batch_df.to_dict(orient="records"))
 
@@ -2610,7 +2584,7 @@ class MooTDX2Client:
             for i in range(0, len(prefixed), MAX_LIMIT_BATCH_QUOTE):
                 chunk = prefixed[i:i + MAX_LIMIT_BATCH_QUOTE]
                 stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in chunk]
-                batch_df = q.quotes(symbols=stripped)
+                batch_df = q.quotes(symbol=stripped)
                 if batch_df is not None and len(batch_df) > 0:
                     all_quotes.extend(batch_df.to_dict(orient="records"))
 
@@ -2656,12 +2630,11 @@ class MooTDX2Client:
     async def stock_top_board(self, sort_by: str = "change_pct", direction: str = "desc", limit: int = 50, market: str = "all") -> ToolResult:
         """获取市场排行榜
 
-        2026-09-15 P0 (H2-a): 加 10s L1 + single-flight 防全市场扫描雪崩。
+        2026-09-16: 移除 single-flight，改用 L1 缓存 + Reader 并发控制。
         行情 10s 内变化 < 0.5%, 用户感知不到差异。
         """
         self._metrics["total_requests"] += 1
         if not self._DAILY_L1_ENABLED:
-            # cachetools 没装, 降级到直跑路径
             try:
                 data = await self._run_blocking(
                     self._stock_top_board_sync, sort_by, direction, limit, market
@@ -2677,46 +2650,23 @@ class MooTDX2Client:
             self._top_board_l1_hits += 1
             return cached
 
-        # miss 路径: single-flight 去重并发雪崩
-        inflight_future: asyncio.Future | None = None
-        is_leader = False
-        async with self._top_board_l1_inflight_lock:
-            existing = self._top_board_l1_inflight.get(cache_key)
-            if existing is not None:
-                inflight_future = existing
-            else:
-                inflight_future = asyncio.get_running_loop().create_future()
-                self._top_board_l1_inflight[cache_key] = inflight_future
-                is_leader = True
-
-        if inflight_future is not None and not is_leader:
-            return await inflight_future
-
-        try:
-            self._top_board_l1_misses += 1
-            data = await self._run_blocking(
-                self._stock_top_board_sync, sort_by, direction, limit, market
-            )
-            result = ToolResult(success=True, data=data, source="mootdx2")
-            self._top_board_l1[cache_key] = result
-            if is_leader and not inflight_future.done():
-                inflight_future.set_result(result)
-            return result
-        except Exception as e:
-            logger.error(f"stock_top_board failed: {e}")
-            error_result = self._error_result(e, "stock_top_board")
-            if is_leader and not inflight_future.done():
-                inflight_future.set_result(error_result)
-            return error_result
-        finally:
-            if is_leader:
-                async with self._top_board_l1_inflight_lock:
-                    self._top_board_l1_inflight.pop(cache_key, None)
+        self._top_board_l1_misses += 1
+        async with self._reader_semaphore:
+            try:
+                data = await self._run_blocking(
+                    self._stock_top_board_sync, sort_by, direction, limit, market
+                )
+                result = ToolResult(success=True, data=data, source="mootdx2")
+                self._top_board_l1[cache_key] = result
+                return result
+            except Exception as e:
+                logger.error(f"stock_top_board failed: {e}")
+                return self._error_result(e, "stock_top_board")
 
     async def stock_unusual(self, event_type: str = "all") -> ToolResult:
         """获取市场异动数据（主力监控精灵）
 
-        2026-09-15 P0 (H2-a): 加 10s L1 + single-flight。
+        2026-09-16: 移除 single-flight，改用 L1 缓存 + Reader 并发控制。
         """
         self._metrics["total_requests"] += 1
         if not self._DAILY_L1_ENABLED:
@@ -2733,35 +2683,13 @@ class MooTDX2Client:
             self._unusual_l1_hits += 1
             return cached
 
-        inflight_future: asyncio.Future | None = None
-        is_leader = False
-        async with self._unusual_l1_inflight_lock:
-            existing = self._unusual_l1_inflight.get(cache_key)
-            if existing is not None:
-                inflight_future = existing
-            else:
-                inflight_future = asyncio.get_running_loop().create_future()
-                self._unusual_l1_inflight[cache_key] = inflight_future
-                is_leader = True
-
-        if inflight_future is not None and not is_leader:
-            return await inflight_future
-
-        try:
-            self._unusual_l1_misses += 1
-            data = await self._run_blocking(self._stock_unusual_sync, event_type)
-            result = ToolResult(success=True, data=data, source="mootdx2")
-            self._unusual_l1[cache_key] = result
-            if is_leader and not inflight_future.done():
-                inflight_future.set_result(result)
-            return result
-        except Exception as e:
-            logger.error(f"stock_unusual failed: {e}")
-            error_result = self._error_result(e, "stock_unusual")
-            if is_leader and not inflight_future.done():
-                inflight_future.set_result(error_result)
-            return error_result
-        finally:
-            if is_leader:
-                async with self._unusual_l1_inflight_lock:
-                    self._unusual_l1_inflight.pop(cache_key, None)
+        self._unusual_l1_misses += 1
+        async with self._reader_semaphore:
+            try:
+                data = await self._run_blocking(self._stock_unusual_sync, event_type)
+                result = ToolResult(success=True, data=data, source="mootdx2")
+                self._unusual_l1[cache_key] = result
+                return result
+            except Exception as e:
+                logger.error(f"stock_unusual failed: {e}")
+                return self._error_result(e, "stock_unusual")

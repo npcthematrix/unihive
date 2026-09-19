@@ -185,6 +185,16 @@ class Cache:
         except Exception as e:
             logger.error(f"Failed to initialize cache: {e}")
             self.enabled = False
+            # L6 (round 9 audit): engine 已建但 CREATE TABLE/PRAGMA 失败时,
+            # 旧实现只置 enabled=False, _engine 留挂着 → 同实例重试
+            # initialize() 泄漏第二个 SQLAlchemy engine。dispose + 置 None。
+            if self._engine is not None:
+                try:
+                    await asyncio.wait_for(self._engine.dispose(), timeout=2.0)
+                except Exception as dispose_err:
+                    logger.warning(f"cache engine dispose failed: {dispose_err}")
+                self._engine = None
+            self._session_factory = None
 
     async def get(self, key: str) -> Any | None:
         """获取缓存值。 M1: 包 operation_timeout 防 SQLite 卡死。"""

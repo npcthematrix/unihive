@@ -1,13 +1,13 @@
-"""config.db 覆盖层管理 API (2026-09-18 P1): list / 单行删除 / 一键恢复出厂。
+"""P1 薄覆盖层服务函数 (2026-09-18): list / 单行删除 / 一键恢复出厂。
+
+v2 实体化后 HTTP 路由 (/api/config/overlays*) 与覆盖管理 UI 已退役
+(2026-09-18 P2), 这层服务函数仅作为 yaml 逃生/兼容内部路径保留,
+由 set_config_store 注入测试; 生产链路走实体表 (见 test_config_db_load_chain.py)。
 
 - 服务函数: list_config_overlays / delete_config_overlay / reset_config_overlays;
-- enabled 覆盖行删除后, 运行时按 YAML 出厂值热收敛 (_reconcile_enabled_overlays);
-- HTTP handler: GET /api/config/overlays, DELETE /api/config/overlays/{path},
-  POST /api/config/overlays/reset, 路由顺序静态 reset 在 {path} 之前。
+- enabled 覆盖行删除后, 运行时按 YAML 出厂值热收敛 (_reconcile_enabled_overlays)。
 """
 from __future__ import annotations
-
-import inspect
 
 import pytest
 
@@ -205,94 +205,3 @@ async def test_reconcile_runtime_failure_does_not_block(overlay_env):
     assert await overlay_env.list_overlays() == []
 
 
-# ---------------------------------------------------------------------------
-# HTTP handlers
-# ---------------------------------------------------------------------------
-
-
-class _FakeRequest:
-    def __init__(self, path_params: dict | None = None, body: object = None):
-        self.path_params = path_params or {}
-        self._body = body
-
-    async def json(self):
-        if self._body is None:
-            raise ValueError("no body")
-        return self._body
-
-
-async def test_list_handler_200_and_503(overlay_env):
-    resp = await ca.config_overlays_list_api(_FakeRequest())
-    assert resp.status_code == 200
-    payload = resp.body.decode()
-    assert '"revision":0' in payload.replace(" ", "")
-
-    ca.set_config_store(None)
-    resp = await ca.config_overlays_list_api(_FakeRequest())
-    assert resp.status_code == 503
-
-
-async def test_delete_handler_200(overlay_env):
-    await overlay_env.upsert_overlay("fuyao_cache.tools.t_base", 60)
-    await ca._refresh_overlay_snapshot()
-    req = _FakeRequest(
-        {"path": "fuyao_cache.tools.t_base"}, {"version": 1}
-    )
-    resp = await ca.config_overlay_reset_api(req)
-    assert resp.status_code == 200
-    assert await overlay_env.list_overlays() == []
-
-
-async def test_delete_handler_409_conflict(overlay_env):
-    await overlay_env.upsert_overlay("fuyao_cache.tools.t_base", 60)
-    await ca._refresh_overlay_snapshot()
-    req = _FakeRequest(
-        {"path": "fuyao_cache.tools.t_base"}, {"version": 0}
-    )
-    resp = await ca.config_overlay_reset_api(req)
-    assert resp.status_code == 409
-
-
-async def test_delete_handler_400_bad_path(overlay_env):
-    req = _FakeRequest({"path": "a/../b"}, {})
-    resp = await ca.config_overlay_reset_api(req)
-    assert resp.status_code == 400
-
-
-async def test_reset_all_handler_200(overlay_env):
-    await overlay_env.upsert_overlay("upstreams.alpha.enabled", False)
-    await ca._refresh_overlay_snapshot()
-    req = _FakeRequest(body={"version": 1})
-    resp = await ca.config_overlays_reset_all_api(req)
-    assert resp.status_code == 200
-    assert await overlay_env.list_overlays() == []
-
-
-async def test_reset_all_handler_no_body_ok(overlay_env):
-    req = _FakeRequest(body=None)  # 无 body 时跳过乐观锁
-    resp = await ca.config_overlays_reset_all_api(req)
-    assert resp.status_code == 200
-
-
-def test_routes_mounted_and_reset_before_param_route():
-    """reset 静态路由必须在 {path} 参数路由之前, 否则 reset 会当成覆盖路径。"""
-    from starlette.routing import Route
-
-    routes = ca.build_upstream_routes()
-    by_path: dict[str, set[str]] = {}
-    for r in routes:
-        if isinstance(r, Route):
-            by_path.setdefault(r.path, set()).update(r.methods or ())
-    assert "GET" in by_path["/api/config/overlays"]
-    assert "POST" in by_path["/api/config/overlays/reset"]
-    assert "DELETE" in by_path["/api/config/overlays/{path}"]
-    ordered = [r.path for r in routes]
-    assert ordered.index("/api/config/overlays/reset") < ordered.index(
-        "/api/config/overlays/{path}"
-    )
-
-    # gateway_server 必须挂载本路由组
-    from src.unihive.gateway_server import GatewayServer
-
-    source = inspect.getsource(GatewayServer.serve_http)
-    assert "build_upstream_routes()" in source

@@ -67,39 +67,14 @@ async def test_empty_real_store_roundtrip_matches_yaml(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_gateway_skips_overlay_when_source_yaml(tmp_path, monkeypatch):
+async def test_gateway_skips_db_when_source_yaml(tmp_path, monkeypatch):
+    # autouse fixture 已把 UNIHIVE_CONFIG_SOURCE 钉成 yaml; 再显式声明确认。
     monkeypatch.setenv("UNIHIVE_CONFIG_SOURCE", "yaml")
     monkeypatch.setenv("UNIHIVE_CONFIG_DB", str(tmp_path / "config.db"))
     server = GatewayServer(str(UPSTREAMS_YAML), strict_env=False,
                            strict_validation=False)
     try:
-        await server._apply_db_config_overlays()
+        await server._load_db_config()
         assert server.config_store is None
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_gateway_applies_enabled_overlay_from_db(tmp_path, monkeypatch):
-    db = tmp_path / "config.db"
-    store = ConfigStore(db)
-    await store.initialize()
-    # 选一个当前启用的上游 (THS-LOCAL-GATEWAY), 覆盖为 disabled
-    await store.upsert_overlay("upstreams.THS-LOCAL-GATEWAY.enabled", False)
-    await store.close()
-
-    monkeypatch.setenv("UNIHIVE_CONFIG_DB", str(db))
-    monkeypatch.delenv("UNIHIVE_CONFIG_SOURCE", raising=False)
-
-    server = GatewayServer(str(UPSTREAMS_YAML), strict_env=False,
-                           strict_validation=False)
-    try:
-        await server._apply_db_config_overlays()
-        assert server.config_store is not None
-        assert (
-            server.config["upstreams"]["THS-LOCAL-GATEWAY"]["enabled"] is False
-        )
-        # 未覆盖的兄弟字段不丢
-        assert "type" in server.config["upstreams"]["THS-LOCAL-GATEWAY"]
     finally:
         await server.stop()

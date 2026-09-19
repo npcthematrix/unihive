@@ -69,7 +69,7 @@ export function paramsSearchKey(params: Array<string | { name?: string }> | unde
   return params.map((p) => (typeof p === 'string' ? p : p.name || '')).join(' ')
 }
 
-/** 7 个 subtab 的 key 常量 */
+/** 8 个 subtab 的 key 常量 */
 export const TAB_KEYS = [
   'upstreams',
   'mapping',
@@ -77,7 +77,8 @@ export const TAB_KEYS = [
   'cache',
   'proxy',
   'fuyaoCache',
-  'overlays',
+  'database',
+  'updateCenter',
 ] as const
 export type TabKey = (typeof TAB_KEYS)[number]
 
@@ -89,5 +90,6 @@ export const TAB_TITLES: Record<TabKey, string> = {
   cache: '缓存',
   proxy: '代理设置',
   fuyaoCache: 'FUYAO 缓存',
-  overlays: '本地覆盖',
+  database: '配置库',
+  updateCenter: '出厂更新',
 }

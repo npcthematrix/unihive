@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import tempfile
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -255,13 +257,29 @@ class TestOmniStartStatus:
         client._db_path = str(db_path)
         client._status = UpstreamStatus.UNKNOWN
         client._metrics = {"total_requests": 0, "total_errors": 0}
+        # H3/L10 (round 9 audit): start/stop 现用到的连接登记字段。
+        client._all_conns = []
+        client._conns_lock = threading.Lock()
+        client._tls = threading.local()
         return client
 
     @pytest.mark.asyncio
     async def test_db_exists_sets_healthy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_file = Path(tmpdir) / "board.db"
-            db_file.touch()  # 创建空文件
+            # H3 (round 9 audit): 仅 touch 空 file 不再算 HEALTHY —
+            # 必须有 sectors 表且非空。建表 + 插一行模拟已同步。
+            conn = sqlite3.connect(str(db_file))
+            conn.execute(
+                "CREATE TABLE sectors (id INTEGER PRIMARY KEY, source TEXT, "
+                "board_type TEXT, code TEXT, name TEXT, stock_count INTEGER)"
+            )
+            conn.execute(
+                "INSERT INTO sectors (source, board_type, code, name) "
+                "VALUES ('THS', 'industry', '001', 'test')"
+            )
+            conn.commit()
+            conn.close()
             client = self._make_client(db_file)
             await client.start()
             assert client.status == UpstreamStatus.HEALTHY

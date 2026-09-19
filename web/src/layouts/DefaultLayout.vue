@@ -6,7 +6,7 @@
       class="sidebar"
     >
       <div class="brand">
-        <span class="brand-mark">UH</span>
+        <img class="brand-mark" :src="brandMark" alt="UniHive" />
         <span v-show="!isCollapsed" class="brand-name">UniHive</span>
       </div>
       <el-menu
@@ -69,6 +69,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Monitor, Connection, Setting, Grid, Files, Fold, Expand, DataLine } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import brandMark from '@/assets/unihive-mark-dark.svg'
 
 const route = useRoute()
 const router = useRouter()
@@ -186,17 +187,11 @@ onBeforeUnmount(() => {
 }
 
 .brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 6px;
-  background: var(--el-color-primary);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
   flex-shrink: 0;
+  /* 深色侧栏上给一点投影, 标体更浮出来 */
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
 }
 
 .brand-name {

@@ -16,6 +16,13 @@ from .upstream_client import ToolResult, UpstreamStatus
 logger = logging.getLogger(__name__)
 
 
+class OpenApiFetchError(RuntimeError):
+    """拉取/解析上游 OpenAPI 失败 (未初始化 / 网络 / 非 200 / 非 JSON 对象)。
+
+    调用方 (console_api) 统一映射为 502; 显式失败, 不做静默兜底。
+    """
+
+
 @dataclass
 class ThsLocalConfig:
     """THS-LOCAL 上游配置"""
@@ -57,7 +64,23 @@ class ThsLocalClient:
             )
             self._client = httpx.AsyncClient(timeout=timeout)
             # 执行健康检查确认连接可用
-            if await self.health_check():
+            # L11 (round 9 audit): _start_upstream_client 对 ths_local_gateway
+            # 特例不走 wait_for (gateway 级超时不生效), 而 health_check 的
+            # httpx POST 仅受 timeout_seconds (默认 30s) 约束 → 上游挂死时
+            # boot 卡 30s。这里用 connect_timeout_seconds 做 boot-probe 硬
+            # 超时, 挂死在 ~boot-probe 返回 DEGRADED 而非等满 read timeout。
+            boot_probe_timeout = max(self.config.connect_timeout_seconds, 1.0)
+            try:
+                healthy = await asyncio.wait_for(
+                    self.health_check(), timeout=boot_probe_timeout
+                )
+            except asyncio.TimeoutError:
+                healthy = False
+                logger.warning(
+                    f"[{self.name}] health check timed out after "
+                    f"{boot_probe_timeout}s, marked as DEGRADED"
+                )
+            if healthy:
                 self._status = UpstreamStatus.HEALTHY
                 logger.info(f"[{self.name}] Connected to {self.config.base_url}")
                 return True
@@ -167,6 +190,44 @@ class ThsLocalClient:
             self.name,
             **kwargs,
         )
+
+    async def fetch_openapi(self) -> dict[str, Any]:
+        """实时拉取站点根的 ``openapi.json`` (REST 契约权威, 非 MCP 端点)。
+
+        ``base_url`` 通常是 ``.../mcp``, 去掉末尾 ``/mcp`` (含尾斜杠容错) 得到
+        站点根, 再拼 ``/openapi.json``; 不带 ``/mcp`` 后缀时按站点根处理。
+        超时沿用 client 既有配置。任何失败抛 :class:`OpenApiFetchError`。
+        """
+        if not self._client:
+            raise OpenApiFetchError(
+                f"[{self.name}] client not initialized; call start() first"
+            )
+        root = self.config.base_url.rstrip("/")
+        if root.endswith("/mcp"):
+            root = root[: -len("/mcp")]
+        url = root + "/openapi.json"
+        try:
+            response = await self._client.get(url)
+        except httpx.HTTPError as exc:
+            # TimeoutException / 连接拒绝等全部归一, 调用方映射 502。
+            raise OpenApiFetchError(
+                f"[{self.name}] fetch openapi failed: {exc}"
+            ) from exc
+        if response.status_code != 200:
+            raise OpenApiFetchError(
+                f"[{self.name}] fetch openapi returned HTTP {response.status_code}"
+            )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise OpenApiFetchError(
+                f"[{self.name}] openapi response is not valid JSON"
+            ) from exc
+        if not isinstance(data, dict):
+            raise OpenApiFetchError(
+                f"[{self.name}] openapi document is not a JSON object"
+            )
+        return data
 
     async def health_check(self) -> bool:
         """健康检查"""

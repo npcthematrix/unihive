@@ -19,7 +19,7 @@ class TestMooTDX2Client:
         client = MooTDX2Client(config)
         # Mock quotes attribute
         class MockQuotes:
-            def quotes(self, symbols):
+            def quotes(self, symbol):
                 import pandas as pd
                 return pd.DataFrame([{"symbol": "600000", "close": 10.0, "open": 9.5, "high": 10.2, "low": 9.4, "vol": 1000000, "amount": 10000000}])
         client._quotes = MockQuotes()
@@ -76,7 +76,7 @@ class TestMooTDX2Client:
             {"symbol": "889999", "close": 1000.0, "pct_chg": -0.1},
             {"symbol": "000300", "close": 3800.0, "pct_chg": 0.2},
         ])
-        mock_quotes = type('MockQuotes', (), {'quotes': lambda self, symbols: mock_df})()
+        mock_quotes = type('MockQuotes', (), {'quotes': lambda self, symbol: mock_df})()
         with mock.patch.object(client, '_get_quotes', return_value=mock_quotes):
             result = client._index_overview_sync()
         assert len(result) == 6
@@ -106,7 +106,7 @@ class TestMooTDX2Client:
         ])
         mock_q = type("MockQ", (), {
             "stock": lambda self, exchange: mock_stock_df,
-            "quotes": lambda self, symbols: mock_quote_df,
+            "quotes": lambda self, symbol: mock_quote_df,
         })()
         with mock.patch.object(client, "_get_quotes", return_value=mock_q):
             result = client._stock_top_board_sync(sort_by="change_pct", direction="desc", limit=10, market="all")
@@ -127,7 +127,7 @@ class TestMooTDX2Client:
         ])
         mock_q = type('MockQ', (), {
             'block': lambda self, block_type: mock_block_df,
-            'quotes': lambda self, symbols: mock_quote_df,
+            'quotes': lambda self, symbol: mock_quote_df,
         })()
         with mock.patch.object(client, '_get_quotes', return_value=mock_q):
             result = client._stock_unusual_sync(event_type="all")
@@ -234,7 +234,7 @@ class TestMooTDX2HealthLoopRecovery:
 
         # mock quotes 让 probe 成功
         class MockQuotes:
-            def quotes(self, symbols):
+            def quotes(self, symbol):
                 import pandas as pd
                 return pd.DataFrame([{"symbol": "000001", "close": 10.0}])
 

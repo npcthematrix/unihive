@@ -1,26 +1,31 @@
+<!-- UniHive favicon (浅底版)。几何与 web/src/assets/unihive-mark-light.svg 一致, 改一处记得同步。 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="UniHive">
   <title>UniHive</title>
   <defs>
-    <linearGradient id="uh-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2f7cf6"/>
-      <stop offset="1" stop-color="#0d6efd"/>
+    <linearGradient id="uh-hex" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4d94ff"/>
+      <stop offset="0.55" stop-color="#1a6ff5"/>
+      <stop offset="1" stop-color="#0a4fc4"/>
+    </linearGradient>
+    <linearGradient id="uh-red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5564f"/>
+      <stop offset="1" stop-color="#cf1f1f"/>
     </linearGradient>
   </defs>
-  <!-- app tile -->
-  <rect x="3" y="3" width="58" height="58" rx="15" fill="url(#uh-bg)"/>
-  <!-- hive cell: six-source aggregation -->
+  <!-- hive cell: six-source aggregation — bare mark, no app tile -->
   <polygon
-    points="51.5,32 41.75,48.9 22.25,48.9 12.5,32 22.25,15.1 41.75,15.1"
-    fill="#ffffff" fill-opacity="0.10"
-    stroke="#ffffff" stroke-width="3.2"
+    points="57,32 44.5,54.2 19.5,54.2 7,32 19.5,9.8 44.5,9.8"
+    fill="#0d6efd" fill-opacity="0.07"
+    stroke="url(#uh-hex)" stroke-width="5"
     stroke-linejoin="round"/>
-  <!-- three ascending candlesticks: market data -->
+  <!-- three ascending candlesticks: 红涨绿跌 (A 股配色), 中间红柱为视觉焦点
+       线 bbox 宽为 0, 竖渐变不渲染 (SVG 规范坑) —— 柱体用渐变, 影线用实色 -->
   <g stroke-linecap="round">
-    <line x1="25" y1="28" x2="25" y2="42" stroke="#ffffff" stroke-width="2"/>
-    <rect x="22.9" y="33" width="4.2" height="7" rx="1" fill="#ffffff"/>
-    <line x1="32" y1="25" x2="32" y2="43" stroke="#ffd666" stroke-width="2"/>
-    <rect x="29.9" y="29" width="4.2" height="11" rx="1" fill="#ffd666"/>
-    <line x1="39" y1="28" x2="39" y2="40" stroke="#ffffff" stroke-width="2"/>
-    <rect x="36.9" y="31" width="4.2" height="8" rx="1" fill="#ffffff"/>
+    <line x1="24.5" y1="25.5" x2="24.5" y2="44.5" stroke="#2b9e5f" stroke-width="2.8"/>
+    <rect x="21.7" y="30.5" width="5.6" height="9" rx="1.4" fill="#2b9e5f"/>
+    <line x1="32" y1="21.5" x2="32" y2="45.5" stroke="#cf1f1f" stroke-width="3"/>
+    <rect x="29.3" y="26" width="5.6" height="13.5" rx="1.4" fill="url(#uh-red)"/>
+    <line x1="39.5" y1="25.5" x2="39.5" y2="43" stroke="#147a44" stroke-width="2.8"/>
+    <rect x="36.7" y="29.5" width="5.6" height="10" rx="1.4" fill="#147a44"/>
   </g>
 </svg>

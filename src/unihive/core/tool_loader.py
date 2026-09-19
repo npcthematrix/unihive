@@ -35,6 +35,8 @@ def load_all_tools(
     config: dict,
     *,
     include_env_gated: bool = False,
+    provenance: dict[str, str] | None = None,
+    source_name: str | None = None,
 ) -> list[dict]:
     """Merge ``config[upstreams.yaml].tools`` with the generated tools file
     (``tools_tdx_quant.yaml`` looked up next to ``config_path`` or in
@@ -48,6 +50,10 @@ def load_all_tools(
         include_env_gated: 连 ``requires_env`` 门控的 spec 一并加载。
             运行时注册保持门控 (默认 False); ``unihive config lint`` 传 True,
             因为目录正确性校验不应依赖本机是否打开了写工具开关。
+        provenance: 可选的 {工具名: 来源文件名} 汇编码 (v2 配置入库 seed 用,
+            记录每个 spec 来自内联 YAML 还是哪个 tools_*.yaml)。
+        source_name: provenance 汇编码对内联工具记录的来源名 (通常是
+            config_path 的文件名)。
     """
     source_tools = list(config.get("tools", []) or [])
     tools: list[dict] = (
@@ -55,6 +61,10 @@ def load_all_tools(
         if include_env_gated
         else filter_specs_by_env(source_tools)
     )
+    if provenance is not None:
+        inline_name = source_name or config_path.name
+        for spec in source_tools:
+            provenance[spec["name"]] = inline_name
     top_mapping = config.setdefault("upstream_tool_mapping", {})
     base_dir = config_path.parent.resolve()
     for filename in _GENERATED_FILENAMES:
@@ -73,6 +83,9 @@ def load_all_tools(
                     else filter_specs_by_env(gen_source)
                 )
                 tools.extend(gen_tools)
+                if provenance is not None:
+                    for spec in gen_source:
+                        provenance[spec["name"]] = filename
                 for spec in gen_tools:
                     rk = spec.get("routing")
                     if rk and rk not in top_mapping:

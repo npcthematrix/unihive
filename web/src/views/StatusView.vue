@@ -318,7 +318,7 @@ const tableEmptyText = computed(() => {
   if (loadError.value && rows.value.length === 0) {
     return `无法加载上游状态：${loadError.value}`
   }
-  if (rows.value.length === 0) return '暂无上游配置：编辑 config/upstreams.yaml 后重启网关'
+  if (rows.value.length === 0) return '暂无上游配置：请到「配置信息 → 上游」检查启用状态 (YAML 逃生模式下需编辑 config/upstreams.yaml 后重启)'
   if (filter.value === 'healthy') return '当前没有正常的上游'
   if (filter.value === 'unhealthy') return '当前没有异常的上游'
   return '没有匹配的上游'

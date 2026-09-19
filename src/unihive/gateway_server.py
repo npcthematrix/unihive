@@ -5,6 +5,7 @@ UniHive MCP Gateway Server - 统一 MCP 网关
 import argparse
 import asyncio
 import contextlib
+import copy
 import json
 import logging
 import os
@@ -27,7 +28,6 @@ from starlette.staticfiles import StaticFiles
 
 from .storage.cache import Cache, CacheConfig
 from .storage.config_store import ConfigStore
-from .core.config_merge import apply_config_overlays
 from .utils.config_loader import (
     load_config,
     merge_config_overlay,
@@ -38,6 +38,7 @@ from .core.normalizer import Normalizer
 from .core.registry import register_tool, register_tools_from_config, validate_specs
 from .core.router import Router
 from .core.proxy_settings import ProxySettings
+from .core.config_db import resolve_project_path
 from .api.upstream_client import UpstreamClient, UpstreamConfig
 from .api.fuyao_client import FuyaoClient, FuyaoConfig
 from .api.mootdx2_client import MooTDX2Client, MooTDX2Config
@@ -121,6 +122,11 @@ def _parse_mootdx2_servers(raw_servers: list) -> list:
 
 GATEWAY_VERSION = _read_gateway_version()
 
+#: 手写/状态工具名: 实体工具不得改名为这些名字 (会与
+#: _register_status_tools / search_stock 的手写注册撞车, 且这些名字
+#: 在 tool 实体表里本就不存在)。
+RESERVED_TOOL_NAMES = frozenset({"get_server_status", "get_health", "search_stock"})
+
 
 def _console_auth_config_from_env() -> tuple[dict | None, str]:
     """Read console auth config from UNIHIVE_CONSOLE_* env vars only.
@@ -154,7 +160,17 @@ def _console_auth_config_from_env() -> tuple[dict | None, str]:
             f"32 characters (got {len(secret)})"
         )
 
-    return {"username": username, "password": password, "session_secret": secret}, "ok"
+    # H4 (round 9 audit): env 路径就地 hash 明文 password → password_hash。
+    # setup_console_auth 现在拒绝明文 (要 PBKDF2 password_hash), 旧实现直接
+    # 塞明文 → serve_http 路由装配段崩。就地 hash 后 env 路径与 YAML 路径
+    # 同态, 不再把明文留进程内存 (hash 是被 setup 持久化的对象)。
+    from .console_auth import hash_password
+
+    return {
+        "username": username,
+        "password_hash": hash_password(password),
+        "session_secret": secret,
+    }, "ok"
 
 
 def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, str]:
@@ -262,30 +278,81 @@ class GatewayServer:
         upstream_start_timeout: float | None = None,
         health_check_timeout: float | None = None,
     ):
-        self.config_path = Path(config_path)
+        # L3 (round 10 audit): 相对 config_path 锚定项目根, 与从任意 CWD 启动
+        # 无关。旧实现 Path(relative) 锚定 CWD → 从别的工作目录启动时找不到
+        # upstreams.yaml, db 模式空库首启会拿不到出厂 YAML 模板而 seed 空配置;
+        # 绝对路径原样保留 (resolve_project_path 第三语义)。
+        self.config_path = Path(
+            resolve_project_path(config_path, "config/upstreams.yaml")
+        )
+        self._strict_env = strict_env
 
-        # Load upstreams.yaml
-        self.config = load_config(config_path, strict_env=strict_env)
+        # v2 (2026-09-18): 配置事实源默认是 data/config.db 实体表;
+        # UNIHIVE_CONFIG_SOURCE=yaml 回到纯 YAML 出厂模式 (故障逃生通道);
+        # UNIHIVE_CONFIG_DB 可覆盖库路径。db 模式下, 这里的 YAML 加载只是
+        # 预检基线, _do_initialize 的 _load_db_config() 会用库内实体装配结果
+        # 整体替换 self.config。
+        source = os.environ.get("UNIHIVE_CONFIG_SOURCE", "db").strip().lower()
+        # L1 (round 9 audit): 任何拼写错误 (如 "deeb") 旧实现静默当作 db 模式,
+        # 用户以为逃生到了 yaml 却进了 db。fail-closed: 仅接受 db/yaml/空。
+        if source not in ("", "db", "yaml"):
+            raise ValueError(
+                f"UNIHIVE_CONFIG_SOURCE must be 'db' or 'yaml' (got {source!r})"
+            )
+        self._db_mode = source != "yaml"
+        # M10: 库路径锚定项目根, 从任意 CWD 启动都指向同一个 config.db,
+        # 杜绝在 CWD 下静默生成空库重 seed 的裂脑; 绝对路径原样保留。
+        from .core.config_db import resolve_config_db_path
 
-        # Load config.yaml and merge (config.yaml takes precedence for overlapping keys)
-        config_yaml_path = self.config_path.parent / "config.yaml"
-        if config_yaml_path.exists():
-            try:
-                config_yaml = load_config(str(config_yaml_path), strict_env=strict_env)
-                # Merge: config.yaml overrides upstreams.yaml (浅层合并,
-                # 与 `unihive config lint` 共用 merge_config_overlay)
-                merge_config_overlay(self.config, config_yaml)
-            except Exception as e:
-                logger.warning(f"Failed to load config.yaml: {e}")
-        errors = validate_config(self.config)
-        if errors:
-            for e in errors:
-                logger.warning(f"Config validation: {e}")
-            if strict_validation:
-                raise ValueError(
-                    f"Config validation failed ({len(errors)} error(s)): "
-                    + "; ".join(errors)
-                )
+        self._db_path = str(
+            resolve_config_db_path(os.environ.get("UNIHIVE_CONFIG_DB"))
+        )
+
+        # YAML 预检基线。db 模式下真正的事实源是 config.db, YAML 损坏不得阻止
+        # 健康库启动 (M9): 预检失败只告警并以空 dict 占位, _load_db_config()
+        # 会用库内实体整体替换; 空库 seed 时坏模板仍在装配门 fail-closed (H4)。
+        # yaml 逃生模式保持原严格语义: 加载/校验失败直接抛出。
+        try:
+            # Load upstreams.yaml
+            # L3 (round 10 audit): 必须用锚定后的 self.config_path 而非原始
+            # config_path 参数 — 后者在从非 repo 根启动时锚定 CWD, yaml 逃生
+            # 模式下直接 FileNotFoundError; db 模式预检基线也会静默落空,
+            # 空库首启拿不到出厂模板。
+            self.config = load_config(
+                str(self.config_path), strict_env=strict_env
+            )
+
+            # Load config.yaml and merge (config.yaml takes precedence for overlapping keys)
+            config_yaml_path = self.config_path.parent / "config.yaml"
+            if config_yaml_path.exists():
+                try:
+                    config_yaml = load_config(
+                        str(config_yaml_path), strict_env=strict_env
+                    )
+                    # Merge: config.yaml overrides upstreams.yaml (浅层合并,
+                    # 与 `unihive config lint` 共用 merge_config_overlay)
+                    merge_config_overlay(self.config, config_yaml)
+                except Exception as e:
+                    logger.warning(f"Failed to load config.yaml: {e}")
+            errors = validate_config(self.config)
+            if errors:
+                for e in errors:
+                    logger.warning(f"Config validation: {e}")
+                if strict_validation:
+                    raise ValueError(
+                        f"Config validation failed ({len(errors)} error(s)): "
+                        + "; ".join(errors)
+                    )
+        except Exception:
+            if not self._db_mode:
+                raise
+            logger.warning(
+                "YAML config preflight failed; continuing in db mode — "
+                "config.db is authoritative (an empty DB will still fail "
+                "closed when seeding from this template)",
+                exc_info=True,
+            )
+            self.config = {}
         # 与 console_api 共用同一份 config，避免双轨不一致
         from .utils import console_api as _ca
         _ca.set_config(self.config)
@@ -300,7 +367,10 @@ class GatewayServer:
         # toggle 锁串行化并发的启用/禁用操作。
         self.tool_specs: list[dict] = []
         self._published_tools: set[str] = set()
-        # SQLite 薄覆盖层 (data/config.db), _do_initialize 早期装配;
+        # publish_mode=hidden 的工具名 (仅 db 模式有内容): 不发布,
+        # 上游热开关与启动注册都要跳过, 防止 backer 变动时被重新放出。
+        self._db_hidden_tools: set[str] = set()
+        # v2 配置实体库 (data/config.db), _do_initialize 早期装配;
         # None 表示 UNIHIVE_CONFIG_SOURCE=yaml 逃生模式或尚未初始化。
         self.config_store: ConfigStore | None = None
         self._upstream_toggle_lock = asyncio.Lock()
@@ -337,7 +407,16 @@ class GatewayServer:
             if health_check_timeout is not None
             else self.DEFAULT_HEALTH_CHECK_TIMEOUT
         )
-        # 从 gateway 配置读取 per_upstream_timeout
+        # gateway 调参 (per_upstream_timeout + 限流器): 先按 YAML 基线应用;
+        # db 模式 _load_db_config 装配出库内配置后会再跑一次。
+        self._apply_gateway_tuning()
+
+    def _apply_gateway_tuning(self) -> None:
+        """从当前 self.config 应用 gateway 段调参 (per_upstream_timeout + QPS)。
+
+        __init__ 按 YAML 基线跑一次; db 模式下库内实体装配完成后再跑一次,
+        让控制台对 gateway 调参段的修改无需重启即可被 router/limiter 读到。
+        """
         gateway_cfg = self.config.get("gateway", {})
         self._per_upstream_timeout = gateway_cfg.get("per_upstream_timeout", self.DEFAULT_REQUEST_TIMEOUT)
         # 初始化限流器：从配置读取每个上游的 QPS 限制
@@ -363,52 +442,82 @@ class GatewayServer:
                 return
             await self._do_initialize()
 
-    async def _apply_db_config_overlays(self) -> None:
-        """加载 data/config.db 薄覆盖层并合并进 self.config。
+    async def _load_db_config(self) -> None:
+        """以 data/config.db 实体表为事实源装配 self.config (v2, 2026-09-18)。
 
-        YAML (upstreams.yaml + config.yaml) 是出厂基线; SQLite 只存本机
-        差异 (upstreams.<n>.enabled / fuyao_cache.tools.<tool> ...),
-        设计见 docs/design/2026-09-18-sqlite-config-overlay.md。
+        YAML (upstreams.yaml + tools_*.yaml) 只是出厂模板: 空库自动从模板
+        解构 seed, 之后运行时只读库内 sections / upstream / tool 实体,
+        不再回读 YAML; config.yaml 仅贡献 bootstrap 子集 (console 整段 +
+        gateway host/port/mcp_path, 永不入库)。设计见
+        docs/design/2026-09-18-sqlite-config-full-database.md。
 
         - ``UNIHIVE_CONFIG_SOURCE=yaml`` 完全绕过 DB (故障逃生通道);
         - ``UNIHIVE_CONFIG_DB`` 覆盖默认路径 data/config.db;
-        - 必须在任何 cache/client 构造之前执行: enabled 覆盖决定是否连上游。
-          合并后配置若过不了 validate_config, 直接 fail-closed, 避免在错误
-          配置上悄悄建连。
+        - 必须在任何 cache/client 构造之前执行: upstream.enabled 决定是否
+          建连。装配结果 resolve env 后若过不了 validate_config, 直接
+          fail-closed, 避免在错误配置上悄悄建连。
         """
+        from .core.config_db import ensure_seeded, load_template_from_store
+        from .core.db_assembler import assemble_config, merge_bootstrap
+        from .core.template_normalize import load_raw_config
         from .utils import console_api as _ca
+        from .utils.config_loader import resolve_env_vars
 
-        source = os.environ.get("UNIHIVE_CONFIG_SOURCE", "db").strip().lower()
-        if source == "yaml":
-            logger.info("UNIHIVE_CONFIG_SOURCE=yaml, 跳过 SQLite 配置覆盖层")
-            _ca.set_config_store(None)
+        if not self._uses_db_source():
+            logger.info("UNIHIVE_CONFIG_SOURCE=yaml, 配置事实源=YAML 文件 (无 SQLite)")
+            _ca.set_config_db(None)
             return
-        db_path = os.environ.get("UNIHIVE_CONFIG_DB", "data/config.db")
-        store = ConfigStore(db_path)
-        await store.initialize()
-        self.config_store = store
-        rows = await store.list_overlays()
-        revision = await store.revision()
-        # 同步读路径 (load_config / get_interfaces ...) 用行镜像合并, 不走 DB;
-        # 控制台写路径直接用这个 store 实例。
-        _ca.set_config_store(store, rows, revision)
-        if not rows:
-            return
-        merged = apply_config_overlays(self.config, rows)
-        errors = validate_config(merged)
-        if errors:
-            await store.close()
-            self.config_store = None
-            _ca.set_config_store(None)
-            raise ValueError(
-                f"Config overlay validation failed ({len(errors)} error(s)): "
-                + "; ".join(errors)
+
+        store = ConfigStore(self._db_path)
+        # M4 (round 9 audit): store.initialize() 纳入 try —— 自身失败 (库路径不可
+        # 写 / 磁盘满) 时旧实现在 try 外抛, except 接不到, store.close() 不被
+        # 调 → SQLAlchemy engine 泄漏。这里赋值在 try 前, except 安全调 close。
+        try:
+            await store.initialize()
+            # 空库: 从未解析 env 的 YAML 模板解构 seed (明文密钥 fail-closed)。
+            await ensure_seeded(store, self.config_path)
+            template = await load_template_from_store(store)
+            self._db_hidden_tools = {
+                t.name for t in template.tools if t.publish_mode == "hidden"
+            }
+            assembled = assemble_config(template)
+            # bootstrap 只从 config.yaml 合 console + 监听键; 其余段以库为准,
+            # 不被文件旧值盖住 (浅合并, 与 yaml 加载链同语义)。
+            config_yaml_raw = load_raw_config(self.config_path.parent / "config.yaml")
+            merge_bootstrap(assembled, config_yaml_raw)
+            # M6 (round 9 audit): strict 下也跳过 disabled 上游块的 ${VAR} 解析,
+            # 与 validate_config 同语义 —— 禁用上游不要求环境变量齐备,
+            # 否则控制台禁用 fuyao 但环境无其 key 时网关起不来 (热改却容忍)。
+            resolved, missing = resolve_env_vars(
+                assembled, strict=self._strict_env, skip_disabled_upstreams=True
             )
-        self.config = merged
-        _ca.set_config(self.config)
+            if missing and not self._strict_env:
+                logger.warning("Missing env vars (kept as placeholders): %s", missing)
+            errors = validate_config(resolved)
+            if errors:
+                raise ValueError(
+                    f"DB config validation failed ({len(errors)} error(s)): "
+                    + "; ".join(errors)
+                )
+        except Exception:
+            await store.close()
+            raise
+
+        self.config_store = store
+        self.config = resolved
+        # 库内 gateway 调参段可能与 YAML 预检基线不同, 重放一次。
+        self._apply_gateway_tuning()
+        revision = await store.revision()
+        # 与 console_api 共享同一 live dict: 热开关/TTL 热改两边即时可见。
+        _ca.set_config(resolved)
+        _ca.set_config_db(store, revision)
         logger.info(
-            "Applied %d SQLite config overlay row(s) (revision=%d, db=%s)",
-            len(rows), await store.revision(), db_path,
+            "Loaded config from %s: %d upstreams, %d tools, revision=%d, template=%s",
+            self._db_path,
+            len(resolved.get("upstreams") or {}),
+            len(resolved.get("tools") or []),
+            revision,
+            (await store.template_version_seeded() or "")[:12],
         )
 
     async def _do_initialize(self):
@@ -420,15 +529,17 @@ class GatewayServer:
         from .utils import console_api as _ca
 
         try:
-            # SQLite 配置薄覆盖层: 必须在 cache/client 构造前合并,
-            # enabled 覆盖决定上游是否建连。
-            await self._apply_db_config_overlays()
+            # v2 配置实体库: 必须在 cache/client 构造前完成装配,
+            # upstream.enabled 决定上游是否建连。
+            await self._load_db_config()
 
             # 初始化缓存
             cache_cfg = self.config.get("cache", {})
             self.cache = Cache(CacheConfig(
                 enabled=cache_cfg.get("enabled", True),
-                db_path=cache_cfg.get("db_path", "logs/cache.db"),
+                db_path=str(resolve_project_path(
+                    cache_cfg.get("db_path"), "logs/cache.db"
+                )),
                 max_entries=int(cache_cfg.get("max_entries", 50000)),
                 operation_timeout=float(cache_cfg.get("operation_timeout", 3.0)),
             ))
@@ -449,8 +560,23 @@ class GatewayServer:
             for name, cfg in (self.config.get("upstreams") or {}).items():
                 if not cfg.get("enabled", False):
                     continue
-                client = self._construct_upstream_client(name, cfg)
-                await self._start_upstream_client(name, cfg, client)
+                # H2 (round 9 audit): 单个上游构造/启动抛错 (如 mootdx2 非法
+                # servers、tdx_quant 缺 DLL) 不得让整个网关拒启 —— 与
+                # _start_upstream_client 已有的 "失败也登记为不可用" 语义一致,
+                # 这里把构造也纳入 try, 该上游跳过 + log, 其余照常启动。
+                # CancelledError (BaseException) 仍传播, 不被吞。
+                try:
+                    client = self._construct_upstream_client(name, cfg)
+                    await self._start_upstream_client(name, cfg, client)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        "Failed to construct/start upstream %r (skipping, "
+                        "other upstreams continue): %s",
+                        name,
+                        e,
+                    )
 
             # 2026-09-15: 让 console_api 能查到已注册的 upstream client,
             # 服务 /api/upstreams/<name>/metrics 端点。必须在装配循环结束、
@@ -465,7 +591,8 @@ class GatewayServer:
             _omni = self._find_omni_client()
             _ca.set_omni_client(_omni)
 
-            # 初始化路由前先合并生成工具的 mapping（_load_all_tools 会写回顶层 config）
+            # 全量 spec (db 模式来自库内实体; yaml 模式此处合入生成文件并
+            # 回填顶层 mapping), 存全量供热开关重算发布集。
             tool_specs = self._load_all_tools()
             # 存全量 spec 供热开关重算发布集; validate/注册逻辑不变。
             self.tool_specs = tool_specs
@@ -474,7 +601,9 @@ class GatewayServer:
             # 控制 mootdx2 → tdx_quant 透明代理. yaml 不存在时自动 fallback
             # 到默认 (enabled=False), 不阻断 gateway 启动.
             proxy_settings = ProxySettings(
-                path="config/proxy_settings.yaml",
+                path=str(resolve_project_path(
+                    None, "config/proxy_settings.yaml"
+                )),
             )
 
             # 初始化路由
@@ -510,12 +639,37 @@ class GatewayServer:
                 except Exception:
                     pass
             self.upstreams.clear()
+            # M4 (round 9 audit): 取消半建的 cache cleanup task, 否则它引用
+            # 即将关闭的 cache 且重试时会泄漏第二个 task。
+            cleanup_task = getattr(self, "_cache_cleanup_task", None)
+            if cleanup_task is not None:
+                cleanup_task.cancel()
+                try:
+                    await cleanup_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._cache_cleanup_task = None
             if self.cache:
                 try:
                     await asyncio.wait_for(self.cache.close(), timeout=2.0)
                 except Exception:
                     pass
                 self.cache = None
+            # M4: v2 配置库 engine 也须 dispose, 否则直接 await initialize()
+            # 的嵌入宿主/同实例重试会泄漏第二个 SQLAlchemy engine。
+            config_store = getattr(self, "config_store", None)
+            if config_store is not None:
+                try:
+                    await config_store.close()
+                except Exception:
+                    pass
+                self.config_store = None
+            # M4: 复位 console_api 写目标全局, 不再指向已死 server 的 store/config。
+            _ca.set_config_db(None)
+            _ca.set_config({})
+            _ca.set_gateway_server(None)
+            _ca.set_upstream_registry({})
+            _ca.set_omni_client(None)
             # M1 (2026-09-07 audit): 半构造的 router / mcp 也归零, 否则后续
             # get_server_status / 路由调用拿到指向未完全初始化对象的引用。
             self.router = None
@@ -549,6 +703,9 @@ class GatewayServer:
                 call_timeout_sec=cfg.get("call_timeout_sec", 10),
                 reconnect_threshold=cfg.get("reconnect_threshold", 3),
                 unavailable_threshold=cfg.get("unavailable_threshold", 10),
+                # L3 (round 9 audit): 透传 tdx_remote_port, 否则 YAML 里配的非
+                # 默认端口被静默丢弃, 运行时永远连默认 17709。
+                tdx_remote_port=int(cfg.get("tdx_remote_port", 17709)),
             )
             tdx_quant_cfg = TdxQuantConfig(
                 name=name,
@@ -581,7 +738,9 @@ class GatewayServer:
             # OMNIDATA 板块数据客户端
             omni_cfg = OmniConfig(
                 name=name,
-                db_path=cfg.get("db_path", "./data/board.db"),
+                db_path=str(resolve_project_path(
+                    cfg.get("db_path"), "./data/board.db"
+                )),
             )
             return OmniClient(omni_cfg)
         if cfg.get("type") == "thsdk":
@@ -680,18 +839,21 @@ class GatewayServer:
           (yaml 已落盘, HTTP 层返 500 带 version); 下次同态点击走 reconcile
           自愈补完, 不再被 no-op 短路。
 
-        持久化 (upstreams.yaml) 由调用方 console_api 先完成, 本方法只改运行态
+        持久化 (config.db overlay) 由调用方 console_api 先完成, 本方法只改运行态
         self.config (与 console_api 共享同一 dict) 与已发布工具集。
         """
-        upstreams_cfg = self.config.get("upstreams") or {}
-        if name not in upstreams_cfg:
-            raise KeyError(f"Unknown upstream: {name}")
-        cfg = upstreams_cfg[name]
-
         if self.mcp is None or not getattr(self, "tool_specs", None):
             raise RuntimeError("Gateway not initialized")
 
         async with self._upstream_toggle_lock:
+            # H3: cfg 必须锁内从 live config 现读。锁外捕获的 cfg 可能在等锁期间
+            # 被 apply_upstream_edit/出厂升级整块替换成孤儿 dict —— 在孤儿上翻
+            # enabled 会返回 200 但 live 真值未变, 且按旧连接块建 client。
+            upstreams_cfg = self.config.get("upstreams") or {}
+            if name not in upstreams_cfg:
+                raise KeyError(f"Unknown upstream: {name}")
+            cfg = upstreams_cfg[name]
+
             current = bool(cfg.get("enabled", False))
             if current == enabled:
                 # 状态已一致: 常规零动作 no-op; 同时承担上次部分失败后的运行态自愈
@@ -703,8 +865,1380 @@ class GatewayServer:
             return await self._disable_upstream_locked(name)
 
     # ------------------------------------------------------------------
+    # P3: 单工具实体热编辑 (config.db → lint 门 → 热重注册 → 失败回滚)
+    # ------------------------------------------------------------------
+
+    async def apply_tool_edit(
+        self,
+        name: str,
+        patch: dict,
+        *,
+        confirm_dangerous: bool = False,
+        expected_revision: int | None = None,
+    ) -> dict:
+        """编辑一个工具实体并立即热生效到对外 /mcp。
+
+        流程 (设计 §6, docs/design/2026-09-18-sqlite-config-full-database.md):
+
+        1. 字段白名单/形态校验 + 描述层/契约层分层: 触及 name/routing/
+           requires_env/mapping 必须 ``confirm_dangerous=True``;
+        2. 本地构造候选实体 → 装配出候选运行时 config (与启动同一条
+           assemble → bootstrap → resolve env 链) → ``lint_config`` 全量
+           静态校验, 有 error 抛 :class:`LintRejected`, 运行态/库均不动;
+        3. toggle 锁内先切运行态 (config/tool_specs/router/hidden 集),
+           再做 provider 换工具 (remove 旧名 → register 新 spec);
+        4. 注册成功后写库 (乐观锁); 注册或写库任一步失败, 运行态与 provider
+           全部回滚到编辑前, 异常原样抛给 HTTP 层;
+        5. publish_mode=hidden / requires_env 门控 / 全 backer 禁用的候选
+           只摘除不注册 (行保留, 可恢复)。
+
+        Returns:
+            ``{changed, name, revision, published, previously_published,
+            contract_fields}``; 净效果无变化时 no-op 短路 (不含
+            contract_fields 键), 不 bump revision、不碰 provider。
+        """
+        from .core.config_lint import ERROR as LINT_ERROR
+        from .core.config_lint import LintRejected, lint_config
+        from .core.entity_edit import (
+            DangerousConfirmationRequired,
+            apply_tool_patch,
+            contract_fields_in_patch,
+        )
+        from .core.tool_loader import filter_specs_by_env
+        from .utils import console_api as _ca
+
+        store = self.config_store
+        if store is None:
+            raise RuntimeError(
+                "tool editing requires the config.db entity source "
+                "(UNIHIVE_CONFIG_SOURCE=db); current source has no store"
+            )
+        if self.mcp is None or not getattr(self, "tool_specs", None):
+            raise RuntimeError("Gateway not initialized")
+
+        entity = await store.get_tool(name)
+        if entity is None:
+            raise KeyError(name)
+
+        contract_fields = sorted(contract_fields_in_patch(patch))
+        if contract_fields and not confirm_dangerous:
+            raise DangerousConfirmationRequired(contract_fields)
+
+        # bundle 与其 revision 在同一快照读出 (plan 时刻): 即使调用方省略
+        # expected_revision, 也以该 revision 为乐观锁基准 — plan 之后若有别的
+        # 写入落库, 锁内落库必撞 RevisionConflict 并整笔回滚, 杜绝"锁外旧
+        # bundle 构造候选 → 覆盖并发编辑" (H5)。
+        bundle, plan_revision = await store.read_bundle()
+        existing_names = {row["name"] for row in bundle["tools"]}
+        updated = apply_tool_patch(entity, patch, existing_names=existing_names)
+        old_name, new_name = name, updated["name"]
+        if new_name != old_name and new_name in RESERVED_TOOL_NAMES:
+            raise ValueError(
+                f"tool name {new_name!r} is reserved for gateway built-in tools"
+            )
+
+        if ConfigStore._tool_entity_unchanged(entity, updated):
+            currently_published = old_name in self._published_tools
+            return {
+                "changed": False,
+                "name": old_name,
+                "revision": await store.revision(),
+                "published": currently_published,
+                "previously_published": currently_published,
+            }
+
+        candidate, candidate_specs, candidate_hidden = self._build_tool_edit_candidate(
+            bundle, old_name, updated
+        )
+        lint_errors = [
+            issue
+            for issue in lint_config(candidate, candidate_specs)
+            if issue.severity == LINT_ERROR
+        ]
+        if lint_errors:
+            raise LintRejected(lint_errors)
+
+        async with self._upstream_toggle_lock:
+            # 运行态快照 (全是引用替换, 无需深拷贝: 候选 config 是独立新 dict,
+            # 回滚只是把引用换回来)。
+            old_config = self.config
+            old_specs = list(self.tool_specs)
+            old_hidden = set(self._db_hidden_tools)
+            previously_published = old_name in self._published_tools
+
+            # 1) 切运行态: live config / env 门控 spec / hidden 集 / router。
+            self.config = candidate
+            _ca.set_config(candidate)
+            self.tool_specs = candidate_specs
+            self._db_hidden_tools = candidate_hidden
+            if self.router is not None:
+                self.router.routing_config = candidate.get("routing", {})
+                self.router.upstream_tool_mapping = candidate.get(
+                    "upstream_tool_mapping", {}
+                )
+                self.router.replace_tool_specs(candidate_specs)
+
+            # 2) provider 换工具: 先摘旧名 (KeyError 幂等), 再注册候选。
+            if previously_published:
+                try:
+                    self.mcp.local_provider.remove_tool(old_name)
+                except KeyError:
+                    logger.warning(
+                        "tool edit: %r not on local provider (idempotent)",
+                        old_name,
+                    )
+                self._published_tools.discard(old_name)
+
+            new_spec = next(
+                (s for s in candidate_specs if s["name"] == new_name), None
+            )
+            will_publish = new_name in {
+                s["name"] for s in self._publishable_specs(candidate_specs)
+            }
+            published = False
+            if new_spec is not None and will_publish:
+                try:
+                    register_tool(self, new_spec)
+                except Exception as e:
+                    self._rollback_tool_edit_locked(
+                        old_config=old_config,
+                        old_specs=old_specs,
+                        old_hidden=old_hidden,
+                        old_name=old_name,
+                        new_name=new_name,
+                        candidate_published=False,
+                        previously_published=previously_published,
+                    )
+                    raise RuntimeError(f"re-register failed: {e}") from e
+                self._published_tools.add(new_name)
+                published = True
+
+            # 3) 写库 (乐观锁)。失败 → 运行态 + provider 全量回滚。
+            # expected 缺省钉住 plan 时刻 revision (非锁内重读, 锁内重读会
+            # 让校验恒通过, 并发编辑被旧候选物理覆盖)。
+            expected = (
+                plan_revision
+                if expected_revision is None
+                else expected_revision
+            )
+            try:
+                final_name, revision = await store.update_tool(
+                    old_name, patch, expected_revision=expected
+                )
+            except Exception:
+                self._rollback_tool_edit_locked(
+                    old_config=old_config,
+                    old_specs=old_specs,
+                    old_hidden=old_hidden,
+                    old_name=old_name,
+                    new_name=new_name,
+                    candidate_published=published,
+                    previously_published=previously_published,
+                )
+                raise
+
+            # 4) 成功: console_api 共享同一 store 对象, 刷 revision 与缓存。
+            _ca.set_config_db(store, revision)
+            _ca.invalidate_config_caches()
+            logger.info(
+                "Tool %r edited (final=%r, rev=%d, published=%s, contract=%s)",
+                old_name,
+                final_name,
+                revision,
+                published,
+                contract_fields or "-",
+            )
+            return {
+                "changed": True,
+                "name": final_name,
+                "revision": revision,
+                "published": published,
+                "previously_published": previously_published,
+                "contract_fields": contract_fields,
+            }
+
+    def _build_tool_edit_candidate(
+        self, bundle: dict, old_name: str, updated: dict
+    ) -> tuple[dict, list[dict], set[str]]:
+        """把单个候选实体行换入 bundle, 走与启动同构的装配链产出候选运行态。
+
+        返回 ``(resolved_config, env 门控后 specs, hidden 工具名集)``。
+        不做 IO 写; bootstrap 仅在正常启动路径 (有 config_path) 时合并,
+        __new__ 旁路 __init__ 的测试场景自动跳过。
+        """
+        from .core.db_assembler import (
+            assemble_config,
+            entities_from_json,
+            merge_bootstrap,
+        )
+        from .core.template_normalize import load_raw_config
+        from .core.tool_loader import filter_specs_by_env
+        from .utils.config_loader import resolve_env_vars
+
+        row_keys = (
+            "name",
+            "routing",
+            "description",
+            "cache_ttl_key",
+            "requires_env",
+            "publish_mode",
+            "mapping",
+            "spec",
+            "source_file",
+            "origin",
+        )
+        cand_bundle = copy.deepcopy(bundle)
+        for idx, row in enumerate(cand_bundle.get("tools") or []):
+            if row["name"] == old_name:
+                cand_bundle["tools"][idx] = {
+                    key: updated.get(key) for key in row_keys
+                }
+                break
+
+        template = entities_from_json(cand_bundle)
+        candidate = assemble_config(template)
+        config_path = getattr(self, "config_path", None)
+        if config_path is not None:
+            merge_bootstrap(
+                candidate, load_raw_config(config_path.parent / "config.yaml")
+            )
+        candidate, _missing = resolve_env_vars(
+            candidate, strict=bool(getattr(self, "_strict_env", False))
+        )
+        candidate_specs = filter_specs_by_env(list(candidate.get("tools") or []))
+        hidden = {
+            tool.name for tool in template.tools if tool.publish_mode == "hidden"
+        }
+        return candidate, candidate_specs, hidden
+
+    def _rollback_tool_edit_locked(
+        self,
+        *,
+        old_config: dict,
+        old_specs: list[dict],
+        old_hidden: set[str],
+        old_name: str,
+        new_name: str,
+        candidate_published: bool,
+        previously_published: bool,
+    ) -> None:
+        """热编辑失败回滚: provider 摘候选 → 运行态复位 → 补发旧工具。
+
+        补发旧工具若再失败只记录不抛 (原异常正在传播), 集合按 provider
+        真实状态保留, 后续上游 reconcile 可自愈。
+        """
+        from .utils import console_api as _ca
+
+        if candidate_published:
+            try:
+                self.mcp.local_provider.remove_tool(new_name)
+            except KeyError:
+                pass
+            self._published_tools.discard(new_name)
+
+        self.config = old_config
+        _ca.set_config(old_config)
+        self.tool_specs = old_specs
+        self._db_hidden_tools = old_hidden
+        if self.router is not None:
+            self.router.routing_config = old_config.get("routing", {})
+            self.router.upstream_tool_mapping = old_config.get(
+                "upstream_tool_mapping", {}
+            )
+            self.router.replace_tool_specs(old_specs)
+
+        if previously_published:
+            old_spec = next(
+                (s for s in old_specs if s["name"] == old_name), None
+            )
+            if old_spec is not None:
+                try:
+                    register_tool(self, old_spec)
+                    self._published_tools.add(old_name)
+                except Exception:
+                    logger.exception(
+                        "tool edit rollback: failed to re-register %r", old_name
+                    )
+                    self._published_tools.discard(old_name)
+
+    async def apply_upstream_edit(
+        self,
+        name: str,
+        config: dict,
+        *,
+        type: str | None = None,
+        confirm_dangerous: bool = False,
+        expected_revision: int | None = None,
+    ) -> dict:
+        """整体替换上游连接块 (可选改类型), 热生效。
+
+        连接块（base_url / api_key / servers / 超时等）是上游建连契约,
+        一律按契约层处理: 必须 ``confirm_dangerous=True``。明文密钥字段
+        (非 ``${VAR}`` 占位) 在触碰运行态前 fail-closed 拒绝。
+
+        顺序 (全部破坏性动作集中在 toggle 锁内):
+
+        1. 锁外静态门: 形态校验 → 明文密钥扫描 → ``${VAR}`` 解析 (仅启用上游
+           要求变量齐备; 库内永远只存占位) → 候选 config 全量 lint;
+        2. 锁内, 启用且有变更: **先构造新 client** (纯构造失败 = 零损伤),
+           启动登记新 client 后再停旧 client (先接后断, 无"无 client"空窗),
+           换 live 块, 差集自愈重放;
+        3. **落库最后做**: RevisionConflict 或发布失败 → 运行态整体回滚
+           (摘新 client、复原 live 块、按旧块重建等价 client);
+        4. 禁用上游: 只换 live 块 (保留 ``${VAR}`` 占位) + 落库, 不碰 client。
+
+        建连本身失败 (超时/不可用) 按启动语义登记不可用 client、工具仍发布,
+        不回滚 (与开机"配了但连不上"同态, connected=False 提示)。
+
+        Returns:
+            ``{changed, name, revision, enabled, connected, contract_fields}``。
+        """
+        from .core.config_lint import ERROR as LINT_ERROR
+        from .core.config_lint import LintRejected, lint_config
+        from .core.entity_edit import (
+            DangerousConfirmationRequired,
+            validate_upstream_config,
+        )
+        from .core.template_normalize import find_plaintext_secrets_in
+        from .utils import console_api as _ca
+        from .utils.config_loader import resolve_env_vars
+
+        store = self.config_store
+        if store is None:
+            raise RuntimeError(
+                "upstream editing requires the config.db entity source "
+                "(UNIHIVE_CONFIG_SOURCE=db); current source has no store"
+            )
+        if self.mcp is None or not getattr(self, "tool_specs", None):
+            raise RuntimeError("Gateway not initialized")
+
+        bundle, plan_revision = await store.read_bundle()
+        entity = next(
+            (u for u in bundle.get("upstreams") or [] if u["name"] == name), None
+        )
+        if entity is None:
+            raise KeyError(name)
+
+        contract_fields = ["upstream.config"]
+        new_type = type or entity["type"]
+        if type is not None and type != entity["type"]:
+            contract_fields.append("upstream.type")
+        if not confirm_dangerous:
+            raise DangerousConfirmationRequired(contract_fields)
+
+        # 边界形态 + 明文密钥: 任何运行态/库变更之前先拒 (存储层还会再守)。
+        clean_config = validate_upstream_config(config)
+        leaked = find_plaintext_secrets_in(clean_config, f"upstreams.{name}")
+        if leaked:
+            raise ValueError(
+                "Refusing to write plaintext secret field(s): " + ", ".join(leaked)
+            )
+
+        enabled = bool(entity["enabled"])
+        changed = new_type != entity["type"] or self._canonical_config(
+            entity.get("config") or {}
+        ) != self._canonical_config(clean_config)
+
+        # live 块形态; ${VAR} 只在运行态解析 —— 库内事实源永远保留占位 (H2)。
+        candidate_block = {
+            **copy.deepcopy(clean_config),
+            "enabled": enabled,
+            "type": new_type,
+        }
+        resolved_block, missing_env = resolve_env_vars(candidate_block, strict=False)
+        live_block = resolved_block if enabled else candidate_block
+
+        # lint 门: 只替换本块的候选完整 config 跑全量静态校验 (M7)。
+        candidate_config = copy.deepcopy(self.config)
+        candidate_config.setdefault("upstreams", {})[name] = live_block
+        lint_errors = [
+            issue
+            for issue in lint_config(candidate_config, list(self.tool_specs))
+            if issue.severity == LINT_ERROR
+        ]
+        if lint_errors:
+            raise LintRejected(lint_errors)
+
+        if not changed:
+            # 仍然过一遍乐观锁: 过期 revision 的 no-op 也要 409; 等价写入不 bump、
+            # 不翻 origin、不重连。
+            revision = await store.update_upstream_config(
+                name,
+                clean_config,
+                type=type,
+                expected_revision=(
+                    plan_revision if expected_revision is None else expected_revision
+                ),
+            )
+            _ca.set_config_db(store, revision)
+            _ca.invalidate_config_caches()
+            current_client = self.upstreams.get(name)
+            connected = bool(
+                current_client is not None
+                and getattr(current_client, "is_available", False)
+            )
+            return {
+                "changed": False,
+                "name": name,
+                "revision": revision,
+                "enabled": enabled,
+                "connected": connected,
+                "contract_fields": contract_fields,
+            }
+
+        # 启用上游但新块引用的环境变量缺失 = 新 client 必败 (如确定性 401),
+        # 在任何状态变更前拒绝 (H2)。
+        if enabled and missing_env:
+            raise ValueError(
+                "upstream config references env var(s) not set in the gateway "
+                f"environment: {', '.join(missing_env)}; set them before applying "
+                "(the stored block keeps ${VAR} placeholders)"
+            )
+
+        expected = plan_revision if expected_revision is None else expected_revision
+        connected = False
+        async with self._upstream_toggle_lock:
+            old_live_block = (self.config.get("upstreams") or {}).get(name)
+            old_client = self.upstreams.get(name)
+            new_client = None
+            if enabled:
+                # 纯构造先于一切状态变更: 构造异常时旧 client/live/库全部不动。
+                new_client = self._construct_upstream_client(name, resolved_block)
+
+            self.config.setdefault("upstreams", {})[name] = live_block
+
+            if enabled:
+                old_client_stopped = False
+                try:
+                    # 先接后断: 新 client 启动并登记到同名槽位后再停旧 client。
+                    connected = await self._start_upstream_client(
+                        name, resolved_block, new_client
+                    )
+                    if isinstance(new_client, OmniClient):
+                        _ca.set_omni_client(new_client)
+                    elif isinstance(old_client, OmniClient):
+                        _ca.set_omni_client(None)
+                    if old_client is not None and old_client is not new_client:
+                        await self._stop_one_upstream(name, old_client)
+                        # M2 (round 9 audit): 标记旧 client 已停, 供回滚决定是
+                        # 复用 old 还是重建 restored (见 _rollback_upstream_edit_locked)。
+                        old_client_stopped = True
+                    # 新连接块可能引入新 backer 可发布的工具, 重放一次差集自愈。
+                    errors: list[str] = []
+                    to_add, _ = self._toggle_tool_diff_locked(name)
+                    self._publish_tools_locked(to_add, errors)
+                    self._raise_if_toggle_errors(name, errors)
+                except BaseException:  # noqa: BLE001 - 含 CancelledError, 回滚后重抛
+                    await self._rollback_upstream_edit_locked(
+                        name=name,
+                        old_live_block=old_live_block,
+                        old_client=old_client,
+                        new_client=new_client,
+                        old_client_stopped=old_client_stopped,
+                    )
+                    raise
+            else:
+                connected = False
+
+            try:
+                revision = await store.update_upstream_config(
+                    name,
+                    clean_config,
+                    type=type,
+                    expected_revision=expected,
+                )
+            except BaseException:  # noqa: BLE001 - 落库失败 (含 409), 运行态回滚
+                # 落库失败路径: 成功段已把 old 停掉 (old_client_stopped=True 由
+                # 成功路径设, 失败点之后的 flag 在此 try 外不可见, 用成功语义:
+                # 若走到落库, 前面重连成功则 old 已停)。
+                await self._rollback_upstream_edit_locked(
+                    name=name,
+                    old_live_block=old_live_block,
+                    old_client=old_client,
+                    new_client=new_client,
+                    old_client_stopped=enabled,
+                )
+                raise
+
+            _ca.set_config_db(store, revision)
+            _ca.invalidate_config_caches()
+
+        logger.info(
+            "Upstream %r connection block edited (rev=%d, changed=%s, enabled=%s)",
+            name,
+            revision,
+            changed,
+            enabled,
+        )
+        return {
+            "changed": True,
+            "name": name,
+            "revision": revision,
+            "enabled": enabled,
+            "connected": connected,
+            "contract_fields": contract_fields,
+        }
+
+    async def _rollback_upstream_edit_locked(
+        self,
+        *,
+        name: str,
+        old_live_block: dict | None,
+        old_client,
+        new_client,
+        old_client_stopped: bool = False,
+    ) -> None:
+        """apply_upstream_edit 运行态回滚 (调用方持 toggle 锁)。
+
+        摘除已登记的新 client → live 块复原 → 旧 client 处置:
+        - 旧 client **未被停** (cancel 发生在 start new 阶段, old 仍活): 重新
+          登记回槽, 不另建 restored —— 否则 old 成无引用孤儿 + restored 双活
+          (M2, round 9 audit);
+        - 旧 client **已被停** (重连成功后落库/发布失败): 按旧 live 块重建等价
+          client 接替 (old 已死, 不能复用)。
+        复原失败只记录 (原异常正在传播), 漂移留待 reconcile 自愈。
+        """
+        from .utils import console_api as _ca
+
+        if new_client is not None and self.upstreams.get(name) is new_client:
+            self.upstreams.pop(name, None)
+            await self._stop_one_upstream(name, new_client)
+
+        if old_live_block is not None:
+            self.config.setdefault("upstreams", {})[name] = old_live_block
+
+        if old_client is None or old_client is new_client:
+            return
+
+        if not old_client_stopped:
+            # M2: old 仍活 (其 stop 从未执行/完成) → 重新登记, 杜绝孤儿 + 重复构造。
+            if self.upstreams.get(name) is not old_client:
+                self.upstreams[name] = old_client
+            if isinstance(old_client, OmniClient):
+                _ca.set_omni_client(old_client)
+            logger.warning(
+                "upstream %r edit rolled back; old client still alive, re-registered",
+                name,
+            )
+            return
+
+        # old 已停 → 按旧 live 块重建等价 client 接替。
+        try:
+            restored = self._construct_upstream_client(name, old_live_block)
+            await self._start_upstream_client(
+                name, old_live_block, restored
+            )
+            if isinstance(restored, OmniClient):
+                _ca.set_omni_client(restored)
+            logger.warning(
+                "upstream %r edit rolled back after runtime failure; "
+                "client rebuilt from previous block",
+                name,
+            )
+        except Exception:  # noqa: BLE001 - 复原失败不掩盖原异常
+            logger.exception(
+                "upstream %r edit rollback: previous client restore failed",
+                name,
+            )
+
+    # ------------------------------------------------------------------
+    # P3: 出厂模板更新 (三方合并 dry-run / 热 apply + 回滚)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _canonical_config(value: object) -> str:
+        """连接块/spec 等价比较的规范 JSON (env 已解析, 纯本地比较用)。"""
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+
+    async def _prepare_config_upgrade(self, resolutions: dict[str, str] | None) -> dict:
+        """出厂更新计划 (纯读): old 快照 + cur 实体 ↔ 新出厂 YAML 三方合并,
+
+        装配候选运行态并跑全量 lint。不写库、不碰运行态/provider。
+        """
+        from .core import config_db as _cdb
+        from .core.config_lint import ERROR as LINT_ERROR
+        from .core.config_lint import WARNING as LINT_WARNING
+        from .core.config_lint import lint_config
+
+        store = self.config_store
+        if store is None:
+            raise RuntimeError(
+                "factory upgrade requires the config.db entity source "
+                "(UNIHIVE_CONFIG_SOURCE=db); current source has no store"
+            )
+        if self.mcp is None or not getattr(self, "tool_specs", None):
+            raise RuntimeError("Gateway not initialized")
+
+        resolutions = _cdb.validate_resolutions(resolutions)
+        snapshot = await store.template_snapshot()
+        if snapshot is None:
+            raise RuntimeError(
+                "config.db has no factory template snapshot; seed first"
+            )
+        old_version, old_bundle = snapshot
+        # bundle 与 revision 同快照: apply 缺省 expected 时钉住此值 (H5)。
+        cur_bundle, plan_revision = await store.read_bundle()
+
+        config_path = getattr(self, "config_path", None)
+        new_version, new_bundle, result = _cdb.plan_config_upgrade(
+            old_bundle,
+            cur_bundle,
+            config_path=config_path,
+            resolutions=resolutions,
+        )
+        candidate, candidate_specs, candidate_hidden = (
+            _cdb.assemble_runtime_candidate(
+                result.bundle,
+                config_path=config_path,
+                strict_env=bool(getattr(self, "_strict_env", False)),
+            )
+        )
+        issues = lint_config(candidate, candidate_specs)
+        lint_errors = [i for i in issues if i.severity == LINT_ERROR]
+        lint_warnings = [i for i in issues if i.severity == LINT_WARNING]
+        summary = result.summary()
+        changed = bool(summary["added"] or summary["removed"] or summary["updated"])
+        return {
+            "resolutions": resolutions,
+            "revision": plan_revision,
+            "old_version": old_version,
+            "new_version": new_version,
+            "new_bundle": new_bundle,
+            "result": result,
+            "summary": summary,
+            "changed": changed,
+            "candidate": candidate,
+            "candidate_specs": candidate_specs,
+            "candidate_hidden": candidate_hidden,
+            "lint_errors": lint_errors,
+            "lint_warnings": lint_warnings,
+        }
+
+    @staticmethod
+    def _upgrade_issue_json(issue) -> dict:
+        return {
+            "severity": issue.severity,
+            "code": issue.code,
+            "message": issue.message,
+        }
+
+    def _upgrade_tool_impact(
+        self,
+        old_specs: list[dict],
+        candidate_specs: list[dict],
+        candidate_config: dict,
+        candidate_hidden: set[str],
+    ) -> tuple[set[str], set[str], set[str]]:
+        """全局工具发布差集 → (to_add, to_remove, republish)。
+
+        republish = 新旧都应发布但 spec 内容变化的工具 (先摘后注)。
+        wanted 按候选 config 的 enabled 链 + 候选 hidden 集计算, 不依赖
+        self.config 已切换 (dry-run 也要能算)。
+        """
+        from .core.tool_loader import filter_specs_by_enabled
+
+        wanted = {
+            spec["name"]
+            for spec in filter_specs_by_enabled(candidate_specs, candidate_config)
+            if spec.get("name") not in candidate_hidden
+        }
+        old_by_name = {s["name"]: s for s in old_specs}
+        new_by_name = {s["name"]: s for s in candidate_specs}
+        old_published = set(getattr(self, "_published_tools", set()))
+        republish = {
+            name
+            for name in old_published & wanted
+            if self._canonical_config(old_by_name.get(name))
+            != self._canonical_config(new_by_name.get(name))
+        }
+        to_remove = (old_published - wanted) | republish
+        to_add = (wanted - old_published) | republish
+        return to_add, to_remove, republish
+
+    def _upgrade_upstream_impact(
+        self, candidate_config: dict
+    ) -> tuple[list[str], list[str], list[str]]:
+        """据 live 已解析连接块与已挂载 client, 算 (attach, reconnect, detach)。"""
+        old_blocks = self.config.get("upstreams") or {}
+        new_blocks = candidate_config.get("upstreams") or {}
+        attach: list[str] = []
+        reconnect: list[str] = []
+        detach: list[str] = []
+        for name in sorted(set(old_blocks) | set(new_blocks)):
+            old_block = old_blocks.get(name)
+            new_block = new_blocks.get(name)
+            attached = name in self.upstreams
+            if not (new_block and new_block.get("enabled")):
+                if attached:
+                    detach.append(name)
+                continue
+            if not attached:
+                attach.append(name)
+            elif self._canonical_config(old_block) != self._canonical_config(
+                new_block
+            ):
+                reconnect.append(name)
+        return attach, reconnect, detach
+
+    async def preview_config_upgrade(
+        self, resolutions: dict[str, str] | None = None
+    ) -> dict:
+        """出厂更新 dry-run: 台账 + 冲突三向值 + lint + 运行态影响面, 零写入。"""
+        plan = await self._prepare_config_upgrade(resolutions)
+        result = plan["result"]
+        old_specs = list(getattr(self, "tool_specs", []))
+        to_add, to_remove, republish = self._upgrade_tool_impact(
+            old_specs,
+            plan["candidate_specs"],
+            plan["candidate"],
+            plan["candidate_hidden"],
+        )
+        attach, reconnect, detach = self._upgrade_upstream_impact(plan["candidate"])
+        return {
+            "changed": plan["changed"],
+            "revision": plan["revision"],
+            "old_version": plan["old_version"],
+            "new_version": plan["new_version"],
+            "template_changed": plan["old_version"] != plan["new_version"],
+            "summary": plan["summary"],
+            "sections": [c.to_json() for c in result.sections],
+            "upstreams_changes": [c.to_json() for c in result.upstreams],
+            "tools_changes": [c.to_json() for c in result.tools],
+            "conflicts": [c.to_json() for c in result.conflicts],
+            "resolutions_applied": sorted(plan["resolutions"]),
+            "lint_errors": [self._upgrade_issue_json(i) for i in plan["lint_errors"]],
+            "lint_warnings": [
+                self._upgrade_issue_json(i) for i in plan["lint_warnings"]
+            ],
+            "impact": {
+                "tools_added": sorted(to_add - republish),
+                "tools_removed": sorted(to_remove - republish),
+                "tools_republished": sorted(republish),
+                "upstreams_attach": attach,
+                "upstreams_reconnect": reconnect,
+                "upstreams_detach": detach,
+            },
+        }
+
+    async def apply_config_upgrade(
+        self,
+        *,
+        resolutions: dict[str, str] | None = None,
+        expected_revision: int | None = None,
+    ) -> dict:
+        """热应用出厂更新: 合并 → lint 门 → 备份 → 运行态切换 → 单事务落库。
+
+        - 仍有未裁决字段冲突 → ValueError (HTTP 400), 什么都不动;
+        - lint error → LintRejected (HTTP 422), 什么都不动;
+        - 无出厂变化 → no-op;
+        - 运行态: live config/specs/hidden/router 引用替换, 按连接块差集
+          detach/attach 上游 (建连失败仅警告, 与开机"配了但连不上"同态),
+          按发布差集摘除/重发/重注册工具;
+        - provider 切换或落库失败 → 运行态/已挂 client 尽力回滚, 库不动;
+        - 落库同时把 config_template 快照前推到新出厂 bundle (下次合并基线)。
+        """
+        import asyncio
+
+        from .core import config_db as _cdb
+        from .core.config_lint import LintRejected
+        from .core.config_upgrade import section_origins, unresolved_conflicts
+        from .utils import console_api as _ca
+
+        plan = await self._prepare_config_upgrade(resolutions)
+        result = plan["result"]
+        pending = unresolved_conflicts(result, plan["resolutions"])
+        if pending:
+            keys = ", ".join(c.key for c in pending[:10])
+            raise ValueError(
+                f"{len(pending)} unresolved field conflict(s): {keys}; "
+                "resolve each with keep_cur/accept_new before applying"
+            )
+        if plan["lint_errors"]:
+            raise LintRejected(plan["lint_errors"])
+        if not plan["changed"]:
+            return {
+                "changed": False,
+                "revision": plan["revision"],
+                "old_version": plan["old_version"],
+                "new_version": plan["new_version"],
+                "summary": plan["summary"],
+            }
+
+        store = self.config_store
+        cur_bundle = await store.load_bundle()
+        seeded_version = await store.template_version_seeded()
+        backup_dir = Path(store.db_path).parent / "backups"
+        # 备份是升级回滚的唯一凭据: 任何状态切换前先落盘。
+        backup_path = await asyncio.to_thread(
+            _cdb.write_upgrade_backup,
+            backup_dir,
+            cur_bundle,
+            revision=plan["revision"],
+            template_version_seeded=seeded_version,
+        )
+
+        candidate = plan["candidate"]
+        candidate_specs = plan["candidate_specs"]
+        candidate_hidden = plan["candidate_hidden"]
+
+        async with self._upstream_toggle_lock:
+            old_config = self.config
+            old_specs = list(self.tool_specs)
+            old_hidden = set(self._db_hidden_tools)
+            old_blocks = old_config.get("upstreams") or {}
+            new_blocks = candidate.get("upstreams") or {}
+
+            # 影响面必须在引用切换前算: 差集基于当前 live 块与已挂 client。
+            to_add, to_remove, republish = self._upgrade_tool_impact(
+                old_specs, candidate_specs, candidate, candidate_hidden
+            )
+            attach_names, reconnect_names, detach_names = (
+                self._upgrade_upstream_impact(candidate)
+            )
+
+            # 1) 运行态引用切换 (独立新 dict, 回滚只是换回引用)。
+            self.config = candidate
+            _ca.set_config(candidate)
+            self.tool_specs = candidate_specs
+            self._db_hidden_tools = candidate_hidden
+            if self.router is not None:
+                self.router.routing_config = candidate.get("routing", {})
+                self.router.upstream_tool_mapping = candidate.get(
+                    "upstream_tool_mapping", {}
+                )
+                self.router.replace_tool_specs(candidate_specs)
+
+            warnings: list[str] = []
+            attached: list[str] = []
+            reconnected: list[str] = []
+            detached: list[str] = []
+            errors: list[str] = []
+
+            # 2) 先摘工具 (M8): 任何 client 断开前, 失去 backer / spec 变更的
+            #    工具必须先从 provider 摘除, 杜绝切换窗内新调用被路由到正在
+            #    关闭的 client。此时 client 全部未动, 回滚只需补注册。
+            removed = self._unpublish_tools_locked(to_remove, errors)
+            if errors:
+                await self._rollback_config_upgrade_locked(
+                    old_config=old_config,
+                    old_specs=old_specs,
+                    old_hidden=old_hidden,
+                    to_add=set(),
+                    to_remove=to_remove,
+                    switched_upstreams=[],
+                    old_blocks=old_blocks,
+                )
+                self._raise_if_toggle_errors("factory-upgrade", errors)
+
+            # 3) 上游 client 差集收敛 (先断后连; 失败只警告, 不阻断升级)。
+            for name in sorted(set(detach_names) | set(reconnect_names)):
+                if name in self.upstreams:
+                    await self._detach_upstream_client_locked(name)
+                    if name in detach_names:
+                        detached.append(name)
+            for name in sorted(set(attach_names) | set(reconnect_names)):
+                new_block = new_blocks.get(name)
+                try:
+                    _client, connected = await self._attach_upstream_client_locked(
+                        name, new_block
+                    )
+                except asyncio.CancelledError:
+                    # M3 (round 9 audit): CancelledError 是 BaseException, 旧
+                    # ``except Exception`` 接不住 → 直接逃出锁, live config/specs
+                    # 已换、部分 client 已 detach, DB 未变 → 长期半迁移。回滚后重抛。
+                    (reconnected if name in old_blocks else attached).append(name)
+                    await self._rollback_config_upgrade_locked(
+                        old_config=old_config,
+                        old_specs=old_specs,
+                        old_hidden=old_hidden,
+                        to_add=to_add,
+                        to_remove=to_remove,
+                        switched_upstreams=attached + reconnected + detached,
+                        old_blocks=old_blocks,
+                    )
+                    raise
+                except Exception as e:  # noqa: BLE001 - 建连失败按开机语义降级
+                    warnings.append(
+                        f"upstream {name}: attach failed: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    logger.exception("factory upgrade: attach upstream %r failed", name)
+                    # 仍记入切换清单: 失败的 client 可能已登记, 回滚路径要尝试复原。
+                    (reconnected if name in old_blocks else attached).append(name)
+                    continue
+                if name in reconnect_names or name in old_blocks:
+                    reconnected.append(name)
+                else:
+                    attached.append(name)
+                if not connected:
+                    warnings.append(
+                        f"upstream {name}: configured but not connected "
+                        "(tools stay published; same semantics as startup)"
+                    )
+
+            # 4) 新 client 就位后再发布新工具/重发布 (单工具失败收集, 必须全
+            #    成功才落库; 失败 → client 与 provider 整体回滚)。
+            added = self._publish_tools_locked(to_add, errors)
+            if errors:
+                await self._rollback_config_upgrade_locked(
+                    old_config=old_config,
+                    old_specs=old_specs,
+                    old_hidden=old_hidden,
+                    to_add=to_add,
+                    to_remove=to_remove,
+                    switched_upstreams=attached + reconnected + detached,
+                    old_blocks=old_blocks,
+                )
+                self._raise_if_toggle_errors("factory-upgrade", errors)
+
+            # 4) 单事务落库 + 快照前推 (乐观锁)。失败 → 运行态尽力回滚。
+            # expected 缺省钉住 plan 时刻 revision: plan→apply 之间若有并发
+            # 实体写入, 全表重写必须失败回滚, 不得物理抹掉并发改动 (H5)。
+            expected = (
+                plan["revision"]
+                if expected_revision is None
+                else expected_revision
+            )
+            try:
+                revision = await store.apply_upgrade_bundle(
+                    plan["new_version"],
+                    plan["new_bundle"],
+                    result.bundle,
+                    section_origins=section_origins(
+                        plan["new_bundle"], result.bundle
+                    ),
+                    expected_revision=expected,
+                )
+            except BaseException:  # noqa: BLE001 - M3: 含 CancelledError, 回滚后重抛
+                await self._rollback_config_upgrade_locked(
+                    old_config=old_config,
+                    old_specs=old_specs,
+                    old_hidden=old_hidden,
+                    to_add=to_add,
+                    to_remove=to_remove,
+                    switched_upstreams=attached + reconnected + detached,
+                    old_blocks=old_blocks,
+                )
+                raise
+
+        _ca.set_config_db(store, revision)
+        _ca.invalidate_config_caches()
+        logger.info(
+            "Factory upgrade applied: template %s -> %s, rev=%d, "
+            "tools +%d/-%s/republish %d, upstreams attached=%s reconnected=%s "
+            "detached=%s, backup=%s",
+            plan["old_version"][:12],
+            plan["new_version"][:12],
+            revision,
+            len(added),
+            len(removed),
+            len(republish),
+            attached,
+            reconnected,
+            detached,
+            backup_path,
+        )
+        return {
+            "changed": True,
+            "revision": revision,
+            "old_version": plan["old_version"],
+            "new_version": plan["new_version"],
+            "summary": plan["summary"],
+            "sections": [c.to_json() for c in result.sections],
+            "upstreams_changes": [c.to_json() for c in result.upstreams],
+            "tools_changes": [c.to_json() for c in result.tools],
+            "resolutions_applied": sorted(plan["resolutions"]),
+            "lint_warnings": [
+                self._upgrade_issue_json(i) for i in plan["lint_warnings"]
+            ],
+            "tools_added": sorted(set(added) - republish),
+            "tools_removed": sorted(set(removed) - republish),
+            "tools_republished": sorted(republish),
+            "upstreams_attached": attached,
+            "upstreams_reconnected": reconnected,
+            "upstreams_detached": detached,
+            "warnings": warnings,
+            "backup_path": str(backup_path),
+        }
+
+    async def _rollback_config_upgrade_locked(
+        self,
+        *,
+        old_config: dict,
+        old_specs: list[dict],
+        old_hidden: set[str],
+        to_add: set[str],
+        to_remove: set[str],
+        switched_upstreams: list[str],
+        old_blocks: dict,
+    ) -> None:
+        """升级失败回滚 (正向顺序的逆序): 摘新工具 → client 复原 → 补注册
+        旧工具 → 运行态引用复位。
+
+        与正向 "先摘工具 → client 切换 → 再发布" 严格互逆: 旧 client 复原
+        之后才补注册旧工具, 杜绝补回的工具瞬间路由到已关闭 client。所有
+        补发/重连均尽力而为, 失败只记录 (原异常正在传播); 复位后
+        _published_tools 以编辑前快照为准, 漂移留待上游 reconcile 自愈。
+        """
+        from .utils import console_api as _ca
+
+        for name in sorted(to_add):
+            try:
+                self.mcp.local_provider.remove_tool(name)
+            except KeyError:
+                pass
+            except Exception:  # noqa: BLE001
+                logger.exception("upgrade rollback: remove %r failed", name)
+            self._published_tools.discard(name)
+
+        for name in switched_upstreams:
+            old_block = old_blocks.get(name)
+            try:
+                if name in self.upstreams:
+                    await self._detach_upstream_client_locked(name)
+                if old_block and old_block.get("enabled"):
+                    await self._attach_upstream_client_locked(name, old_block)
+            except Exception:  # noqa: BLE001
+                logger.exception("upgrade rollback: restore upstream %r failed", name)
+
+        old_by_name = {s["name"]: s for s in old_specs}
+        for name in sorted(to_remove):
+            spec = old_by_name.get(name)
+            if spec is None:
+                continue
+            try:
+                register_tool(self, spec)
+                self._published_tools.add(name)
+            except Exception:  # noqa: BLE001
+                logger.exception("upgrade rollback: re-register %r failed", name)
+                self._published_tools.discard(name)
+
+        self.config = old_config
+        _ca.set_config(old_config)
+        self.tool_specs = old_specs
+        self._db_hidden_tools = old_hidden
+        if self.router is not None:
+            self.router.routing_config = old_config.get("routing", {})
+            self.router.upstream_tool_mapping = old_config.get(
+                "upstream_tool_mapping", {}
+            )
+            self.router.replace_tool_specs(old_specs)
+
+    # ------------------------------------------------------------------
+    # P4: FQGate OpenAPI 实时导入 (origin='user' 工具行热注册)
+    # ------------------------------------------------------------------
+
+    async def _prepare_openapi_import(
+        self, upstream_name: str, selected_names: list[str] | None
+    ) -> dict:
+        """OpenAPI 导入计划 (纯读): 活拉 OpenAPI + tools/list → 转换 → 差异 →
+        候选运行态 → lint → 发布差集 → YAML 片段。不写库、不碰运行态/provider。
+
+        - 上游未在 config 注册 → KeyError (HTTP 404);
+        - 已配置但当前未挂载 client (禁用/启动建连失败) → RuntimeError (503);
+        - client 不具备 OpenAPI 导入能力 (非 MCP 网关型) → ValueError (400);
+        - 上游拉取异常 (OpenApiFetchError / tools/list !ok) → 原样抛 (502)。
+        """
+        from .core import config_db as _cdb
+        from .core import openapi_import as _oi
+        from .core.config_lint import ERROR as LINT_ERROR
+        from .core.config_lint import WARNING as LINT_WARNING
+        from .core.config_lint import lint_config
+
+        store = self.config_store
+        if store is None:
+            raise RuntimeError(
+                "OpenAPI import requires the config.db entity source "
+                "(UNIHIVE_CONFIG_SOURCE=db); current source has no store"
+            )
+        if self.mcp is None or not getattr(self, "tool_specs", None):
+            raise RuntimeError("Gateway not initialized")
+
+        client = self.upstreams.get(upstream_name)
+        if client is None:
+            if upstream_name not in (self.config.get("upstreams") or {}):
+                raise KeyError(upstream_name)
+            raise RuntimeError(
+                f"upstream {upstream_name!r} is configured but not connected "
+                "(disabled or startup attach failed)"
+            )
+        fetch_openapi = getattr(client, "fetch_openapi", None)
+        list_tools_raw = getattr(client, "list_tools_raw", None)
+        if not callable(fetch_openapi) or not callable(list_tools_raw):
+            raise ValueError(
+                f"upstream {upstream_name!r} does not support OpenAPI import "
+                "(client has no fetch_openapi/list_tools_raw)"
+            )
+
+        openapi_doc = await fetch_openapi()
+        raw = await list_tools_raw()
+        if not getattr(raw, "ok", False):
+            raise RuntimeError(
+                f"upstream {upstream_name!r} tools/list failed: "
+                f"{getattr(raw, 'error', None)}"
+            )
+
+        entities, unmapped = _oi.convert_openapi_tools(
+            openapi_doc, list(raw.tools or [])
+        )
+        # bundle 与 revision 同快照: apply 缺省 expected 时钉住此值 (H5)。
+        cur_bundle, plan_revision = await store.read_bundle()
+        plan = _oi.plan_openapi_import(
+            cur_bundle,
+            entities,
+            upstream_label=upstream_name,
+            unmapped=unmapped,
+        )
+        selected_set = set(selected_names) if selected_names is not None else None
+        # change_entities 对不在 added/changed 集的名字抛 ValueError
+        selected = plan.change_entities(selected_set)
+        merged_bundle = _oi.merge_imported_tools(cur_bundle, selected)
+        final_names = [e["name"] for e in selected]
+        # 落库行取合并后的实体: 已存在行带保留的 position/门控列 (store 还会
+        # 再保一次, 这里保证候选运行态与落库行同源)。
+        upsert_rows = [
+            row for row in merged_bundle["tools"] if row["name"] in set(final_names)
+        ]
+
+        config_path = getattr(self, "config_path", None)
+        candidate, candidate_specs, candidate_hidden = (
+            _cdb.assemble_runtime_candidate(
+                merged_bundle,
+                config_path=config_path,
+                strict_env=bool(getattr(self, "_strict_env", False)),
+            )
+        )
+        issues = lint_config(candidate, candidate_specs)
+        to_add, to_remove, republish = self._upgrade_tool_impact(
+            list(self.tool_specs),
+            candidate_specs,
+            candidate,
+            candidate_hidden,
+        )
+        fragment = _oi.render_yaml_fragment(selected)
+        return {
+            "revision": plan_revision,
+            "plan": plan,
+            "unmapped": plan.unmapped,
+            "selected": final_names,
+            "upsert_rows": upsert_rows,
+            "cur_bundle": cur_bundle,
+            "candidate": candidate,
+            "candidate_specs": candidate_specs,
+            "candidate_hidden": candidate_hidden,
+            "lint_errors": [i for i in issues if i.severity == LINT_ERROR],
+            "lint_warnings": [i for i in issues if i.severity == LINT_WARNING],
+            "to_add": to_add,
+            "to_remove": to_remove,
+            "republish": republish,
+            "yaml_fragment": fragment,
+        }
+
+    async def preview_openapi_import(
+        self,
+        *,
+        upstream: str = "THS-LOCAL-GATEWAY",
+        tools: list[str] | None = None,
+    ) -> dict:
+        """OpenAPI 导入 dry-run: 差异台账 + lint + 发布影响面 + YAML 片段, 零写入。"""
+        prep = await self._prepare_openapi_import(upstream, tools)
+        plan = prep["plan"]
+        return {
+            "changed": bool(prep["selected"]),
+            "revision": prep["revision"],
+            "upstream": upstream,
+            "summary": plan.summary(),
+            "changes": [c.to_json() for c in plan.changes],
+            "unmapped": [u.to_json() for u in prep["unmapped"]],
+            "removed": list(plan.removed),
+            "selected": prep["selected"],
+            "lint_errors": [self._upgrade_issue_json(i) for i in prep["lint_errors"]],
+            "lint_warnings": [
+                self._upgrade_issue_json(i) for i in prep["lint_warnings"]
+            ],
+            "impact": {
+                "tools_added": sorted(prep["to_add"] - prep["republish"]),
+                "tools_removed": sorted(prep["to_remove"] - prep["republish"]),
+                "tools_republished": sorted(prep["republish"]),
+                # 导入只动工具契约, 永不重连/断开上游
+                "upstreams_attach": [],
+                "upstreams_reconnect": [],
+                "upstreams_detach": [],
+            },
+            "yaml_fragment": prep["yaml_fragment"],
+        }
+
+    async def apply_openapi_import(
+        self,
+        *,
+        upstream: str = "THS-LOCAL-GATEWAY",
+        tools: list[str] | None = None,
+        confirm_dangerous: bool = False,
+        expected_revision: int | None = None,
+    ) -> dict:
+        """热应用 OpenAPI 导入: lint 门 → 强确认 → 备份 → 运行态切换 →
+        provider 摘/注 (只 add/republish, **永不删除**) → 单事务 upsert_tools。
+
+        provider 切换或落库失败 → 运行态/provider 尽力回滚, 库不动;
+        ``plan.removed`` 仅作顾问信息展示, apply 路径不删任何工具行。
+        """
+        from .core import config_db as _cdb
+        from .core.config_lint import LintRejected
+        from .core.entity_edit import DangerousConfirmationRequired
+        from .utils import console_api as _ca
+
+        prep = await self._prepare_openapi_import(upstream, tools)
+        if prep["lint_errors"]:
+            raise LintRejected(prep["lint_errors"])
+
+        plan = prep["plan"]
+        selected = prep["selected"]
+        if not selected:
+            return {
+                "changed": False,
+                "revision": prep["revision"],
+                "upstream": upstream,
+                "summary": plan.summary(),
+            }
+
+        # 导入即新增/改写工具契约 (params/mapping/routing), 一律契约层强确认。
+        if not confirm_dangerous:
+            raise DangerousConfirmationRequired(
+                [f"tool:{name}:contract" for name in selected]
+            )
+
+        store = self.config_store
+        seeded_version = await store.template_version_seeded()
+        backup_dir = Path(store.db_path).parent / "backups"
+        backup_path = await asyncio.to_thread(
+            _cdb.write_upgrade_backup,
+            backup_dir,
+            prep["cur_bundle"],
+            revision=prep["revision"],
+            template_version_seeded=seeded_version,
+        )
+
+        candidate = prep["candidate"]
+        candidate_specs = prep["candidate_specs"]
+        candidate_hidden = prep["candidate_hidden"]
+        to_add, to_remove, republish = (
+            prep["to_add"], prep["to_remove"], prep["republish"]
+        )
+
+        async with self._upstream_toggle_lock:
+            old_config = self.config
+            old_specs = list(self.tool_specs)
+            old_hidden = set(self._db_hidden_tools)
+
+            # 1) 运行态引用切换 (独立新 dict, 回滚只是换回引用)。
+            self.config = candidate
+            _ca.set_config(candidate)
+            self.tool_specs = candidate_specs
+            self._db_hidden_tools = candidate_hidden
+            if self.router is not None:
+                self.router.routing_config = candidate.get("routing", {})
+                self.router.upstream_tool_mapping = candidate.get(
+                    "upstream_tool_mapping", {}
+                )
+                self.router.replace_tool_specs(candidate_specs)
+
+            # 2) provider: 契约变化的先摘, 新增/重注的后发; 无删除语义。
+            errors: list[str] = []
+            removed = self._unpublish_tools_locked(to_remove, errors)
+            added = self._publish_tools_locked(to_add, errors)
+            if errors:
+                await self._rollback_config_upgrade_locked(
+                    old_config=old_config,
+                    old_specs=old_specs,
+                    old_hidden=old_hidden,
+                    to_add=to_add,
+                    to_remove=to_remove,
+                    switched_upstreams=[],
+                    old_blocks={},
+                )
+                self._raise_if_toggle_errors("openapi-import", errors)
+
+            # 3) 单事务批量落库 (乐观锁; origin 恒 user, 门控列 store 保留)。
+            # expected 缺省钉住 prep 时刻 revision, plan→apply 之间的并发
+            # 写入必须让导入失败回滚, 不得被批量 upsert 静默冲掉 (H5)。
+            expected = (
+                prep["revision"]
+                if expected_revision is None
+                else expected_revision
+            )
+            try:
+                revision = await store.upsert_tools(
+                    prep["upsert_rows"], expected_revision=expected
+                )
+            except Exception:
+                await self._rollback_config_upgrade_locked(
+                    old_config=old_config,
+                    old_specs=old_specs,
+                    old_hidden=old_hidden,
+                    to_add=to_add,
+                    to_remove=to_remove,
+                    switched_upstreams=[],
+                    old_blocks={},
+                )
+                raise
+
+        _ca.set_config_db(store, revision)
+        _ca.invalidate_config_caches()
+        logger.info(
+            "OpenAPI import applied from %s: rev=%d, tools +%s/republish %s, "
+            "unmapped=%d, backup=%s",
+            upstream,
+            revision,
+            sorted(set(added) - republish),
+            sorted(republish),
+            len(prep["unmapped"]),
+            backup_path,
+        )
+        return {
+            "changed": True,
+            "revision": revision,
+            "upstream": upstream,
+            "summary": plan.summary(),
+            "changes": [c.to_json() for c in plan.changes],
+            "unmapped": [u.to_json() for u in prep["unmapped"]],
+            "removed": list(plan.removed),
+            "selected": selected,
+            "lint_warnings": [
+                self._upgrade_issue_json(i) for i in prep["lint_warnings"]
+            ],
+            "tools_added": sorted(set(added) - republish),
+            "tools_removed": sorted(set(removed) - republish),
+            "tools_republished": sorted(republish),
+            "upstreams_attached": [],
+            "upstreams_reconnected": [],
+            "upstreams_detached": [],
+            "warnings": [],
+            "backup_path": str(backup_path),
+            "yaml_fragment": prep["yaml_fragment"],
+        }
+
+    # ------------------------------------------------------------------
     # 热开关内部步骤 (调用方须持 _upstream_toggle_lock)
     # ------------------------------------------------------------------
+
+    def _publishable_specs(self, specs: list[dict] | None) -> list[dict]:
+        """当前真正应发布到对外 /mcp 的 spec: env 门控后再过
+
+        ``filter_specs_by_enabled`` (多 backer: 至少一个启用才保留) 与
+        ``publish_mode=hidden`` 下架集。启动注册、上游热开关差集、单工具
+        热编辑三处共用同一判定, 保证 hidden 工具不会从任何路径漏回。
+        """
+        from .core.tool_loader import filter_specs_by_enabled
+
+        if not specs:
+            return []
+        # getattr 兜底: __new__ 旁路 __init__ 的热开关测试不构造该属性。
+        hidden = getattr(self, "_db_hidden_tools", None) or set()
+        return [
+            spec
+            for spec in filter_specs_by_enabled(specs, self.config)
+            if spec.get("name") not in hidden
+        ]
 
     def _toggle_tool_diff_locked(self, name: str) -> tuple[set[str], set[str]]:
         """计算单个上游背书工具的发布差集 → (to_add, to_remove)。
@@ -713,11 +2247,9 @@ class GatewayServer:
         backing_upstreams 含 name 的工具取交 —— 自愈重放时只碰本上游的
         工具, 不顺手摘补其他上游的漂移。
         """
-        from .core.tool_loader import backing_upstreams, filter_specs_by_enabled
+        from .core.tool_loader import backing_upstreams
 
-        wanted = {
-            s["name"] for s in filter_specs_by_enabled(self.tool_specs, self.config)
-        }
+        wanted = {s["name"] for s in self._publishable_specs(self.tool_specs)}
         affected: set[str] = set()
         for spec in self.tool_specs:
             routing_key = spec.get("routing") or spec["name"]
@@ -1067,9 +2599,26 @@ class GatewayServer:
                 self._active_requests -= 1
 
     def _load_all_tools(self) -> list[dict]:
-        """Delegate to tool_loader.load_all_tools for YAML merge."""
-        from .core.tool_loader import load_all_tools
+        """全量工具 spec (运行时 env 门控后)。
+
+        db 模式: 实体装配时 290 条已在 config['tools'], 这里只补运行时
+        requires_env 门控 (与 yaml 模式 load_all_tools 默认行为一致),
+        不再回读任何 tools_*.yaml。
+        yaml 模式: 委托 tool_loader 合并内联 + 生成文件。
+        """
+        from .core.tool_loader import filter_specs_by_env, load_all_tools
+
+        if self._uses_db_source():
+            return filter_specs_by_env(list(self.config.get("tools") or []))
         return load_all_tools(self.config_path, self.config)
+
+    def _uses_db_source(self) -> bool:
+        """配置事实源是否为 config.db。__init__ 正常路径读实例属性;
+        __new__ 旁路 __init__ 的测试回落环境变量 (autouse fixture 钉 yaml)。"""
+        flag = getattr(self, "_db_mode", None)
+        if flag is not None:
+            return bool(flag)
+        return os.environ.get("UNIHIVE_CONFIG_SOURCE", "db").strip().lower() != "yaml"
 
     async def _create_and_register_gateway_mcp(
         self, tool_specs: list[dict] | None = None
@@ -1113,11 +2662,9 @@ class GatewayServer:
                 self.config.get("upstream_tool_mapping", {}),
                 strict=strict,
             )
-            # 发布集按上游 enabled 过滤: 全部 backer 禁用的工具不进对外 /mcp。
+            # 发布集 = 至少一个启用 backer 且未被 publish_mode=hidden 下架。
             # 热开关见 set_upstream_enabled(), 启动语义与其差集计算一致。
-            from .core.tool_loader import filter_specs_by_enabled
-
-            publishable = filter_specs_by_enabled(specs, self.config)
+            publishable = self._publishable_specs(specs)
             registered = register_tools_from_config(self, publishable)
             self._published_tools = set(registered)
             hidden = len(specs) - len(registered)
@@ -1269,6 +2816,11 @@ class GatewayServer:
         # 调 stop() 清 partial state, 允许同实例重试。Pre-fix: _running 在
         # initialize 之前设 True, 失败时留在 True, 重试 start() 会状态错位。
         self._running = True
+        # L8 (round 9 audit): stop() 末尾 set _shutdown_event 唤醒旧 watcher,
+        # 但从不 clear → 同实例 stdio restart 时新 watcher `await event.wait()`
+        # 立即返回, cancel 当前 main_task → run_stdio_async 没跑就被杀。
+        # 建 watcher 前清掉, 让残留 set 不影响重启。
+        self._shutdown_event.clear()
         try:
             await self.initialize()
         except BaseException:
@@ -1313,10 +2865,6 @@ class GatewayServer:
 
     async def serve_http(self, host: str = None, port: int = None, mcp_path: str = None):
         """HTTP 模式: 同时 serve MCP 接口和 Console 管理 UI."""
-        gw_cfg = self.config.get("gateway", {})
-        host = host if host is not None else gw_cfg.get("host", "127.0.0.1")
-        port = port if port is not None else gw_cfg.get("port", 18080)
-        mcp_path = mcp_path if mcp_path is not None else gw_cfg.get("mcp_path", "/mcp")
         self._running = True
         # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并
         # 调 stop() 清 partial state, 允许同实例重试。
@@ -1325,6 +2873,14 @@ class GatewayServer:
         except BaseException:
             await self.stop()
             raise
+        # M5 (round 9 audit): host/port/mcp_path 默认值必须在 initialize() 之后
+        # 从 self.config 取。M9 路径下 __init__ 预检失败时 self.config={} (或无
+        # gateway 段); 旧实现在 init 前快照 → 静默回落 127.0.0.1:18080/mcp,
+        # DB/config.yaml 改的端口永不生效。显式参数 (CLI) 仍优先。
+        gw_cfg = self.config.get("gateway", {})
+        host = host if host is not None else gw_cfg.get("host", "127.0.0.1")
+        port = port if port is not None else gw_cfg.get("port", 18080)
+        mcp_path = mcp_path if mcp_path is not None else gw_cfg.get("mcp_path", "/mcp")
 
         # Console API handlers (delegates to console_api.py)
         from .utils import console_api as _ca
@@ -1346,9 +2902,19 @@ class GatewayServer:
             return JSONResponse(_ca.get_fuyao_cache())
 
         async def _fuyao_cache_put_api(req: Request):
-            body = await req.json()
-            payload = body.get("fuyao_cache") or {}
-            expected_version = body.get("version")
+            # M3: 非法 JSON 体 → 400 (旧实现裸 await req.json() 直接 500);
+            # fuyao_cache 缺失/null 不再被 ``or {}`` 静默当成清空。
+            try:
+                body = await req.json()
+            except Exception:
+                return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+            try:
+                payload, expected_version = _ca.parse_fuyao_cache_put_body(body)
+            except ValueError as e:
+                return JSONResponse(
+                    {"error": "validation_failed", "message": str(e)},
+                    status_code=400,
+                )
             try:
                 result = await _ca.save_fuyao_cache(
                     payload,
@@ -1422,61 +2988,83 @@ class GatewayServer:
         # 显式传 allowed_hosts / allowed_origins / host_origin_protection,
         # 不依赖 FastMCP 4.x 的默认值 (默认开, 但版本升级可能改),
         # 始终满足 MCP 2025-11-25 spec 对 DNS-rebinding 防护的 MUST 要求。
-        mcp_app = self.mcp.http_app(
-            path="/",
-            allowed_hosts=["127.0.0.1:*", "localhost:*"],
-            allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
-            host_origin_protection=True,
-        )
+        # H4 (round 9 audit): 路由装配段 (mcp.http_app / NoSlashStarlette /
+        # setup_console_auth) 抛错时旧实现绕过 stop() → 半建 inner_app/mcp
+        # 泄漏。装配段纳入 try, 崩溃也 stop()。上面的 handler 定义只声明闭包,
+        # 不会抛, 留在 try 外。
+        try:
+            mcp_app = self.mcp.http_app(
+                path="/",
+                allowed_hosts=["127.0.0.1:*", "localhost:*"],
+                allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
+                host_origin_protection=True,
+            )
 
-        # Mount("/mcp", ...) 对子路径 /mcp/foo 会剥前缀成 /foo,
-        # 对完全相等的 /mcp 则不剥, 透传 /mcp 给 inner app, 但 mcp_app
-        # 的 route 挂在 "/" 上, 不匹配会 404。
-        # 用 make_mcp_path_canonicalizer 把 /mcp 改写成 /mcp/, 让 Mount 能命中。
-        # 用 NoSlashStarlette 关掉 Starlette 默认的 redirect_slashes=True,
-        # 否则 POST /mcp → 307 → /mcp/, 多数 MCP 客户端不会自动跟 POST 307。
-        # 来自 src.core.mcp_factory (Refactor 1, 2026-09-08)。
-        from .core.mcp_factory import NoSlashStarlette, make_mcp_path_canonicalizer
+            # Mount("/mcp", ...) 对子路径 /mcp/foo 会剥前缀成 /foo,
+            # 对完全相等的 /mcp 则不剥, 透传 /mcp 给 inner app, 但 mcp_app
+            # 的 route 挂在 "/" 上, 不匹配会 404。
+            # 用 make_mcp_path_canonicalizer 把 /mcp 改写成 /mcp/, 让 Mount 能命中。
+            # 用 NoSlashStarlette 关掉 Starlette 默认的 redirect_slashes=True,
+            # 否则 POST /mcp → 307 → /mcp/, 多数 MCP 客户端不会自动跟 POST 307。
+            # 来自 src.core.mcp_factory (Refactor 1, 2026-09-08)。
+            from .core.mcp_factory import NoSlashStarlette, make_mcp_path_canonicalizer
 
-        inner_app = NoSlashStarlette(
-            lifespan=mcp_app.lifespan,
-            routes=[
-                Mount(mcp_path, app=mcp_app),
-                Mount("/static", StaticFiles(directory=str(_ca._PROJECT_ROOT / "static"), html=False)),
-                Route("/", _index_route),
-                Route("/console.html", _index_route),
-                Route("/api/status", _status_api),
-                *_ca.build_omni_routes(),
-                *_ca.build_mcp_browser_routes(),
-                Route("/api/upstreams/{name}/metrics", _ca.upstream_metrics_api),
-                *_proxy_routes(),
-                Route("/api/interfaces", _interfaces_api),
-                Route("/api/config", _config_api),
-                Route("/api/config/fuyao-cache", _fuyao_cache_get_api),
-                Route("/api/config/fuyao-cache", _fuyao_cache_put_api, methods=["PUT"]),
-                # 2026-09-18: 上游启用/禁用热开关 (鉴权随 /api/* 中间件继承)
-                *_ca.build_upstream_routes(),
-                Route("/health", _health_api),
-                Route("/api/mcp-tools-list", _mcp_tools_api),
-            ]
-        )
+            inner_app = NoSlashStarlette(
+                lifespan=mcp_app.lifespan,
+                routes=[
+                    Mount(mcp_path, app=mcp_app),
+                    # H1 (round 10 audit): 用布局感知的 _ca.STATIC_DIR (dev=repo/static,
+                    # installed=site-packages/static 经 wheel force-include 落地);
+                    # 旧实现写死 4-parents 目录, 非 editable wheel 安装下目录不存在,
+                    # StaticFiles 构造期即 raise → 网关拒启。
+                    Mount("/static", StaticFiles(directory=_ca.STATIC_DIR, html=False)),
+                    Route("/", _index_route),
+                    Route("/console.html", _index_route),
+                    Route("/api/status", _status_api),
+                    *_ca.build_omni_routes(),
+                    *_ca.build_mcp_browser_routes(),
+                    Route("/api/upstreams/{name}/metrics", _ca.upstream_metrics_api),
+                    *_proxy_routes(),
+                    Route("/api/interfaces", _interfaces_api),
+                    Route("/api/config", _config_api),
+                    Route("/api/config/fuyao-cache", _fuyao_cache_get_api),
+                    Route("/api/config/fuyao-cache", _fuyao_cache_put_api, methods=["PUT"]),
+                    # 2026-09-18: 上游启用/禁用热开关 (鉴权随 /api/* 中间件继承)
+                    *_ca.build_upstream_routes(),
+                    Route("/health", _health_api),
+                    Route("/api/mcp-tools-list", _mcp_tools_api),
+                ]
+            )
 
-        # HIGH #4 (console needs login): wire console_auth into inner_app when
-        # console config is set in YAML or all three UNIHIVE_CONSOLE_* env vars.
-        # ConsoleAuthMiddleware exempts /mcp, /health, /login, /logout, /static —
-        # so MCP clients and health probes keep working. If not configured,
-        # leave the console open and log why (backward compatible; opt-in auth).
-        auth_cfg, auth_reason = _get_console_auth_config(self.config)
-        if auth_cfg is not None:
-            from .console_auth import setup_console_auth
-            setup_console_auth(inner_app, auth_cfg)
-            logger.info("Console auth enabled (UNIHIVE_CONSOLE_* set)")
-        else:
-            logger.warning(f"Console auth disabled: {auth_reason}")
+            # HIGH #4 (console needs login): wire console_auth into inner_app when
+            # console config is set in YAML or all three UNIHIVE_CONSOLE_* env vars.
+            # ConsoleAuthMiddleware exempts /mcp, /health, /login, /logout, /static —
+            # so MCP clients and health probes keep working. If not configured,
+            # leave the console open and log why (backward compatible; opt-in auth).
+            auth_cfg, auth_reason = _get_console_auth_config(self.config)
+            if auth_cfg is not None:
+                from .console_auth import setup_console_auth
+                # M10: 传 mcp_path 让配置的 MCP 端点免鉴权 (不再写死 /mcp)。
+                setup_console_auth(inner_app, auth_cfg, mcp_path=mcp_path)
+                logger.info("Console auth enabled (UNIHIVE_CONSOLE_* set)")
+            else:
+                logger.warning(f"Console auth disabled: {auth_reason}")
 
-        app = make_mcp_path_canonicalizer(inner_app, mcp_path)
-        log_level = self.config.get("logging", {}).get("level", "info").lower()
-        config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
+            app = make_mcp_path_canonicalizer(inner_app, mcp_path)
+            log_level = self.config.get("logging", {}).get("level", "info").lower()
+            # L12 (round 9 audit): uvicorn 默认 timeout_graceful_shutdown=None
+            # (无硬上限), 长闲连接会拖住 SIGTERM 远超 stop() 的 max_wait=10s。
+            # 与 stop() 的 max_wait 对齐, 让 uvicorn 在同一预算内强收连接。
+            config = uvicorn.Config(
+                app,
+                host=host,
+                port=port,
+                log_level=log_level,
+                timeout_graceful_shutdown=10,
+            )
+        except BaseException:
+            await self.stop()
+            raise
 
         # 端口可用性预检: uvicorn 绑定失败只 log + 退出 3, 不 raise OSError,
         # 拿不到干净错误。预检给一个明确消息 + 退出码 2。
@@ -1529,8 +3117,8 @@ class GatewayServer:
         _ca.set_omni_client(None)
         # 2026-09-18: 摘掉热开关回调目标, 防止 stop 后 /api 仍调到死 server
         _ca.set_gateway_server(None)
-        # P1: 摘掉 config.db 写目标与 overlay 镜像, 支持同实例 stop/start
-        _ca.set_config_store(None)
+        # v2: 摘掉 config.db 写目标与实体模式标记, 支持同实例 stop/start
+        _ca.set_config_db(None)
         # LOW-1 (2026-09-14 audit): 显式关掉 probe executor, 不依赖 atexit
         # (stdio transport 下 atexit 不保证触发)。
         _ca._shutdown_probe_executor()
@@ -1613,6 +3201,7 @@ class GatewayServer:
         # 热开关状态一并归零, 支持同实例 stop/start 循环
         self._published_tools = set()
         self.tool_specs = []
+        self._db_hidden_tools = set()
         self._initialized = False
 
         # M1 (2026-09-15 MCP 二次审视): 重置全局限流器单例，支持 stop/start 循环

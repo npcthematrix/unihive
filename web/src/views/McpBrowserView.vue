@@ -24,6 +24,8 @@ import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
 import HighlightText from '@/components/HighlightText.vue'
 import RawSchemaPanel from './mcp-browser/RawSchemaPanel.vue'
+import OpenapiImportDialog from './mcp-browser/OpenapiImportDialog.vue'
+import type { OpenapiImportApplyResult } from '@/api/config'
 import {
   UPSTREAM_ORDER,
   UPSTREAM_TITLE,
@@ -67,6 +69,18 @@ const searchInputRef = ref()
 const expandedNames = ref<Set<string>>(new Set())
 const copiedName = ref('')
 
+/** OpenAPI 实时导入对话框 (仅 ThsLocalClient 类上游具备 fetch_openapi)。 */
+const importVisible = ref(false)
+
+function openImport(): void {
+  importVisible.value = true
+}
+
+function onImportApplied(_result: OpenapiImportApplyResult): void {
+  // 工具已热注册, 原始台账也刷新一下 (新增工具此刻应出现在上游 tools/list)。
+  if (selected.value) void fetchTools(selected.value)
+}
+
 let debounceTimer: ReturnType<typeof setTimeout> | undefined
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 /**
@@ -102,6 +116,9 @@ const filtersActive = computed(() => hasActiveFilters(appliedQuery.value, toggle
 const metaText = computed(() => (payload.value ? summarizePayload(payload.value) : ''))
 
 const currentUpstream = computed(() => upstreams.value.find((u) => u.name === selected.value))
+
+/** 只有 ThsLocalClient 暴露 openapi.json + 原始 tools/list, 按钮不对其他上游显示。 */
+const importSupported = computed(() => currentUpstream.value?.type === 'ThsLocalClient')
 
 // ---- 搜索 ----
 watch(rawQuery, (value) => {
@@ -302,6 +319,15 @@ onUnmounted(() => {
         </h2>
         <div class="toolbar-actions">
           <span v-if="metaText" class="mcp-meta">{{ metaText }}</span>
+          <el-button
+            v-if="importSupported"
+            size="small"
+            type="warning"
+            plain
+            @click="openImport"
+          >
+            OpenAPI 导入
+          </el-button>
           <el-button size="small" @click="copyAll">复制全部 tool 名</el-button>
           <el-button size="small" :icon="Refresh" :loading="loading" @click="refresh">
             刷新
@@ -505,6 +531,12 @@ onUnmounted(() => {
         </div>
       </section>
     </div>
+
+    <OpenapiImportDialog
+      v-model="importVisible"
+      :upstream="selected"
+      @applied="onImportApplied"
+    />
   </el-card>
 </template>
 

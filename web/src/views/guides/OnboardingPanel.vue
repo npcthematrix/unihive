@@ -28,8 +28,8 @@
       </div>
       <CodeBlock :code="START_HTTP" />
       <p>启动后, 控制台和 HTTP 网关共用端口 <code>http://127.0.0.1:18080</code> (MCP 接口在 <code>/mcp</code> 子路径下)。</p>
-      <h4>1.2 配置文件</h4>
-      <p>上游数据源在 <code>config/upstreams.yaml</code> 中配置。修改后需要重启网关生效。</p>
+      <h4>1.2 配置管理</h4>
+      <p>日常配置在控制台<strong>「配置信息」</strong>页维护, 事实源是配置库 <code>data/config.db</code> — 上游启停、工具契约、FUYAO TTL 等改动<strong>热生效, 无需重启</strong>。空库首次启动时自动从出厂 YAML 模板 (<code>config/upstreams.yaml</code> + <code>config/tools_*.yaml</code>) seed; 监听端口、控制台账号等 bootstrap 配置仍在 <code>config/config.yaml</code>。</p>
     </section>
 
     <!-- 2. 接入方式 -->
@@ -85,7 +85,7 @@
       <ul>
         <li>查看控制台"上游状态"标签页, 确认对应上游是否在线</li>
         <li>查看返回的 <code>last_error</code> 字段</li>
-        <li>对应上游若被禁用, 可在控制台"配置信息 → 上游"标签页直接热切换启用 (实时生效并持久化到 <code>config/upstreams.yaml</code>), 无需重启</li>
+        <li>对应上游若被禁用, 可在控制台"配置信息 → 上游"标签页直接热切换启用 (实时生效并持久化到配置库 <code>data/config.db</code>), 无需重启</li>
       </ul>
       <h4>5.3 参数错误</h4>
       <ul>

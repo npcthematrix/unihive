@@ -38,6 +38,14 @@ build-backend = "hatchling.build"
 [tool.hatchling.build.targets.wheel]
 packages = ["src"]
 
+# L13 (round 9 audit): wheel 只打包 src/ 包, console.html 与 static/ 在包外
+# (repo 根), pip install 后会缺失 → 控制台路由返回 404。force-include 把它们
+# 复制到 wheel 根 (site-packages/console.html, site-packages/static/...),
+# console_api.resolve_console_html_path 据此定位 installed 布局。
+[tool.hatchling.build.force-include]
+"console.html" = "console.html"
+"static" = "static"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

@@ -4,6 +4,7 @@
 - 递归解析 ${VAR} 环境变量占位符
 - 启动时校验必需配置项
 """
+import copy
 import logging
 import os
 import re
@@ -35,13 +36,24 @@ def _load_dotenv_once() -> None:
     _DOTENV_LOADED = True
 
 
-def _resolve_value(value: Any, *, strict: bool, missing: set[str] | None = None) -> Any:
+def _resolve_value(
+    value: Any,
+    *,
+    strict: bool,
+    missing: set[str] | None = None,
+    skip_disabled_upstreams: bool = False,
+    _key: str | None = None,
+) -> Any:
     """递归替换字符串中的 ${VAR} 占位符。
 
     Args:
         value: 任意值；只对 str 类型做替换
         strict: True 时 env var 缺失抛 KeyError；False 时保留占位符
         missing: 内部递归用，记录所有缺失变量名（set 自动去重）
+        skip_disabled_upstreams: True 时, ``upstreams`` 段下 ``enabled`` 为假
+            的块跳过解析 (深拷贝原样返回), 不把其 ${VAR} 缺失计入 missing、
+            不在 strict 下抛 KeyError。与 :func:`validate_config` 同语义:
+            禁用上游不参与启动校验 (M6, round 9 audit)。
     """
     if missing is None:
         missing = set()
@@ -59,20 +71,58 @@ def _resolve_value(value: Any, *, strict: bool, missing: set[str] | None = None)
 
         return _ENV_PATTERN.sub(_replace, value)
     elif isinstance(value, dict):
-        return {k: _resolve_value(v, strict=strict, missing=missing) for k, v in value.items()}
+        # M6: upstreams 段下 enabled 为假的块整块跳过 (保留 ${VAR} 占位,
+        # 不解析、不计 missing、不抛 KeyError), 与 validate_config 同语义。
+        if skip_disabled_upstreams and _key == "upstreams":
+            result: dict[Any, Any] = {}
+            for k, v in value.items():
+                if isinstance(v, dict) and not v.get("enabled", False):
+                    result[k] = copy.deepcopy(v)
+                else:
+                    result[k] = _resolve_value(
+                        v, strict=strict, missing=missing,
+                        skip_disabled_upstreams=True, _key=k,
+                    )
+            return result
+        return {
+            k: _resolve_value(
+                v, strict=strict, missing=missing,
+                skip_disabled_upstreams=skip_disabled_upstreams, _key=k,
+            )
+            for k, v in value.items()
+        }
     elif isinstance(value, list):
-        return [_resolve_value(v, strict=strict, missing=missing) for v in value]
+        return [
+            _resolve_value(
+                v, strict=strict, missing=missing,
+                skip_disabled_upstreams=skip_disabled_upstreams,
+            )
+            for v in value
+        ]
     return value
 
 
-def resolve_env_vars(config: dict, *, strict: bool = True) -> tuple[dict, list[str]]:
+def resolve_env_vars(
+    config: dict,
+    *,
+    strict: bool = True,
+    skip_disabled_upstreams: bool = False,
+) -> tuple[dict, list[str]]:
     """对整个 config dict 递归解析 env var。
+
+    Args:
+        strict: True 时 env var 缺失抛 KeyError；False 时保留占位符
+        skip_disabled_upstreams: True 时禁用上游块的 ${VAR} 不参与解析/校验
+            (M6), 默认 False 保持向后兼容。
 
     Returns:
         (resolved_config, sorted_unique list_of_missing_var_names)
     """
     missing: set[str] = set()
-    resolved = _resolve_value(config, strict=strict, missing=missing)
+    resolved = _resolve_value(
+        config, strict=strict, missing=missing,
+        skip_disabled_upstreams=skip_disabled_upstreams,
+    )
     return resolved, sorted(missing)
 
 

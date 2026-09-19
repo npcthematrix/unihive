@@ -8,8 +8,9 @@
         <code class="fcp-key">TTL</code>
         处直接设置秒数 (留空 = 走全局
         <code class="fcp-key">cache.ttl[cache_ttl_key]</code>)。
-        只保存与出厂配置不同的差异, 保存后立即生效 (无需重启);
-        与出厂值相同的行会自动删除, 升级 YAML 基线不被本地覆盖挡住。
+        保存后立即生效 (无需重启), 覆盖值写入 <code>data/config.db</code>
+        的 <code>fuyao_cache</code> 实体段; 出厂 YAML 模板保持不变,
+        后续出厂更新可在更新中心做字段级合并。
       </span>
     </div>
 
@@ -203,6 +204,13 @@ import type {
 } from '@/api/config'
 import { errorMessage } from '@/api/client'
 import { revisionOrSkip } from './revisions'
+import {
+  buildFuyaoTtlDiffs,
+  formatSeconds,
+  fuyaoToolsSnapshot,
+  normalizeTtlSeconds,
+  type FuyaoToolsMap,
+} from './fuyaoCache'
 
 interface Props {
   fuyaoCache?: FuyaoCacheConfig
@@ -241,10 +249,8 @@ const searchQuery = ref('')
 /** 默认全展开, 用户可手动收/展。 */
 const openSet = ref<Set<FuyaoEndpointKey>>(new Set(ENDPOINT_ORDER))
 
-type ToolsMap = Record<string, number>
-
-const snapshot = reactive<ToolsMap>({})
-const working = reactive<ToolsMap>({})
+const snapshot = reactive<FuyaoToolsMap>({})
+const working = reactive<FuyaoToolsMap>({})
 
 /** 派生: 按 endpoint 分组的 FUYAO 工具列表 (含描述)。每次 props 变化重算。 */
 interface FuyaoToolRow {
@@ -293,63 +299,12 @@ const isUnset = computed(() => {
 const hasChanges = computed(() => diffCount.value > 0)
 const diffCount = computed(() => diffs.value.length)
 
-interface DiffEntry {
-  path: string
-  beforeText: string
-  afterText: string
-}
-
-const diffs = computed<DiffEntry[]>(() => {
-  const all = new Set<string>([...Object.keys(snapshot), ...Object.keys(working)])
-  const out: DiffEntry[] = []
-  for (const tool of all) {
-    const before = snapshot[tool]
-    const after = working[tool]
-    if (before === undefined && after !== undefined) {
-      out.push({
-        path: `tools.${tool}`,
-        beforeText: '(未设置, 走全局)',
-        afterText: `${after}s (${formatSeconds(after)})`,
-      })
-    } else if (before !== undefined && after === undefined) {
-      out.push({
-        path: `tools.${tool}`,
-        beforeText: `${before}s (${formatSeconds(before)})`,
-        afterText: '(已清空, 回落全局 cache.ttl)',
-      })
-    } else if (before !== undefined && after !== undefined && before !== after) {
-      out.push({
-        path: `tools.${tool}`,
-        beforeText: `${before}s (${formatSeconds(before)})`,
-        afterText: `${after}s (${formatSeconds(after)})`,
-      })
-    }
-  }
-  return out
-})
-
-function formatSeconds(s: number): string {
-  if (s === 0) return '实时 / 不缓存'
-  if (s < 60) return `${s} 秒`
-  if (s < 3600) {
-    const m = s / 60
-    return `${Number.isInteger(m) ? m : m.toFixed(1)} 分钟`
-  }
-  if (s < 86400) {
-    const h = s / 3600
-    return `${Number.isInteger(h) ? h : h.toFixed(1)} 小时`
-  }
-  const d = s / 86400
-  return `${Number.isInteger(d) ? d : d.toFixed(1)} 天`
-}
+const diffs = computed(() => buildFuyaoTtlDiffs(snapshot, working))
 
 /** 把服务端 FuyaoCacheConfig 拍平到 reactive dict (snapshot/working 复用同一结构)。 */
-function hydrateFromConfig(cfg: FuyaoCacheConfig | undefined, target: ToolsMap) {
+function hydrateFromConfig(cfg: FuyaoCacheConfig | undefined, target: FuyaoToolsMap) {
   for (const k of Object.keys(target)) delete target[k]
-  const tools = cfg?.tools || {}
-  for (const [k, v] of Object.entries(tools)) {
-    if (typeof v === 'number' && v >= 0) target[k] = v
-  }
+  Object.assign(target, fuyaoToolsSnapshot(cfg?.tools))
 }
 
 function resetDraft() {
@@ -387,18 +342,11 @@ function onEpToggle(ep: FuyaoEndpointKey, e: Event) {
   openSet.value = next
 }
 
-/** 单工具设置: undefined / null / NaN / 负值 = 清空 override (回落全局)。
- *  有限非负数 = 设值 (整数化)。 */
+/** 单工具设置: 归一化后 undefined = 清空 override (回落全局), 否则设值。 */
 function setOverride(tool: string, seconds: number | undefined | null) {
-  if (seconds === undefined || seconds === null || Number.isNaN(seconds)) {
-    delete working[tool]
-    return
-  }
-  if (!Number.isFinite(seconds) || seconds < 0) {
-    delete working[tool]
-    return
-  }
-  working[tool] = Math.floor(seconds)
+  const v = normalizeTtlSeconds(seconds)
+  if (v === undefined) delete working[tool]
+  else working[tool] = v
 }
 
 function removeOverride(tool: string) {
@@ -407,9 +355,10 @@ function removeOverride(tool: string) {
 
 /** 批量把 endpoint 内全部工具设为同一 TTL (含已配置的, 强制覆盖)。 */
 function bulkSetEp(ep: FuyaoEndpointKey, seconds: number) {
-  if (seconds < 0 || !Number.isFinite(seconds)) return
+  const v = normalizeTtlSeconds(seconds)
+  if (v === undefined) return
   for (const row of toolsByEp(ep)) {
-    working[row.name] = Math.floor(seconds)
+    working[row.name] = v
   }
 }
 
@@ -432,9 +381,7 @@ async function onSubmit() {
       revisionOrSkip(props.configVersion),
     )
     for (const k of Object.keys(snapshot)) delete snapshot[k]
-    for (const [k, v] of Object.entries(result.fuyao_cache.tools || {})) {
-      snapshot[k] = v
-    }
+    Object.assign(snapshot, fuyaoToolsSnapshot(result.fuyao_cache.tools))
     emit('saved', { fuyao_cache: result.fuyao_cache, version: result.version })
     ElMessage.success('FUYAO 缓存配置已保存并立即生效')
   } catch (e: unknown) {

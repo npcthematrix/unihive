@@ -72,24 +72,73 @@
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
+      <el-table-column v-if="editable" label="操作" width="80" align="center">
+        <template #default="{ row }">
+          <el-button
+            size="small"
+            text
+            type="primary"
+            :aria-label="`编辑工具 ${row.name}`"
+            @click="openEdit(row.name)"
+          >编辑</el-button>
+        </template>
+      </el-table-column>
     </el-table>
 
     <div v-if="search.trim()" class="tools-count">
       显示 {{ filteredTools.length }} / {{ totalTools }}
     </div>
+
+    <ToolEditDialog
+      v-model="dialogOpen"
+      :tool-name="editingName"
+      @saved="onSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { ConfigTool, GatewayConfig } from '@/api/config'
+import type { ConfigRevision, ConfigTool, GatewayConfig } from '@/api/config'
 import { paramCells, paramsSearchKey } from './format'
+import ToolEditDialog from './ToolEditDialog.vue'
 
 interface Props {
   config: GatewayConfig | null
+  /** db 实体模式才出编辑入口 (yaml 逃生模式只读)。 */
+  editable?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { editable: false })
+const emit = defineEmits<{
+  changed: [payload: {
+    name: string
+    revision: ConfigRevision
+    published: boolean
+    previouslyPublished: boolean
+    changed: boolean
+  }]
+}>()
+
+/** 编辑弹窗状态 (弹窗内部自取 GET 详情, 列表只负责打开/冒泡保存事件)。 */
+const dialogOpen = ref(false)
+const editingName = ref<string | null>(null)
+
+function openEdit(name: string): void {
+  editingName.value = name
+  dialogOpen.value = true
+}
+
+function onSaved(payload: {
+  name: string
+  revision: number
+  published: boolean
+  previouslyPublished: boolean
+  changed: boolean
+}): void {
+  emit('changed', payload)
+  editingName.value = null
+}
 
 const search = ref('')
 

@@ -2,10 +2,18 @@
   <div class="cache-panel">
     <div class="cfg-banner cache-banner">
       <span class="cfg-info-icon" aria-hidden="true">i</span>
-      <span>
-        此处显示的是 <code>config/config.yaml</code> 里的 <code>cache</code> 配置
-        （与"上游状态"标签页的运行时缓存是不同概念）。
-        <strong>修改后需重启网关</strong>生效。
+      <span v-if="isDbMode">
+        此处为当前生效的 <code>cache</code> 全局配置 — 存于配置库
+        <code>data/config.db</code> 的 <code>config_section</code>
+        (空库由出厂 YAML 模板 seed; 与"上游状态"标签页的运行时缓存是不同概念)。
+        只读展示, <strong>修改后需重启网关</strong>生效;
+        单工具 TTL 覆盖请到「FUYAO 缓存」标签页 (可热生效)。
+      </span>
+      <span v-else>
+        网关以 <code>UNIHIVE_CONFIG_SOURCE=yaml</code> 逃生模式启动, 此处为
+        出厂 YAML (<code>config/upstreams.yaml</code> /
+        <code>config/config.yaml</code>) 中的 <code>cache</code> 配置,
+        只读展示, 编辑文件后重启网关生效。
       </span>
     </div>
 
@@ -78,9 +86,13 @@ import { humanizeDuration } from './format'
 
 interface Props {
   config: GatewayConfig | null
+  /** 配置事实源: db (默认, 配置库) / yaml (逃生模式)。决定 banner 措辞。 */
+  source?: 'db' | 'yaml'
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { source: 'db' })
+
+const isDbMode = computed(() => props.source === 'db')
 
 const cache = computed(() => props.config?.cache || {})
 

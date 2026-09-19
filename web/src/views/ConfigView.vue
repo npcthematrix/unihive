@@ -55,18 +55,23 @@
         @click="selectTab(tab.key)"
       >
         {{ tab.title }}
-        <span class="cfg-subtab-count">{{ tab.count }}</span>
+        <span v-if="tab.count !== ''" class="cfg-subtab-count">{{ tab.count }}</span>
       </button>
     </nav>
 
-    <!-- 6 个 panel, 切换只显示 active -->
+    <!-- 8 个 panel, 切换只显示 active -->
     <div v-loading="loading && !config" class="cfg-panel-stack">
       <section
         v-show="activeTab === 'upstreams'"
         class="cfg-panel"
         aria-labelledby="cfg-tab-upstreams"
       >
-        <UpstreamsPanel :config="config" @changed="onUpstreamEnabled" />
+        <UpstreamsPanel
+          :config="displayConfig"
+          :editable="isDbMode"
+          @changed="onUpstreamEnabled"
+          @connection-saved="onUpstreamConnectionSaved"
+        />
       </section>
 
       <section
@@ -74,7 +79,7 @@
         class="cfg-panel"
         aria-labelledby="cfg-tab-mapping"
       >
-        <MappingPanel :config="config" />
+        <MappingPanel :config="displayConfig" />
       </section>
 
       <section
@@ -82,7 +87,11 @@
         class="cfg-panel"
         aria-labelledby="cfg-tab-tools"
       >
-        <ToolsPanel :config="config" />
+        <ToolsPanel
+          :config="displayConfig"
+          :editable="isDbMode"
+          @changed="onToolEdited"
+        />
       </section>
 
       <section
@@ -90,7 +99,11 @@
         class="cfg-panel"
         aria-labelledby="cfg-tab-cache"
       >
-        <CachePanel :config="config" />
+        <!-- entities 未加载完时默认按 db 措辞, 避免逃生模式 banner 闪烁 -->
+        <CachePanel
+          :config="displayConfig"
+          :source="entities?.source === 'yaml' ? 'yaml' : 'db'"
+        />
       </section>
 
       <section
@@ -112,26 +125,28 @@
         aria-labelledby="cfg-tab-fuyao-cache"
       >
         <FuyaoCachePanel
-          :fuyao-cache="config?.fuyao_cache"
-          :config-version="config?.version"
-          :all-tools="config?.tools"
-          :upstream-tool-mapping="config?.upstream_tool_mapping"
+          :fuyao-cache="displayConfig?.fuyao_cache"
+          :config-version="displayConfig?.version"
+          :all-tools="displayConfig?.tools"
+          :upstream-tool-mapping="displayConfig?.upstream_tool_mapping"
           @saved="onFuyaoCacheSaved"
         />
       </section>
 
       <section
-        v-show="activeTab === 'overlays'"
+        v-show="activeTab === 'database'"
         class="cfg-panel"
-        aria-labelledby="cfg-tab-overlays"
+        aria-labelledby="cfg-tab-database"
       >
-        <OverlayPanel
-          :overlays="overlays"
-          :revision="overlayRevision"
-          :disabled="overlayDisabled"
-          :loading="overlayLoading"
-          @changed="onOverlayChanged"
-        />
+        <DatabasePanel :entities="entities" />
+      </section>
+
+      <section
+        v-show="activeTab === 'updateCenter'"
+        class="cfg-panel"
+        aria-labelledby="cfg-tab-update-center"
+      >
+        <UpdateCenterPanel :entities="entities" @applied="onFactoryUpgradeApplied" />
       </section>
     </div>
   </el-card>
@@ -142,19 +157,22 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getConfig, getConfigOverlays } from '@/api/config'
+import { getConfig, getConfigEntities } from '@/api/config'
 import type {
-  ConfigOverlayRow,
+  ConfigEntities,
   ConfigRevision,
+  ConfigTool,
   GatewayConfig,
   ProxySettings,
 } from '@/api/config'
 import { getProxySettings } from '@/api/config'
+import { getInterfaces } from '@/api/interfaces'
 import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
 import { formatHMS } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type TabKey } from './config/format'
 import type { UpstreamEnabledChanged } from './config/upstreams'
+import { userModifiedCount } from './config/entities'
 import { parseHashTab } from './_shared/hashTab'
 import UpstreamsPanel from './config/UpstreamsPanel.vue'
 import MappingPanel from './config/MappingPanel.vue'
@@ -162,7 +180,8 @@ import ToolsPanel from './config/ToolsPanel.vue'
 import CachePanel from './config/CachePanel.vue'
 import ProxyPanel from './config/ProxyPanel.vue'
 import FuyaoCachePanel from './config/FuyaoCachePanel.vue'
-import OverlayPanel from './config/OverlayPanel.vue'
+import DatabasePanel from './config/DatabasePanel.vue'
+import UpdateCenterPanel from './config/UpdateCenterPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -180,11 +199,24 @@ const lastRefresh = ref<number | null>(null)
 const proxyLastRefresh = ref<number | null>(null)
 const copyInFlight = ref(false)
 
-/** config.db 薄覆盖层 (P1): 行列表/revision/只读模式独立于 /api/config 拉取。 */
-const overlays = ref<ConfigOverlayRow[]>([])
-const overlayRevision = ref<number | null>(null)
-const overlayDisabled = ref(false)
-const overlayLoading = ref(false)
+/** config.db v2 实体浏览摘要 (db 模式才有实体字段; yaml 逃生模式只回 source)。 */
+const entities = ref<ConfigEntities | null>(null)
+/**
+ * /api/config 在 db 模式不携带 290 条 spec (避免快照臃肿); 工具规格面板与
+ * FUYAO TTL 面板改吃 /api/interfaces 的全量 env 门控清单, 在此合成。
+ */
+const interfaceTools = ref<ConfigTool[]>([])
+
+/**
+ * 面板统一吃的 config: 快照自带 tools (yaml 模式) 时原样, 否则用 interfaces
+ * 合成的清单补齐。不可变派生, 写回只动原始 config ref。
+ */
+const displayConfig = computed<GatewayConfig | null>(() => {
+  const current = config.value
+  if (!current) return null
+  if (current.tools && current.tools.length) return current
+  return { ...current, tools: interfaceTools.value }
+})
 
 const activeTab = ref<TabKey>('upstreams')
 
@@ -206,7 +238,7 @@ function selectTab(tab: TabKey): void {
 
 const upstreamsCount = computed(() => Object.keys(config.value?.upstreams || {}).length)
 const mappingCount = computed(() => Object.keys(config.value?.upstream_tool_mapping || {}).length)
-const toolsCount = computed(() => (config.value?.tools || []).length)
+const toolsCount = computed(() => (displayConfig.value?.tools || []).length)
 const ttlCount = computed(() => Object.keys(config.value?.cache?.ttl || {}).length)
 const coverageCount = computed(() => proxy.value?.coverage?.length ?? 0)
 /** FUYAO 工具级 override 总条数; 0 个显示 0 (扁平 tools dict, 2026-09-15 重构)。*/
@@ -214,8 +246,11 @@ const fuyaoOverrideCount = computed(() => {
   const tools = config.value?.fuyao_cache?.tools
   return tools ? Object.keys(tools).length : 0
 })
-/** config.db 本地覆盖行数 (yaml 逃生模式下恒 0, 面板自身展示只读告警)。 */
-const overlayCount = computed(() => overlays.value.length)
+/** 配置库 tab 角标: 用户改动实体行数 (yaml 逃生模式 0)。 */
+const userModifiedEntitiesCount = computed(() => userModifiedCount(entities.value))
+
+/** db 实体模式才允许热编辑 (yaml 逃生模式隐藏编辑入口)。 */
+const isDbMode = computed(() => entities.value?.source === 'db')
 
 const TABS = computed(() => [
   { key: 'upstreams' as const, title: TAB_TITLES.upstreams, count: upstreamsCount.value },
@@ -224,7 +259,9 @@ const TABS = computed(() => [
   { key: 'cache' as const, title: TAB_TITLES.cache, count: ttlCount.value },
   { key: 'proxy' as const, title: TAB_TITLES.proxy, count: coverageCount.value },
   { key: 'fuyaoCache' as const, title: TAB_TITLES.fuyaoCache, count: fuyaoOverrideCount.value },
-  { key: 'overlays' as const, title: TAB_TITLES.overlays, count: overlayCount.value },
+  { key: 'database' as const, title: TAB_TITLES.database, count: userModifiedEntitiesCount.value },
+  // 出厂更新无静态角标计数 (模板 hash 信号在面板内拉取展示)
+  { key: 'updateCenter' as const, title: TAB_TITLES.updateCenter, count: '' },
 ])
 
 async function loadProxy() {
@@ -242,26 +279,31 @@ async function loadProxy() {
   }
 }
 
-/** 拉 config.db 覆盖层列表; 503 = 网关以 yaml 逃生模式启动 (只读)。 */
-async function loadOverlays() {
-  overlayLoading.value = true
+/** 拉 config.db v2 实体浏览摘要 (yaml 逃生模式只回 {source:'yaml'})。 */
+async function loadEntities() {
   try {
-    const data = await getConfigOverlays()
-    overlays.value = data.overlays
-    overlayRevision.value = data.revision
-    overlayDisabled.value = false
+    entities.value = await getConfigEntities()
   } catch (e) {
-    const status = (e as { response?: { status?: number } })?.response?.status
-    if (status === 503) {
-      overlayDisabled.value = true
-      overlays.value = []
-      overlayRevision.value = null
-    } else {
-      // 非 503 的瞬时失败: 保留旧数据, toast 提示, 不动 disabled 态
-      ElMessage.error(errorMessage(e, '加载本地覆盖失败'))
-    }
-  } finally {
-    overlayLoading.value = false
+    // 瞬时失败不阻塞配置渲染, 面板下次整体刷新时重试
+    ElMessage.error(errorMessage(e, '加载配置库实体失败'))
+  }
+}
+
+/** 拉全量工具清单 (/api/interfaces, env 门控后), 补 db 模式快照缺失的 tools。 */
+async function loadInterfaceTools() {
+  try {
+    const data = await getInterfaces()
+    // interfaces 的 ToolParamInfo 无 ConfigTool 的字符串索引签名, 结构上兼容,
+    // 这里显式收窄 (ToolsPanel/FuyaoCachePanel 只读 name/description/params)。
+    interfaceTools.value = data.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      dangerous: t.dangerous,
+      cache_ttl_key: t.cache_ttl_key,
+      params: t.params,
+    })) as ConfigTool[]
+  } catch (e) {
+    ElMessage.error(errorMessage(e, '加载工具清单失败'))
   }
 }
 
@@ -279,8 +321,9 @@ async function load(isManual = false) {
     loading.value = false
     manualLoading.value = false
   }
-  // 覆盖层列表随 config 一起刷新 (独立失败, 不阻塞渲染)。
-  void loadOverlays()
+  // 配置库实体摘要 + 全量工具清单随 config 一起刷新 (独立失败, 不阻塞渲染)。
+  void loadEntities()
+  void loadInterfaceTools()
   // proxy 单独拉, 失败不影响 config 渲染。
   // 当前在 proxy tab 时同步等待 (用户切到该 tab 应看到立即加载的数据),
   // 否则异步 (fire-and-forget) 不阻塞整体 load 延迟。
@@ -308,8 +351,44 @@ function onUpstreamEnabled(payload: UpstreamEnabledChanged) {
     },
     version: payload.version,
   }
-  // enabled 覆盖行已增删, 刷新「本地覆盖」tab 的行数与 revision
-  void loadOverlays()
+  // enabled 已写实体行, 刷新「配置库」tab 的 origin/updated_at 与 revision
+  void loadEntities()
+  void loadInterfaceTools()
+}
+
+/**
+ * 工具热编辑成功: 回写乐观锁 revision, 重拉 /api/interfaces (改名/描述/
+ * 发布态都会反映在工具清单) 与实体摘要 (origin/updated_at)。
+ */
+function onToolEdited(payload: {
+  name: string
+  revision: ConfigRevision
+  published: boolean
+  previouslyPublished: boolean
+  changed: boolean
+}) {
+  if (config.value) {
+    config.value = { ...config.value, version: payload.revision }
+  }
+  void loadEntities()
+  void loadInterfaceTools()
+}
+
+/**
+ * 上游连接块热编辑成功: 连接参数/类型可能已变, 重拉整份配置快照
+ * (脱敏展示值也要更新), 并刷新实体摘要。
+ */
+function onUpstreamConnectionSaved(payload: {
+  name: string
+  revision: number
+  enabled: boolean
+  connected: boolean
+  changed: boolean
+}) {
+  if (config.value) {
+    config.value = { ...config.value, version: payload.revision }
+  }
+  void load(false)
 }
 
 /** FUYAO 缓存保存成功 — 把新 fuyao_cache 与 revision 回写到本地 config。 */
@@ -324,12 +403,18 @@ function onFuyaoCacheSaved(payload: {
       version: payload.version,
     }
   }
-  void loadOverlays()
+  void loadEntities()
 }
 
-/** 覆盖层删除/清空成功 — revision 已变, 整表重拉 (生效 enabled/TTL 随之刷新)。 */
-function onOverlayChanged(_revision: ConfigRevision) {
-  void load()
+/**
+ * 出厂更新热应用成功: 实体/快照/工具发布集都可能批量变化, 整份重拉
+ * (面板自身已复查 dry-run; 这里刷新配置快照、实体摘要与工具清单)。
+ */
+function onFactoryUpgradeApplied(payload: { revision: number }) {
+  if (config.value) {
+    config.value = { ...config.value, version: payload.revision }
+  }
+  void load(false)
 }
 
 const refreshLabel = computed(() => {

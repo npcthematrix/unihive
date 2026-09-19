@@ -86,6 +86,7 @@ MCP 端点: http://127.0.0.1:18080/mcp
 
 ## 关键约定
 
+- **配置事实源是 `data/config.db`** (2026-09-18 P2 起): YAML 解构为实体行 (upstream/tool/config_section + JSON 列) 全量入库,空库首次启动自动从 YAML 出厂模板 seed;日常配置维护在控制台,不改 YAML。`UNIHIVE_CONFIG_SOURCE=yaml` 为逃生模式 (纯 YAML,不建库)。详见 `docs/handoffs/2026-09-18-sqlite-config-entity-cutover.md`
 - **请求/响应 only**,无 SSE 流;`/mcp` 保持开放,**不**做鉴权
 - **鉴权范围**: `/api/*` + `console.html` 用 cookie session (见 `src/console_auth.py`)
 - **代码标准化**: `600519.SH` / `000001.SZ` (fuyao 格式) 与 `sh600519` (TDX 格式) 互转 (`src/core/normalizer.py`)

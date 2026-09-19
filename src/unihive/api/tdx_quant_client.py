@@ -26,12 +26,15 @@ from ..exceptions.tdx_quant_errors import (
 )
 from .upstream_client import ToolResult, UpstreamStatus
 from ..core.blocking_pool import get_blocking_executor
+from ..core.config_db import resolve_project_path
 
 logger = logging.getLogger(__name__)
 
 # strategy_id 持久化路径: 让 UUID 在进程重启间保持稳定, TdxW.exe 才能跨
 # 重启保留该 strategy 的状态 (持仓/自选股等)。
-_STRATEGY_ID_FILE = Path("logs/tdx_quant_strategy_id")
+# M9 (round 9 audit): 锚定到项目根, 否则从非 repo 根启动会生成新 UUID
+# (文件在 CWD 下), churn 破坏 TdxW.exe 跨重启连续性。
+_STRATEGY_ID_FILE = resolve_project_path(None, "logs/tdx_quant_strategy_id")
 
 
 def _resolve_strategy_id(configured: str) -> str:
@@ -206,7 +209,14 @@ class TdxQuantClient:
             self._tq = tqcenter.tq
             # tqcenter.initialize 仅接受 path 参数 (dll_path='')，不支持 strategy_id
             tdx_root = str(self.config.tdx_root_path)
-            self._tq.initialize(tdx_root)
+            # H1 (round 9 audit): initialize 是同步 DLL 调用 (加载 TdxW
+            # 插件 + 登录), 跑在事件循环上会冻结 boot 且 gateway 的
+            # wait_for(client.start()) 无法打断。与 stop() 的 tq.close()
+            # 对称, 包 run_in_executor 让 DLL 调用跑在 worker thread。
+            await asyncio.get_event_loop().run_in_executor(
+                get_blocking_executor(),
+                lambda: self._tq.initialize(tdx_root),
+            )
             logger.info(f"[{self.name}] TQ strategy_id={self._strategy_id} (记录用, 未传给 DLL)")
             return True, None
         except (FileNotFoundError, ModuleNotFoundError) as e:
