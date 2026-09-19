@@ -511,7 +511,7 @@ async def test_enable_partial_publish_failure_self_heals_on_retry(monkeypatch):
             raise RuntimeError("boom")
         return real_register_tool(srv, spec)
 
-    monkeypatch.setattr(gs_mod, "register_tool", flaky_register)
+    monkeypatch.setattr("src.unihive.core.registry.register_tool", flaky_register)
 
     with pytest.raises(RuntimeError, match="partial failure"):
         await server.set_upstream_enabled("B", True)

@@ -62,9 +62,10 @@ def test_h1_static_dir_env_override(tmp_path, monkeypatch):
 def test_h1_gateway_mounts_resolved_static_dir():
     """gateway 装配必须用 _ca.STATIC_DIR, 不再拼 _PROJECT_ROOT / 'static'
     (后者在 installed 布局指向 venv 根 → StaticFiles 构造期 raise, 网关拒启)。"""
-    from src.unihive import gateway_server
+    # 2026-09-19 god-module 拆包后遍历 gateway_server/ 包 (serve_http 在 http.py)。
+    from tests.conftest import read_gateway_package_text
 
-    src = Path(gateway_server.__file__).read_text(encoding="utf-8")
+    src = read_gateway_package_text()
     assert "_ca.STATIC_DIR" in src, "Mount('/static') must use the layout-aware _ca.STATIC_DIR"
     assert '_PROJECT_ROOT / "static"' not in src, (
         "hard-coded 4-parents static path breaks non-editable wheel installs"

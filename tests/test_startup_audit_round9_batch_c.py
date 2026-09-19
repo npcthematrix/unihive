@@ -16,7 +16,6 @@ import sys
 import threading
 import time
 import types
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -99,6 +98,8 @@ async def test_h1b_tdx_quant_initialize_runs_off_event_loop(monkeypatch):
     client.name = "tdq"
     client._tq = None
     client._strategy_id = "sid"
+    # M2 (round 11): initialize 经 _dll_initialize 持 _dll_lock 串行化
+    client._dll_lock = threading.Lock()
 
     loop_thread = threading.get_ident()
     ok, err = await client._try_initialize()
@@ -307,13 +308,13 @@ def test_l12_uvicorn_config_sets_graceful_shutdown_timeout():
     默认 None (无硬上限), 长闲连接拖住 SIGTERM 远超 stop() 的 max_wait=10s。
     修复后显式设 timeout_graceful_shutdown 与 stop() 的 max_wait 对齐。"""
 
-    src = (
-        Path(__file__).resolve().parent.parent
-        / "src"
-        / "unihive"
-        / "gateway_server.py"
-    )
-    text = src.read_text(encoding="utf-8")
+    # 2026-09-19 god-module 拆包后 serve_http 位于 http.py; inspect 会自动
+    # 跟到定义子模块, 不再按文件路径读 gateway_server.py。
+    import inspect
+
+    from src.unihive.gateway_server import GatewayServer
+
+    text = inspect.getsource(GatewayServer.serve_http)
     assert "timeout_graceful_shutdown" in text, (
         "uvicorn.Config must set timeout_graceful_shutdown so lingering "
         "connections don't outlive stop()'s max_wait budget"

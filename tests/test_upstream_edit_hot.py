@@ -457,7 +457,7 @@ async def test_enabled_edit_publish_failure_rolls_runtime_back(beta_store, monke
             raise RuntimeError("provider exploded")
         return real_register(srv, spec)
 
-    monkeypatch.setattr(gs_mod, "register_tool", boom_register)
+    monkeypatch.setattr("src.unihive.core.registry.register_tool", boom_register)
 
     with pytest.raises(RuntimeError, match="partial failure"):
         await server.apply_upstream_edit(

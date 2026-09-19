@@ -50,8 +50,14 @@ def test_m9_resolve_project_path_empty_falls_to_default_anchored():
 
 
 def test_m9_gateway_anchors_runtime_state_paths():
-    """gateway_server / tdx_quant 的状态路径消费点改用 resolve_project_path。"""
-    gw = (REPO / "src" / "unihive" / "gateway_server.py").read_text(encoding="utf-8")
+    """gateway_server / tdx_quant 的状态路径消费点改用 resolve_project_path。
+
+    2026-09-19 god-module 拆包后断言遍历 gateway_server/ 包内全部 .py
+    (facade + lifecycle/http 等 mixin), 不再读单个 gateway_server.py。
+    """
+    from tests.conftest import read_gateway_package_text
+
+    gw = read_gateway_package_text()
     assert "resolve_project_path" in gw, (
         "gateway_server must anchor config-driven state paths (cache.db / "
         "board.db / proxy_settings) via resolve_project_path, not CWD-relative"
@@ -151,9 +157,16 @@ def test_l13_wheel_includes_console_assets():
         "wheel must force-include console.html so installed packages serve the console"
     )
     assert "static" in toml, "wheel must force-include static/console assets"
-    assert "force-include" in toml or "artifacts" in toml, (
-        "hatchling force-include / artifacts table must be present for out-of-tree assets"
+    # hatchling 只认 [tool.hatch.*]; 误写成 [tool.hatchling.*] 会被静默忽略
+    # (2026-09-19 wheel 内容审计实测 force-include 因此从未生效)。
+    assert "[tool.hatch.build.targets.wheel.force-include]" in toml, (
+        "force-include must live under the table hatchling actually reads "
+        "([tool.hatch.build.targets.wheel.force-include]); [tool.hatchling.*] is ignored"
     )
+    assert "[tool.hatchling.build" not in toml, (
+        "[tool.hatchling.*] tables are silently ignored by hatchling; use [tool.hatch.*]"
+    )
+    assert "packages" in toml
 
 
 def test_l13_console_html_path_resolves_dev_layout(tmp_path):

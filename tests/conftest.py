@@ -14,6 +14,18 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+def read_gateway_package_text() -> str:
+    """拼接 gateway_server 包内全部 .py 文本。
+
+    2026-09-19 god-module 拆包后, 旧审计测试读单个 gateway_server.py 的
+    写法不再适用; 结构断言改为遍历包 (facade + 各 mixin 子模块)。
+    """
+    pkg = ROOT / "src" / "unihive" / "gateway_server"
+    return "\n".join(
+        p.read_text(encoding="utf-8") for p in sorted(pkg.glob("*.py"))
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolate_config_source(tmp_path, monkeypatch):
     """测试默认走 YAML 事实源, 避免 db 模式自动 seed 真实 data/config.db。

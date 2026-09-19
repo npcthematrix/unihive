@@ -511,7 +511,7 @@ async def test_apply_publish_failure_rolls_runtime_back_db_untouched(
     def boom(srv, spec):
         raise RuntimeError("provider exploded")
 
-    monkeypatch.setattr(gs_mod, "register_tool", boom)
+    monkeypatch.setattr("src.unihive.core.registry.register_tool", boom)
     with pytest.raises(RuntimeError, match="factory-upgrade"):
         await server.apply_config_upgrade()
 

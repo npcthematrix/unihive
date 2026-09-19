@@ -184,7 +184,7 @@ async def test_register_failure_rolls_runtime_back_and_never_writes_db(
             raise RuntimeError("provider exploded")
         return real_register(srv, spec)
 
-    monkeypatch.setattr(gs_mod, "register_tool", boom_then_restore)
+    monkeypatch.setattr("src.unihive.core.registry.register_tool", boom_then_restore)
     with pytest.raises(RuntimeError, match="re-register failed"):
         await server.apply_tool_edit("a_one", {"description": "x"})
 

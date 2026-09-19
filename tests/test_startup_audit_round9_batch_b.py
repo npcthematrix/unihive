@@ -364,7 +364,9 @@ async def test_h2_construct_failure_degrades_upstream_not_boot(beta_store, monke
         async def close(self):
             return None
 
-    monkeypatch.setattr(gs_mod, "Cache", lambda *a, **kw: _FakeCache())
+    monkeypatch.setattr(
+        "src.unihive.storage.cache.Cache", lambda *a, **kw: _FakeCache()
+    )
 
     async def fake_mcp(specs):
         return None

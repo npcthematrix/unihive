@@ -381,7 +381,7 @@ async def test_apply_provider_failure_rolls_everything_back(store, monkeypatch):
             raise RuntimeError("provider exploded")
         return real_register_tool(srv, spec)
 
-    monkeypatch.setattr(gs_mod, "register_tool", selective_boom)
+    monkeypatch.setattr("src.unihive.core.registry.register_tool", selective_boom)
     with pytest.raises(RuntimeError, match="openapi-import"):
         await server.apply_openapi_import(confirm_dangerous=True)
 

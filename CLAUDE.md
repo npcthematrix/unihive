@@ -32,7 +32,11 @@ unihive/
 │       ├── models/                  # 各上游的 dataclass + 异常
 │       ├── exceptions/
 │       ├── console_auth.py          # 控制台鉴权 (cookie-based, /api/* + console.html)
-│       └── gateway_server.py        # 入口 (HTTP+stdio 双模)
+│       └── gateway_server/          # 入口包 (HTTP+stdio 双模); __init__.py 是 facade
+│           │                          # (GatewayServer 多继承组装 + main/async_main),
+│           │                          # 9 个 mixin 子模块按职责拆分: lifecycle/http/
+│           │                          # upstreams/hot_toggle/config_edits/config_upgrade/
+│           │                          # openapi_import/cached_calls/mcp_tools (+_helpers)
 ├── config/
 │   ├── upstreams.yaml           # 上游连接 + 路由 + fuyao 工具定义 (主配置)
 │   ├── tools_mootdx2.yaml       # MooTDX2 工具详情
