@@ -170,6 +170,7 @@ def test_compatibility_attribute_shims_exist():
 
 EXPECTED_MODULES = {
     "__init__.py",
+    "__main__.py",
     "_helpers.py",
     "cached_calls.py",
     "config_edits.py",
