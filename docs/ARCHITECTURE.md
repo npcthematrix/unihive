@@ -25,7 +25,6 @@ MooTDX2 封装了两套数据接口：
 | get_market_count | 市场证券数量 |
 | get_workday | 交易日查询 |
 | get_workday_range | 交易日范围 |
-| get_income | 盘后收益 |
 | get_block | 板块数据 |
 | get_f10 | F10基础数据 |
 | get_f10_company | F10公司概况 |

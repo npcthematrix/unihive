@@ -142,7 +142,7 @@ const stdioConfig = computed(() =>
 
 // --- 工具数量提示 (从 runtime 接口估算) ---
 // 实际数量在运行时由控制台 "MCP APIs" 页显示;这里给个约数避免误导用户
-// (2026-09: 5 套上游合计 291; FQGate 87 + fuyao 67 + tdx_quant 54 + mootdx2 34 + omni 5 等)。
+// (2026-09: 5 套上游合计 290; FQGate 87 + fuyao 67 + tdx_quant 54 + mootdx2 33 + omni 5 等)。
 const toolCountHint = '~290'
 
 // --- AI Agent 系统提示词 (可选,作为 system prompt 模板) ---

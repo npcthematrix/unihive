@@ -569,7 +569,7 @@ onUnmounted(() => {
   gap: 12px;
   position: sticky;
   top: 0;
-  /* 矮视口下侧栏 (筛选卡 + 291 工具分组导航) 会比视口高, sticky 失效且
+  /* 矮视口下侧栏 (筛选卡 + 289 工具分组导航) 会比视口高, sticky 失效且
      整页被侧栏撑高; 限制为视口高并在侧栏内部滚动。 */
   max-height: calc(100vh - 24px);
   overflow-y: auto;

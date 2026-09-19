@@ -352,19 +352,19 @@ tools:
 
   - name: get_index_all
     description: |-
-      【全指K线（含成分股）】获取全指 K 线及成分股信息。
+      【全指K线】获取指数 K 线数据（仅指数自身行情序列, 不返回指数包含的股票清单）。
 
       【使用场景】
-      - 当用户需要指数及其成分股的综合数据时调用
-      - 不适合：仅需指数数据（用 get_index_kline）
+      - 需要指数（如上证指数 sh000001）的日/周/月/分钟 K 线时调用
+      - 本工具只返回指数自身行情序列, 指数包含的股票清单请使用板块类工具
 
       【参数说明】
-      - code (必填): 指数代码
+      - code (必填): 指数代码（建议带 sh/sz 前缀, 如 sh000001）
       - type (可选): K线类型，默认 day
       - limit (可选): 返回条数
 
       【返回示例】
-      成功: {"success": true, "data": {...}}
+      成功: {"success": true, "data": [...]}
       失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "指数代码不存在"}}
 
       【典型错误】
@@ -372,7 +372,7 @@ tools:
     routing: get_index_all
     upstream_tool_mapping:
       mootdx2: get_index_all
-    cache_ttl_key: realtime_quote
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -560,15 +560,20 @@ tools:
       - 适合日期计算和交易日相关逻辑
 
       【参数说明】
-      - date (可选): 基准日期，格式 YYYYMMDD，省略则默认当天
-      - count (可选): 往前查 N 天，默认 1
+      - date (可选): 基准日期，格式 YYYYMMDD（也接受 YYYY-MM-DD），省略则默认当天
+      - count (可选): 往前查 N 个工作日，默认 1，允许范围 1-365
+
+      【重要说明】
+      - 本工具只做周末数学（周一至周五），**未剔除法定节假日**，
+        网关不内置节假日历；国庆/春节等休市日及调休上班日会被计作交易日,
+        对节假日敏感的场景请自行叠加节假日历
 
       【返回示例】
       成功: {"success": true, "data": ["20240101", "20240102", ...]}
       失败: {"success": false, "error": {"error_type": "invalid_param", "message": "日期格式错误"}}
 
       【典型错误】
-      - invalid_param: 日期格式错误
+      - invalid_param: 日期格式错误 / count 超出 1-365
     routing: get_workday
     upstream_tool_mapping:
       mootdx2: get_workday
@@ -583,7 +588,7 @@ tools:
       - name: count
         type: int
         required: false
-        description: 往前查N天（默认 1）
+        description: 往前查 N 个工作日（默认 1, 范围 1-365; 未剔除法定节假日）
 
   - name: get_workday_range
     description: |-
@@ -594,15 +599,19 @@ tools:
       - 适合批量日期处理
 
       【参数说明】
-      - start (可选): 起始日期 YYYYMMDD
-      - end (可选): 结束日期 YYYYMMDD
+      - start (可选): 起始日期 YYYYMMDD（也接受 YYYY-MM-DD），省略默认当天
+      - end (可选): 结束日期 YYYYMMDD（也接受 YYYY-MM-DD），省略默认当天
+
+      【重要说明】
+      - 本工具只做周末数学（周一至周五），**未剔除法定节假日**，
+        网关不内置节假日历；start 晚于 end 返回 invalid_param
 
       【返回示例】
       成功: {"success": true, "data": ["20240101", "20240102", "20240103", ...]}
       失败: {"success": false, "error": {"error_type": "invalid_param", "message": "日期格式错误"}}
 
       【典型错误】
-      - invalid_param: 日期格式错误
+      - invalid_param: 日期格式错误 / start 晚于 end
     routing: get_workday_range
     upstream_tool_mapping:
       mootdx2: get_workday_range
@@ -613,52 +622,15 @@ tools:
       - name: start
         type: str
         required: false
-        description: 起始日期 YYYYMMDD
+        description: 起始日期 YYYYMMDD（默认当天）
       - name: end
         type: str
         required: false
-        description: 结束日期 YYYYMMDD
+        description: 结束日期 YYYYMMDD（默认当天）
 
-  - name: get_income
-    description: |-
-      【盘后收益】获取股票盘后收益数据。
-
-      【使用场景】
-      - 当用户需要了解盘后收益数据时调用
-      - 适合收盘后的数据分析
-
-      【参数说明】
-      - code (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - days (可选): 天数，默认 30
-      - start_date (可选): 起始日期 YYYYMMDD
-
-      【返回示例】
-      成功: {"success": true, "data": [...]}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "股票代码不存在"}}
-
-      【典型错误】
-      - invalid_symbol: 股票代码不存在
-    routing: get_income
-    upstream_tool_mapping:
-      mootdx2: get_income
-    cache_ttl_key: fundamentals
-    data_source_type: online
-    dangerous: false
-    params:
-      - name: code
-        type: str
-        required: true
-        normalize: code
-        description: 股票代码
-      - name: days
-        type: int
-        required: false
-        description: 天数（默认 30）
-      - name: start_date
-        type: str
-        required: false
-        description: 起始日期 YYYYMMDD
-
+  # 2026-09-19 H1: get_income 已下线 — mootdx2 1.4.2 无 income() 能力
+  # (finance() 只是单股财务快照, 非盘后收益序列), 旧实现生产必抛
+  # AttributeError; call_tool 对存量 config.db 中残留的该工具返回 Unknown tool。
   - name: get_custom_sector_list
     description: |-
       【自定义板块列表】读取用户在 TDX 客户端维护的自定义板块（自选股分组）。
@@ -897,7 +869,7 @@ tools:
 
       【参数说明】
       - symbol (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - date (可选): 日期，默认 '20191023'
+      - date (可选): 日期 YYYYMMDD，省略则默认当天
 
       【返回示例】
       成功: {"success": true, "data": [{"time": "09:30:00", "open": 10.0, "high": 10.2, "low": 9.9, "close": 10.1, "vol": 1000}, ...]}
@@ -920,7 +892,7 @@ tools:
       - name: date
         type: str
         required: false
-        description: 日期（默认 '20191023'）
+        description: 日期 YYYYMMDD（默认当天）
 
   - name: search_stock_local
     description: |-
@@ -928,12 +900,13 @@ tools:
 
       【使用场景】
       - 当用户输入股票名称或代码片段进行搜索时调用
-      - 基于本地 block 板块文件，支持名称/代码/拼音模糊匹配
+      - 优先本地 block 板块文件，为空时回退 board.db 离线库；支持名称/代码模糊匹配
+        （底层表只有 stock_code/stock_name 两列, 不支持字母缩写匹配）
       - 适合离线环境或快速搜索
       - 不适合：全量列表（用 get_code_list）
 
       【参数说明】
-      - keyword (必填): 搜索关键词（股票名称、代码或拼音缩写）
+      - keyword (必填): 搜索关键词（股票名称或代码片段）
 
       【返回示例】
       成功: {"success": true, "data": [{"code": "600000", "market": "sh", "name": "浦发银行"}, ...]}
@@ -951,7 +924,7 @@ tools:
       - name: keyword
         type: str
         required: true
-        description: 搜索关键词（股票名称、代码或拼音缩写）
+        description: 搜索关键词（股票名称或代码片段）
 
   - name: mootdx2_stock_info
     description: |-
@@ -1105,7 +1078,8 @@ tools:
     routing: indicator_atr
     upstream_tool_mapping:
       mootdx2: indicator_atr
-    cache_ttl_key: fundamentals
+    # ATR 由历史 K 线序列计算, 属历史数据档 (旧标 fundamentals 错误)
+    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:

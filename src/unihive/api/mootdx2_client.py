@@ -1,40 +1,19 @@
 """MooTDX2 MCP Client 基于 mootdx2 库"""
 import asyncio
+import datetime
 import functools
 import logging
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .upstream_client import ToolResult, UpstreamStatus
 from ..core.blocking_pool import get_blocking_executor
-from ..models.mootdx2_errors import (
-    ErrorClassifier,
-    MooTDXErrorType,
-    error_to_result,
-    no_data_result,
-)
-from .index_registry import (
-    INDEX_KIND,
-    STOCK_KIND,
-    classify_symbol,
-    parse_symbol,
-)
-
-
-class SectorDataError(Exception):
-    """板块数据相关错误的领域异常
-
-    携带 MooTDXErrorType + 中文消息，由 async wrapper 转 ToolResult。
-    """
-
-    def __init__(self, error_type: "MooTDXErrorType", message: str):
-        self.error_type = error_type
-        self.message = message
-        super().__init__(message)
+from ..core.config_db import resolve_project_path
+from ..models.mootdx2_errors import MooTDXErrorType, error_to_result
+from .index_registry import INDEX_KIND, STOCK_KIND, parse_symbol
 
 
 if TYPE_CHECKING:
@@ -58,12 +37,214 @@ FREQ_MAP = {
 # 数据量限制常量
 MAX_LIMIT_KLINE = 1000  # K线最大返回条数
 MAX_LIMIT_BATCH_QUOTE = 50  # 批量行情最大股票数
-MAX_LIMIT_TRADE = 500  # 逐笔成交最大条数
-MAX_LIMIT_TRANSACTIONS = 500  # 历史逐笔最大条数
-MAX_LIMIT_STOCK_LIST = 10000  # 股票列表最大条数
+# 2026-09-19 合同修复: batch_bars YAML 合同明示 ≤20 只 / 每只 ≤500 根,
+# 违约返 invalid_param (旧实现静默截断 limit, >20 只也不拦)。
+MAX_LIMIT_BATCH_BARS_CODES = 20
+MAX_LIMIT_BATCH_BARS = 500
+# workday 往前推算的保护性上限 (纯周末数学, 不做节假日历)
+MAX_WORKDAY_COUNT = 365
+
+# call_tool 分发表 (2026-09-19 LOW): 工具名 → 方法名。旧实现每次调用新建
+# ~40 个 bound method 的 dict; 类方法都是稳定属性, getattr 即可。
+_TOOL_METHOD_NAMES: dict[str, str] = {
+    "get_quote": "get_quote",
+    "get_kline": "get_kline",
+    "get_batch_quote": "get_batch_quote",
+    "get_minute_data": "get_minute_data",
+    "get_trade": "get_trade",
+    "get_trade_history": "get_trade_history",
+    "get_index_kline": "get_index_kline",
+    "get_code_list": "get_code_list",
+    "get_stock_codes": "get_stock_codes",
+    "get_etf_codes": "get_etf_codes",
+    "get_etf_list": "get_etf_list",
+    "get_market_count": "get_market_count",
+    "get_workday": "get_workday",
+    "get_workday_range": "get_workday_range",
+    "get_index_all": "get_index_all",
+    "get_f10": "get_f10",
+    "get_f10_company": "get_f10_company",
+    "get_minutes": "get_minutes",
+    "get_index_bars": "get_index_bars",
+    "get_xdxr": "get_xdxr",
+    "get_stock_all": "get_stock_all",
+    "get_k_data": "get_k_data",
+    "search_stock": "search_stock",
+    "get_stock_info": "get_stock_info",
+    "get_custom_sector_list": "get_custom_sector_list",
+    "get_custom_sector_stocks": "get_custom_sector_stocks",
+    "get_index_overview": "get_index_overview",
+    "get_index_kline_local": "get_index_kline_local",
+    "stock_top_board": "stock_top_board",
+    "stock_unusual": "stock_unusual",
+    "indicator_atr": "indicator_atr",
+    "get_daily": "get_daily",
+    "get_minute": "get_minute",
+    "get_fzline": "get_fzline",
+    "batch_bars": "batch_bars",
+    # YAML 工具名别名
+    "get_daily_local": "get_daily",
+    "get_fzline_local": "get_fzline",
+    "get_minute_local": "get_minute",
+    "mootdx2_stock_info": "get_stock_info",
+    "search_stock_local": "search_stock",
+}
 
 # 数据量过大错误消息模板
 DATA_TOO_LARGE_MSG = "数据量超过{limit}条，请缩小查询范围或增加筛选条件"
+
+# ---- 2026-09-19 HIGH 审视: 实时行情报文归一化常量/helper --------------------
+# tdxpy 0.2.7 parser/std/get_security_quotes.py 实测报文行只有
+# market(int: 0=SZ/1=SH/2=BJ) / code / price / last_close / open / high /
+# low / vol / amount ... **没有** close / pct_chg / symbol / name 列
+# (旧代码按 close/pct_chg/symbol 取值, 生产全是 0 或 KeyError)。
+_MARKET_ID_TO_PREFIX = {0: "sz", 1: "sh", 2: "bj"}
+# A 股代码前缀 (按交易所划分, stocks() 列表里还混有基金/债券, 必须过滤)
+_A_SHARE_PREFIXES_SH = ("60", "68")
+_A_SHARE_PREFIXES_SZ = ("00", "30")
+# ETF 代码前缀: 沪市 51/56/58, 深市 15 (16 开头是 LOF/分级, 不算 ETF)
+_ETF_PREFIXES_BY_MARKET = {1: ("51", "56", "58"), 0: ("15",)}
+# block.dat FLAT 行 code 为 7 位 "市场位 + 6 位代码": 0=SZ / 1=SH / 2=BJ
+_BLOCK_MARKET_CHAR_TO_PREFIX = {"0": "sz", "1": "sh", "2": "bj"}
+
+
+class _CustomSectorError(Exception):
+    """自定义板块的内部信号异常: 本机环境/业务状态而非上游故障。
+
+    tdxdir 缺失 (tdx_not_installed) / blocknew 目录缺失
+    (tdx_custom_sector_unavailable) / 板块名未命中 (sector_not_found)。
+    wrapper 显式捕获后返回 success=False 的类型化结果, 不进 error_counts、
+    不降级上游 status。
+    """
+
+    def __init__(self, error_type: str, message: str):
+        self.error_type = error_type
+        super().__init__(message)
+
+
+def _quote_symbol(rec: dict) -> str:
+    """从报文 market/code 拼出带前缀 symbol, 如 'sh600519'。"""
+    try:
+        prefix = _MARKET_ID_TO_PREFIX.get(int(rec.get("market", 0)), "sz")
+    except (TypeError, ValueError):
+        prefix = "sz"
+    return f"{prefix}{rec.get('code', '')}"
+
+
+def _quote_pct_chg(rec: dict) -> float:
+    """报文只给 price/last_close, 涨跌幅由网关计算 (%)。"""
+    try:
+        price = float(rec.get("price", 0) or 0)
+        last_close = float(rec.get("last_close", 0) or 0)
+        if last_close > 0:
+            return round((price - last_close) / last_close * 100, 2)
+    except (TypeError, ValueError):
+        pass
+    return 0.0
+
+
+def _quote_amplitude(rec: dict) -> float:
+    """振幅 = (最高 - 最低) / 昨收 * 100 (%)。"""
+    try:
+        high = float(rec.get("high", 0) or 0)
+        low = float(rec.get("low", 0) or 0)
+        last_close = float(rec.get("last_close", 0) or 0)
+        if last_close > 0:
+            return round((high - low) / last_close * 100, 2)
+    except (TypeError, ValueError):
+        pass
+    return 0.0
+
+
+def _annotate_quote_records(records: list[dict]) -> None:
+    """就地补出网关合同需要的 symbol/close/pct_chg/amplitude 列。"""
+    for rec in records:
+        rec["symbol"] = _quote_symbol(rec)
+        rec["close"] = float(rec.get("price", 0) or 0)
+        rec["pct_chg"] = _quote_pct_chg(rec)
+        rec["amplitude"] = _quote_amplitude(rec)
+
+
+def _strip_market_prefix(code: str) -> str:
+    """剥 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀, 返回裸码。
+
+    取代散落在 10+ 处的 ``code.lower().replace("sh","").replace("sz","")``
+    链式替换 (旧写法有顺序坑: 裸码含 "sh" 子串也会被误删)。
+    """
+    s = str(code or "").strip().lower()
+    if len(s) >= 9 and s[-3:] in (".sh", ".sz", ".bj"):
+        s = s[:-3]
+    if s[:2] in ("sh", "sz", "bj"):
+        s = s[2:]
+    return s
+
+
+def _classify_bare_market(code: str) -> str:
+    """按 tdxpy get_stock_market 的裸码推断规则返回 sh/sz/bj。
+
+    tdxpy: 4/8 开头 → bj (北交所), 5/6/7/9 及 50/51/60/68 等 → sh,
+    0/3 及 12/13/15/16/18/20/39 等 → sz, 默认 sh。北交所 2024 后新号段
+    920xxx 同样走 bj (旧规则漏判)。
+    """
+    code = str(code or "")
+    if code.startswith("920") or code[:1] in ("4", "8"):
+        return "bj"
+    if code[:3] in ("110", "113", "132", "204"):
+        return "sh"
+    if code[:2] in ("50", "51", "56", "58", "60", "68", "90"):
+        return "sh"
+    if code[:1] in ("5", "6", "7", "9"):
+        return "sh"
+    return "sz"
+
+
+def _parse_quote_symbol(code: str) -> tuple[str, str, str]:
+    """行情接口代码归一化 → (market_prefix, bare6, library_token)。
+
+    实测的 tdxpy 路由约束:
+    - sh/sz 前缀被 get_stock_markets 显式识别, 必须**前缀直传** — 裸码
+      "000001" 会被数字推断成深市股票平安银行, 无法表达上证指数;
+    - "bj" 前缀**不被识别** (bj430047 会错路由到 SH), 北交所只能发裸码,
+      且批次中混入 market=2 时 tdxpy 整批返 None → BJ 只能单只独立批次。
+    """
+    s = str(code or "").strip().lower()
+    prefix: str | None = None
+    if len(s) >= 9 and s[-3:] in (".sh", ".sz", ".bj"):
+        prefix, s = s[-2:], s[:-3]
+    elif s[:2] in ("sh", "sz", "bj"):
+        prefix, s = s[:2], s[2:]
+    if not (len(s) == 6 and s.isdigit()):
+        raise ValueError(f"代码格式错误: {code!r} (需 6 位数字, 可带 sh/sz/bj 前缀)")
+    if prefix is None:
+        prefix = _classify_bare_market(s)
+    token = s if prefix == "bj" else f"{prefix}{s}"
+    return prefix, s, token
+
+
+def _split_prefixed_symbol(sym: str) -> tuple[str, str]:
+    """'sh600519' → ('sh','600519'); 无前缀回落 ('sz', sym)。"""
+    s = str(sym or "")
+    if s[:2] in ("sh", "sz", "bj"):
+        return s[:2], s[2:]
+    return "sz", s
+
+
+def _classify_search_code(code: str) -> str:
+    """search_stock 两条数据源共用的市场分类: block FLAT 7 位码或 6 位裸码。"""
+    code = str(code or "")
+    if len(code) == 7 and code[0] in _BLOCK_MARKET_CHAR_TO_PREFIX:
+        return _BLOCK_MARKET_CHAR_TO_PREFIX[code[0]]
+    return _classify_bare_market(code)
+
+
+def _parse_compact_date(value: str) -> datetime.datetime:
+    """YYYYMMDD / YYYY-MM-DD → datetime; 均不匹配抛 ValueError。"""
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"日期格式错误: {value!r} (需 YYYYMMDD 或 YYYY-MM-DD)")
 
 
 def _validate_kline_record(record: dict) -> bool:
@@ -93,17 +274,6 @@ def _validate_kline_record(record: dict) -> bool:
         return False
 
 
-def _validate_quote_record(record: dict) -> bool:
-    """校验单条行情数据合理性"""
-    try:
-        close = float(record.get("close", 0))
-        if close <= 0:
-            return False
-        return True
-    except (TypeError, ValueError):
-        return False
-
-
 @dataclass
 class MooTDX2Config:
     """MooTDX2 配置"""
@@ -122,7 +292,6 @@ class MooTDX2Client:
         self.name = config.name
         self._status = UpstreamStatus.UNKNOWN
         self._quotes = None
-        self._quotes_cls = None  # 延迟导入
         self._reader = None  # Reader 实例缓存
         self._reader_lock = threading.Lock()  # Reader 缓存锁（高并发保护）
         self._quotes_lock = threading.Lock()  # Quotes 缓存锁（高并发保护）
@@ -130,7 +299,10 @@ class MooTDX2Client:
         # H1 (round 8 audit): 后台周期探活任务, 让 DEGRADED 状态有机会
         # 在 TDX 恢复后自动回到 HEALTHY。
         self._health_task: asyncio.Task | None = None
-        self._probe_attempts: int = 0  # 用于 start() 内的重试计数 (H2)
+        # M2 (round 11): 生命周期代次标记。start() 超时被网关取消后在途
+        # factory 线程仍可能完成; 用于防止已停 client 被晚到的健康循环复活,
+        # 并让 late recovery 入口拒绝已停实例。
+        self._stopped = False
 
         # 指标收集
         self._request_id = 0
@@ -150,7 +322,6 @@ class MooTDX2Client:
         # 2026-09-16: 缓存策略改为当日有效（到次日 9:00 过期）
         # 方案：用日期作为缓存 key 的一部分，同一天内命中，次日自动 miss
         # 这是为了避免缓存隔日陈旧行情数据（如停牌/退市/复权价）
-        import datetime
         try:
             from cachetools import TTLCache
             # 次日 9:00 过期 = 计算到次日 9:00 的秒数
@@ -235,6 +406,58 @@ class MooTDX2Client:
                 return tdxdir
         return None
 
+    def _require_blocknew_dir(self) -> Path:
+        """自定义板块工具的统一前置闸: 返回 T0002/blocknew 目录。
+
+        - tdxdir 未配置或目录不存在 → tdx_not_installed (旧码 Path(None)
+          抛 TypeError, 对外误报 internal_error);
+        - T0002/blocknew 不存在 (V7.73+ 未同步自定义板块) →
+          tdx_custom_sector_unavailable。
+        """
+        tdxdir = self._get_tdxdir()
+        if not tdxdir:
+            raise _CustomSectorError(
+                MooTDXErrorType.TDX_NOT_INSTALLED.value,
+                "未配置通达信安装目录 (settings.tdxdir), 无法访问自定义板块",
+            )
+        root = Path(tdxdir)
+        if not root.exists():
+            raise _CustomSectorError(
+                MooTDXErrorType.TDX_NOT_INSTALLED.value,
+                f"通达信安装目录不存在: {tdxdir}",
+            )
+        blocknew_dir = root / "T0002" / "blocknew"
+        if not blocknew_dir.exists():
+            raise _CustomSectorError(
+                MooTDXErrorType.TDX_CUSTOM_SECTOR_UNAVAILABLE.value,
+                f"自定义板块目录不存在: {blocknew_dir} (请在通达信客户端维护自定义板块)",
+            )
+        return blocknew_dir
+
+    @staticmethod
+    def _load_custom_sector_name_map(tdxdir: str) -> dict[str, str]:
+        """Customize.search(group=True) DataFrame → {block_type(stem): 中文名}。
+
+        mootdx2 1.4.2 实测返回 DataFrame, 列 blockname(中文名)/
+        block_type(.blk 文件名 stem)/stock_count/code_list。cfg 不兼容时
+        返回空映射, 调用方退化为 .blk 文件名展示。
+        """
+        try:
+            from mootdx2.tools.customize import Customize
+
+            grouped = Customize(tdxdir=tdxdir).search(group=True)
+        except Exception as e:  # V7.73+ cfg 格式可能不兼容
+            logger.info(f"Customize.search failed, fallback to .blk stems: {e}")
+            return {}
+        name_by_stem: dict[str, str] = {}
+        if grouped is not None and hasattr(grouped, "iterrows") and len(grouped) > 0:
+            for _, row in grouped.iterrows():
+                stem = str(row.get("block_type", "")).strip()
+                name = str(row.get("blockname", "")).strip()
+                if stem and name:
+                    name_by_stem[stem] = name
+        return name_by_stem
+
     @staticmethod
     def _filter_records_by_date(records: list, start_date: str, end_date: str) -> list:
         """缓存命中后在 records 上做 start/end 过滤。O(N) dict 遍历。
@@ -252,7 +475,6 @@ class MooTDX2Client:
                 continue
             out.append(r)
         return out
-        return None
 
     def _get_reader(self):
         """获取缓存的 Reader 实例（懒初始化，线程安全）。"""
@@ -344,19 +566,6 @@ class MooTDX2Client:
             error_detail=error_detail,
         )
 
-    def _sector_error_result(self, exc: "SectorDataError") -> ToolResult:
-        """将 SectorDataError 转换为 ToolResult（recoverable=False，配置/业务错误）"""
-        self._record_error(exc.error_type.value)
-        return ToolResult(
-            success=False,
-            error=exc.message,
-            error_detail={
-                "error_type": exc.error_type.value,
-                "message": exc.message,
-                "recoverable": False,
-            },
-        )
-
     def _no_data_result(self, message: str = "查询成功但无数据") -> ToolResult:
         """返回 no_data 状态（不是错误，是正常业务状态）"""
         return ToolResult(
@@ -370,15 +579,53 @@ class MooTDX2Client:
             },
         )
 
+    def _invalid_param_result(self, message: str) -> ToolResult:
+        """参数门控失败 (不可重试, 不打 TDX, 不记 error_counts)。"""
+        return ToolResult(
+            success=False,
+            error=message,
+            error_detail={
+                "error_type": MooTDXErrorType.INVALID_PARAM.value,
+                "message": message,
+                "recoverable": False,
+            },
+        )
+
+    def _invalid_symbol_result(self, message: str) -> ToolResult:
+        """代码格式门控失败。"""
+        return ToolResult(
+            success=False,
+            error=message,
+            error_detail={
+                "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
+                "message": message,
+                "recoverable": False,
+            },
+        )
+
+    def _custom_sector_error_result(self, error_type: str, message: str) -> ToolResult:
+        """自定义板块的环境/业务状态 (tdxdir 缺失 / 目录缺失 / 板块未找到)。
+
+        与 no_data 不同, YAML 合同把这三类列为错误 (success=False), 但它们是
+        本机环境状态而非上游故障, 不进 error_counts / 不降级 status。
+        """
+        return ToolResult(
+            success=False,
+            error=message,
+            error_detail={
+                "error_type": error_type,
+                "message": message,
+                "recoverable": True,
+            },
+        )
+
     def _build_daily_tool_result(
         self,
         *,
         code: str,
         data: list[dict] | None,
         meta: dict,
-        adjust: str,
         parsed_for_key,
-        reader_symbol_key: str | None,
     ) -> ToolResult:
         """Build ToolResult from `_get_daily_sync` output.
 
@@ -393,7 +640,6 @@ class MooTDX2Client:
                 result.error_detail = {"warn": meta["warn"], "recoverable": True}
             return result
         # 无数据
-        from .index_registry import parse_symbol, INDEX_KIND
         if meta.get("kind") == INDEX_KIND:
             if parsed_for_key is not None:
                 msg = (
@@ -415,7 +661,6 @@ class MooTDX2Client:
 
     def _get_ttl_until_tomorrow_9am(self) -> float:
         """计算到次日 9:00 的剩余秒数（动态 TTL）"""
-        import datetime
         now = datetime.datetime.now()
         tomorrow_9am = now.replace(hour=9, minute=0, second=0, microsecond=0)
         if now.hour >= 9:
@@ -471,14 +716,6 @@ class MooTDX2Client:
             "maxsize": cache.maxsize,
             "ttl_seconds": ttl,
         }
-
-    async def get_metrics_async(self) -> ToolResult:
-        """获取服务指标（异步版本供 call_tool 调用）"""
-        return ToolResult(
-            success=True,
-            data=self.get_metrics(),
-            source="mootdx2",
-        )
 
     async def get_health(self) -> ToolResult:
         """健康检查接口（轻量 ping）"""
@@ -563,7 +800,6 @@ class MooTDX2Client:
                 # 双重检查
                 if self._quotes is None:
                     from mootdx2.quotes import Quotes
-                    self._quotes_cls = Quotes
                     settings = self.config.settings
                     pinned = settings.servers if settings else []
                     # 从配置获取超时设置
@@ -597,21 +833,24 @@ class MooTDX2Client:
         return self._quotes
 
     def _get_quote_sync(self, code: str):
-        """同步获取实时行情"""
+        """同步获取实时行情。
+
+        2026-09-19 合同修复: sh/sz 前缀直传 (旧实现无脑剥前缀, sh000001
+        上证指数被裸码路由成深市平安银行); bj 不被 tdxpy 识别, 改发裸码
+        单只请求; 报文行统一过 _annotate_quote_records 补 symbol/close/
+        pct_chg/amplitude。
+        """
+        prefix, bare, token = _parse_quote_symbol(code)
         q = self._get_quotes()
-        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        df = q.quotes(symbol=[sym])
+        df = q.quotes(symbol=[token])
         if df is not None and len(df) > 0:
-            latest = df.iloc[-1]
-            return {
-                "symbol": code,
-                "close": float(latest.get("close", 0)),
-                "open": float(latest.get("open", 0)),
-                "high": float(latest.get("high", 0)),
-                "low": float(latest.get("low", 0)),
-                "volume": float(latest.get("vol", 0)),
-                "amount": float(latest.get("amount", 0)),
-            }
+            rec = df.iloc[-1].to_dict()
+            _annotate_quote_records([rec])
+            # 兼容合同键: 报文成交量字段是 vol
+            rec["volume"] = float(rec.get("vol", 0) or 0)
+            for k in ("open", "high", "low", "amount"):
+                rec[k] = float(rec.get(k, 0) or 0)
+            return rec
         return None
 
     @property
@@ -634,6 +873,9 @@ class MooTDX2Client:
         C1 (round 8 audit): 复用 self._quotes 实例, 避免每次 probe 都触发
         Quotes.factory() 重新测速所有服务器, 启动延迟叠加。
         """
+        # M2 (round 11): 同实例 stop/start 循环与 late recovery 都经此入口,
+        # 先复位停止标记, 否则 _start_health_loop 会把新健康循环挡在门外。
+        self._stopped = False
         # C1: 提前创建一次 Quotes 实例 (factory 内部测速一次, 后续 probe 复用)
         # 2026-09-14 round 11 audit: tdxdir 探测 (best-effort, 不抛) —
         # 早于 Quotes init, 方便用户在日志里立刻看到本地数据目录错配。
@@ -744,12 +986,31 @@ class MooTDX2Client:
         # L1 (round 10): probe 同样是 TDX 同步阻塞调用, 走专用阻塞池。
         return await self._run_blocking(_do_probe)
 
-    def _start_health_loop(self) -> None:
+    def _start_health_loop(self) -> asyncio.Task | None:
         """H1 (round 8 audit): 启动后台周期探活, 让 DEGRADED 状态有机会
-        在 TDX 恢复后回到 HEALTHY。每 30s probe 一次 (复用 quotes)。"""
+        在 TDX 恢复后回到 HEALTHY。每 30s probe 一次 (复用 quotes)。
+
+        M2 (round 11): stop 之后 / 尚未 start 的晚到调用不再复活健康循环;
+        返回 task 引用供调用方/测试判重, 已在跑时返回同一个 task。
+        """
+        if self._stopped:
+            return None
         if self._health_task and not self._health_task.done():
-            return
+            return self._health_task
         self._health_task = asyncio.create_task(self._health_loop())
+        return self._health_task
+
+    async def start_after_timeout(self) -> None:
+        """M2 (round 11): 网关启动 ``wait_for`` 超时后的后台自愈入口。
+
+        被取消的 start() 可能留下在途 factory 线程 (线程池不可中断);
+        ``_get_quotes()`` 的锁+双重检查使重复进入不会二次 factory, 故这里
+        重跑一遍 start() 即可: factory 秒回 (复用在途/已建实例), probe
+        重测并启动健康循环, 让 UNKNOWN 孤儿 client 无需重启网关即恢复。
+        """
+        if self._stopped:
+            return
+        await self.start()
 
     async def _health_loop(self) -> None:
         """后台周期探活: DEGRADED → HEALTHY 自动恢复, HEALTHY → DEGRADED 失败检测。
@@ -795,6 +1056,9 @@ class MooTDX2Client:
             pass
 
     async def stop(self):
+        # M2 (round 11): 先置停止位, 挡住 late recovery 重入与晚到的健康
+        # 循环复活 (与摘除/关闭 Quotes 分开, 无需持锁即可立即生效)。
+        self._stopped = True
         # 2026-09-16: 清理 L1 缓存 (去掉了 single-flight)
         if self._DAILY_L1_ENABLED and hasattr(self, '_daily_l1'):
             self._daily_l1.clear()
@@ -812,17 +1076,27 @@ class MooTDX2Client:
             except asyncio.CancelledError:
                 pass
             self._health_task = None
-        # M4 (round 8 audit): 关闭 Quotes 实例防止连接泄漏
-        if self._quotes is not None:
-            try:
-                close_method = getattr(self._quotes, "close", None)
-                if close_method:
-                    # L1 (round 10): Quotes.close 同为 TDX 同步阻塞调用,
-                    # 走专用阻塞池而非 asyncio.to_thread 默认池。
-                    await self._run_blocking(close_method)
-            except Exception as e:
-                logger.debug(f"{self.name}: Quotes.close failed: {e}")
-            self._quotes = None
+        # M4 (round 8 audit): 关闭 Quotes 实例防止连接泄漏。
+        # L1 (round 11): start() 超时后在途 factory 线程 (预算可达 90s) 可能
+        # 在 stop() 读到 None 跳过关闭之后才晚赋值, 留下无人关的活 TDX 连接。
+        # 摘除+关闭整段在 _quotes_lock 内与 factory 赋值互斥: stop 先到时
+        # 排队等在同一把锁上, factory 一释放就摘除并关闭晚赋值的实例,
+        # stop 的 wait_for 超时后该动作仍在 daemon 阻塞线程上排队, 最终必执行。
+        def _detach_and_close_quotes() -> None:
+            with self._quotes_lock:
+                q, self._quotes = self._quotes, None
+            if q is None:
+                return
+            close_method = getattr(q, "close", None)
+            if close_method:
+                # Quotes.close 是 TDX 同步阻塞调用, 跑在专用 unihive-upstream
+                # 阻塞池 (L1 round 10), 不占 asyncio 默认池。
+                close_method()
+
+        try:
+            await self._run_blocking(_detach_and_close_quotes)
+        except Exception as e:
+            logger.debug(f"{self.name}: Quotes.close failed: {e}")
         self._status = UpstreamStatus.UNKNOWN
 
     async def health_check(self) -> bool:
@@ -840,56 +1114,11 @@ class MooTDX2Client:
         C3 (round 9 audit): 顶层 try/except, 失败时降级 status (HEALTHY →
         DEGRADED), 让 router 快速跳过此上游, 不必等 30s health_loop。
         """
-        method_map = {
-            "get_quote": self.get_quote,
-            "get_kline": self.get_kline,
-            "get_batch_quote": self.get_batch_quote,
-            "get_minute_data": self.get_minute_data,
-            "get_trade": self.get_trade,
-            "get_trade_history": self.get_trade_history,
-            "get_index_kline": self.get_index_kline,
-            "get_code_list": self.get_code_list,
-            "get_stock_codes": self.get_stock_codes,
-            "get_etf_codes": self.get_etf_codes,
-            "get_etf_list": self.get_etf_list,
-            "get_market_count": self.get_market_count,
-            "get_workday": self.get_workday,
-            "get_workday_range": self.get_workday_range,
-            "get_index_all": self.get_index_all,
-            "get_income": self.get_income,
-            # 新增接口
-            "get_f10": self.get_f10,
-            "get_f10_company": self.get_f10_company,
-            "get_minutes": self.get_minutes,
-            "get_index_bars": self.get_index_bars,
-            "get_xdxr": self.get_xdxr,
-            "get_stock_all": self.get_stock_all,
-            "get_k_data": self.get_k_data,
-            "search_stock": self.search_stock,
-            "get_stock_info": self.get_stock_info,
-            "get_custom_sector_list": self.get_custom_sector_list,
-            "get_custom_sector_stocks": self.get_custom_sector_stocks,
-            "get_index_overview": self.get_index_overview,
-            # 2026-09-14 round 11 audit: 离线指数 K 线（Reader.daily 强制
-            # 无复权），与在线 get_index_kline 区别在于不依赖 TDX 网络。
-            "get_index_kline_local": self.get_index_kline_local,
-            "stock_top_board": self.stock_top_board,
-            "stock_unusual": self.stock_unusual,
-            "indicator_atr": self.indicator_atr,
-            # Reader 离线接口（本地 .day / .lc1 / .lc5 文件）
-            "get_daily": self.get_daily,
-            "get_minute": self.get_minute,
-            "get_fzline": self.get_fzline,
-            # YAML 工具名映射
-            "batch_bars": self.batch_bars,
-            "get_daily_local": self.get_daily,
-            "get_fzline_local": self.get_fzline,
-            "get_minute_local": self.get_minute,
-            "mootdx2_stock_info": self.get_stock_info,
-            "search_stock_local": self.search_stock,
-        }
-
-        method = method_map.get(tool_name)
+        # H1 (2026-09-19): get_income 已下线 (mootdx2 无 income() 能力;
+        # finance() 只是单股财务快照), 不在分发表内; 存量 config.db 残留
+        # 实体走到这里返回 Unknown tool。
+        method_name = _TOOL_METHOD_NAMES.get(tool_name)
+        method = getattr(self, method_name, None) if method_name else None
         if not method:
             return ToolResult(success=False, error=f"Unknown tool: {tool_name}")
 
@@ -932,14 +1161,12 @@ class MooTDX2Client:
             return self._error_result(e, f"get_quote({code})")
 
     def _get_kline_sync(self, code: str, type: str = "day", limit: int = 100):
-        """同步获取K线"""
+        """同步获取K线 (bars offset 即条数, 旧码再 tail(limit) 是重复截断)。"""
         q = self._get_quotes()
-        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+        sym = _strip_market_prefix(code)
         freq = FREQ_MAP.get(type, 9)
         df = q.bars(symbol=sym, frequency=freq, offset=limit)
         if df is not None and len(df) > 0:
-            if limit and limit > 0:
-                df = df.tail(limit)
             return df.to_dict(orient="records")
         return None
 
@@ -954,14 +1181,16 @@ class MooTDX2Client:
         Returns:
             数据量超过限制时返回错误提示
         """
-        # 数据量检查
-        if limit > MAX_LIMIT_KLINE:
+        # 数据量检查 (2026-09-19 LOW: 旧码只拦 >1000, 0/负数会带着非法
+        # offset 打到 TDX)
+        if not isinstance(limit, int) or not (1 <= limit <= MAX_LIMIT_KLINE):
+            msg = f"limit 需为 1-{MAX_LIMIT_KLINE} 的整数, 收到 {limit!r}"
             return ToolResult(
                 success=False,
-                error=DATA_TOO_LARGE_MSG.format(limit=MAX_LIMIT_KLINE),
+                error=msg,
                 error_detail={
                     "error_type": MooTDXErrorType.INVALID_PARAM.value,
-                    "message": DATA_TOO_LARGE_MSG.format(limit=MAX_LIMIT_KLINE),
+                    "message": msg,
                     "recoverable": False,
                 },
             )
@@ -981,56 +1210,128 @@ class MooTDX2Client:
             return self._error_result(e, f"get_kline({code})")
 
     # ========== 批量行情 ==========
-    def _get_batch_quote_sync(self, codes: str):
-        """同步批量行情"""
+    def _get_batch_quote_sync(self, tokens: list[str]) -> list[dict] | None:
+        """同步批量行情 (tokens 已是 tdxpy 可直接消费的形式)。
+
+        返回报文行并就地补出 symbol/close/pct_chg/amplitude。调用方负责
+        BJ 隔离: 批次里混入 market=2 时 tdxpy 整批返 None。
+        """
         q = self._get_quotes()
-        code_list = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in codes.split(",")]
-        df = q.quotes(symbol=code_list)
+        df = q.quotes(symbol=list(tokens))
         if df is not None and len(df) > 0:
-            return df.to_dict(orient="records")
+            rows = df.to_dict(orient="records")
+            _annotate_quote_records(rows)
+            return rows
         return None
 
     async def get_batch_quote(self, codes: str) -> ToolResult:
-        """获取批量行情"""
+        """获取批量行情 (最多 50 只)。
+
+        2026-09-19 合同修复:
+        - >50 / 空串 / 非法代码 → invalid_param / invalid_symbol, 不打 TDX;
+        - 沪深合并一批前缀直传; 北交所每只独立一批裸码 (混批 tdxpy 整批
+          返 None), BJ 批次失败不拖垮沪深, 在 error_detail.warn 说明。
+        """
         self._metrics["total_requests"] += 1
+        raw_parts = [p.strip() for p in str(codes or "").split(",") if p.strip()]
+        if not raw_parts:
+            return self._invalid_param_result("codes 不能为空")
         try:
-            data = await self._run_blocking(self._get_batch_quote_sync, codes)
-            if data:
-                return ToolResult(success=True, data=data, source="mootdx2")
-            return self._no_data_result()
+            parsed = [_parse_quote_symbol(p) for p in raw_parts]
+        except ValueError as e:
+            return self._invalid_symbol_result(str(e))
+        if len(parsed) > MAX_LIMIT_BATCH_QUOTE:
+            return self._invalid_param_result(
+                f"批量请求超过 {MAX_LIMIT_BATCH_QUOTE} 只股票限制"
+            )
+
+        try:
+            main_tokens = [tok for pref, _, tok in parsed if pref in ("sh", "sz")]
+            bj_tokens = [(pref, bare, tok) for pref, bare, tok in parsed if pref == "bj"]
+
+            rows_by_key: dict[tuple[str, str], dict] = {}
+            if main_tokens:
+                rows = await self._run_blocking(self._get_batch_quote_sync, main_tokens)
+                for rec in rows or []:
+                    mkt, bare = _split_prefixed_symbol(rec.get("symbol", ""))
+                    rows_by_key[(mkt, bare)] = rec
+
+            failed_bj: list[str] = []
+            for _, _, tok in bj_tokens:
+                # BJ 只能单只裸码独立批次 (含 market=2 的混批整批返 None)
+                rows = await self._run_blocking(self._get_batch_quote_sync, [tok])
+                if rows:
+                    mkt, bare = _split_prefixed_symbol(rows[0].get("symbol", ""))
+                    rows_by_key[(mkt, bare)] = rows[0]
+                else:
+                    failed_bj.append(tok)
+
+            ordered = [
+                rows_by_key[(pref, bare)]
+                for pref, bare, _ in parsed
+                if (pref, bare) in rows_by_key
+            ]
+            if not ordered:
+                return self._no_data_result()
+            result = ToolResult(success=True, data=ordered, source="mootdx2")
+            if failed_bj:
+                result.error_detail = {
+                    "warn": (
+                        f"北交所行情批次无返回: {','.join(failed_bj)} "
+                        f"(已返回其余 {len(ordered)} 只)"
+                    ),
+                    "recoverable": True,
+                }
+            return result
         except Exception as e:
             logger.error(f"get_batch_quote failed: {e}")
             return self._error_result(e, f"get_batch_quote({codes})")
 
     # ========== 批量K线 ==========
-    FREQ_MAP_BATCH = {
-        "day": 9,
-        "week": 5,
-        "month": 6,
-        "minute1": 1,
-        "minute5": 5,
-        "minute15": 15,
-        "minute30": 30,
-        "minute60": 60,
-    }
-
-    def _get_batch_bars_sync(self, codes: str, type: str = "day", limit: int = 100):
-        """同步批量K线"""
+    # H4 (2026-09-19): batch_bars 内部 BatchDailyFetcher 循环调
+    # quotes.bars(frequency=...), 与单股 K 线共用同一套 TDX category 码,
+    # 必须用模块级 FREQ_MAP (8/0/1/2/3), 旧 FREQ_MAP_BATCH 的 minute 码
+    # (1/5/15/30/60) 实际取到的是 15min/周线/非法类别。
+    def _get_batch_bars_sync(self, bare_codes: list[str], type: str = "day", limit: int = 100):
+        """同步批量K线 (bare_codes 已剥前缀并校验)。"""
         q = self._get_quotes()
-        code_list = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in codes.split(",")]
-        freq = FREQ_MAP_BATCH.get(type, 9)
-        result = q.batch_bars(symbols=code_list, frequency=freq, count=limit)
+        freq = FREQ_MAP.get(type, 9)
+        # batch_bars 的条数入参是 offset (内部透传给 bars), 旧代码传 count
+        # 会落进 **kwargs 被忽略, 每只恒取 800 根; bars offset 硬上限 800。
+        result = q.batch_bars(
+            symbols=bare_codes, frequency=freq, start=0, offset=min(limit, 800)
+        )
         if result and isinstance(result, dict):
             return {k: v.to_dict(orient="records") if v is not None else [] for k, v in result.items()}
         return None
 
     async def batch_bars(self, codes: str, type: str = "day", limit: int = 100) -> ToolResult:
-        """批量获取K线"""
-        if limit > 500:
-            limit = 500
+        """批量获取K线 (≤20 只, 每只 1-500 根; 违约 invalid_param, 不打 TDX)。"""
+        parts = [p.strip() for p in str(codes or "").split(",") if p.strip()]
+        if not parts:
+            return self._invalid_param_result("codes 不能为空")
+        if len(parts) > MAX_LIMIT_BATCH_BARS_CODES:
+            return self._invalid_param_result(
+                f"批量K线一次最多 {MAX_LIMIT_BATCH_BARS_CODES} 只, 收到 {len(parts)} 只"
+            )
+        if not isinstance(limit, int) or not (1 <= limit <= MAX_LIMIT_BATCH_BARS):
+            return self._invalid_param_result(
+                f"limit 需为 1-{MAX_LIMIT_BATCH_BARS} 的整数, 收到 {limit!r}"
+            )
+        bare_codes: list[str] = []
+        for part in parts:
+            bare = _strip_market_prefix(part)
+            if not (len(bare) == 6 and bare.isdigit()):
+                return self._invalid_symbol_result(
+                    f"代码格式错误: {part!r} (需 6 位数字, 可带 sh/sz/bj 前缀)"
+                )
+            bare_codes.append(bare)
+
         self._metrics["total_requests"] += 1
         try:
-            data = await self._run_blocking(self._get_batch_bars_sync, codes, type, limit)
+            data = await self._run_blocking(
+                self._get_batch_bars_sync, bare_codes, type, limit
+            )
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result()
@@ -1050,6 +1351,7 @@ class MooTDX2Client:
 
     async def get_minute_data(self, code: str) -> ToolResult:
         """获取今日分时"""
+        self._metrics["total_requests"] += 1
         try:
             data = await self._run_blocking(self._get_minute_data_sync, code)
             if data:
@@ -1180,20 +1482,47 @@ class MooTDX2Client:
             logger.error(f"get_code_list failed: {e}")
             return self._error_result(e, f"get_code_list({exchange})")
 
-    # ========== 股票代码列表 ==========
-    def _get_stock_codes_sync(self, limit: int, prefix: bool):
-        """同步股票代码列表"""
+    # ========== 股票/ETF 代码列表 ==========
+    # H1 (2026-09-19): mootdx2 没有 stock()/etf() 方法 (旧实现生产必抛
+    # AttributeError), 真实方法面是 stocks(market=0|1) + stock_all(),
+    # 返回该市场全部证券 (含基金/债券/指数), 必须按代码前缀过滤。
+    def _list_market_securities_sync(self, market: int) -> list[dict]:
+        """拉取单市场证券列表原始行 (code/name/decimal_point/...)。"""
         q = self._get_quotes()
-        df = q.stock(exchange="sz")
-        if df is not None and len(df) > 0:
-            codes = df["code"].tolist()[:limit]
-            if prefix:
-                return [f"sz{c}" for c in codes]
-            return codes
-        return None
+        df = q.stocks(market=market)
+        if df is None or len(df) == 0:
+            return []
+        return df.to_dict(orient="records")
+
+    def _list_prefixed_codes_sync(self, market: int, code_prefixes: tuple) -> list[tuple[str, str]]:
+        """返回 [(market_prefix, code), ...], 仅保留匹配前缀的证券, 顺序稳定。"""
+        prefix = _MARKET_ID_TO_PREFIX[market]
+        pairs = []
+        for row in self._list_market_securities_sync(market):
+            code = str(row.get("code") or "")
+            if code.startswith(code_prefixes):
+                pairs.append((prefix, code))
+        return pairs
+
+    def _list_a_share_codes_sync(self) -> list[tuple[str, str]]:
+        """沪深 A 股 (沪先深后): 沪 60/68, 深 00/30。"""
+        sh = self._list_prefixed_codes_sync(1, _A_SHARE_PREFIXES_SH)
+        sz = self._list_prefixed_codes_sync(0, _A_SHARE_PREFIXES_SZ)
+        return sh + sz
+
+    def _get_stock_codes_sync(self, limit: int, prefix: bool):
+        """同步股票代码列表 (沪深 A 股, 沪先深后)"""
+        pairs = self._list_a_share_codes_sync()[: max(int(limit), 0)]
+        if not pairs:
+            return None
+        if prefix:
+            return [f"{mkt}{code}" for mkt, code in pairs]
+        return [code for _, code in pairs]
 
     async def get_stock_codes(self, limit: int = 100, prefix: bool = False) -> ToolResult:
         """获取股票代码列表"""
+        if not isinstance(limit, int) or limit <= 0:
+            return self._invalid_param_result(f"limit 需为正整数, 收到 {limit!r}")
         self._metrics["total_requests"] += 1
         try:
             data = await self._run_blocking(self._get_stock_codes_sync, limit, prefix)
@@ -1205,19 +1534,25 @@ class MooTDX2Client:
             return self._error_result(e, f"get_stock_codes(limit={limit})")
 
     # ========== ETF代码列表 ==========
+    def _list_etf_codes_sync(self) -> list[tuple[str, str]]:
+        """沪深 ETF (沪先深后): 沪 51/56/58, 深 15。16 开头为 LOF 不计。"""
+        sh = self._list_prefixed_codes_sync(1, _ETF_PREFIXES_BY_MARKET[1])
+        sz = self._list_prefixed_codes_sync(0, _ETF_PREFIXES_BY_MARKET[0])
+        return sh + sz
+
     def _get_etf_codes_sync(self, limit: int, prefix: bool):
         """同步ETF代码列表"""
-        q = self._get_quotes()
-        df = q.etf(exchange="sz")
-        if df is not None and len(df) > 0:
-            codes = df["code"].tolist()[:limit]
-            if prefix:
-                return [f"sz{c}" for c in codes]
-            return codes
-        return None
+        pairs = self._list_etf_codes_sync()[: max(int(limit), 0)]
+        if not pairs:
+            return None
+        if prefix:
+            return [f"{mkt}{code}" for mkt, code in pairs]
+        return [code for _, code in pairs]
 
     async def get_etf_codes(self, limit: int = 100, prefix: bool = False) -> ToolResult:
         """获取ETF代码列表"""
+        if not isinstance(limit, int) or limit <= 0:
+            return self._invalid_param_result(f"limit 需为正整数, 收到 {limit!r}")
         self._metrics["total_requests"] += 1
         try:
             data = await self._run_blocking(self._get_etf_codes_sync, limit, prefix)
@@ -1230,21 +1565,41 @@ class MooTDX2Client:
 
     # ========== ETF列表 ==========
     def _get_etf_list_sync(self, exchange: str, limit: int):
-        """同步ETF列表"""
-        q = self._get_quotes()
-        df = q.etf(exchange=exchange)
-        if df is not None and len(df) > 0:
-            result = df.head(limit).to_dict(orient="records")
-            return result
-        return None
+        """同步ETF列表。返回合同字段 [{"code","name","exchange"}, ...]。
+
+        mootdx2 stocks(market) 仅支持沪深 (1=SH/0=SZ), bj 返回 None
+        由上层转 no_data。
+        """
+        exchange_val = (exchange or "").strip().lower()
+        market = self._CODE_LIST_MARKETS.get(exchange_val)
+        if market is None:
+            return None
+        result = []
+        for row in self._list_market_securities_sync(market):
+            code = str(row.get("code") or "")
+            if not code.startswith(_ETF_PREFIXES_BY_MARKET[market]):
+                continue
+            result.append(
+                {"code": code, "name": str(row.get("name", "")), "exchange": exchange_val.upper()}
+            )
+            if len(result) >= limit:
+                break
+        return result or None
 
     async def get_etf_list(self, exchange: str = "sz", limit: int = 100) -> ToolResult:
         """获取ETF列表"""
+        if not isinstance(limit, int) or limit <= 0:
+            return self._invalid_param_result(f"limit 需为正整数, 收到 {limit!r}")
         self._metrics["total_requests"] += 1
+        exchange_val = (exchange or "").strip().lower()
         try:
-            data = await self._run_blocking(self._get_etf_list_sync, exchange, limit)
+            data = await self._run_blocking(self._get_etf_list_sync, exchange_val, limit)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
+            if exchange_val not in self._CODE_LIST_MARKETS:
+                return self._no_data_result(
+                    "mootdx2 ETF 列表仅支持沪深 (sh/sz),暂不支持该交易所"
+                )
             return self._no_data_result()
         except Exception as e:
             logger.error(f"get_etf_list failed: {e}")
@@ -1270,27 +1625,32 @@ class MooTDX2Client:
             return self._error_result(e, f"get_market_count({market})")
 
     # ========== 交易日查询 ==========
-    def _get_workday_sync(self, date: str, count: int):
-        """同步交易日查询"""
-        from datetime import datetime, timedelta
-        # 简化的交易日计算
-        try:
-            target = datetime.strptime(date, "%Y%m%d")
-        except ValueError:
-            target = datetime.strptime(date, "%Y-%m-%d")
-        # 从目标日期往前找count个交易日
+    # 注意: 纯周末数学, **不剔除法定节假日** (网关不内置节假日历, 调休/休市
+    # 日会被计作交易日), YAML 合同已诚实声明。
+    def _get_workday_sync(self, date: str | None, count: int) -> list[str]:
+        """同步交易日查询: 从 target (默认今天) 往前找 count 个周一~周五。"""
+        target = _parse_compact_date(date) if date else datetime.datetime.now()
         results = []
         current = target
         while len(results) < count:
-            current -= timedelta(days=1)
+            current -= datetime.timedelta(days=1)
             if current.weekday() < 5:  # 周一到周五
                 results.append(current.strftime("%Y%m%d"))
         results.reverse()
         return results
 
-    async def get_workday(self, date: str, count: int = 1) -> ToolResult:
-        """获取交易日"""
+    async def get_workday(self, date: str | None = None, count: int = 1) -> ToolResult:
+        """获取交易日 (date 省略默认今天; 纯周末推算, 未剔除法定节假日)。"""
         self._metrics["total_requests"] += 1
+        if not isinstance(count, int) or not (1 <= count <= MAX_WORKDAY_COUNT):
+            return self._invalid_param_result(
+                f"count 需为 1-{MAX_WORKDAY_COUNT} 的整数, 收到 {count!r}"
+            )
+        if date:
+            try:
+                _parse_compact_date(date)
+            except ValueError as e:
+                return self._invalid_param_result(str(e))
         try:
             data = await self._run_blocking(self._get_workday_sync, date, count)
             if data:
@@ -1301,28 +1661,34 @@ class MooTDX2Client:
             return self._error_result(e, f"get_workday({date})")
 
     # ========== 交易日范围 ==========
-    def _get_workday_range_sync(self, start: str, end: str):
-        """同步交易日范围"""
-        from datetime import datetime, timedelta
-        try:
-            start_dt = datetime.strptime(start, "%Y%m%d")
-        except ValueError:
-            start_dt = datetime.strptime(start, "%Y-%m-%d")
-        try:
-            end_dt = datetime.strptime(end, "%Y%m%d")
-        except ValueError:
-            end_dt = datetime.strptime(end, "%Y-%m-%d")
+    def _get_workday_range_sync(
+        self, start: str | None, end: str | None
+    ) -> list[str]:
+        """同步交易日范围 (start/end 省略默认今天)。"""
+        start_dt = _parse_compact_date(start) if start else datetime.datetime.now()
+        end_dt = _parse_compact_date(end) if end else datetime.datetime.now()
         results = []
         current = start_dt
         while current <= end_dt:
             if current.weekday() < 5:
                 results.append(current.strftime("%Y%m%d"))
-            current += timedelta(days=1)
+            current += datetime.timedelta(days=1)
         return results
 
-    async def get_workday_range(self, start: str, end: str) -> ToolResult:
-        """获取交易日范围"""
+    async def get_workday_range(
+        self, start: str | None = None, end: str | None = None
+    ) -> ToolResult:
+        """获取交易日范围 (纯周末推算, 未剔除法定节假日)。"""
         self._metrics["total_requests"] += 1
+        try:
+            start_dt = _parse_compact_date(start) if start else datetime.datetime.now()
+            end_dt = _parse_compact_date(end) if end else datetime.datetime.now()
+        except ValueError as e:
+            return self._invalid_param_result(str(e))
+        if start_dt > end_dt:
+            return self._invalid_param_result(
+                f"start 不能晚于 end: {start} > {end}"
+            )
         try:
             data = await self._run_blocking(self._get_workday_range_sync, start, end)
             if data:
@@ -1356,123 +1722,68 @@ class MooTDX2Client:
             logger.error(f"get_index_all failed: {e}")
             return self._error_result(e, f"get_index_all({code})")
 
-    # ========== 盘后收益 ==========
-    def _get_income_sync(self, code: str):
-        """同步盘后收益"""
-        q = self._get_quotes()
-        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        df = q.income(symbol=sym)
-        if df is not None and len(df) > 0:
-            return df.to_dict(orient="records")
-        return None
-
-    async def get_income(self, code: str, days: int = 30, start_date: str = "") -> ToolResult:
-        """获取盘后收益"""
-        self._metrics["total_requests"] += 1
-        try:
-            data = await self._run_blocking(self._get_income_sync, code)
-            if data:
-                return ToolResult(success=True, data=data, source="mootdx2")
-            return self._no_data_result()
-        except Exception as e:
-            logger.error(f"get_income failed: {e}")
-            return self._error_result(e, f"get_income({code})")
+    # H1 (2026-09-19): get_income 已删除 — mootdx2 无盘后收益序列能力
+    # (q.income 不存在; q.finance 只是单股财务快照, 语义不符不能顶替)。
 
     # ========== 自定义板块 ==========
+    @staticmethod
+    def _parse_blk_content(content: str) -> list[dict]:
+        """.blk 行格式: market_id(1=SH / 0=SZ / 2=BJ) + 6 位代码。"""
+        market_prefix_map = {"1": "sh", "0": "sz", "2": "bj"}
+        result = []
+        for line in content.splitlines():
+            line = line.strip()
+            if len(line) < 7 or not line[0].isdigit():
+                continue
+            code = line[1:]
+            if not (code.isdigit() and len(code) == 6):
+                continue
+            result.append({"code": code, "market": market_prefix_map.get(line[0], "sz")})
+        return result
+
     def _scan_blk_files_sync(self) -> list[dict]:
-        """直接扫描 T0002/blocknew/*.blk 文件（不依赖 cfg 索引）
+        """扫描 T0002/blocknew/*.blk 列出全部自定义板块。
 
         适用于 V7.73+ 通达信：cfg 索引格式可能更新，但 .blk 文件本身仍可读。
-        策略：先尝试 cfg 解析（拿到 blockname → blk_file 映射），
-        cfg 解析失败时退化为用 .blk 文件名作为 sector_name。
+        先经 Customize.search DataFrame 拿 block_type(stem)→blockname(中文名)
+        映射; cfg 解析失败时退化为用 .blk 文件名作为 sector_name。
 
         .blk 文件格式：每行 = market_id(1=SH / 0=SZ / 2=BJ) + 6位股票代码
         例如：'1600000' 表示 SH 600000，'0000001' 表示 SZ 000001。
         """
+        blocknew_dir = self._require_blocknew_dir()
         tdxdir = self._get_tdxdir()
-        blocknew_dir = Path(tdxdir) / "T0002" / "blocknew"
-        if not blocknew_dir.exists():
-            logger.info(
-                f"custom sector dir missing (V7.73+ TDX?): {blocknew_dir}"
-            )
-            return []
+        name_by_stem = self._load_custom_sector_name_map(tdxdir)
 
-        # 1. 尝试从 cfg 解析 sector_name → blk_file 映射
-        name_by_blk: dict[str, str] = {}
-        try:
-            from mootdx2.tools.customize import Customize
-            customize = Customize(tdxdir=tdxdir)
-            grouped = customize.search(group=True)
-            # mootdx2 返回 DataFrame，列: blockname, block_type, stock_count, code_list
-            if grouped is not None and len(grouped) > 0:
-                # 检查是否是 DataFrame
-                if hasattr(grouped, 'iterrows'):
-                    # DataFrame 格式
-                    for _, row in grouped.iterrows():
-                        blk_file = str(row.get('block_type', '')).strip()
-                        name = str(row.get('blockname', '')).strip()
-                        if blk_file and name:
-                            name_by_blk[blk_file] = name
-                else:
-                    # 列表格式（旧版本兼容）
-                    for entry in grouped or []:
-                        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
-                            name = str(entry[0]).strip()
-                            blk_file = entry[2] if len(entry) >= 3 else None
-                            if blk_file:
-                                name_by_blk[str(blk_file).strip()] = name
-        except Exception as e:
-            logger.info(
-                f"Customize.search failed (V7.73 cfg may be incompatible): {e}; "
-                f"falling back to .blk filename as sector name"
-            )
-
-        # 2. 扫描 .blk 文件，统计每板块的股票数
-        market_prefix_map = {"1": "sh", "0": "sz", "2": "bj"}
         results = []
         for blk_path in sorted(blocknew_dir.glob("*.blk")):
             blk_name = blk_path.stem
-            display_name = name_by_blk.get(blk_name, blk_name)
+            display_name = name_by_stem.get(blk_name, blk_name)
             try:
                 content = blk_path.read_text(encoding="gbk", errors="ignore")
             except Exception:
                 content = blk_path.read_text(encoding="utf-8", errors="ignore")
-            codes = []
-            for line in content.splitlines():
-                line = line.strip()
-                if len(line) >= 7 and line[0].isdigit():
-                    code = line[1:]
-                    if code.isdigit() and len(code) == 6:
-                        codes.append(code)
             results.append({
                 "sector_name": display_name,
                 "sector_type": "custom",
-                "stock_count": len(codes),
+                "stock_count": len(self._parse_blk_content(content)),
                 "blk_file": blk_name,
             })
         return results
 
-    def _get_custom_sector_list_sync(self) -> list:
-        """同步读取自定义板块列表（T0002/blocknew/）
-
-        Returns:
-            list[dict]: [{"sector_name", "sector_type": "custom", "stock_count"}, ...]
-
-        V7.73+ 通达信 cfg 索引可能更新，直接扫描 .blk 文件更稳定。
-        """
-        return self._scan_blk_files_sync()
-
     async def get_custom_sector_list(self) -> ToolResult:
         """获取自定义板块列表（用户在 TDX 客户端手动维护）
 
-        数据源：{tdxdir}/T0002/blocknew/blocknew.cfg + *.blk
+        数据源：{tdxdir}/T0002/blocknew/blocknew.cfg + *.blk。
+        tdxdir 缺失 → tdx_not_installed; blocknew 目录缺失 →
+        tdx_custom_sector_unavailable。
         """
         self._metrics["total_requests"] += 1
         try:
-            data = await self._run_blocking(self._get_custom_sector_list_sync)
+            data = await self._run_blocking(self._scan_blk_files_sync)
             return ToolResult(success=True, data=data, source="mootdx2")
-        except SectorDataError as e:
-            return self._sector_error_result(e)
+        except _CustomSectorError as e:
+            return self._custom_sector_error_result(e.error_type, str(e))
         except Exception as e:
             logger.error(f"get_custom_sector_list failed: {e}")
             return self._error_result(e, "get_custom_sector_list()")
@@ -1481,66 +1792,42 @@ class MooTDX2Client:
         """同步读取自定义板块成分股
 
         Args:
-            sector_code: 板块名称（用户自定义）或 .blk 文件名（不含扩展名）
-            market: 市场（保留参数，对齐其它工具签名；内部按 .blk 文件的 market_id 前缀自动推断）
+            sector_code: 板块中文名（DataFrame blockname）或 .blk 文件名 stem;
+              中文名经 Customize.search(group=True) DataFrame 解析为 stem。
+            market: 保留参数 (对齐其它工具签名; 市场按 .blk 行 market_id 推断)。
 
-        V7.73+ 通达信 cfg 索引可能更新，直接扫描 .blk 文件更稳定。
+        2026-09-19 H2 修复: 旧码 ``for entry in grouped`` 直接迭代 DataFrame
+        得到的是列名字符串, isinstance tuple 恒 False → 中文名解析整条链路
+        是死的, 传中文板块名必然落空。
         """
+        sector_code = str(sector_code or "").strip()
+        blocknew_dir = self._require_blocknew_dir()
         tdxdir = self._get_tdxdir()
-        blocknew_dir = Path(tdxdir) / "T0002" / "blocknew"
-        if not blocknew_dir.exists():
-            logger.info(
-                f"custom sector dir missing (V7.73+ TDX?): {blocknew_dir}"
-            )
-            return []
+        name_by_stem = self._load_custom_sector_name_map(tdxdir)
 
-        # 1. 尝试 cfg 解析拿到 blk_file
-        blk_file = None
-        try:
-            from mootdx2.tools.customize import Customize
-            customize = Customize(tdxdir=tdxdir)
-            grouped = customize.search(group=True)
-            for entry in grouped or []:
-                if isinstance(entry, (list, tuple)) and len(entry) >= 3:
-                    if str(entry[0]).strip() == sector_code:
-                        blk_file = str(entry[2]).strip()
-                        break
-        except Exception as e:
-            logger.info(
-                f"Customize.search(name=) failed (V7.73 cfg may be incompatible): {e}; "
-                f"treating sector_code as .blk filename"
-            )
+        # 1. 解析 sector_code → .blk stem:
+        #    a) 入参本身就是 stem (block_type 命中或文件存在, 向后兼容)
+        #    b) 入参是中文名 (blockname 命中)
+        blk_stem = sector_code
+        if sector_code not in name_by_stem:
+            for stem, name in name_by_stem.items():
+                if name == sector_code:
+                    blk_stem = stem
+                    break
 
-        # 2. cfg 失败或未匹配时，直接把 sector_code 当作 .blk 文件名
-        if blk_file is None:
-            blk_file = sector_code
-
-        blk_path = blocknew_dir / f"{blk_file}.blk"
+        blk_path = blocknew_dir / f"{blk_stem}.blk"
         if not blk_path.exists():
-            logger.info(
-                f"custom sector '{sector_code}' not found (blk={blk_path} missing)"
+            raise _CustomSectorError(
+                MooTDXErrorType.SECTOR_NOT_FOUND.value,
+                f"自定义板块未找到: {sector_code!r} "
+                f"(既未匹配板块中文名, 也无 {blk_stem}.blk 文件)",
             )
-            return []
 
-        # 3. 解析 .blk 文件：每行 = market_id + 6位代码
-        market_prefix_map = {"1": "sh", "0": "sz", "2": "bj"}
         try:
             content = blk_path.read_text(encoding="gbk", errors="ignore")
         except Exception:
             content = blk_path.read_text(encoding="utf-8", errors="ignore")
-
-        result = []
-        for line in content.splitlines():
-            line = line.strip()
-            if len(line) < 7 or not line[0].isdigit():
-                continue
-            prefix = line[0]
-            code = line[1:]
-            if not (code.isdigit() and len(code) == 6):
-                continue
-            m = market_prefix_map.get(prefix, "sz")
-            result.append({"code": code, "market": m})
-        return result
+        return self._parse_blk_content(content)
 
     async def get_custom_sector_stocks(
         self, sector_code: str, market: str = "auto"
@@ -1548,65 +1835,92 @@ class MooTDX2Client:
         """获取自定义板块的成分股
 
         Args:
-            sector_code: 自定义板块名（用户在 TDX 客户端命名的标签）
+            sector_code: 自定义板块中文名（TDX 客户端命名）或 .blk 文件名 stem
         """
         self._metrics["total_requests"] += 1
         try:
-            data = await self._run_blocking(self._get_custom_sector_stocks_sync, sector_code, market
+            data = await self._run_blocking(
+                self._get_custom_sector_stocks_sync, sector_code, market
             )
             return ToolResult(success=True, data=data, source="mootdx2")
-        except SectorDataError as e:
-            return self._sector_error_result(e)
+        except _CustomSectorError as e:
+            return self._custom_sector_error_result(e.error_type, str(e))
         except Exception as e:
             logger.error(f"get_custom_sector_stocks failed: {e}")
             return self._error_result(e, f"get_custom_sector_stocks({sector_code})")
 
     # ========== 指数概览 ==========
+    # (code, name, market_prefix, market_id): 前缀直传给 quotes,
+    # get_stock_markets 显式识别 sh/sz (裸码 "000001" 会被数字推断成深市股票
+    # 平安银行, 与上证指数撞码)。
+    _INDEX_SPECS = [
+        ("000001", "上证指数", "sh", 1),
+        ("399001", "深证成指", "sz", 0),
+        ("399006", "创业板", "sz", 0),
+        ("000688", "科创50", "sh", 1),
+        ("889999", "北证50", "bj", 2),
+        ("000300", "沪深300", "sh", 1),
+    ]
+
     def _index_overview_sync(self) -> list:
-        """同步获取主要指数概览（6个指数）"""
-        INDEX_CODES = [
-            ("000001", "上证指数", "sh"),
-            ("399001", "深证成指", "sz"),
-            ("399006", "创业板", "sz"),
-            ("000688", "科创50", "sh"),
-            ("889999", "北证50", "bj"),
-            ("000300", "沪深300", "sh"),
-        ]
+        """同步获取主要指数概览。
+
+        H3 (2026-09-19):
+        - sh/sz 指数带前缀直传 quotes, 杜绝裸码数字推断把上证指数路由成
+          深市股票; 回包按 (market_id, code) 匹配, 绝不按位置 zipper
+          (上游丢行会让后续名称整体错位)。
+        - 北证 889999 必须单独一批: tdxpy get_security_quotes 批次中只要
+          含 market=2 就整批返回 None; 当前协议通常仍取不到, 缺则省略,
+          不伪造 0 值。
+        """
         q = self._get_quotes()
-        # Build code list with market prefixes
-        code_list = []
-        for c, n, m in INDEX_CODES:
-            if m == "sh":
-                code_list.append(f"sh{c}")
-            elif m == "sz":
-                code_list.append(f"sz{c}")
-            else:
-                code_list.append(f"bj{c}")
-        # Strip prefixes for quotes API
-        stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in code_list]
-        df = q.quotes(symbol=stripped)
-        if df is None or len(df) == 0:
-            return []
-        records = df.to_dict(orient="records")
-        # Match back by position (order is preserved)
+        sh_sz_symbols = [
+            f"{prefix}{code}"
+            for code, _, prefix, market_id in self._INDEX_SPECS
+            if market_id in (0, 1)
+        ]
+        quotes_by_key: dict[tuple[int, str], dict] = {}
+        df = q.quotes(symbol=sh_sz_symbols)
+        if df is not None and len(df) > 0:
+            for rec in df.to_dict(orient="records"):
+                try:
+                    key = (int(rec.get("market")), str(rec.get("code", "")))
+                except (TypeError, ValueError):
+                    continue
+                quotes_by_key[key] = rec
+
+        # 北交所单独 best-effort 批次 (tdxpy 现阶段多返回空)
+        try:
+            df_bj = q.quotes(symbol=["889999"])
+            if df_bj is not None and len(df_bj) > 0:
+                for rec in df_bj.to_dict(orient="records"):
+                    try:
+                        market_id = int(rec.get("market"))
+                        key = (market_id, str(rec.get("code", "")))
+                    except (TypeError, ValueError):
+                        continue
+                    if market_id == 2:
+                        quotes_by_key[key] = rec
+        except Exception as e:  # 北交所缺失不影响沪深指数
+            logger.debug(f"index overview: BJ quote skipped: {e}")
+
         result = []
-        for i, rec in enumerate(records):
-            if i >= len(INDEX_CODES):
-                break
-            code, name, market = INDEX_CODES[i]
-            close = float(rec.get("close", 0))
-            pct_chg = float(rec.get("pct_chg", 0))
+        for code, name, market, market_id in self._INDEX_SPECS:
+            rec = quotes_by_key.get((market_id, code))
+            if rec is None:
+                continue
             result.append({
                 "code": code,
                 "name": name,
                 "market": market,
-                "close": close,
-                "change_pct": pct_chg,
+                "close": float(rec.get("price", 0) or 0),
+                "change_pct": _quote_pct_chg(rec),
             })
         return result
 
     async def get_index_overview(self) -> ToolResult:
-        """获取主要指数概览（6个指数：上证、深证、创业板、科创50、北证50、沪深300）"""
+        """获取主要指数概览（上证、深证、创业板、科创50、北证50、沪深300；
+        北交所协议不支持时北证50 缺省, 返回其余可用指数）"""
         self._metrics["total_requests"] += 1
         try:
             data = await self._run_blocking(self._index_overview_sync)
@@ -1671,22 +1985,28 @@ class MooTDX2Client:
             return self._error_result(e, f"get_f10_company({symbol})")
 
     # ========== 分钟K线 ==========
-    def _get_minutes_sync(self, symbol: str, date: str = "20191023"):
-        """同步分钟K线"""
+    def _get_minutes_sync(self, symbol: str, date: str | None = None):
+        """同步分钟K线 (date 省略默认当天; 旧默认值 '20191023' 是演示脏值)。"""
         q = self._get_quotes()
-        sym = symbol.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        df = q.minutes(symbol=sym, date=date)
+        sym = _strip_market_prefix(symbol)
+        target = date or datetime.date.today().strftime("%Y%m%d")
+        df = q.minutes(symbol=sym, date=target)
         if df is not None and len(df) > 0:
             return df.to_dict(orient="records")
         return None
 
-    async def get_minutes(self, symbol: str, date: str = "20191023") -> ToolResult:
+    async def get_minutes(self, symbol: str, date: str | None = None) -> ToolResult:
         """获取分钟K线
 
         Args:
             symbol: 股票代码
-            date: 日期，默认为 '20191023'
+            date: 日期 YYYYMMDD, 省略默认当天
         """
+        if date:
+            try:
+                _parse_compact_date(date)
+            except ValueError as e:
+                return self._invalid_param_result(str(e))
         self._metrics["total_requests"] += 1
         try:
             data = await self._run_blocking(self._get_minutes_sync, symbol, date)
@@ -1700,8 +2020,11 @@ class MooTDX2Client:
     # ========== 离线日线（Reader，TDX 本地 .day 文件） ==========
     def _get_daily_sync(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
-    ) -> list:
-        """同步读取离线日线数据。
+    ) -> tuple[list[dict], dict]:
+        """同步读取离线日线数据, 返回 (records, meta)。
+
+        2026-09-19 LOW: meta 随返回值带出 (旧实现写 self._last_daily_meta
+        实例属性, 并发调用互相覆盖, 且要求 wrapper 用 getattr 回读)。
 
         Args:
             code: 6 位股票代码（不带市场前缀）
@@ -1740,9 +2063,8 @@ class MooTDX2Client:
         reader = self._get_reader()
         df = reader.daily(symbol=reader_symbol, adjust=adjust)
         if df is None or getattr(df, "empty", True):
-            # 把 kind 信息附在异常路径里，便于 _get_daily 给更明确的 no_data 文案
-            setattr(self, "_last_daily_meta", meta)
-            return []
+            # kind 信息随 meta 返回, 便于 _get_daily 给更明确的 no_data 文案
+            return [], meta
 
         if start_date:
             df = df[df.index >= start_date] if hasattr(df.index, "__ge__") else df
@@ -1754,8 +2076,7 @@ class MooTDX2Client:
             if "index" in r:
                 idx = r.pop("index")
                 r["date"] = str(idx)[:10]
-        setattr(self, "_last_daily_meta", meta)
-        return records
+        return records, meta
 
     async def get_daily(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
@@ -1785,9 +2106,12 @@ class MooTDX2Client:
             # 2026-09-16: 修复缓存 key 与实际 adjust 不一致问题
             #   - 指数代码传 qfq/hfq 会被 _get_daily_sync 强制覆盖为 none
             #   - 缓存 key 必须使用实际执行的 adjust 值，否则永远 miss
-            from .index_registry import parse_symbol, STOCK_KIND, INDEX_KIND
+            from .index_registry import parse_symbol, INDEX_KIND
             cache_hit = False
             cached_records = None
+            # 2026-09-19 LOW: cachetools ImportError (_DAILY_L1_ENABLED=False)
+            # 时旧码在 miss 分支引用未定义的 parsed_for_key 抛 UnboundLocalError。
+            parsed_for_key = None
             if self._DAILY_L1_ENABLED:
                 try:
                     parsed_for_key = parse_symbol(code)
@@ -1825,31 +2149,26 @@ class MooTDX2Client:
             # 2026-09-16: 用信号量限制并发 Reader 数量，防止雪崩
             async with self._reader_semaphore:
                 try:
-                    data = await self._run_blocking(self._get_daily_sync,
+                    records, meta = await self._run_blocking(self._get_daily_sync,
                         code,
                         adjust,
                         start_date,
                         end_date,
                     )
-                    meta = getattr(
-                        self, "_last_daily_meta", {"kind": STOCK_KIND, "warn": None}
-                    )
                     result = self._build_daily_tool_result(
                         code=code,
-                        data=data,
+                        data=records,
                         meta=meta,
-                        adjust=adjust,
                         parsed_for_key=parsed_for_key,
-                        reader_symbol_key=reader_symbol_key,
                     )
                     # 写 L1 (仅 actual_adjust=none + 有数据 + 解析成功)
                     if (
                         self._DAILY_L1_ENABLED
                         and actual_adjust == "none"
-                        and data
+                        and records
                         and parsed_for_key is not None
                     ):
-                        self._daily_l1[(today, reader_symbol_key, actual_adjust, start_date or "", end_date or "")] = data
+                        self._daily_l1[(today, reader_symbol_key, actual_adjust, start_date or "", end_date or "")] = records
                     return result
                 except ValueError as e:
                     self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
@@ -1877,8 +2196,6 @@ class MooTDX2Client:
                     "recoverable": False,
                 },
             )
-        except SectorDataError as e:
-            return self._sector_error_result(e)
         except Exception as e:
             logger.error(f"get_daily failed: {e}")
             return self._error_result(e, f"get_daily({code})")
@@ -1937,8 +2254,6 @@ class MooTDX2Client:
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的{suffix}分钟数据")
-        except SectorDataError as e:
-            return self._sector_error_result(e)
         except Exception as e:
             logger.error(f"get_minute failed: {e}")
             return self._error_result(e, f"get_minute({code})")
@@ -1979,8 +2294,6 @@ class MooTDX2Client:
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的分时线数据")
-        except SectorDataError as e:
-            return self._sector_error_result(e)
         except Exception as e:
             logger.error(f"get_fzline failed: {e}")
             return self._error_result(e, f"get_fzline({code})")
@@ -2119,8 +2432,6 @@ class MooTDX2Client:
                 f"指数 {parsed.code} 本地无 .day 文件"
                 f"（可能未下载完整本地数据）"
             )
-        except SectorDataError as e:
-            return self._sector_error_result(e)
         except Exception as e:
             logger.error(f"get_index_kline_local failed: {e}")
             return self._error_result(e, f"get_index_kline_local({code})")
@@ -2260,18 +2571,12 @@ class MooTDX2Client:
                     ):
                         if not code:
                             continue
-                        # 判断市场前缀
-                        if code.startswith(("60", "68")):
-                            mkt = "sh"
-                        elif code.startswith(("00", "30")):
-                            mkt = "sz"
-                        elif code.startswith(("8", "4")):
-                            mkt = "bj"
-                        else:
-                            mkt = "sz"
+                        code = str(code)
+                        # FLAT block 行为 7 位 "市场位+6 位裸码", 归一化成裸码
+                        bare = code[1:] if len(code) == 7 and code[0].isdigit() else code
                         result.append({
-                            "code": code,
-                            "market": mkt,
+                            "code": bare,
+                            "market": _classify_search_code(code),
                             "name": name,
                         })
                     return result
@@ -2282,15 +2587,17 @@ class MooTDX2Client:
         return self._search_stock_from_sqlite(keyword)
 
     def _search_stock_from_sqlite(self, keyword: str) -> list[dict]:
-        """从 SQLite 数据库搜索股票"""
+        """从 board.db.sector_stocks 搜索股票 (名称/代码 LIKE, 无拼音列)。"""
         import sqlite3
-        from pathlib import Path
 
-        db_path = Path("data/board.db")
+        # 2026-09-19 M4: 锚定项目根, 旧码 Path("data/board.db") 随 CWD
+        # 漂移, 非项目根启动时永远搜不到。
+        db_path = resolve_project_path(None, "data/board.db")
         if not db_path.exists():
-            logger.warning("search_stock: board.db not found")
+            logger.warning(f"search_stock: board.db not found: {db_path}")
             return []
 
+        conn = None
         try:
             conn = sqlite3.connect(str(db_path))
             kw = f"%{keyword}%"
@@ -2302,31 +2609,26 @@ class MooTDX2Client:
             """, (kw, kw))
             result = []
             for stock_code, stock_name in cursor.fetchall():
-                # 判断市场前缀
-                if stock_code.startswith(("60", "68")):
-                    market = "sh"
-                elif stock_code.startswith(("00", "30")):
-                    market = "sz"
-                elif stock_code.startswith(("8", "4")):
-                    market = "bj"
-                else:
-                    market = "sz"
                 result.append({
                     "code": stock_code,
-                    "market": market,
+                    # 共用分类器: 6 位裸码, 覆盖 920 北交所新号段
+                    "market": _classify_search_code(stock_code),
                     "name": stock_name,
                 })
-            conn.close()
             return result
         except Exception as e:
             logger.warning(f"search_stock SQLite fallback failed: {e}")
             return []
+        finally:
+            # 查询异常也要释放连接 (旧码异常路径泄漏 conn)
+            if conn is not None:
+                conn.close()
 
     async def search_stock(self, keyword: str) -> ToolResult:
-        """搜索股票（名称/代码/拼音模糊匹配）
+        """搜索股票（名称/代码模糊匹配; board.db 无拼音列, 不支持拼音）
 
         Args:
-            keyword: 搜索关键词（股票名称、代码或拼音缩写）
+            keyword: 搜索关键词（股票名称或代码）
         """
         self._metrics["total_requests"] += 1
         try:
@@ -2338,50 +2640,58 @@ class MooTDX2Client:
 
     # ========== 聚合股票信息 ==========
     def _get_stock_info_sync(self, code: str, market: str = "sz", kline_period: str = "day", kline_count: int = 100):
-        """同步获取聚合股票信息（快照在线 + K线/分时离线）"""
-        try:
+        """同步获取聚合股票信息（快照在线 + K线/分时离线）。
+
+        2026-09-19 M3 修复:
+        - 不再 try/except 吞掉所有异常伪装成功 —— 在线快照整体故障时
+          调用方需要看到 internal_error, 而不是 quote=None 的空壳;
+        - BJ 跳过在线快照: "bj" 前缀不被 tdxpy 识别 (错路由 SH), BJ 批次
+          又会毒化混批, 离线 Reader K线/分时不受影响照常返回;
+        - quotes 返 None (旧码 len(None) 崩) 与返空 DataFrame 等价处理。
+        """
+        bare = _strip_market_prefix(code)
+
+        # 1. 实时快照（在线; BJ 无在线快照能力, 跳过）
+        quote = None
+        if market != "bj":
+            _, _, token = _parse_quote_symbol(f"{market}{bare}")
             q = self._get_quotes()
-            sym = f"{market}{code}".lower()
+            quote_df = q.quotes(symbol=[token])
+            if quote_df is not None and len(quote_df) > 0:
+                rec = quote_df.iloc[0].to_dict()
+                _annotate_quote_records([rec])
+                quote = rec
 
-            # 1. 实时快照（在线）
-            quote_df = q.quotes(symbol=[sym])
-            quote = quote_df.iloc[0].to_dict() if len(quote_df) > 0 else None
+        # 2. K线（离线 - Reader）
+        reader = self._get_reader()
+        daily_df = reader.daily(symbol=bare)
+        kline_list = daily_df.tail(kline_count).to_dict(orient="records") if daily_df is not None and len(daily_df) > 0 else []
 
-            # 2. K线（离线 - Reader）
-            reader = self._get_reader()
-            daily_df = reader.daily(symbol=code)
-            kline_list = daily_df.tail(kline_count).to_dict(orient="records") if daily_df is not None and len(daily_df) > 0 else []
+        # 3. 当日分时（离线 - Reader minute）
+        minute_df = reader.minute(symbol=bare)
+        minute_list = minute_df.to_dict(orient="records") if minute_df is not None and len(minute_df) > 0 else []
 
-            # 3. 当日分时（离线 - Reader minute）
-            minute_df = reader.minute(symbol=code)
-            minute_list = minute_df.to_dict(orient="records") if minute_df is not None and len(minute_df) > 0 else []
-
-            return {
-                "code": code,
-                "market": market,
-                "quote": quote,
-                "kline": kline_list,
-                "minute": minute_list,
-            }
-        except Exception as e:
-            logger.error(f"get_stock_info({market}{code}) failed: {e}")
-            return {
-                "code": code,
-                "market": market,
-                "quote": None,
-                "kline": [],
-                "minute": [],
-            }
+        return {
+            "code": bare,
+            "market": market,
+            "quote": quote,
+            "kline": kline_list,
+            "minute": minute_list,
+        }
 
     async def get_stock_info(self, code: str, market: str = "sz", kline_period: str = "day", kline_count: int = 100) -> ToolResult:
         """获取聚合股票信息（快照 + K线 + 分时）
 
         Args:
             code: 股票代码
-            market: 市场前缀 (sh/sz/bj)
+            market: 市场前缀 (sh/sz/bj; bj 仅返回离线 K线/分时)
             kline_period: K线周期 (day/week/month/minute1/5/15/30/60)
             kline_count: K线返回条数
         """
+        if market not in ("sh", "sz", "bj"):
+            return self._invalid_param_result(
+                f"market 仅支持 sh/sz/bj, 收到 {market!r}"
+            )
         self._metrics["total_requests"] += 1
         try:
             data = await self._run_blocking(self._get_stock_info_sync, code, market, kline_period, kline_count)
@@ -2393,15 +2703,15 @@ class MooTDX2Client:
             return self._error_result(e, f"get_stock_info({market}{code})")
 
     # ========== ATR 指标 ==========
-    def _indicator_atr_sync(self, code: str, type: str = "day", limit: int = 100) -> dict:
-        """同步计算ATR指标"""
+    def _indicator_atr_sync(self, code: str, type: str = "day", limit: int = 100) -> dict | None:
+        """同步计算ATR指标; K 线为空返回 None (由 wrapper 转 no_data)。"""
         import pandas as pd
         kline = self._get_kline_sync(code, type, limit)
         if not kline:
-            return {}
+            return None
         df = pd.DataFrame(kline)
         if df.empty or "close" not in df.columns:
-            return {}
+            return None
         highs = df["high"].astype(float).tolist() if "high" in df.columns else df["close"].astype(float).tolist()
         lows = df["low"].astype(float).tolist() if "low" in df.columns else df["close"].astype(float).tolist()
         closes = df["close"].astype(float).tolist()
@@ -2437,9 +2747,15 @@ class MooTDX2Client:
             type: K线类型 (day/week/month/minute1/5/15/30/60)
             limit: 返回条数，默认100，最大1000
         """
+        if not isinstance(limit, int) or not (1 <= limit <= MAX_LIMIT_KLINE):
+            return self._invalid_param_result(
+                f"limit 需为 1-{MAX_LIMIT_KLINE} 的整数, 收到 {limit!r}"
+            )
         self._metrics["total_requests"] += 1
         try:
             data = await self._run_blocking(self._indicator_atr_sync, code, type, limit)
+            if not data:
+                return self._no_data_result(f"股票 {code} 无 K 线数据, 无法计算 ATR")
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"indicator_atr failed: {e}")
@@ -2447,56 +2763,57 @@ class MooTDX2Client:
 
     # ========== 市场异动（主力监控精灵） ==========
     def _stock_unusual_sync(self, event_type: str = "all") -> list:
-        """同步获取市场异动数据"""
+        """同步获取市场异动数据。
+
+        H2 (2026-09-19): q.block() 固定拉系统 block.dat, tdxpy 以
+        BlockReader FLAT 解析, 每行一个成分股: blockname / block_type /
+        code_index / code (code 为 7 位 "市场位 + 6位代码")。旧代码找的
+        code_list 列只存在于 GROUP 模式, FLAT 下永远缺失 → 恒返回 [];
+        block_type 入参也会被 block(tofile, **kwargs) 静默吞掉。
+        """
         import pandas as pd
 
         q = self._get_quotes()
 
-        # Get concept blocks
-        blocks_df = q.block(block_type="concept")
-        if blocks_df is None or blocks_df.empty:
+        blocks_df = q.block()
+        if blocks_df is None or blocks_df.empty or "code" not in blocks_df.columns:
             return []
 
-        # Collect stock codes from blocks (limited to avoid too many requests)
-        all_codes = set()
-        for _, row in blocks_df.head(50).iterrows():
-            block_name = str(row.get("name", ""))
-            # Use stock_count as hint — we need actual stock codes
-            # Since q.block() returns code_list in newer mootdx2, check for it
-            if "code_list" in row and pd.notna(row["code_list"]):
-                codes = str(row["code_list"]).split(",")
-                for c in codes:
-                    c = c.strip()
-                    if c:
-                        all_codes.add(c)
-
-        stock_list = list(all_codes)[:500]
+        # 收集去重后的沪深成分股 (北交所标的跳过: quotes 批次含 market=2
+        # 时 tdxpy 整批返回 None)。sorted 保证结果顺序稳定, 最多扫 500 只。
+        code_to_market: dict[str, str] = {}
+        for raw in blocks_df["code"].astype(str).tolist():
+            bare = raw[-6:]
+            if len(bare) != 6 or not bare.isdigit():
+                continue
+            market = _BLOCK_MARKET_CHAR_TO_PREFIX.get(raw[:1])
+            if market in ("sh", "sz"):
+                code_to_market.setdefault(bare, market)
+        stock_list = sorted(code_to_market)[:500]
         if not stock_list:
             return []
 
-        # Batch quote
+        # Batch quote (带前缀直传, get_stock_markets 显式识别 sh/sz)
         results = []
         for i in range(0, len(stock_list), MAX_LIMIT_BATCH_QUOTE):
             chunk = stock_list[i:i + MAX_LIMIT_BATCH_QUOTE]
-            prefixed = []
-            for c in chunk:
-                if str(c).startswith(("60", "68")):
-                    prefixed.append(f"sh{c}")
-                elif str(c).startswith(("00", "30")):
-                    prefixed.append(f"sz{c}")
-                elif str(c).startswith(("8", "4")):
-                    prefixed.append(f"bj{c}")
-                else:
-                    prefixed.append(f"sz{c}")
-            stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in prefixed]
-            batch_df = q.quotes(symbol=stripped)
+            symbols = [f"{code_to_market[c]}{c}" for c in chunk]
+            batch_df = q.quotes(symbol=symbols)
             if batch_df is not None and len(batch_df) > 0:
                 results.extend(batch_df.to_dict(orient="records"))
 
         if not results:
             return []
 
+        # 报文无 close/pct_chg/symbol 列, 统一归一化
+        _annotate_quote_records(results)
         df = pd.DataFrame(results)
+        if df.empty or "pct_chg" not in df.columns:
+            return []
+
+        # 异动宇宙: |涨跌幅| >= 5% 才算异动, 所有事件过滤 (含 涨/跌) 都在
+        # 宇宙内进行 — 否则 +0.5% 的票会以 "上涨异动" 名义漏出。
+        df = df[df["pct_chg"].abs() >= 5]
         if df.empty:
             return []
 
@@ -2510,37 +2827,36 @@ class MooTDX2Client:
         elif event_type == "缩量":
             df = df[df["vol"] < df["vol"].quantile(0.25)] if "vol" in df.columns else df
         elif event_type == "炸板":
+            # 大涨 (>=5%) 但未封板 (<9%): 触板后回落的近似信号
             df = df[(df["pct_chg"] > 0) & (df["pct_chg"] < 9)]
         elif event_type == "天地板":
             df = df[(df["pct_chg"] <= -9.5) | (df["pct_chg"] >= 9.5)]
-        else:  # all
-            df = df[(df["pct_chg"].abs() >= 5) | (df["pct_chg"] >= 9.5) | (df["pct_chg"] <= -9.5)]
+        # else: all → 整个异动宇宙
 
         # Build result with event label
         result = []
         for _, row in df.head(100).iterrows():
             sym = str(row.get("symbol", ""))
             if sym.startswith("sh"):
-                mkt, code = "sh", sym.replace("sh", "")
+                mkt, code = "sh", sym[2:]
             elif sym.startswith("sz"):
-                mkt, code = "sz", sym.replace("sz", "")
+                mkt, code = "sz", sym[2:]
             elif sym.startswith("bj"):
-                mkt, code = "bj", sym.replace("bj", "")
+                mkt, code = "bj", sym[2:]
             else:
                 mkt, code = "sz", sym
             pct = float(row.get("pct_chg", 0))
+            # 事件标签与 event_type 过滤一致: 放量/缩量事件才标量能,
+            # all/涨/跌 只标方向 (旧码无条件标 "放量上涨/放量下跌",
+            # 缩量榜和 all 榜的标签都是错的)。涨停/跌停事实优先。
             if pct >= 9.9:
                 event = "涨停"
             elif pct <= -9.9:
                 event = "跌停"
-            elif pct > 5:
-                event = "放量上涨"
-            elif pct < -5:
-                event = "放量下跌"
-            elif pct > 0:
-                event = "上涨"
+            elif event_type in ("放量", "缩量"):
+                event = f"{event_type}{'上涨' if pct > 0 else '下跌'}"
             else:
-                event = "下跌"
+                event = "上涨" if pct > 0 else "下跌"
             result.append({
                 "code": code,
                 "market": mkt,
@@ -2562,35 +2878,38 @@ class MooTDX2Client:
             market = "all"
         limit = min(limit, 200)
 
+        # H1 (2026-09-19): mootdx2 没有 stock() 方法, 真实接口是
+        # stocks(market=1=SH/0=SZ) (market=2 会抛 MootdxValidationException,
+        # 故 bj 榜单无数据源 → 诚实地返回空)。列表混有基金/债券, 按 A 股
+        # 前缀过滤后带交易所前缀直传 quotes, 不再靠数字猜市场。
+        MARKET_PLAN = (
+            (1, "sh", _A_SHARE_PREFIXES_SH),
+            (0, "sz", _A_SHARE_PREFIXES_SZ),
+        )
         q = self._get_quotes()
         all_quotes = []
 
-        for exchange in ["sz", "sh"]:
-            df_stock = q.stock(exchange=exchange)
-            if df_stock is None or df_stock.empty:
+        for market_id, exchange, stock_prefixes in MARKET_PLAN:
+            df_stock = q.stocks(market=market_id)
+            if df_stock is None or len(df_stock) == 0:
                 continue
-            codes = df_stock["code"].tolist()
-            prefixed = []
-            for c in codes:
-                cs = str(c)
-                if cs.startswith(("60", "68")):
-                    prefixed.append(f"sh{cs}")
-                elif cs.startswith(("00", "30")):
-                    prefixed.append(f"sz{cs}")
-                elif cs.startswith(("8", "4")):
-                    prefixed.append(f"bj{cs}")
-                else:
-                    prefixed.append(f"sz{cs}")
+            codes = [
+                str(r.get("code"))
+                for r in df_stock.to_dict(orient="records")
+                if str(r.get("code") or "").startswith(stock_prefixes)
+            ]
+            prefixed = [f"{exchange}{c}" for c in codes]
             for i in range(0, len(prefixed), MAX_LIMIT_BATCH_QUOTE):
                 chunk = prefixed[i:i + MAX_LIMIT_BATCH_QUOTE]
-                stripped = [c.strip().lower().replace("sh", "").replace("sz", "").replace("bj", "") for c in chunk]
-                batch_df = q.quotes(symbol=stripped)
+                batch_df = q.quotes(symbol=chunk)
                 if batch_df is not None and len(batch_df) > 0:
                     all_quotes.extend(batch_df.to_dict(orient="records"))
 
         if not all_quotes:
             return []
 
+        # 报文无 symbol/close/pct_chg 列, 统一归一化
+        _annotate_quote_records(all_quotes)
         df_quotes = pd.DataFrame(all_quotes)
         if df_quotes.empty:
             return []
@@ -2598,7 +2917,11 @@ class MooTDX2Client:
         if market != "all":
             df_quotes = df_quotes[df_quotes["symbol"].str.startswith(market)]
 
-        sort_col = sort_by if sort_by in df_quotes.columns else "pct_chg"
+        # 可排序列: change_pct(报文列名 pct_chg)/amplitude/amount 网关算得出;
+        # turnover(换手率)/volume_ratio(量比) 不在行情报文里, wrapper 负责
+        # 给 warn, 这里统一回落 pct_chg。
+        sort_column_map = {"change_pct": "pct_chg", "amplitude": "amplitude", "amount": "amount"}
+        sort_col = sort_column_map.get(sort_by, "pct_chg")
         if sort_col not in df_quotes.columns:
             sort_col = "pct_chg"
         ascending = direction == "asc"
@@ -2608,11 +2931,11 @@ class MooTDX2Client:
         for _, row in df_quotes.iterrows():
             sym = str(row.get("symbol", ""))
             if sym.startswith("sh"):
-                mkt, code = "sh", sym.replace("sh", "")
+                mkt, code = "sh", sym[2:]
             elif sym.startswith("sz"):
-                mkt, code = "sz", sym.replace("sz", "")
+                mkt, code = "sz", sym[2:]
             elif sym.startswith("bj"):
-                mkt, code = "bj", sym.replace("bj", "")
+                mkt, code = "bj", sym[2:]
             else:
                 mkt, code = "sz", sym
             result.append({
@@ -2622,24 +2945,71 @@ class MooTDX2Client:
                 "change_pct": float(row.get("pct_chg", 0)),
                 "volume": float(row.get("vol", 0)),
                 "amount": float(row.get("amount", 0)),
-                "turnover": float(row.get("turnover", 0)),
-                "volume_ratio": float(row.get("volume_ratio", 0)),
+                # 报文无换手率/量比, 保留合同键但诚实置 0
+                "turnover": 0.0,
+                "volume_ratio": 0.0,
             })
         return result
+
+    _TOP_BOARD_SORT_UNAVAILABLE = {
+        "turnover": "换手率",
+        "volume_ratio": "量比",
+    }
+    _TOP_BOARD_SORT_VALID = {
+        "change_pct", "amplitude", "amount", "turnover", "volume_ratio",
+    }
+
+    def _top_board_sort_warn(self, sort_by: str) -> str | None:
+        """sort_by 的诚实降级提示 (报文无换手率/量比; 未知字段回落涨跌幅)。"""
+        if sort_by in self._TOP_BOARD_SORT_UNAVAILABLE:
+            label = self._TOP_BOARD_SORT_UNAVAILABLE[sort_by]
+            return (
+                f"实时行情报文不含{label}数据, sort_by={sort_by} 已回落为按"
+                "涨跌幅排序"
+            )
+        if sort_by not in self._TOP_BOARD_SORT_VALID:
+            return f"不支持的排序字段 {sort_by!r}, 已回落为按涨跌幅排序"
+        return None
+
+    @staticmethod
+    def _with_warn(result: ToolResult, warn: str | None) -> ToolResult:
+        """成功结果附带 warn (返回新对象, 不改动 L1 缓存里的 ToolResult)。"""
+        if not warn or not result.success:
+            return result
+        detail = dict(result.error_detail or {})
+        detail["warn"] = warn
+        return ToolResult(
+            success=True,
+            data=result.data,
+            source=result.source,
+            error=result.error,
+            error_detail=detail,
+            duration_ms=result.duration_ms,
+        )
 
     async def stock_top_board(self, sort_by: str = "change_pct", direction: str = "desc", limit: int = 50, market: str = "all") -> ToolResult:
         """获取市场排行榜
 
         2026-09-16: 移除 single-flight，改用 L1 缓存 + Reader 并发控制。
         行情 10s 内变化 < 0.5%, 用户感知不到差异。
+        2026-09-19 LOW: bj 显式 no_data (旧实现静默空列表); 换手率/量比
+        排序在 error_detail.warn 诚实说明降级。
         """
         self._metrics["total_requests"] += 1
+        if market == "bj":
+            # stocks(market=2) 库内即抛 MootdxValidationException, BJ 无榜数据源
+            return self._no_data_result(
+                "北交所(bj)无排行榜数据源 (stocks(market=2) 不支持), 榜单仅支持 all/sh/sz"
+            )
+        warn = self._top_board_sort_warn(sort_by)
         if not self._DAILY_L1_ENABLED:
             try:
                 data = await self._run_blocking(
                     self._stock_top_board_sync, sort_by, direction, limit, market
                 )
-                return ToolResult(success=True, data=data, source="mootdx2")
+                return self._with_warn(
+                    ToolResult(success=True, data=data, source="mootdx2"), warn
+                )
             except Exception as e:
                 logger.error(f"stock_top_board failed: {e}")
                 return self._error_result(e, "stock_top_board")
@@ -2648,7 +3018,8 @@ class MooTDX2Client:
         cached = self._top_board_l1.get(cache_key)
         if cached is not None:
             self._top_board_l1_hits += 1
-            return cached
+            # warn 由入参决定, 每次重新附加 (缓存对象本身不写 warn)
+            return self._with_warn(cached, warn)
 
         self._top_board_l1_misses += 1
         async with self._reader_semaphore:
@@ -2658,7 +3029,7 @@ class MooTDX2Client:
                 )
                 result = ToolResult(success=True, data=data, source="mootdx2")
                 self._top_board_l1[cache_key] = result
-                return result
+                return self._with_warn(result, warn)
             except Exception as e:
                 logger.error(f"stock_top_board failed: {e}")
                 return self._error_result(e, "stock_top_board")

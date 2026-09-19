@@ -202,7 +202,7 @@ const copyInFlight = ref(false)
 /** config.db v2 实体浏览摘要 (db 模式才有实体字段; yaml 逃生模式只回 source)。 */
 const entities = ref<ConfigEntities | null>(null)
 /**
- * /api/config 在 db 模式不携带 290 条 spec (避免快照臃肿); 工具规格面板与
+ * /api/config 在 db 模式不携带 289 条 spec (避免快照臃肿); 工具规格面板与
  * FUYAO TTL 面板改吃 /api/interfaces 的全量 env 门控清单, 在此合成。
  */
 const interfaceTools = ref<ConfigTool[]>([])

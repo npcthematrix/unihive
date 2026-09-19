@@ -15,7 +15,13 @@ def client():
 # ========== get_daily ==========
 
 def test_get_daily_tdxdir_empty(client):
-    """tdxdir empty → tdx_not_installed."""
+    """tdxdir 目录不存在 → tdx_not_installed。
+
+    显式指向不存在的目录而非依赖 settings=None + mootdx2 DEFAULT_TDXDIR
+    (本机装过通达信时 C:/new_tdx 存在, 旧写法会退化为 no_data)。
+    """
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "Z:/__no_such_tdx__"
     r = asyncio.run(client.get_daily("600036"))
     assert r.success is False
     assert r.error_detail["error_type"] == "tdx_not_installed"
@@ -89,7 +95,9 @@ def test_get_daily_date_filter(client):
 # ========== get_minute ==========
 
 def test_get_minute_tdxdir_empty(client):
-    """tdxdir empty → tdx_not_installed."""
+    """tdxdir 目录不存在 → tdx_not_installed (显式配置, 见上)。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "Z:/__no_such_tdx__"
     r = asyncio.run(client.get_minute("600036"))
     assert r.success is False
     assert r.error_detail["error_type"] == "tdx_not_installed"
@@ -132,7 +140,9 @@ def test_get_minute_suffix_5(client):
 # ========== get_fzline ==========
 
 def test_get_fzline_tdxdir_empty(client):
-    """tdxdir empty → tdx_not_installed."""
+    """tdxdir 目录不存在 → tdx_not_installed (显式配置, 见上)。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "Z:/__no_such_tdx__"
     r = asyncio.run(client.get_fzline("600036"))
     assert r.success is False
     assert r.error_detail["error_type"] == "tdx_not_installed"
@@ -175,13 +185,18 @@ def test_get_fzline_bool_result(client):
 # ========== method_map 注册验证 ==========
 
 def test_new_tools_registered_in_method_map(client):
-    """call_tool 必须能路由到 3 个新离线接口。"""
-    import inspect
+    """call_tool 必须能路由到 3 个新离线接口。
+
+    2026-09-19 LOW: 分发表从 call_tool 内联 dict 改为模块级
+    ``_TOOL_METHOD_NAMES`` (避免每次调用重建 ~40 项 dict),
+    断言改为查表 + 方法可解析。
+    """
+    from src.unihive.api.mootdx2_client import _TOOL_METHOD_NAMES
 
     expected = {"get_daily", "get_minute", "get_fzline"}
-    src = inspect.getsource(client.call_tool)
     for name in expected:
-        assert name in src, f"{name} 未在 method_map 注册"
+        assert name in _TOOL_METHOD_NAMES, f"{name} 未在 method_map 注册"
+        assert callable(getattr(client, _TOOL_METHOD_NAMES[name], None))
 
 
 # ========== YAML 配置验证 ==========

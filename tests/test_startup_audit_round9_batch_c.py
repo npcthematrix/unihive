@@ -48,7 +48,6 @@ async def test_h1a_mootdx2_ensure_quotes_runs_off_event_loop():
     client._status = UpstreamStatus.UNKNOWN
     client._quotes = None
     client._health_task = None
-    client._probe_attempts = 0
 
     recorded: list[int] = []
 
