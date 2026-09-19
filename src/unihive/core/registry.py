@@ -4,6 +4,7 @@
 import inspect
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Callable, Literal
 
 from pydantic import Field
@@ -65,6 +66,32 @@ _DATE_PARAM_NAMES = frozenset({"start_time", "end_time", "start_date", "end_date
 
 # 字符串但语义上应该是数组的参数: 逗号分隔转列表 (Pydantic 不接受 List[str] 时)
 _LIST_PARAM_NAMES = frozenset({"stock_list", "field_list"})
+
+# normalize: "date_ms" —— 日期字符串 (yyyy-MM-dd / yyyy/MM/dd / yyyyMMdd) 转
+# Asia/Shanghai 零点毫秒戳, 且转发键名 date → date_ms。fuyao special_data
+# 三个池子端点 (limit_up/down/break_pool) 只认 date_ms integer, 且静默忽略
+# 未知参数并回落"当前自然日" —— 直接透传 `date` 会不报错但恒为空, 必须在此改写。
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+
+def _date_str_to_ms(tool: str, pname: str, raw: Any) -> int:
+    """yyyy-MM-dd / yyyy/MM/dd / yyyyMMdd → 上海时区零点毫秒时间戳。
+
+    Raises:
+        ValueError: 非 8 位数字或不是合法日历日期。
+    """
+    digits = re.sub(r"\D", "", str(raw))
+    if len(digits) != 8:
+        raise ValueError(
+            f"{tool}: parameter {pname!r} must be a date like 2026-09-18, got {raw!r}"
+        )
+    try:
+        dt = datetime.strptime(digits, "%Y%m%d").replace(tzinfo=_SHANGHAI_TZ)
+    except ValueError:
+        raise ValueError(
+            f"{tool}: parameter {pname!r} is not a valid calendar date: {raw!r}"
+        ) from None
+    return int(dt.timestamp() * 1000)
 
 
 def _annotation_for(p: dict) -> Any:
@@ -153,7 +180,11 @@ def _validate_and_normalize(name: str, param_specs: list[dict], kwargs: dict) ->
                 f"{name}: invalid value for {p['name']!r}: {v!r}, "
                 f"expected one of {enum_values}"
             )
-        normalized[p["name"]] = v
+        # normalize: date_ms —— 值转毫秒戳 + 键名改写 date → date_ms
+        if p.get("normalize") == "date_ms":
+            normalized[f"{p['name']}_ms"] = _date_str_to_ms(name, p["name"], v)
+        else:
+            normalized[p["name"]] = v
     return normalized
 
 

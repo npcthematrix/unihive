@@ -108,6 +108,74 @@ class TestBuildToolFunction:
         asyncio.run(fn(symbol="600519"))
         assert server.calls[0][1] == {"symbol": "sh600519"}
 
+    def test_normalize_date_ms_rekeys_to_upstream(self):
+        """normalize: date_ms —— date 转上海零点毫秒戳并改键 date → date_ms。"""
+        server = _FakeServer()
+        spec = {
+            "name": "pool",
+            "description": "d",
+            "routing": "pool",
+            "params": [
+                {"name": "date", "type": "str", "required": False, "normalize": "date_ms"},
+                {"name": "size", "type": "int", "required": False},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(date="2026-09-18", size=3))
+        # 2026-09-18 00:00 Asia/Shanghai == 1789660800000 (实测上游可取回 09-18 涨停池)
+        assert server.calls[0][1] == {"date_ms": 1789660800000, "size": 3}
+
+    def test_normalize_date_ms_slash_and_compact_forms(self):
+        server = _FakeServer()
+        spec = {
+            "name": "pool",
+            "description": "d",
+            "routing": "pool",
+            "params": [
+                {"name": "date", "type": "str", "required": False, "normalize": "date_ms"},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        for raw in ("2026/09/18", "20260918"):
+            server.calls.clear()
+            asyncio.run(fn(date=raw))
+            assert server.calls[0][1] == {"date_ms": 1789660800000}, raw
+
+    def test_normalize_date_ms_omitted_not_forwarded(self):
+        """省略 date 时不转发占位值, 由上游回落"当前自然日"。"""
+        server = _FakeServer()
+        spec = {
+            "name": "pool",
+            "description": "d",
+            "routing": "pool",
+            "params": [
+                {"name": "date", "type": "str", "required": False, "normalize": "date_ms"},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        asyncio.run(fn(date=""))
+        assert server.calls[0][1] == {}
+
+    def test_normalize_date_ms_invalid_raises(self):
+        server = _FakeServer()
+        spec = {
+            "name": "pool",
+            "description": "d",
+            "routing": "pool",
+            "params": [
+                {"name": "date", "type": "str", "required": False, "normalize": "date_ms"},
+            ],
+        }
+        fn = build_tool_function(spec, server)
+        import asyncio
+        with pytest.raises(ValueError, match="2026-09-18"):
+            asyncio.run(fn(date="not-a-date"))
+        with pytest.raises(ValueError, match="calendar"):
+            asyncio.run(fn(date="2026-02-30"))
+
     def test_optional_param_skipped_when_empty(self):
         server = _FakeServer()
         spec = {
