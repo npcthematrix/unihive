@@ -2,7 +2,6 @@
 
 Covers:
 - #4 GatewayServer.initialize idempotency
-- #5 _health_check_loop responds to stop()
 - #3 _probe_upstream cache key includes (type, base_url), not just name
 - #2 console_server.load_config delegates to config_loader + masks secrets
 """
@@ -48,38 +47,6 @@ class TestGatewayInitializeIdempotent:
         await server.initialize()
         assert server.cache is first_cache, "二次 initialize 不应替换 cache 实例"
         assert server._initialized is True
-
-
-# ========== #5: _health_check_loop 响应 stop() ==========
-
-class TestHealthLoopShutdown:
-    """stop() 必须能立即唤醒 health loop, 不能等 30s 一次的 asyncio.sleep。"""
-
-    async def test_stop_wakes_health_loop_immediately(self, tmp_path):
-        import time
-        from src.unihive.gateway_server import GatewayServer
-
-        server = GatewayServer.__new__(GatewayServer)
-        server.config = {
-            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
-            "upstreams": {},
-        }
-        server.upstreams = {}
-        server.cache = None
-        server._running = True
-        server._shutdown_event = asyncio.Event()
-
-        task = asyncio.create_task(server._health_check_loop())
-        await asyncio.sleep(0.05)  # 让 loop 进入 wait_for
-
-        t0 = time.monotonic()
-        server._running = False
-        server._shutdown_event.set()
-        await asyncio.wait_for(task, timeout=2.0)
-        elapsed = time.monotonic() - t0
-
-        # 必须远小于 30s tick
-        assert elapsed < 1.0, f"health loop 未被 stop 立即唤醒, 花了 {elapsed:.2f}s"
 
 
 # ========== #3: _probe_upstream cache key 包含 (type, base_url) ==========
@@ -293,11 +260,6 @@ class TestGatewayShutdownChain:
             server._initialized = True
         server.initialize = fake_init  # type: ignore[assignment]
 
-        # health check loop 假扮, 不真跑
-        async def fake_loop():
-            await asyncio.Event().wait()
-        server._health_check_loop = fake_loop  # type: ignore[assignment]
-
         # http_app() 假扮, 返回一个空 ASGI app (Mount 要求 app 非 None)
         async def empty_asgi_app(scope, receive, send):
             pass
@@ -358,10 +320,6 @@ class TestGatewayShutdownChain:
             server._initialized = True
         server.initialize = fake_init  # type: ignore[assignment]
 
-        async def fake_loop():
-            await asyncio.Event().wait()
-        server._health_check_loop = fake_loop  # type: ignore[assignment]
-
         # http_app() 假扮, 返回一个空 ASGI app (Mount 要求 app 非 None)
         async def empty_asgi_app(scope, receive, send):
             pass
@@ -407,10 +365,6 @@ class TestGatewayShutdownChain:
         async def fake_init():
             server._initialized = True
         server.initialize = fake_init  # type: ignore[assignment]
-
-        async def fake_loop():
-            await asyncio.Event().wait()
-        server._health_check_loop = fake_loop  # type: ignore[assignment]
 
         # mcp.run_stdio_async 假扮: 立刻触发 shutdown, 让 start 跑完 finally
         class FakeMcp:

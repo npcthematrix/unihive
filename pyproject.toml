@@ -35,16 +35,33 @@ unihive = "unihive.gateway_server:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatchling.build.targets.wheel]
-packages = ["src"]
+# 注意表名是 tool.hatch.* (hatchling 读这个); tool.hatchling.* 会被静默忽略,
+# 2026-09-19 wheel 内容审计发现旧表名致 force-include 从未生效。
+[tool.hatch.build.targets.wheel]
+packages = ["src/unihive"]
 
 # L13 (round 9 audit): wheel 只打包 src/ 包, console.html 与 static/ 在包外
 # (repo 根), pip install 后会缺失 → 控制台路由返回 404。force-include 把它们
 # 复制到 wheel 根 (site-packages/console.html, site-packages/static/...),
 # console_api.resolve_console_html_path 据此定位 installed 布局。
-[tool.hatchling.build.force-include]
+#
+# M1 (round 11 audit): v2 配置事实源是 data/config.db, 空库首启要从出厂
+# YAML 模板 seed —— installed 布局 (site-packages/config/...) 缺模板会在
+# seed 准入门 fail-closed ("No upstreams configured"), wheel 装出来的网关
+# 每次首启都拒启。故把 seed 模板一并 force-include 到 wheel 根 config/。
+# 刻意不打 config/config.yaml: 内含本机真实 session_secret + PBKDF2 口令
+# 哈希 (非 ${VAR} 占位), 打进 wheel 等于分发本机凭据; installed 用户的
+# 控制台凭据走 UNIHIVE_CONSOLE_* 环境变量。proxy_settings.yaml 同样不打:
+# 缺失即 fail-soft 默认 disabled, 带上反而可能意外给 installed 用户启用代理。
+[tool.hatch.build.targets.wheel.force-include]
 "console.html" = "console.html"
 "static" = "static"
+"config/upstreams.yaml" = "config/upstreams.yaml"
+"config/tools_tdx_quant.yaml" = "config/tools_tdx_quant.yaml"
+"config/tools_mootdx2.yaml" = "config/tools_mootdx2.yaml"
+"config/tools_omni.yaml" = "config/tools_omni.yaml"
+"config/tools_thsdk.yaml" = "config/tools_thsdk.yaml"
+"config/tools_ths_local.yaml" = "config/tools_ths_local.yaml"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

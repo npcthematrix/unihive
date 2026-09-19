@@ -13,6 +13,7 @@ import asyncio
 import logging
 import socket
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -74,6 +75,13 @@ class TdxQuantClient:
         self._reconnect_tasks: set[asyncio.Task] = set()
         self._fail_count = 0
         self._strategy_id = _resolve_strategy_id(config.settings.strategy_id)
+        # M2 (round 11): DLL 串行锁 + 生命周期位。
+        # - _dll_lock: start() 超时取消后, 在途 initialize (阻塞池不可中断)
+        #   与 late recovery 重入的 initialize 不能并发打进同一 DLL;
+        #   close 与 initialize 同样互斥, 复用 _reconnect 的 close→init 序。
+        # - _stopped: 阻止已停 client 被晚到的健康循环/late recovery 复活。
+        self._dll_lock = threading.Lock()
+        self._stopped = False
 
     @property
     def status(self) -> UpstreamStatus:
@@ -121,6 +129,9 @@ class TdxQuantClient:
             True: 初始化成功，status=HEALTHY
             False: 初始化失败，status=UNAVAILABLE（不抛，gateway 继续）
         """
+        # M2 (round 11): 同实例 stop/start 循环与 late recovery 都经此入口,
+        # 先复位停止位, 否则健康循环会被停止位挡住无法重建。
+        self._stopped = False
         # 探测 17709 端口连通性 (TQ 本地端口)
         port = self.config.settings.tdx_remote_port
         if not await self._probe_tdx_remote_port():
@@ -154,12 +165,47 @@ class TdxQuantClient:
         else:
             self._status = UpstreamStatus.HEALTHY
 
-        self._health_task = asyncio.create_task(self._health_loop())
+        self._start_health_loop()
         logger.info(
             f"[{self.name}] initialized (tdx_root={self.config.tdx_root_path}, "
             f"strategy_id={self._strategy_id}, status={self._status.value})"
         )
         return True
+
+    def _start_health_loop(self) -> Optional[asyncio.Task]:
+        """M2 (round 11): 健康循环统一入口 — stop 后不复活, 重复调用判重,
+        返回在跑的 task 引用。"""
+        if self._stopped:
+            return None
+        if self._health_task and not self._health_task.done():
+            return self._health_task
+        self._health_task = asyncio.create_task(self._health_loop())
+        return self._health_task
+
+    async def start_after_timeout(self) -> None:
+        """M2 (round 11): 网关启动 wait_for 超时后的后台自愈入口。
+
+        被取消的 start() 可能留下在途 DLL initialize (阻塞池不可中断);
+        _dll_lock 把本次 initialize 串到僵尸调用之后, 杜绝并发打进同一
+        DLL, 随后正常探活 + 健康循环, UNKNOWN 孤儿无需重启网关即恢复。
+        """
+        if self._stopped:
+            return
+        await self.start()
+
+    def _dll_initialize(self, tdx_root: str) -> None:
+        """tq.initialize 的持锁包装, 串行化所有 DLL initialize 调用
+        (首次初始化 / reconnect / 超时后的 late recovery)。"""
+        with self._dll_lock:
+            self._tq.initialize(tdx_root)
+
+    def _dll_close(self) -> None:
+        """tq.close 的持锁包装, 与 initialize 互斥, 复刻 reconnect 的
+        close→init 次序, 不留半初始化窗口。"""
+        with self._dll_lock:
+            tq = self._tq
+            if tq is not None:
+                tq.close()
 
     async def _verify_tq_interface(self) -> bool:
         """C4: 调一次轻量接口验证 TQ 真正可用。
@@ -215,7 +261,7 @@ class TdxQuantClient:
             # 对称, 包 run_in_executor 让 DLL 调用跑在 worker thread。
             await asyncio.get_event_loop().run_in_executor(
                 get_blocking_executor(),
-                lambda: self._tq.initialize(tdx_root),
+                lambda: self._dll_initialize(tdx_root),
             )
             logger.info(f"[{self.name}] TQ strategy_id={self._strategy_id} (记录用, 未传给 DLL)")
             return True, None
@@ -234,7 +280,11 @@ class TdxQuantClient:
 
         MED4: 先等所有 in-flight _reconnect() 完成, 再 tq.close()。
         否则 reconnect 内部 close+initialize 序列会被 tq.close() 半路截断。
+
+        M2 (round 11): 先置停止位挡住 late recovery / 健康循环复活;
+        close 走 _dll_lock, 排在僵尸 initialize 之后执行, 不并发打进 DLL。
         """
+        self._stopped = True
         if self._health_task:
             self._health_task.cancel()
             try:
@@ -265,8 +315,9 @@ class TdxQuantClient:
             try:
                 # tq.close() 同步调 DLL, 在主线程跑会阻塞 event loop 0.5s+
                 # (HIGH2). executor 跑让其他 in-flight 请求继续调度。
+                # M2 (round 11): 持 _dll_lock 与在途/晚到 initialize 互斥。
                 await asyncio.get_event_loop().run_in_executor(
-                    get_blocking_executor(), self._tq.close
+                    get_blocking_executor(), self._dll_close
                 )
             except Exception as e:
                 logger.warning(f"[{self.name}] close warning: {e}")
@@ -390,19 +441,27 @@ class TdxQuantClient:
 
     async def _reconnect(self):
         """重连：tq.close() + tq.initialize()，asyncio.Lock 串行化。"""
+        loop = asyncio.get_event_loop()
         async with self._reconnect_lock:
             try:
                 if self._tq:
-                    # HIGH2: tq.close() 同步 DLL, 必须 run_in_executor
-                    await asyncio.get_event_loop().run_in_executor(
-                        get_blocking_executor(), self._tq.close
+                    # HIGH2: tq.close() 同步 DLL, 必须 run_in_executor;
+                    # M2 (round 11): 走 _dll_lock 与 initialize 互斥。
+                    await loop.run_in_executor(
+                        get_blocking_executor(), self._dll_close
                     )
             except Exception as e:
                 logger.warning(f"[{self.name}] close during reconnect: {e}")
             try:
                 # C1 (round 9 audit): tqcenter.initialize() 只接受 path 参数
                 # (策略 ID 仅记录用), 之前传 self._strategy_id 是 bug。
-                self._tq.initialize(str(self.config.tdx_root_path))
+                # M2 (round 11): initialize 同为同步 DLL 调用, 旧实现直接在
+                # 事件循环上跑会冻结 loop; 改 executor + _dll_lock 串行。
+                tdx_root = str(self.config.tdx_root_path)
+                await loop.run_in_executor(
+                    get_blocking_executor(),
+                    lambda: self._dll_initialize(tdx_root),
+                )
                 self._fail_count = 0
                 self._status = UpstreamStatus.HEALTHY
                 logger.info(f"[{self.name}] reconnected")

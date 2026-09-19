@@ -68,10 +68,12 @@ def load_all_tools(
     top_mapping = config.setdefault("upstream_tool_mapping", {})
     base_dir = config_path.parent.resolve()
     for filename in _GENERATED_FILENAMES:
+        # L2 (round 11 audit): 第三候选 Path("config")/filename 锚 CWD,
+        # 从非 repo CWD 跑网关 yaml 模式或 CLI 时可能漏加载生成工具或误拾
+        # 外来 config/tools_*.yaml; 候选 1 已覆盖 config_path 同目录, 删除。
         for candidate in (
             base_dir / filename,
             base_dir / "config" / filename,
-            Path("config") / filename,
         ):
             if candidate.exists():
                 with candidate.open(encoding="utf-8") as f:

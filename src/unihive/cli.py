@@ -21,6 +21,7 @@ import yaml
 from .core.config_db import (
     load_template_from_store,
     resolve_config_db_path,
+    resolve_project_path,
     seed_database,
 )
 from .core.config_lint import ERROR, WARNING, LintRejected, lint_config
@@ -125,8 +126,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_config_path(raw: str) -> Path:
+    """L4 (round 11 audit): 相对 --config 与网关同契约锚定项目根, 不锚 CWD。
+
+    否则从非 repo 目录跑 ``unihive config lint`` 默认值会报 not found, 或
+    ``--config foo/upstreams.yaml`` 解析到与网关不同的另一套文件。
+    """
+    return Path(resolve_project_path(raw, "config/upstreams.yaml"))
+
+
 def _cmd_config_lint(args: argparse.Namespace) -> int:
-    config_path = Path(args.config)
+    config_path = _resolve_config_path(args.config)
     if not config_path.exists():
         print(f"ERROR: config not found: {config_path}", file=sys.stderr)
         return 2
@@ -166,7 +176,7 @@ def _cmd_config_lint(args: argparse.Namespace) -> int:
 
 
 def _cmd_config_seed_db(args: argparse.Namespace) -> int:
-    config_path = Path(args.config)
+    config_path = _resolve_config_path(args.config)
     if not config_path.exists():
         print(f"ERROR: config not found: {config_path}", file=sys.stderr)
         return 2
@@ -277,7 +287,7 @@ def _print_upgrade_preview(
 
 
 def _cmd_config_upgrade_db(args: argparse.Namespace) -> int:
-    config_path = Path(args.config)
+    config_path = _resolve_config_path(args.config)
     if not config_path.exists():
         print(f"ERROR: config not found: {config_path}", file=sys.stderr)
         return 2
