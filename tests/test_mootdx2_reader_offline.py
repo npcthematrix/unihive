@@ -223,3 +223,163 @@ def test_yaml_has_offline_reader_tools():
     minute_params = [p["name"] for p in by_name["get_minute_local"]["params"]]
     assert "suffix" in minute_params
     assert by_name["get_minute_local"]["params"][1]["enum"] == ["1", "5"]
+
+# ========== get_index_kline_local：周/月重采样 + 歧义 warn ==========
+
+def _daily_df(dates, close_start=10.0):
+    """构造 Reader.daily 风格的 OHLCV DataFrame。"""
+    n = len(dates)
+    return pd.DataFrame({
+        "open": [close_start + i for i in range(n)],
+        "high": [close_start + i + 0.5 for i in range(n)],
+        "low": [close_start + i - 0.5 for i in range(n)],
+        "close": [close_start + i for i in range(n)],
+        "vol": [1000.0] * n,
+        "amount": [1e7] * n,
+    }, index=pd.to_datetime(dates))
+
+
+def test_index_kline_week_resample_aggregates_to_friday(client):
+    """两周以上日线 → W-FRI 重采样，OHLCV 聚合正确，日期锚定周五。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    dates = pd.bdate_range("2026-09-01", periods=10)  # 9/1-9/4, 9/7-9/11, 9/14
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = _daily_df([str(d.date()) for d in dates])
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        records, meta = client._get_index_kline_local_sync("000001", 100, "week")
+
+    assert mock_reader.daily.call_args.kwargs["symbol"] == "sh000001"
+    assert mock_reader.daily.call_args.kwargs["adjust"] == "none"
+    # W-FRI：周一 9/14 归入截至周五 9/18 的周桶
+    assert [r["date"] for r in records] == ["2026-09-04", "2026-09-11", "2026-09-18"]
+    # 第一周 4 个交易日：vol 求和 / high 取 max / close 取最后
+    first = records[0]
+    assert first["vol"] == 4000.0
+    assert first["high"] == 13.5
+    assert first["close"] == 13.0
+    assert meta["truncated"] is False
+
+
+def test_index_kline_month_resample_labels_month_end(client):
+    """跨 3 个自然月的日线 → 月末标签（含当月未结束月，label 落在月末日期）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    dates = pd.bdate_range("2026-06-01", periods=65)
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = _daily_df([str(d.date()) for d in dates])
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        records, _ = client._get_index_kline_local_sync("399001", 100, "month")
+
+    labels = [r["date"] for r in records]
+    assert labels[0] == "2026-06-30"
+    assert "2026-08-31" in labels
+    assert all(set(r) == {"date", "open", "high", "low", "close", "vol", "amount"}
+               for r in records)
+
+
+def test_index_kline_limit_truncation_sets_meta(client):
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    dates = pd.bdate_range("2026-09-01", periods=10)
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = _daily_df([str(d.date()) for d in dates])
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        records, meta = client._get_index_kline_local_sync("000001", 3, "day")
+
+    assert len(records) == 3
+    assert meta["truncated"] is True
+    assert [r["date"] for r in records] == ["2026-09-10", "2026-09-11", "2026-09-14"]
+
+
+def test_index_kline_no_data_message_names_actual_file(client):
+    """指数文件缺失时 no_data 文案给出实际查找的市场前缀路径（932000 → sh）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = None
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_kline_local("932000", type="day", limit=100))
+
+    assert r.success is True
+    assert r.data is None
+    assert "sh932000" in r.error and ".day" in r.error
+
+
+# ========== get_daily 裸 000xxx 歧义码 warn ==========
+
+def test_bare_000_ambiguous_code_carries_warn(client):
+    """000001 按深市股票返回时必须带消歧 warn（防止静默拿到另一标的数据）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_df = pd.DataFrame(
+        {"close": [11.7]}, index=pd.to_datetime(["2026-09-18"])
+    )
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = mock_df
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_daily("000001"))
+
+    assert r.success is True
+    warn = r.error_detail["warn"]
+    assert "歧义" in warn and "sh000001" in warn and "get_index_kline_local" in warn
+
+
+def test_bare_000_warn_survives_l1_cache_hit(client):
+    """第二次命中 L1 缓存时 warn 不能丢。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = pd.DataFrame(
+        {"close": [11.7]}, index=pd.to_datetime(["2026-09-18"])
+    )
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r1 = asyncio.run(client.get_daily("000001"))
+        r2 = asyncio.run(client.get_daily("000001"))
+    assert client._daily_l1_hits == 1
+    assert "歧义" in r1.error_detail["warn"]
+    assert "歧义" in r2.error_detail["warn"]
+
+
+def test_explicit_sz000001_has_no_ambiguity_warn(client):
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = pd.DataFrame(
+        {"close": [11.7]}, index=pd.to_datetime(["2026-09-18"])
+    )
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_daily("sz000001"))
+    assert r.success is True
+    assert r.error_detail is None
+
+
+def test_bare_000_no_data_message_points_to_index_entry(client):
+    """裸 000xxx 在 sz 下无文件时，no_data 文案给出指数入口指引。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = None
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_daily("000999"))
+    assert r.success is True
+    assert r.data is None
+    assert "sh000999" in r.error and "get_index_kline_local" in r.error
+
+
+def test_yaml_has_get_index_kline_local_offline():
+    """get_index_kline_local 在 YAML 声明为 offline，type 仅 day/week/month。"""
+    import yaml
+    with open("config/tools_mootdx2.yaml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    by_name = {t["name"]: t for t in data["tools"]}
+    spec = by_name["get_index_kline_local"]
+    assert spec["data_source_type"] == "offline"
+    params = {p["name"]: p for p in spec["params"]}
+    assert params["type"]["enum"] == ["day", "week", "month"]
+    assert params["code"]["required"] is True

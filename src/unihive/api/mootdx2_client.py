@@ -13,7 +13,43 @@ from .upstream_client import ToolResult, UpstreamStatus
 from ..core.blocking_pool import get_blocking_executor
 from ..core.config_db import resolve_project_path
 from ..models.mootdx2_errors import MooTDXErrorType, error_to_result
-from .index_registry import INDEX_KIND, STOCK_KIND, parse_symbol
+from .index_registry import INDEX_KIND, STOCK_KIND, parse_symbol, to_reader_symbol
+
+
+def _bare_000_ambiguity_warn(code: str) -> str:
+    """裸 000xxx 在通用日线入口被按深市股票解析时的消歧提示。
+
+    000001/000002 等是跨市场同代码标的（深市股票 vs 上证指数），
+    静默返回"另一个标的"的数据最难发现，故在 warn 里给出指数入口指引。
+    """
+    return (
+        f"代码 {code} 为跨市场歧义码（深市股票与上证指数同代码），"
+        f"本次已按深市股票解析；如需上证指数请显式传 sh{code} "
+        f"或改用 get_index_kline_local"
+    )
+
+
+def _is_bare_000_stock(parsed) -> bool:
+    """通用日线入口里被按深市股票解析的裸 000xxx 歧义码。"""
+    return (
+        not parsed.had_suffix
+        and parsed.kind == STOCK_KIND
+        and parsed.code.startswith("000")
+    )
+
+
+def _daily_request_warn(parsed, adjust: str) -> str | None:
+    """get_daily 成功路径的非阻断提示（miss / L1-hit 两路径必须共用）。
+
+    - 指数传 qfq/hfq：复权被强制为 none 的说明
+    - 裸 000xxx 股票：跨市场歧义消歧提示
+    两者按 kind 互斥。
+    """
+    if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq"):
+        return f"指数 {parsed.code} 不支持 {adjust} 复权，已强制为 none"
+    if _is_bare_000_stock(parsed):
+        return _bare_000_ambiguity_warn(parsed.code)
+    return None
 
 
 if TYPE_CHECKING:
@@ -496,8 +532,12 @@ class MooTDX2Client:
                     )
                 if self._reader is None:
                     from mootdx2.reader import Reader
+                    from .tdx_reader_patch import patch_reader_bj_paths
                     tdxdir = self._get_tdxdir()
                     self._reader = Reader.factory(market="std", tdxdir=tdxdir)
+                    # mootdx2 1.5.x: 上游 find_path 不支持 bj 前缀/补前缀,
+                    # 北交所股票与 899 北证指数全部读不到，实例级打补丁
+                    patch_reader_bj_paths(self._reader)
         return self._reader
 
     # 2026-09-14 round 11 audit (坑 #6 防御):
@@ -670,6 +710,19 @@ class MooTDX2Client:
                     msg = "指数本地无 .day 文件（可能未下载完整本地数据）"
         else:
             msg = f"未找到 {code} 的日线数据"
+            # 裸 000xxx 在 sz 下无文件时，提示指数入口，避免用户误判
+            # 为"本地数据没下载"
+            ref = parsed_for_key
+            if ref is None:
+                try:
+                    ref = parse_symbol(code)
+                except ValueError:
+                    ref = None
+            if ref is not None and _is_bare_000_stock(ref):
+                msg += (
+                    f"；若要读上证指数请显式传 sh{ref.code} "
+                    f"或使用 get_index_kline_local"
+                )
         return self._no_data_result(msg)
 
     def _get_ttl_until_tomorrow_9am(self) -> float:
@@ -2058,38 +2111,34 @@ class MooTDX2Client:
         实例属性, 并发调用互相覆盖, 且要求 wrapper 用 getattr 回读)。
 
         Args:
-            code: 6 位股票代码（不带市场前缀）
+            code: 6 位代码，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀
             adjust: 复权方式 none / qfq / hfq（默认不复权）
             start_date: 起始日期 yyyy-MM-dd（可选）
             end_date: 结束日期 yyyy-MM-dd（可选）
 
-        2026-09-14 round 11 audit (坑 #2/#3 防御):
-            - 入口用 ``parse_symbol`` 判断 kind
-            - kind=index → reader_symbol 强制 "sh000300" 形式,
-              否则 mootdx2 ``Reader.find_path`` 会按代码前缀推断
-              把 SH 宽基错放到 sz/lday
-            - kind=index 时 adjust 强制覆盖为 'none' (静默 + meta.warn)
-              否则 mootdx2 走 ``to_adjust`` → ``get_xdxr`` 拉新浪
-              复权因子 → 指数无 XDXR 抛 ReversionError 中断调用
+        代码解析规则见 ``index_registry``（2026-09-20 移除旧
+        INDEX_MARKET_MAP 枚举表）：
+            - 显式前缀/后缀始终信任；市场已知时按前缀约定判类型
+            - 裸 000xxx 是跨市场歧义码，本入口按深市股票解析并在
+              meta.warn 带消歧提示，读上证指数请显式传 ``sh000001``
+            - kind=index 时 adjust 强制覆盖为 'none' (meta.warn)，
+              否则指数无 XDXR 会抛 ReversionError
         """
         # 入口解析; ValueError 由调用方 _get_daily 入口转 invalid_symbol
         parsed = parse_symbol(code)
         meta = {"kind": parsed.kind, "warn": None}
 
+        # 成功路径提示（裸 000xxx 消歧 / 指数复权强制 none），
+        # 必须在 adjust 被覆盖之前用原始入参计算
+        meta["warn"] = _daily_request_warn(parsed, adjust)
+
         # 指数强制无复权（坑 #3）
         if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq"):
-            meta["warn"] = (
-                f"指数 {parsed.code} 不支持 {adjust} 复权，已强制为 none"
-            )
             adjust = "none"
 
-        # Reader 调用符号：
-        #   - stock: 纯 6 位 → reader.find_path 内部前缀推断
-        #   - index: 必须 "{market}{code}" 形式，否则错放目录
-        reader_symbol = (
-            f"{parsed.market}{parsed.code}" if parsed.kind == INDEX_KIND
-            else parsed.code
-        )
+        # Reader 调用符号：市场已知（指数 / 显式后缀股票）→ 带市场前缀；
+        # 裸码股票 → 交 reader.find_path 按前缀推断
+        reader_symbol = to_reader_symbol(parsed)
 
         reader = self._get_reader()
         df = reader.daily(symbol=reader_symbol, adjust=adjust)
@@ -2126,9 +2175,10 @@ class MooTDX2Client:
 
         数据源：{tdxdir}/vipdoc/sh/lday/sh600036.day 等本地二进制文件
 
-        2026-09-14 round 11 audit:
-            - 指数代码通过 ``parse_symbol`` 走 ``INDEX_MARKET_MAP`` 显式映射
-            - 未登记代码 / 后缀冲突 → ``invalid_symbol``
+        2026-09-20 重构（移除 INDEX_MARKET_MAP 枚举表）:
+            - 类型/市场由显式后缀 + 通达信前缀约定决定（见 index_registry）
+            - 裸码 000xxx 歧义码在本入口默认按深市股票；读上证指数请显式
+              传 ``sh000001``；非法后缀 / 非 6 位主体 → ``invalid_symbol``
             - 指数 .day 本地不存在 → 更明确的 no_data 文案
         """
         self._metrics["total_requests"] += 1
@@ -2137,7 +2187,7 @@ class MooTDX2Client:
             # 2026-09-16: 修复缓存 key 与实际 adjust 不一致问题
             #   - 指数代码传 qfq/hfq 会被 _get_daily_sync 强制覆盖为 none
             #   - 缓存 key 必须使用实际执行的 adjust 值，否则永远 miss
-            from .index_registry import parse_symbol, INDEX_KIND
+            from .index_registry import parse_symbol, INDEX_KIND, to_reader_symbol
             cache_hit = False
             cached_records = None
             # 2026-09-19 LOW: cachetools ImportError (_DAILY_L1_ENABLED=False)
@@ -2149,11 +2199,7 @@ class MooTDX2Client:
                 except ValueError:
                     parsed_for_key = None
                 if parsed_for_key is not None:
-                    reader_symbol_key = (
-                        f"{parsed_for_key.market}{parsed_for_key.code}"
-                        if parsed_for_key.kind == INDEX_KIND
-                        else parsed_for_key.code
-                    )
+                    reader_symbol_key = to_reader_symbol(parsed_for_key)
                     # 2026-09-16: 缓存 key 加入日期 + 日期范围，实现当日有效
                     import datetime
                     today = datetime.date.today().isoformat()  # "2026-09-16"
@@ -2174,7 +2220,17 @@ class MooTDX2Client:
             if cache_hit and cached_records is not None:
                 # 在缓存 records 上做 start/end 切片 (dict 遍历, O(N))
                 filtered = self._filter_records_by_date(cached_records, start_date, end_date)
-                return ToolResult(success=True, data=filtered, source="mootdx2")
+                result = ToolResult(success=True, data=filtered, source="mootdx2")
+                # 与 miss 分支保持一致：命中缓存也要带成功路径提示
+                # （裸 000xxx 消歧 / 指数 qfq/hfq 强制 none），
+                # 用原始入参 adjust 计算，不能用 actual_adjust="none"
+                hit_warn = _daily_request_warn(parsed_for_key, adjust)
+                if hit_warn:
+                    result.error_detail = {
+                        "warn": hit_warn,
+                        "recoverable": True,
+                    }
+                return result
 
             # 缓存 miss 或 adjust != none：需要执行 Reader
             # 2026-09-16: 用信号量限制并发 Reader 数量，防止雪崩
@@ -2216,7 +2272,7 @@ class MooTDX2Client:
                     logger.error(f"get_daily failed: {e}")
                     return self._error_result(e, f"get_daily({code})")
         except ValueError as e:
-            # parse_symbol 抛: 后缀非法 / 后缀冲突 / 主体非 6 位数字
+            # parse_symbol 抛: 后缀非法 / 主体非 6 位数字 / intent 非法
             self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
             return ToolResult(
                 success=False,
@@ -2244,8 +2300,15 @@ class MooTDX2Client:
             end_date: 结束日期（可选）
         """
         tdxdir = self._get_tdxdir()
-        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
         suffix_int = 1 if str(suffix) == "1" else 5
+
+        # 统一走 parse_symbol（裸码交 reader 推断，显式前缀始终信任）；
+        # 旧实现裸 .replace("bj") 会把 bj920000 剥成 920000 再被上游
+        # get_stock_market 的 9→sh 兜底误路由
+        try:
+            sym = to_reader_symbol(parse_symbol(code))
+        except ValueError:
+            return []
 
         reader = self._get_reader()
         df = reader.minute(symbol=sym, suffix=suffix_int)
@@ -2297,7 +2360,10 @@ class MooTDX2Client:
             code: 6 位股票代码
         """
         reader = self._get_reader()
-        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
+        try:
+            sym = to_reader_symbol(parse_symbol(code))
+        except ValueError:
+            return []
         df = reader.fzline(symbol=sym)
         if df is None or (hasattr(df, "empty") and df.empty):
             return []
@@ -2330,32 +2396,47 @@ class MooTDX2Client:
             return self._error_result(e, f"get_fzline({code})")
 
     # ========== 离线指数K线（Reader，TDX 本地 .day 文件） ==========
-    # 2026-09-14 round 11 audit (坑 #1/#2/#3/#4/#5/#7 防御):
     # mootdx2 ``Reader`` 没有专门的 ``index()`` 方法，离线读指数本质上
-    # 仍走 ``Reader.daily(symbol=...)``，但必须显式把指数映射到正确的
-    # sh/sz 子目录（坑 #2），强制无复权（坑 #3），并对本地文件缺失
-    # 给出明确 no_data 提示（坑 #4），对 offset 截断打 warn（坑 #5），
-    # 分钟级不支持（坑 #7）。
+    # 仍走 ``Reader.daily(symbol=...)``。指数工具入口以 intent='index'
+    # 解析：显式后缀 + 前缀约定决定市场（裸 000xxx 歧义码按 sh 指数），
+    # 强制无复权（指数无 XDXR），本地文件缺失给 no_data 提示，
+    # limit 截断打 truncated 标记，分钟级不支持。
     _INDEX_LOCAL_TYPES: tuple[str, ...] = ("day", "week", "month")
-    # 注：当前实现只直接返回 .day 文件原始日线数据（type 仅 day）。
-    # week/month 由调用方自行 resample，避免 mootdx2 内部周/月频率支持
-    # 不完整（Reader.daily 不接受 frequency 参数）的隐式返回问题。
+    # Reader.daily 只产日线；week/month 在本地按规则重采样
+    _INDEX_RESAMPLE_RULES: dict[str, str] = {"week": "W-FRI", "month": "ME"}
 
     def _get_index_kline_local_sync(
-        self, code: str, limit: int,
+        self, code: str, limit: int, period: str = "day",
     ) -> tuple[list, dict]:
-        """同步读取离线指数 K 线（日级，强制 adjust='none'）。
+        """同步读取离线指数 K 线（强制 adjust='none'）。
+
+        week/month 由日线本地重采样（Reader 只产日线）：
+        open=first / high=max / low=min / close=last / vol,amount=sum；
+        周线锚定周五（W-FRI），月线月末（ME）。
 
         Returns:
             ``(records, meta)``，meta 含 ``truncated`` 等字段。
         """
-        parsed = parse_symbol(code)
+        parsed = parse_symbol(code, intent=INDEX_KIND)
         reader = self._get_reader()
-        reader_symbol = f"{parsed.market}{parsed.code}"
+        reader_symbol = to_reader_symbol(parsed)
         df = reader.daily(symbol=reader_symbol, adjust="none")
         meta: dict = {"kind": parsed.kind, "truncated": False}
         if df is None or getattr(df, "empty", True):
             return [], meta
+
+        if period in self._INDEX_RESAMPLE_RULES:
+            agg = {
+                "open": "first", "high": "max", "low": "min", "close": "last",
+                "vol": "sum", "amount": "sum",
+            }
+            cols = [c for c in agg if c in df.columns]
+            df = (
+                df[cols]
+                .resample(self._INDEX_RESAMPLE_RULES[period])
+                .agg({c: agg[c] for c in cols})
+                .dropna(subset=["open"])
+            )
 
         records = df.reset_index().to_dict(orient="records")
         for r in records:
@@ -2376,8 +2457,10 @@ class MooTDX2Client:
 
         与在线 ``get_index_kline`` 的区别:
           - 不依赖 TDX 网络，走本地 .day 文件
-          - ``type`` 仅支持 day/week/month（分钟级请用 get_minute_local）
-          - 指数代码必须已登记到 ``INDEX_MARKET_MAP``（未登记 → invalid_symbol）
+          - ``type`` 支持 day/week/month（week/month 由本地日线重采样；
+            分钟级请用 get_minute_local）
+          - 本入口按指数意图解析（intent='index'）：裸 000xxx 歧义码按
+            sh 指数；传入股票代码 → invalid_symbol
 
         Args:
             code: 指数代码，6 位数字或带 .SH/.SZ/.BJ 后缀
@@ -2413,9 +2496,9 @@ class MooTDX2Client:
             )
 
         self._metrics["total_requests"] += 1
-        # 入口解析: 未登记 / 后缀冲突 / 非法后缀 → ValueError → invalid_symbol
+        # 入口解析（指数意图）: 非法后缀 / 非 6 位主体 → ValueError → invalid_symbol
         try:
-            parsed = parse_symbol(code)
+            parsed = parse_symbol(code, intent=INDEX_KIND)
         except ValueError as e:
             self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
             return ToolResult(
@@ -2445,14 +2528,14 @@ class MooTDX2Client:
 
         try:
             records, meta = await self._run_blocking(
-                self._get_index_kline_local_sync, code, limit,
+                self._get_index_kline_local_sync, code, limit, type,
             )
             if records:
                 result = ToolResult(success=True, data=records, source="mootdx2")
                 if meta.get("truncated"):
-                    # 坑 #5 防御: offset 截断时显式告警
+                    # 坑 #5 防御: offset 截断时显式告警（warn 会透传到 HTTP 信封顶层）
                     result.error_detail = {
-                        "warn": "truncated",
+                        "warn": f"结果已截断为最近 {len(records)} 条（请求 {limit} 条）",
                         "returned": len(records),
                         "requested": limit,
                         "recoverable": True,
@@ -2460,8 +2543,9 @@ class MooTDX2Client:
                 return result
             # 坑 #4 防御: 本地 .day 缺失给明确 no_data 文案
             return self._no_data_result(
-                f"指数 {parsed.code} 本地无 .day 文件"
-                f"（可能未下载完整本地数据）"
+                f"指数 {to_reader_symbol(parsed)} 本地无日线文件"
+                f"（vipdoc/{parsed.market}/lday/{to_reader_symbol(parsed)}.day "
+                f"不存在，可能该标的本地数据未下载）"
             )
         except Exception as e:
             logger.error(f"get_index_kline_local failed: {e}")

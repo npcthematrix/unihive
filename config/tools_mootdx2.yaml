@@ -1106,16 +1106,26 @@ tools:
       - 需要前/后复权数据时使用
 
       【参数说明】
-      - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀）
+      - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
       - adjust (可选): 复权方式，默认 none
         none=不复权 / qfq=前复权 / hfq=后复权
       - start_date (可选): 起始日期 yyyy-MM-dd
       - end_date (可选): 结束日期 yyyy-MM-dd
 
-      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/xxx.day
+      【代码消歧（重要）】
+      - 裸 000xxx 是跨市场歧义码（000001=平安银行/上证指数，000002=万科A/上证A指），
+        本入口按深市股票解析；成功返回时信封顶层 warn 字段会带消歧提示，
+        读上证指数请显式传 sh000001，或改用 get_index_kline_local
+      - 指数代码（sh000300、399001、880xxx、bj899050 等）请用 get_index_kline_local；
+        指数传 qfq/hfq 会被强制为 none 并在 warn 说明
+      - 北交所股票支持裸码（430/830/870/920 段）或显式 bj 前缀（如 bj920000）
 
-      【返回示例】
+      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/{sh|sz|bj}xxx.day
+
+      【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
+      成功但有非阻断提示（消歧/无本地文件/截断）时额外带顶层 warn 字段。
       成功: {"success": true, "data": [{"date": "2024-01-02", "open": 10.0, ...}], "source": "mootdx2"}
+      歧义: {"success": true, "data": [...], "warn": "代码 000001 为跨市场歧义码…如需上证指数请显式传 sh000001"}
       失败: {"success": false, "error": "TDX 安装目录未配置"}
     routing: get_daily_local
     upstream_tool_mapping:
@@ -1127,7 +1137,7 @@ tools:
       - name: code
         type: str
         required: true
-        description: 股票代码（6 位数字）
+        description: 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀；裸 000xxx 按深市股票解析）
       - name: adjust
         type: str
         required: false
@@ -1151,7 +1161,7 @@ tools:
       - 不依赖网络
 
       【参数说明】
-      - code (必填): 股票代码（6 位数字）
+      - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
       - suffix (可选): '1' = 1 分钟线（默认）/ '5' = 5 分钟线
       - start_date (可选): 起始日期 yyyy-MM-dd
       - end_date (可选): 结束日期 yyyy-MM-dd
@@ -1169,7 +1179,7 @@ tools:
       - name: code
         type: str
         required: true
-        description: 股票代码（6 位数字）
+        description: 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
       - name: suffix
         type: str
         required: false
@@ -1193,7 +1203,7 @@ tools:
       - 与 get_minute suffix='5' 等价（相同数据源 fzline/*.lc5）
 
       【参数说明】
-      - code (必填): 股票代码（6 位数字）
+      - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
 
       【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
     routing: get_fzline_local
@@ -1206,4 +1216,51 @@ tools:
       - name: code
         type: str
         required: true
-        description: 股票代码（6 位数字）
+        description: 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
+
+  - name: get_index_kline_local
+    description: |-
+      【离线指数K线】读取通达信客户端本地指数 .day 文件（无复权），支持日/周/月。
+
+      【使用场景】
+      - 离线环境分析指数历史走势（不依赖网络）
+      - 与在线 get_index_kline 对应，数据源为本地 vipdoc 文件
+
+      【参数说明】
+      - code (必填): 指数代码，6 位数字或带 sh/sz/bj 前缀（也支持 .SH/.SZ/.BJ 后缀）
+        · sh 指数段：000xxx（上证指数/中证老系列）、880/881xxx（通达信板块指数）、
+          930/931/932xxx（中证新号段，如 932000=中证A500）
+        · sz 指数段：399xxx（如 399001 深证成指）
+        · bj 指数段：899xxx（北证指数，如 bj899050；裸码 899050 亦可）
+        · 裸 000xxx 为歧义码（上证指数 vs 深市股票），本工具按 sh 指数解析
+          （如 000001=上证指数、000300=沪深300）；显式前缀始终生效
+      - type (可选): day(默认)/week/month；week/month 由本地日线重采样
+      - limit (可选): 返回最近 N 条，默认 100，最大 1000；超限时截断并在信封 warn 说明
+
+      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/{sh|sz|bj}xxx.day
+      【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
+      成功但有非阻断提示（本地无文件/截断）时额外带顶层 warn 字段。
+      【典型情况】
+      - invalid_symbol: 传入股票代码（如 600000/sz000001/bj920000）请改用 get_daily_local，success=false
+      - no_data: 指数 .day 本地不存在（TDX 未下载该数据），不代表代码错误；
+        success=true、data=null，具体缺失路径在 warn 中给出（如 sh932xxx 本机未下载）
+    routing: get_index_kline_local
+    upstream_tool_mapping:
+      mootdx2: get_index_kline_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: code
+        type: str
+        required: true
+        description: 指数代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀；裸 000xxx 按 sh 指数解析）
+      - name: type
+        type: str
+        required: false
+        enum: [day, week, month]
+        description: K线周期：day=日线(默认)/week=周线/month=月线
+      - name: limit
+        type: int
+        required: false
+        description: 返回最近 N 条（默认 100，最大 1000）

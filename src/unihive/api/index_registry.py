@@ -1,24 +1,34 @@
-"""指数代码 → 市场索引表 + 解析工具。
+"""代码 → (市场, 类型) 解析工具（无枚举白名单）。
 
-2026-09-14 audit (round 11):
-  mootdx2 ``Reader.find_path`` 内部用 ``get_stock_market`` 按代码前缀推断
-  市场（``00/30/39 → sz``、``6/5/9/7 → sh``），会把 SH 宽基指数
-  （000300 / 000905 / 000016 等）错放到 ``vipdoc/sz/lday/``。
+设计背景 (2026-09-20 重构，移除旧 ``INDEX_MARKET_MAP``):
+  旧实现用一张 ``code -> market`` 的枚举表判定"代码是不是指数"。A 股存在
+  跨市场同代码标的（``000001`` = 上证指数 / 平安银行，``000002`` = 上证A指 /
+  万科A），单值表被迫二选一，且把"显式后缀与表冲突"一律报错，导致
+  ``sz000001`` 在离线接口里永远读不到平安银行。
 
-  本模块在调用 Reader 前强制走显式映射，把指数走查表、个股走前缀推断
-  两条路径彻底分开；同时拒绝"前缀兜底猜测" —— 未登记的 6 位代码直接
-  ``raise ValueError``，由外层 ToolResult 转 ``invalid_symbol``。
+  新实现只依赖通达信 vipdoc 目录的**通用前缀约定**（规律，不是逐个代码的
+  白名单），市场归属由用户显式后缀或调用入口的意图决定：
 
-  设计原则 (round 11 user review):
-    - 宁可少不可猜：新指数必须先登记到 ``INDEX_MARKET_MAP`` 再使用。
-    - 后缀冲突（如 ``000300.SZ``）一律 raise，禁止静默接受。
-    - 不依赖代码位数/开头自动推断交易所归属 —— 指数归属是"人为规定"
-      的，不是编码规律。
+  市场已知时，(市场, 前缀) 判定类型无歧义：
+    - sh + 000xxx/880xxx/881xxx/930-932xxx → 指数
+                          （上证/中证系列、板块指数、中证新号段）
+    - sz + 399xxx       → 指数（深证系列）
+    - bj + 899xxx       → 指数（北证指数）
+    - 其余              → 股票/基金等，按股票处理
+
+  无后缀裸码：
+    - 399xxx/899xxx/880xxx/881xxx/930-932xxx → 指数，市场由前缀直接确定
+    - 000xxx               → **歧义码**（深市股票 vs 上证/中证指数）：
+        * 指数工具入口（intent='index'）→ 按 sh 指数解析
+        * 默认（股票/通用入口）         → 按股票，market=None
+          交 ``Reader.find_path`` 前缀推断（000 → sz），命中深市股票
+        * 需要在通用入口读上证指数 → 显式传 ``sh000001`` / ``000001.SH``
+    - 其余                 → 股票，market=None 交 Reader 推断
 
 3 层结构:
-    1. ``INDEX_MARKET_MAP``: 唯一权威表
+    1. ``ParsedSymbol``: 不可变解析结果 DTO
     2. ``parse_symbol``: 统一入口，处理 .SH 后缀 / 旧前缀 / 纯数字
-    3. ``classify_symbol``: 便捷接口，返回 ``(kind, reader_symbol)``
+    3. ``to_reader_symbol``: 转换 Reader 需要的 symbol 形态
 """
 from __future__ import annotations
 
@@ -30,29 +40,25 @@ INDEX_KIND = "index"
 STOCK_KIND = "stock"
 VALID_SUFFIXES: frozenset[str] = frozenset({"sh", "sz", "bj"})
 
-# 指数代码 → 交易所归属（sh/sz/bj），本地 vipdoc 目录布局
-# 维护规则：只覆盖项目实际会调到的指数；新指数必须先登记再使用
-# 表格按代码数值升序排列，方便人工核对
-INDEX_MARKET_MAP: dict[str, str] = {
-    # SH 宽基 / 规模指数（上交所 / 中证发布，按 SH 目录存）
-    "000001": "sh",   # 上证指数
-    "000002": "sh",   # 上证 A 股
-    "000003": "sh",   # 上证 B 股
-    "000016": "sh",   # 上证 50
-    "000300": "sh",   # 沪深 300
-    "000688": "sh",   # 科创 50
-    "000852": "sh",   # 中证 1000
-    "000903": "sh",   # 中证 100
-    "000905": "sh",   # 中证 500
-    # SZ 综指 / 成分指数
-    "399001": "sz",   # 深证成指
-    "399002": "sz",   # 深成指 R
-    "399006": "sz",   # 创业板指
-    "399330": "sz",   # 深证 100
-    "399905": "sz",   # 中证 500 (SZ 镜像)
-    # BJ
-    "899999": "bj",   # 北证 50（占位，按实际下载情况再补）
+#: 市场已知时的指数代码前缀（通达信目录通用约定，非枚举白名单）
+#: sh: 000=上证/中证老系列; 880/881=通达信板块指数（标准目录均有落盘）;
+#: 930-932=中证新号段（932000 中证A500、930/931 行业/主题系列，文件由
+#: 通达信下载到 vipdoc/sh/lday/，本机未下载时返回 no_data）。
+#: sz: 399 深证系列；bj: 899 北证系列。
+_INDEX_PREFIXES_BY_MARKET: dict[str, tuple[str, ...]] = {
+    "sh": ("000", "880", "881", "930", "931", "932"),
+    "sz": ("399",),
+    "bj": ("899",),
 }
+
+#: 无后缀裸码下无歧义指数前缀 → 市场（由主表派生；"000" 除外 ——
+#: 000xxx 在 sh（指数）和 sz（股票）下同时存在，必须交给 intent 消歧）
+_BARE_INDEX_MARKET_BY_PREFIX: tuple[tuple[str, str], ...] = tuple(
+    (prefix, market)
+    for market in ("sh", "sz", "bj")
+    for prefix in _INDEX_PREFIXES_BY_MARKET.get(market, ())
+    if prefix != "000"
+)
 
 
 # ---- DTO ---------------------------------------------------------------------
@@ -61,59 +67,49 @@ INDEX_MARKET_MAP: dict[str, str] = {
 class ParsedSymbol:
     """统一解析结果（immutable DTO）。"""
     code: str           # 6 位纯数字代码
-    market: str | None  # sh / sz / bj；stock + 无后缀 时为 None，让 Reader 自行推断
+    market: str | None  # sh / sz / bj；股票 + 无后缀 时为 None，让 Reader 自行推断
     kind: str           # 'index' / 'stock'
     had_suffix: bool    # 解析时是否带 .SH/.SZ/.BJ 后缀或旧 sh/sz 前缀
 
 
 # ---- 核心函数 -----------------------------------------------------------------
 
-def resolve_index_market(code: str) -> str:
-    """查表返回指数市场。表外直接抛 ``ValueError``（**禁止前缀兜底**）。
-
-    Args:
-        code: 6 位纯数字代码
-
-    Returns:
-        'sh' / 'sz' / 'bj'
-
-    Raises:
-        ValueError: code 不在 ``INDEX_MARKET_MAP`` 中
-    """
-    code = (code or "").strip()
-    if code not in INDEX_MARKET_MAP:
-        raise ValueError(
-            f"指数代码 {code!r} 不在 INDEX_MARKET_MAP 中，"
-            f"请补充映射或确认是否为股票代码（禁止前缀兜底猜测）"
-        )
-    return INDEX_MARKET_MAP[code]
+def _kind_for_market(code: str, market: str) -> str:
+    """市场已知时按前缀约定判定类型。"""
+    prefixes = _INDEX_PREFIXES_BY_MARKET.get(market, ())
+    return INDEX_KIND if code.startswith(prefixes) else STOCK_KIND
 
 
-def parse_symbol(raw: str | None) -> ParsedSymbol:
+def parse_symbol(raw: str | None, *, intent: str = STOCK_KIND) -> ParsedSymbol:
     """统一解析入口。
 
     支持格式:
-        - ``"600036"``: 6 位纯数字，按 ``INDEX_MARKET_MAP`` 决定 kind
-        - ``"sh600036"``: 旧前缀格式，按前缀得 market，kind 走查表
+        - ``"600036"``: 6 位纯数字，按前缀约定/调用意图决定 kind
+        - ``"sh600036"``: 旧前缀格式，市场以前缀为准（始终信任）
         - ``"000300.SH"`` / ``"000300.sh"``: 后缀格式（仅 .SH/.SZ/.BJ）
 
     Args:
         raw: 用户输入的代码字符串
+        intent: 调用入口意图（仅影响 000xxx 裸歧义码）：
+            - ``STOCK_KIND``（默认，通用/股票入口）: 000xxx 裸码按深市股票
+            - ``INDEX_KIND``（指数工具入口）: 000xxx 裸码按 sh 指数
 
     Returns:
         ``ParsedSymbol`` 不可变 DTO
 
     Raises:
-        ValueError: 输入为空 / 主体非 6 位数字 / 后缀非法 / 后缀与表冲突
+        ValueError: 输入为空 / 主体非 6 位数字 / 后缀非法 / intent 非法
     """
+    if intent not in (INDEX_KIND, STOCK_KIND):
+        raise ValueError(f"intent 仅支持 {INDEX_KIND!r}/{STOCK_KIND!r}，收到 {intent!r}")
     if raw is None:
         raise ValueError("symbol 不能为空")
     s = raw.strip()
     if not s:
         raise ValueError("symbol 不能为空")
 
-    had_suffix = False
     market_hint: str | None = None
+    had_suffix = False
     body = s
 
     # 1) 后缀 ".SH/.SZ/.BJ"（大小写均可）
@@ -140,71 +136,54 @@ def parse_symbol(raw: str | None) -> ParsedSymbol:
         )
 
     code = body
-    in_index_map = code in INDEX_MARKET_MAP
 
+    # 显式后缀/前缀：市场以用户输入为准，按 (市场, 前缀) 约定判定类型。
+    # 不再做"与白名单冲突"检测 —— 同代码跨市场标的是合法存在的。
     if had_suffix:
-        # 用户显式给了交易所线索：
-        #   - 命中指数表 → 以表为准，**冲突检测**
-        #   - 未命中 → 当作股票，信任用户后缀（不做前缀推断）
-        if in_index_map:
-            expected = INDEX_MARKET_MAP[code]
-            if market_hint != expected:
-                raise ValueError(
-                    f"指数 {code} 后缀 .{market_hint.upper()} "
-                    f"与 INDEX_MARKET_MAP 记录 .{expected.upper()} 冲突"
-                )
+        return ParsedSymbol(
+            code=code,
+            market=market_hint,
+            kind=_kind_for_market(code, market_hint),
+            had_suffix=True,
+        )
+
+    # 无后缀：无歧义指数前缀
+    for prefix, market in _BARE_INDEX_MARKET_BY_PREFIX:
+        if code.startswith(prefix):
             return ParsedSymbol(
-                code=code, market=expected,
-                kind=INDEX_KIND, had_suffix=True,
+                code=code, market=market, kind=INDEX_KIND, had_suffix=False,
+            )
+
+    # 无后缀 000xxx：唯一歧义段，按调用入口意图解析
+    if code.startswith("000"):
+        if intent == INDEX_KIND:
+            return ParsedSymbol(
+                code=code, market="sh", kind=INDEX_KIND, had_suffix=False,
             )
         return ParsedSymbol(
-            code=code, market=market_hint,
-            kind=STOCK_KIND, had_suffix=True,
+            code=code, market=None, kind=STOCK_KIND, had_suffix=False,
         )
 
-    # 无后缀：先看是否在指数表
-    if in_index_map:
-        return ParsedSymbol(
-            code=code, market=INDEX_MARKET_MAP[code],
-            kind=INDEX_KIND, had_suffix=False,
-        )
-    # 6 位纯数字但不在指数表 → 视为股票；market=None 让 Reader 自行推断
+    # 其余裸码按股票，market=None 交 Reader.find_path 前缀推断
     return ParsedSymbol(
-        code=code, market=None,
-        kind=STOCK_KIND, had_suffix=False,
+        code=code, market=None, kind=STOCK_KIND, had_suffix=False,
     )
 
 
-def classify_symbol(raw: str) -> tuple[str, str]:
-    """便捷接口：返回 ``(kind, reader_symbol)``。
+def to_reader_symbol(parsed: ParsedSymbol) -> str:
+    """转换为 mootdx2 ``Reader`` 需要的 symbol 形态。
 
-    - ``kind='index'`` → ``reader_symbol`` 形如 ``"sh000300"``
-      （market + code 拼接，Reader 直接命中 ``vipdoc/sh/lday/sh000300.day``）
-    - ``kind='stock'`` → ``reader_symbol`` 形如 ``"600036"``
-      （不带前缀，让 ``Reader.find_path`` 按前缀推断）
-
-    Args:
-        raw: 用户输入
-
-    Returns:
-        ``(kind, reader_symbol)``
-
-    Raises:
-        ValueError: 透传 ``parse_symbol`` 的所有错误
+    - 市场已知（指数 / 显式后缀股票）→ ``"sh000300"`` / ``"sz000001"``
+    - 市场未知（裸码股票）→ ``"600036"``，交 ``Reader.find_path`` 前缀推断
     """
-    p = parse_symbol(raw)
-    if p.kind == INDEX_KIND:
-        return p.kind, f"{p.market}{p.code}"
-    return p.kind, p.code
+    return f"{parsed.market}{parsed.code}" if parsed.market else parsed.code
 
 
 __all__ = [
     "INDEX_KIND",
     "STOCK_KIND",
     "VALID_SUFFIXES",
-    "INDEX_MARKET_MAP",
     "ParsedSymbol",
-    "resolve_index_market",
     "parse_symbol",
-    "classify_symbol",
+    "to_reader_symbol",
 ]
