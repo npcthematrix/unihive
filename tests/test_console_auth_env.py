@@ -1,8 +1,19 @@
-"""Unit tests for console auth env var wiring (HIGH #4)."""
+"""Unit tests for console auth env var wiring (HIGH #4).
+
+Round-13 console 启动审视: "显式但不完整" 的 console 配置由 fail-open
+(静默禁用) 改为 fail-closed (抛 ConsoleAuthConfigError 拒启); 只有三个
+变量全不设才是真正的"未启用"。
+
+注意: 一律走 monkeypatch.setenv —— 早期版本用裸 os.environ 写入,
+依赖 autouse fixture 的 delenv undo 间接清理; 该写法会在极少数
+fixture/undo 顺序下把短 secret 泄漏给后续进程内用例 (factory config.yaml
+console 段移除后 env 成为唯一来源, 泄漏即可见)。
+"""
 from __future__ import annotations
 
 import pytest
 
+from src.unihive.console_auth import ConsoleAuthConfigError
 from src.unihive.gateway_server import _console_auth_config_from_env
 
 
@@ -27,38 +38,40 @@ class TestConsoleAuthEnv:
         assert cfg is None
         assert "no UNIHIVE_CONSOLE_*" in reason
 
-    def test_disabled_when_only_user_set(self):
-        import os
-        os.environ["UNIHIVE_CONSOLE_USER"] = "admin"
-        cfg, reason = _console_auth_config_from_env()
-        assert cfg is None
-        assert "missing" in reason
-        assert "UNIHIVE_CONSOLE_PASSWORD" in reason
-        assert "UNIHIVE_CONSOLE_SESSION_SECRET" in reason
+    def test_failclosed_when_only_user_set(self, monkeypatch):
+        monkeypatch.setenv("UNIHIVE_CONSOLE_USER", "admin")
+        with pytest.raises(ConsoleAuthConfigError) as ei:
+            _console_auth_config_from_env()
+        msg = str(ei.value)
+        assert "UNIHIVE_CONSOLE_PASSWORD" in msg
+        assert "UNIHIVE_CONSOLE_SESSION_SECRET" in msg
 
-    def test_disabled_when_user_and_password_only(self):
-        import os
-        os.environ["UNIHIVE_CONSOLE_USER"] = "admin"
-        os.environ["UNIHIVE_CONSOLE_PASSWORD"] = "secret"
-        cfg, reason = _console_auth_config_from_env()
-        assert cfg is None
-        assert "missing" in reason
-        assert "UNIHIVE_CONSOLE_SESSION_SECRET" in reason
+    def test_failclosed_when_user_and_password_only(self, monkeypatch):
+        monkeypatch.setenv("UNIHIVE_CONSOLE_USER", "admin")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_PASSWORD", "secret")
+        with pytest.raises(ConsoleAuthConfigError) as ei:
+            _console_auth_config_from_env()
+        assert "UNIHIVE_CONSOLE_SESSION_SECRET" in str(ei.value)
 
-    def test_disabled_when_secret_too_short(self):
-        import os
-        os.environ["UNIHIVE_CONSOLE_USER"] = "admin"
-        os.environ["UNIHIVE_CONSOLE_PASSWORD"] = "secret"
-        os.environ["UNIHIVE_CONSOLE_SESSION_SECRET"] = "short"
-        cfg, reason = _console_auth_config_from_env()
-        assert cfg is None
-        assert "32 characters" in reason
+    def test_failclosed_when_secret_too_short(self, monkeypatch):
+        monkeypatch.setenv("UNIHIVE_CONSOLE_USER", "admin")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_PASSWORD", "secret")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_SESSION_SECRET", "short")
+        with pytest.raises(ConsoleAuthConfigError, match="32 characters"):
+            _console_auth_config_from_env()
 
-    def test_enabled_when_all_three_set(self):
-        import os
-        os.environ["UNIHIVE_CONSOLE_USER"] = "admin"
-        os.environ["UNIHIVE_CONSOLE_PASSWORD"] = "secret"
-        os.environ["UNIHIVE_CONSOLE_SESSION_SECRET"] = _SECRET_32
+    def test_failclosed_known_default_secret_rejected(self, monkeypatch):
+        # 出厂公开常量即便被显式配置也拒绝 (防止照抄旧 config.yaml)
+        monkeypatch.setenv("UNIHIVE_CONSOLE_USER", "admin")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_PASSWORD", "secret")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_SESSION_SECRET", "0123456789abcdef" * 4)
+        with pytest.raises(ConsoleAuthConfigError, match="default|known|public"):
+            _console_auth_config_from_env()
+
+    def test_enabled_when_all_three_set(self, monkeypatch):
+        monkeypatch.setenv("UNIHIVE_CONSOLE_USER", "admin")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_PASSWORD", "secret")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_SESSION_SECRET", _SECRET_32)
         cfg, reason = _console_auth_config_from_env()
         assert cfg is not None, f"expected enabled; reason={reason!r}"
         assert cfg["username"] == "admin"
@@ -72,25 +85,28 @@ class TestConsoleAuthEnv:
         assert verify_password("secret", cfg["password_hash"]) is True
         assert cfg["session_secret"] == _SECRET_32
 
-    def test_strips_whitespace(self):
-        import os
-        os.environ["UNIHIVE_CONSOLE_USER"] = "  admin  "
-        os.environ["UNIHIVE_CONSOLE_PASSWORD"] = "  secret  "
-        os.environ["UNIHIVE_CONSOLE_SESSION_SECRET"] = _SECRET_32
+    def test_strips_whitespace_user_but_preserves_password(self, monkeypatch):
+        # round13 L4: username/secret 仍 strip; password 逐字保留 —— 尾部空格
+        # 可能是口令的真实组成部分, 静默 strip 会让 "配置时录入" 与 "登录时录入"
+        # 产生难以排查的不一致。纯空白 password 仍按 "未设置" 处理 (fail-closed)。
+        monkeypatch.setenv("UNIHIVE_CONSOLE_USER", "  admin  ")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_PASSWORD", "  secret  ")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_SESSION_SECRET", "  " + _SECRET_32 + "  ")
         cfg, _ = _console_auth_config_from_env()
         assert cfg["username"] == "admin"
-        # 明文 strip 后被 hash; 验证去掉空白后的明文能匹配
+        assert cfg["session_secret"] == _SECRET_32
         assert "password" not in cfg
         from src.unihive.console_auth import verify_password
 
-        assert verify_password("secret", cfg["password_hash"]) is True
+        # 逐字 (含首尾空格) 才能验证通过; strip 后的形式必须失败。
+        assert verify_password("  secret  ", cfg["password_hash"]) is True
+        assert verify_password("secret", cfg["password_hash"]) is False
 
-    def test_empty_string_treated_as_unset(self):
+    def test_empty_string_treated_as_unset(self, monkeypatch):
         """Empty string is treated the same as missing — opt-in via setting them."""
-        import os
-        os.environ["UNIHIVE_CONSOLE_USER"] = ""
-        os.environ["UNIHIVE_CONSOLE_PASSWORD"] = ""
-        os.environ["UNIHIVE_CONSOLE_SESSION_SECRET"] = ""
+        monkeypatch.setenv("UNIHIVE_CONSOLE_USER", "")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_PASSWORD", "")
+        monkeypatch.setenv("UNIHIVE_CONSOLE_SESSION_SECRET", "")
         cfg, reason = _console_auth_config_from_env()
         assert cfg is None
         assert "no UNIHIVE_CONSOLE_*" in reason

@@ -49,6 +49,7 @@ from ._helpers import (  # noqa: F401
     _console_auth_config_from_env,
     _get_console_auth_config,
     _parse_mootdx2_servers,
+    load_config_yaml_overlay,
     _sanitize_sync_message,
     coerce_float_field,
     coerce_int_field,
@@ -132,18 +133,17 @@ class GatewayServer(
                 str(self.config_path), strict_env=strict_env
             )
 
-            # Load config.yaml and merge (config.yaml takes precedence for overlapping keys)
+            # Load config.yaml and merge (config.yaml takes precedence for
+            # overlapping keys). M1/L1 语义见 load_config_yaml_overlay:
+            # 解析失败 + 顶层 console: 键 → fail-closed; 其余只告警。
             config_yaml_path = self.config_path.parent / "config.yaml"
-            if config_yaml_path.exists():
-                try:
-                    config_yaml = load_config(
-                        str(config_yaml_path), strict_env=strict_env
-                    )
-                    # Merge: config.yaml overrides upstreams.yaml (浅层合并,
-                    # 与 `unihive config lint` 共用 merge_config_overlay)
-                    merge_config_overlay(self.config, config_yaml)
-                except Exception as e:
-                    logger.warning(f"Failed to load config.yaml: {e}")
+            config_yaml = load_config_yaml_overlay(
+                config_yaml_path, strict_env=strict_env
+            )
+            if config_yaml is not None:
+                # Merge: config.yaml overrides upstreams.yaml (浅层合并,
+                # 与 `unihive config lint` 共用 merge_config_overlay)
+                merge_config_overlay(self.config, config_yaml)
             errors = validate_config(self.config)
             if errors:
                 for e in errors:

@@ -1,17 +1,30 @@
 # UniHive Gateway 配置文件
 
 # Gateway 配置
+# host 默认仅回环: console 鉴权默认关闭, 绑 0.0.0.0 等于同网段未认证可写
+# /api/*。确需局域网访问时显式改 0.0.0.0 并同时配置 UNIHIVE_CONSOLE_* 开启鉴权
+# (启动时非回环 + 无鉴权会打 SECURITY WARNING)。
 gateway:
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 18080
   mcp_path: "/mcp"
 
-# Console 控制台认证配置（可选）
-# 设置后访问 http://127.0.0.1:18080 需要登录
-console:
-  username: "admin"
-  password_hash: "pbkdf2_sha256$200000$d506b2bd1306c1e8f4d3d228a3313022$41d50a4c0592c0a8e4eebdf9afdd99e2cda48a743a87095272cf1cc89b349445"
-  session_secret: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+# Console 控制台认证（默认关闭: 不配置 = /api/* 与控制台开放, 仅适合本机单用户）
+#
+# 推荐启用方式 —— 在 .env (已 gitignore) 或进程环境里同时设置三个变量:
+#   UNIHIVE_CONSOLE_USER=<用户名>
+#   UNIHIVE_CONSOLE_PASSWORD=<明文口令, 启动时自动 PBKDF2 哈希>
+#   UNIHIVE_CONSOLE_SESSION_SECRET=<32+ 字符随机串;
+#       python -c "import secrets; print(secrets.token_hex(32))">
+# 三个全设才启用; 只设一两个会 fail-closed 拒启 (防止半配置裸奔);
+# 三个全不设才是关闭态。切勿把口令/密钥提交进仓库。
+#
+# 也可以直接在本段配置 (不推荐, 注意提交风险; 只接受哈希, 不接受明文):
+# console:
+#   username: "admin"
+#   # python -c "from src.unihive.console_auth import hash_password; print(hash_password('your-password'))"
+#   password_hash: "<pbkdf2_sha256$...>"
+#   session_secret: "<32+ chars random hex>"
 
 # 全局开关
 disable_dangerous: false

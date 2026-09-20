@@ -8,6 +8,28 @@
       </div>
 
       <el-alert
+        v-if="auth.probeError"
+        :title="auth.probeError"
+        type="warning"
+        show-icon
+        :closable="false"
+        class="login-alert"
+      >
+        <div class="probe-alert-body">
+          <span>冷启动探测失败, 请确认网关进程已启动</span>
+          <el-button
+            type="primary"
+            link
+            size="small"
+            :loading="probing"
+            @click="retryProbe"
+          >
+            重试
+          </el-button>
+        </div>
+      </el-alert>
+
+      <el-alert
         v-if="errorMsg"
         :title="errorMsg"
         type="error"
@@ -56,7 +78,7 @@
         </el-button>
       </el-form>
 
-      <p class="login-meta">需授权访问 · 配置见 config/config.yaml</p>
+      <p class="login-meta">需授权访问 · 凭证配置见 .env (UNIHIVE_CONSOLE_*)</p>
     </el-card>
   </div>
 </template>
@@ -68,6 +90,7 @@ import { Lock, User } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { errorMessage } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { isSafeRedirect } from '@/router/authGuard'
 import brandMark from '@/assets/unihive-mark-light.svg'
 
 const route = useRoute()
@@ -76,6 +99,7 @@ const auth = useAuthStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const probing = ref(false)
 const errorMsg = ref('')
 
 const form = reactive({ username: '', password: '' })
@@ -85,22 +109,45 @@ const rules: FormRules = {
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
 }
 
-async function onSubmit(): Promise<void> {
-  errorMsg.value = ''
-  const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid) return
+/** 登录成功/探测恢复后的落地页: 只接受站内路径, 防开放重定向。 */
+function redirectTarget(): string {
+  const redirect = route.query.redirect
+  return isSafeRedirect(redirect) && redirect !== '/login' ? redirect : '/status'
+}
 
+async function onSubmit(): Promise<void> {
+  // 防双发: 进入即占位 —— validate() 也是异步的, 若等校验完才置位,
+  // 两次连点之间的窗口会并发发出多个登录请求 (校验失败也在 finally 复位)。
+  if (loading.value) return
   loading.value = true
+  errorMsg.value = ''
   try {
+    const valid = await formRef.value?.validate().catch(() => false)
+    if (!valid) return
+
     await auth.login(form.username.trim(), form.password)
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/status'
-    await router.replace(redirect)
+    await router.replace(redirectTarget())
   } catch (error) {
     errorMsg.value = errorMessage(error, '登录失败')
     // 失败清空密码 — 用户需重新输入, 避免反复输入用户名+旧密码
     form.password = ''
   } finally {
     loading.value = false
+  }
+}
+
+/** 冷启动探测故障后的手动重试: 重新拉 /me, 恢复 (例如网关刚启动) 则跳回目标页。 */
+async function retryProbe(): Promise<void> {
+  if (probing.value) return
+  probing.value = true
+  errorMsg.value = ''
+  try {
+    await auth.retryProbe()
+    if (auth.isAuthenticated) {
+      await router.replace(redirectTarget())
+    }
+  } finally {
+    probing.value = false
   }
 }
 </script>
@@ -150,6 +197,13 @@ async function onSubmit(): Promise<void> {
 
 .login-alert {
   margin-bottom: 16px;
+}
+
+.probe-alert-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .login-button {

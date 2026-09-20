@@ -19,8 +19,7 @@ unihive/
 │       │   ├── tool_loader.py       # YAML → 工具加载
 │       │   ├── mcp_factory.py       # FastMCP 实例化 + capability 过滤
 │       │   ├── cache_strategy.py    # 缓存策略
-│       │   ├── normalizer.py        # 股票代码标准化
-│       │   └── auth_middleware.py   # console auth 中间件
+│       │   └── normalizer.py        # 股票代码标准化
 │       ├── storage/
 │       │   └── cache.py             # SQLite 缓存 (SQLAlchemy + aiosqlite)
 │       ├── sync/

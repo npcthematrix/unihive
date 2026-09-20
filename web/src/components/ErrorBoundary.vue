@@ -17,41 +17,40 @@
 </template>
 
 <script setup lang="ts">
-import { onErrorCaptured, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onErrorCaptured } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  bindRouteErrorReset,
+  createErrorBoundaryState,
+} from '@/composables/errorBoundary'
 
 /**
  * 全局视图错误边界。
  *
- * 任何子组件 render 抛错都会被 onErrorCaptured 捕获,
- * 显示降级 UI 而不是白屏。 不会无限递归 (内部不渲染自己)。
+ * 任何后代组件的 render / setup() 同步抛错 / 生命周期钩子异常都会被
+ * onErrorCaptured 捕获, 显示降级 UI 而不是白屏。不会无限递归
+ * (内部不渲染自己, return false 阻止继续向上传播)。
  *
- * 注意: onErrorCaptured 不会捕获 setup() 阶段的同步异常,
- * 也不会捕获异步 Promise rejection — 这两类仍需业务层显式处理。
+ * 不捕获: 异步 Promise rejection、事件处理器里的 throw、setTimeout 回调 —
+ * 这三类仍需业务层显式处理。
+ *
+ * 路由切换 (fullPath 变化) 后自动复位: 用户改点侧栏离开出错页面时,
+ * fallback 卡片不应跨路由残留。
  */
 
+const route = useRoute()
 const router = useRouter()
-const hasError = ref(false)
-const errorMessage = ref('')
-const errorKind = ref('')
+const { hasError, errorKind, errorMessage, capture, reset } =
+  createErrorBoundaryState()
 
 onErrorCaptured((err: unknown) => {
-  // 内部 catch 后立即 mark, 不再向父级传播 (return false)
-  hasError.value = true
-  if (err instanceof Error) {
-    errorKind.value = err.name || 'Error'
-    errorMessage.value = err.message
-  } else if (typeof err === 'string') {
-    errorKind.value = 'Error'
-    errorMessage.value = err
-  } else {
-    errorKind.value = 'Error'
-    errorMessage.value = '未知错误'
-  }
+  capture(err)
   // 故意不 console.error: 生产环境会泄露完整错误对象 (含堆栈/上游 source),
   // 用户已通过 UI fallback 看到错误类型 + 消息。开发期如需调试, 临时加回即可。
   return false
 })
+
+bindRouteErrorReset(() => route.fullPath, reset)
 
 function reload(): void {
   // 重新挂载子树: 简单做是 router.go(0); 走 hash 模式下当前路由仍是同一处,
@@ -60,9 +59,7 @@ function reload(): void {
 }
 
 function goHome(): void {
-  hasError.value = false
-  errorMessage.value = ''
-  errorKind.value = ''
+  reset()
   void router.replace({ name: 'status' })
 }
 </script>

@@ -54,7 +54,13 @@ vi.mock('axios', () => ({
 }))
 
 import axios from 'axios'
-import { _shouldRetry, errorMessage, http, isCanceledError } from '@/api/client'
+import {
+  _shouldRetry,
+  errorMessage,
+  gatewayUnavailableMessage,
+  http,
+  isCanceledError,
+} from '@/api/client'
 
 describe('http 实例 + 401 拦截器', () => {
   beforeEach(() => {
@@ -120,6 +126,38 @@ describe('http 实例 + 401 拦截器', () => {
       return trigger401('/api/auth/login').catch(() => {
         expect(h.mockAuthClear).not.toHaveBeenCalled()
         expect(h.mockRouterReplace).not.toHaveBeenCalled()
+      })
+    })
+
+    it('401 + URL 是 /api/auth/me → 清会话但不替换路由 (bootstrap 自己分类)', () => {
+      // 冷启动探测 /me 返回 401 时, 路由守卫本身还在初次导航中,
+      // 拦截器再 router.replace(login) 会与守卫的重定向双重导航。
+      // clear() 仍要执行 (服务端明确拒绝), 跳转交给守卫/bootstrap。
+      return trigger401('/api/auth/me').catch(() => {
+        expect(h.mockAuthClear).toHaveBeenCalledTimes(1)
+        expect(h.mockRouterReplace).not.toHaveBeenCalled()
+      })
+    })
+
+    it('401 + URL 是 /api/auth/me?带 query → 仍按探测豁免 (按 pathname 精确匹配)', () => {
+      return trigger401('/api/auth/me?_=' + Date.now()).catch(() => {
+        expect(h.mockAuthClear).toHaveBeenCalledTimes(1)
+        expect(h.mockRouterReplace).not.toHaveBeenCalled()
+      })
+    })
+
+    it('401 + URL 仅前缀相似 /api/auth/members → 不当作 /me 豁免, 正常清会话跳转', () => {
+      // 旧实现 url.includes("/api/auth/me") 会误吞这个假设端点
+      return trigger401('/api/auth/members').catch(() => {
+        expect(h.mockAuthClear).toHaveBeenCalledTimes(1)
+        expect(h.mockRouterReplace).toHaveBeenCalledTimes(1)
+      })
+    })
+
+    it('401 + URL 仅前缀相似 /api/auth/loginExtra → 不当作 login 豁免', () => {
+      return trigger401('/api/auth/loginExtra').catch(() => {
+        expect(h.mockAuthClear).toHaveBeenCalledTimes(1)
+        expect(h.mockRouterReplace).toHaveBeenCalledTimes(1)
       })
     })
 
@@ -221,21 +259,35 @@ describe('errorMessage', () => {
     expect(errorMessage(makeAxiosLike({ error: 'e', detail: 'd', message: 'm' }))).toBe('e')
   })
 
-  it('axios error + data 为 null → 走 error.message 兜底', () => {
-    expect(errorMessage(makeAxiosLike(null))).toBe('Network Error')
+  it('axios error + data 为 null + 5xx → 翻译成网关不可用中文', () => {
+    // Round-13 簇M: 裸英文 "Network Error" 不得回显给用户;
+    // 拿不到业务错误体时按状态码/传输错误分类成中文。
+    expect(errorMessage(makeAxiosLike(null))).toBe('网关暂时不可用 (HTTP 500), 请稍后重试')
   })
 
-  it('axios error + data 字段全无 → 走 error.message', () => {
-    expect(errorMessage(makeAxiosLike({}))).toBe('Network Error')
+  it('axios error + data 字段全无 + 5xx → 翻译成网关不可用中文', () => {
+    expect(errorMessage(makeAxiosLike({}))).toBe('网关暂时不可用 (HTTP 500), 请稍后重试')
   })
 
-  it('axios error + 全空字符串字段 → 走 fallback', () => {
-    expect(errorMessage(makeAxiosLike({ error: '', detail: '', message: '' }))).toBe('Network Error')
+  it('axios error + 全空字符串字段 + 5xx → 翻译成网关不可用中文', () => {
+    expect(errorMessage(makeAxiosLike({ error: '', detail: '', message: '' }))).toBe(
+      '网关暂时不可用 (HTTP 500), 请稍后重试',
+    )
   })
 
-  it('axios error 但 response 缺失 → 走 error.message', () => {
-    const e = { isAxiosError: true, message: 'no response' }
-    expect(errorMessage(e)).toBe('no response')
+  it('axios error 但 response 缺失 (网关未启动) → 翻译成无法连接中文', () => {
+    const e = { isAxiosError: true, message: 'no response', request: {} }
+    expect(errorMessage(e)).toBe('无法连接到网关, 请确认网关已启动后重试')
+  })
+
+  it('axios timeout (ECONNABORTED) → 翻译成响应超时中文', () => {
+    const e = { isAxiosError: true, code: 'ECONNABORTED', message: 'timeout of 5000ms exceeded' }
+    expect(errorMessage(e)).toBe('网关响应超时, 请确认网关已启动后重试')
+  })
+
+  it('axios error + 4xx + 无业务错误体 → 回落到 error.message (不谎称网关挂了)', () => {
+    const e = { isAxiosError: true, response: { status: 400 }, message: 'bad request' }
+    expect(errorMessage(e)).toBe('bad request')
   })
 
   it('普通 Error → 取 .message', () => {
@@ -278,6 +330,74 @@ describe('errorMessage', () => {
     // 防止有人误传一个普通对象, 我们应走 Error 分支或 fallback, 不应读 .response.data
     const weird = { response: { data: { error: 'X' } } } // 没有 isAxiosError 标志
     expect(errorMessage(weird)).toBe('请求失败')
+  })
+})
+
+/**
+ * gatewayUnavailableMessage — Round-13 簇M: 冷启动 /me 探测失败分类。
+ * 只翻译 "网关到不了" 这一类传输/服务端故障; 401/4xx/非 axios 错误
+ * 返回 null (调用方据此区分 "未登录" 与 "网关挂了")。
+ */
+describe('gatewayUnavailableMessage', () => {
+  let isAxiosErrorMock: ReturnType<typeof vi.mocked<typeof axios.isAxiosError>>
+
+  beforeEach(() => {
+    isAxiosErrorMock = vi.mocked(axios.isAxiosError)
+    isAxiosErrorMock.mockImplementation(
+      (e: unknown): e is import('axios').AxiosError =>
+        Boolean((e as { isAxiosError?: boolean })?.isAxiosError),
+    )
+  })
+
+  afterEach(() => {
+    isAxiosErrorMock.mockReset()
+  })
+
+  it('无 response + 有 request (连接被拒/DNS) → 无法连接中文', () => {
+    expect(
+      gatewayUnavailableMessage({ isAxiosError: true, request: {}, message: 'Network Error' }),
+    ).toBe('无法连接到网关, 请确认网关已启动后重试')
+  })
+
+  it('ECONNABORTED (超时) → 响应超时中文', () => {
+    expect(
+      gatewayUnavailableMessage({
+        isAxiosError: true,
+        code: 'ECONNABORTED',
+        message: 'timeout of 5000ms exceeded',
+      }),
+    ).toBe('网关响应超时, 请确认网关已启动后重试')
+  })
+
+  it('5xx (500/502/503/504) → 带状态码的暂时不可用中文', () => {
+    for (const status of [500, 502, 503, 504]) {
+      expect(gatewayUnavailableMessage({ isAxiosError: true, response: { status } })).toBe(
+        `网关暂时不可用 (HTTP ${status}), 请稍后重试`,
+      )
+    }
+  })
+
+  it('401/403/404/400 → null (这是业务/鉴权问题, 不是网关不可达)', () => {
+    for (const status of [400, 401, 403, 404]) {
+      expect(gatewayUnavailableMessage({ isAxiosError: true, response: { status } })).toBeNull()
+    }
+  })
+
+  it('CanceledError → null (用户主动取消, 不得冒充网关故障)', () => {
+    expect(
+      gatewayUnavailableMessage({
+        isAxiosError: true,
+        code: 'ERR_CANCELED',
+        name: 'CanceledError',
+        request: {},
+      }),
+    ).toBeNull()
+  })
+
+  it('非 axios error (普通 Error/null/字符串) → null', () => {
+    expect(gatewayUnavailableMessage(new Error('boom'))).toBeNull()
+    expect(gatewayUnavailableMessage(null)).toBeNull()
+    expect(gatewayUnavailableMessage('Network Error')).toBeNull()
   })
 })
 
@@ -378,6 +498,32 @@ describe('_shouldRetry', () => {
 
   it('config.method 缺失 → 按 GET 处理 (axios 默认方法)', () => {
     expect(_shouldRetry(errLike({ response: { status: 502 } as never }))).toBe(true)
+  })
+
+  it('__noRetry: 冷启动 /me 探测即使 5xx/超时/断网也绝不重试', () => {
+    // Round-13 簇M: /me 挂短超时 + __noRetry, 最坏 5s 进登录页故障态,
+    // 而不是 15s + 重试 500ms ≈ 30.5s 白屏。
+    expect(
+      _shouldRetry(
+        errLike({ response: { status: 503 } as never, config: { __noRetry: true } as never }),
+      ),
+    ).toBe(false)
+    expect(
+      _shouldRetry(
+        errLike({ code: 'ECONNABORTED', config: { __noRetry: true } as never }),
+      ),
+    ).toBe(false)
+    expect(
+      _shouldRetry(
+        errLike({ request: {}, message: 'x', config: { __noRetry: true } as never }),
+      ),
+    ).toBe(false)
+  })
+
+  it('__noRetry 缺省 (undefined) 时既有重试行为不变', () => {
+    expect(
+      _shouldRetry(errLike({ response: { status: 503 } as never, config: {} as never })),
+    ).toBe(true)
   })
 })
 

@@ -49,11 +49,14 @@
         </div>
         <div class="topbar-right">
           <el-icon class="user-icon"><UserFilled /></el-icon>
-          <span class="username">{{ auth.username }}</span>
-          <el-divider direction="vertical" />
-          <el-button text size="small" :loading="loggingOut" @click="confirmLogout">
-            退出登录
-          </el-button>
+          <!-- 鉴权关闭态没有会话/用户名, 也没有可退出的登录态 -->
+          <span class="username">{{ isOpenMode ? '开放模式（未启用登录）' : auth.username }}</span>
+          <template v-if="!isOpenMode">
+            <el-divider direction="vertical" />
+            <el-button text size="small" :loading="loggingOut" @click="confirmLogout">
+              退出登录
+            </el-button>
+          </template>
         </div>
       </el-header>
       <el-main id="main-content" class="main" tabindex="-1">
@@ -64,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Monitor, Connection, Setting, Grid, Files, Fold, Expand, DataLine } from '@element-plus/icons-vue'
@@ -76,6 +79,10 @@ const router = useRouter()
 const auth = useAuthStore()
 
 const loggingOut = ref(false)
+
+// 鉴权关闭态 (后端 /api/auth/me 返回 auth_required=false): 无会话可退,
+// 顶栏隐藏退出按钮, 用户名位显示模式标记。
+const isOpenMode = computed(() => auth.authRequired === false)
 
 /** 侧栏折叠态。 < 768px 默认折叠, 桌面默认展开。
  *  - 仅在窄屏上"自动"折叠到 icon-only; 用户手动切换后会记住自身选择

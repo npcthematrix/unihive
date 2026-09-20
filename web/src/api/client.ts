@@ -50,9 +50,31 @@ export function isCanceledError(error: unknown): boolean {
 
 /** axios 内部用 InternalAxiosRequestConfig 走完整 dispatch; 公开 API 用 AxiosRequestConfig 即可。 */
 declare module 'axios' {
+  export interface AxiosRequestConfig {
+    /** 自增重试计数 (从 0 开始); 第一次请求未设值。 */
+    __retryCount?: number
+    /** 显式禁止重试 (冷启动 /me 短超时探测: 快速失败进故障态, 不要 30s 白屏)。 */
+    __noRetry?: boolean
+  }
+
   export interface InternalAxiosRequestConfig {
     /** 自增重试计数 (从 0 开始); 第一次请求未设值。 */
     __retryCount?: number
+    /** 显式禁止重试。 */
+    __noRetry?: boolean
+  }
+}
+
+/**
+ * 取请求 URL 的纯 pathname (剥掉 query/hash)。
+ * axios config.url 一般是相对路径 ('/api/auth/me?_=123'), 用当前页
+ * 作为 base 交给 URL 解析; 解析失败时退回手工截断, 绝不让分类抛错。
+ */
+export function requestPath(url: string): string {
+  try {
+    return new URL(url, window.location.href).pathname
+  } catch {
+    return url.split(/[?#]/, 1)[0]
   }
 }
 
@@ -60,6 +82,8 @@ function shouldRetry(error: AxiosError): boolean {
   // 主动取消绝不重试 —— 必须排在最前 (CanceledError 也带 request 字段,
   // 否则会落入"无 response 的网络错误"分支)。
   if (isCanceledError(error)) return false
+  // 调用方显式标记的快速失败请求 (冷启动 /me 探测)。
+  if (error.config?.__noRetry) return false
   // 仅幂等方法可安全重试; 写操作重试可能双跑同步/重复提交/撞 409。
   const method = (error.config?.method ?? 'get').toUpperCase()
   if (!IDEMPOTENT_METHODS.has(method)) return false
@@ -112,26 +136,67 @@ http.interceptors.response.use(
       return retryRequest(config)
     }
 
-    if (status === 401 && !url.includes('/api/auth/login')) {
-      const auth = useAuthStore()
-      auth.clear()
-      const current = router.currentRoute.value
-      if (current.name !== 'login') {
-        void router.replace({
-          name: 'login',
-          query: current.fullPath !== '/' ? { redirect: current.fullPath } : undefined,
-        })
+    if (status === 401) {
+      // /api/auth/login 自身的 401: 登录页展示 "用户名或密码错误", 不清不跳。
+      // /api/auth/me 的 401: 冷启动探测的正常 "未登录", 清状态但不主动
+      // replace —— 初次导航的路由守卫还在跑, 重复 replace 会造成双重导航,
+      // 守卫/bootstrap 自己会落到登录页。
+      // 按 pathname 精确匹配: includes() 会把 /api/auth/loginExtra、
+      // /api/auth/members 误当登录/探测端点, 漏掉清状态与跳登录。
+      const isLoginCall = requestPath(url) === '/api/auth/login'
+      const isMeProbe = requestPath(url) === '/api/auth/me'
+      if (!isLoginCall) {
+        const auth = useAuthStore()
+        auth.clear()
+      }
+      if (!isLoginCall && !isMeProbe) {
+        const current = router.currentRoute.value
+        if (current.name !== 'login') {
+          void router.replace({
+            name: 'login',
+            query: current.fullPath !== '/' ? { redirect: current.fullPath } : undefined,
+          })
+        }
       }
     }
     return Promise.reject(error)
   },
 )
 
+/**
+ * 网关不可达类故障 (冷启动/导航期的传输与 5xx 错误) 的中文分类。
+ * 返回 null 表示这不是 "网关到不了": 401/4xx 是业务或鉴权问题,
+ * 主动取消是用户意图, 非 axios 错误由调用方另行处理。
+ */
+export function gatewayUnavailableMessage(error: unknown): string | null {
+  if (!axios.isAxiosError(error)) return null
+  if (isCanceledError(error)) return null
+  const status = error.response?.status
+  if (status !== undefined && status >= 500 && status < 600) {
+    return `网关暂时不可用 (HTTP ${status}), 请稍后重试`
+  }
+  if (error.code === 'ECONNABORTED') {
+    return '网关响应超时, 请确认网关已启动后重试'
+  }
+  if (!error.response) {
+    return '无法连接到网关, 请确认网关已启动后重试'
+  }
+  return null
+}
+
 /** 从后端错误体提取可展示消息 (后端统一 {error} / {detail} / {message})。 */
 export function errorMessage(error: unknown, fallback = '请求失败'): string {
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as { error?: string; detail?: string; message?: string } | undefined
-    return data?.error || data?.detail || data?.message || error.message || fallback
+    // 无业务错误体时, 把 5xx/超时/断网翻译成中文, 不裸显 axios 英文 message。
+    return (
+      data?.error ||
+      data?.detail ||
+      data?.message ||
+      gatewayUnavailableMessage(error) ||
+      error.message ||
+      fallback
+    )
   }
   if (error instanceof Error) {
     // 重试耗尽是 axios 拦截器在 retryRequest 上限抛出的内部 Error, 不该

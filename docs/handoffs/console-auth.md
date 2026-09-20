@@ -169,3 +169,37 @@ pytest tests/ -q
                               --------
  总计                          | ~365 行, 5 文件
 ```
+
+---
+
+## 当前实现状态与已知限制 (2026-09-19, Round-13 console 启动审视后更新)
+
+上方为初始设计, 现网实现有几处刻意偏离:
+
+- **出厂模板不带任何凭证**: `config/config.yaml` 无激活 console 段; 真实凭证走
+  gitignored `.env` 的 `UNIHIVE_CONSOLE_USER` / `UNIHIVE_CONSOLE_PASSWORD` /
+  `UNIHIVE_CONSOLE_SESSION_SECRET`。三个全不设 = 鉴权关闭 (console 开放可用,
+  `/api/auth/me` 返回 `auth_required: false`); **设了但不完整/secret <32 字符/
+  照抄旧出厂公开值 → fail-closed 拒启 (exit 2)**, 不再静默裸奔。
+- **YAML 只接受 PBKDF2 `password_hash`**; 明文口令只能经 env 注入并在启动边界
+  就地 hash, 明文不进 `app.state`。旧出厂默认 secret (`0123…cdef` ×4) 与
+  admin/admin123 哈希即使被显式配置也拒绝。
+- **保护范围收窄**: 仅 `/api/*` 要会话; console.html 外壳公开下发 (SPA 守卫经
+  `/me` 决定是否展示登录页); `/mcp`、`/health` 始终公开 (刻意决策, 非缺陷)。
+
+### 已知限制: 会话无服务端吊销
+
+会话载体是 Starlette `SessionMiddleware` 的**无状态签名 cookie**
+(`unihive_console`, itsdangerous), 服务端不存会话、无黑名单:
+
+- **logout 只清当前浏览器的 cookie**。同一账号此前签发、仍在别处持有的 cookie
+  不受影响, 继续有效。
+- **改密码不使已签发 cookie 失效** —— 校验只发生在登录换票时, 之后每个请求
+  仅验签, 不反查口令。
+- cookie 默认存活 **14 天** (SessionMiddleware 默认 `max_age`)。
+
+唯一的全量吊销手段: 更换 `UNIHIVE_CONSOLE_SESSION_SECRET` 后重启网关
+(旧签名全部失效, 所有人重新登录)。本机单用户部署下该限制可接受; 若未来要支持
+"踢人下线 / 改密即失效", 需要引入服务端会话表或在 cookie 内嵌口令哈希版本号,
+属于新专题, 不在当前范围。
+

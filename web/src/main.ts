@@ -7,6 +7,7 @@ import 'element-plus/dist/index.css'
 
 import App from './App.vue'
 import { router } from './router'
+import { installChunkReloadGuard } from './utils/chunkReload'
 import './styles/main.css'
 
 const app = createApp(App)
@@ -19,5 +20,9 @@ app.use(ElementPlus, { locale: zhCn })
 for (const [iconName, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(iconName, component)
 }
+
+// 旧标签页懒加载 hash chunk 404 (新版本刚发布) 时自动刷新拉新 HTML。
+// 必须在 mount 前装好: vite:preloadError 在首次导航的动态 import 上就可能触发。
+installChunkReloadGuard(router)
 
 app.mount('#app')

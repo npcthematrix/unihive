@@ -154,19 +154,33 @@ GATEWAY_VERSION = _read_gateway_version()
 def _console_auth_config_from_env() -> tuple[dict | None, str]:
     """Read console auth config from UNIHIVE_CONSOLE_* env vars only.
 
-    Returns ``(cfg, reason)`` where cfg is None when auth is disabled.
-    Empty string is treated as unset (opt-in via setting them).
-    Whitespace around values is stripped.
+    Returns ``(cfg, reason)`` where cfg is None only when **none** of the
+    three vars is set (= explicit opt-out, console runs open).
+
+    Round-13 fail-closed: any var set but the config incomplete/short/using
+    known public defaults raises ConsoleAuthConfigError (a ValueError, so
+    main() maps it to exit code 2) instead of silently disabling auth —
+    a half-written .env used to mean "open /api/* with no login at all".
+
+    Empty string is treated as unset. Username/secret strip surrounding
+    whitespace. The password is preserved verbatim (leading/trailing spaces
+    are legitimate password characters); a whitespace-only password is
+    treated as unset (fail-closed as a missing var).
     """
     username = os.getenv("UNIHIVE_CONSOLE_USER", "").strip() or None
-    password = os.getenv("UNIHIVE_CONSOLE_PASSWORD", "").strip() or None
+    raw_password = os.getenv("UNIHIVE_CONSOLE_PASSWORD")
+    password = (
+        raw_password
+        if raw_password and not raw_password.isspace()
+        else None
+    )
     secret = os.getenv("UNIHIVE_CONSOLE_SESSION_SECRET", "").strip() or None
 
-    # Three empty => no env vars set at all
+    # Three empty => no env vars set at all => auth intentionally disabled.
     if not (username or password or secret):
         return None, "disabled: no UNIHIVE_CONSOLE_* env vars set"
 
-    # Partial => tell user which var(s) are missing
+    # Partial => fail-closed with the exact missing var(s).
     missing = []
     if not username:
         missing.append("UNIHIVE_CONSOLE_USER")
@@ -175,114 +189,295 @@ def _console_auth_config_from_env() -> tuple[dict | None, str]:
     if not secret:
         missing.append("UNIHIVE_CONSOLE_SESSION_SECRET")
     if missing:
-        return None, f"disabled: missing env var(s): {', '.join(missing)}"
+        from ..console_auth import ConsoleAuthConfigError
+
+        raise ConsoleAuthConfigError(
+            "console auth partially configured via environment "
+            f"variable(s) (missing: {', '.join(missing)}). Set all three "
+            "UNIHIVE_CONSOLE_* vars to enable console auth, or leave all "
+            "three unset to run without it"
+        )
 
     if len(secret) < 32:
-        return None, (
-            f"disabled: UNIHIVE_CONSOLE_SESSION_SECRET must be at least "
-            f"32 characters (got {len(secret)})"
+        from ..console_auth import ConsoleAuthConfigError
+
+        raise ConsoleAuthConfigError(
+            "UNIHIVE_CONSOLE_SESSION_SECRET must be at least 32 characters "
+            f"(got {len(secret)})"
         )
 
     # H4 (round 9 audit): env 路径就地 hash 明文 password → password_hash。
     # setup_console_auth 现在拒绝明文 (要 PBKDF2 password_hash), 旧实现直接
     # 塞明文 → serve_http 路由装配段崩。就地 hash 后 env 路径与 YAML 路径
     # 同态, 不再把明文留进程内存 (hash 是被 setup 持久化的对象)。
-    from ..console_auth import hash_password
+    from ..console_auth import (
+        hash_password,
+        reject_known_default_credentials,
+        reject_weak_password,
+    )
 
-    return {
+    # 弱口令在哈希前查 (O(1) 集合比对, 也省掉无谓的 PBKDF2)。
+    reject_weak_password({"username": username}, plaintext_password=password)
+    cfg = {
         "username": username,
         "password_hash": hash_password(password),
         "session_secret": secret,
-    }, "ok"
+    }
+    # 照抄旧出厂公开 secret/口令 → fail-closed。
+    reject_known_default_credentials(cfg)
+    return cfg, "ok"
 
 
-def _get_console_auth_config(config: dict | None = None) -> tuple[dict | None, str]:
+# console.enabled=false 的内部信号 (区别于 "没有 console 段, 继续找下一源")。
+_CONSOLE_EXPLICITLY_DISABLED = object()
+
+
+def _get_console_auth_config(
+    config: dict | None = None,
+    *,
+    config_yaml_path: str | Path | None = None,
+) -> tuple[dict | None, str]:
     """Read console auth config from config.yaml, upstreams.yaml or env vars.
 
-    Returns (cfg, reason) where cfg is None when auth is disabled. Caller
-    logs ``reason`` at WARNING level and continues without auth; when cfg is
-    not None, caller passes it to ``setup_console_auth`` on the inner app.
+    Returns ``(None, reason)`` only when console auth is *intentionally*
+    disabled (no console section anywhere AND no UNIHIVE_CONSOLE_* env vars).
+    Any explicit-but-incomplete/insecure config raises
+    ``ConsoleAuthConfigError`` (Round-13 fail-closed: a half-written config
+    used to silently leave every /api/* write endpoint unauthenticated).
 
     Config priority (first source with a non-empty console section wins):
-      1. config/config.yaml (console section)
+      1. config/config.yaml (console section) — ``config_yaml_path`` overrides
+         the location (serve_http passes the --config-anchored directory,
+         Round-13 review L5); defaults to the layout root.
       2. config/upstreams.yaml (console section) — passed in via ``config``
       3. Environment variables (UNIHIVE_CONSOLE_USER / _PASSWORD / _SESSION_SECRET)
 
-    Each source is parsed independently: if a source declares a console
-    section, we use *that* source's values verbatim — we don't merge across
-    sources (that previously caused partial-config footguns where username
-    came from yaml and password came from env, leaving setup_console_auth
-    with no way to validate). The reason returned tells the caller exactly
-    which field(s) are missing when the source is partial.
+    Each source is parsed independently — there is deliberately no merge
+    across sources. YAML sources only accept PBKDF2 ``password_hash``;
+    plaintext passwords go through the UNIHIVE_CONSOLE_PASSWORD env var and
+    are hashed at the boundary.
 
-    config.yaml fields:
-      console.username
-      console.password / console.password_hash
-      console.session_secret
+    Round-13 review M1: a config.yaml that *fails to parse* used to be
+    swallowed by a broad ``except Exception`` and the gateway silently came
+    up unauthenticated. Parse failure is now fail-closed unless a complete
+    UNIHIVE_CONSOLE_* env config provides the escape hatch.
     """
+    from ..console_auth import (
+        ConsoleAuthConfigError,
+        reject_known_default_credentials,
+        reject_weak_password,
+    )
 
-    def _extract_console(console_cfg: dict) -> dict:
-        """Return normalized console sub-config (each field None if unset)."""
+    def _extract_console(console_cfg: dict, source: str) -> dict:
+        """Return normalized console sub-config (each field None if unset).
+
+        Non-string scalars (PyYAML 1.1 octal ints, bool, list) must fail with
+        a readable ConsoleAuthConfigError instead of an AttributeError out of
+        ``.strip()`` (which previously surfaced as a raw traceback / exit 1).
+        """
+
+        def _str_field(key: str) -> str | None:
+            value = console_cfg.get(key)
+            if value is None:
+                return None
+            if not isinstance(value, str):
+                raise ConsoleAuthConfigError(
+                    f"{source}: console.{key} 必须是字符串, got "
+                    f"{value!r} ({type(value).__name__})"
+                )
+            return value.strip() or None
+
         return {
-            "username": (console_cfg.get("username") or "").strip() or None,
-            "password": (console_cfg.get("password") or "").strip() or None,
-            "password_hash": (console_cfg.get("password_hash") or "").strip() or None,
-            "secret": (console_cfg.get("session_secret") or "").strip() or None,
+            "username": _str_field("username"),
+            "password": _str_field("password"),
+            "password_hash": _str_field("password_hash"),
+            "secret": _str_field("session_secret"),
         }
 
-    def _missing_fields_message(fields: dict, source: str) -> str:
-        missing = [k for k, v in fields.items() if not v]
-        return f"partial console config from {source}: missing {', '.join(missing)}"
+    def _resolve_section(console_cfg: dict, source: str) -> dict | None:
+        """None = 该源没有 console 段; 否则返回完整 cfg 或 fail-closed 抛错。"""
+        if not isinstance(console_cfg, dict) or not console_cfg:
+            return None
+        # 显式开关: enabled: false = 即使凭证齐全也关闭 (本地逃生)。
+        # enabled 键给了就必须是布尔, 拒绝 "yes"/0 等歧义值。
+        enabled = console_cfg.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ConsoleAuthConfigError(
+                f"{source}: console.enabled 必须是布尔值 true/false, got "
+                f"{enabled!r} ({type(enabled).__name__})"
+            )
+        if enabled is False:
+            return _CONSOLE_EXPLICITLY_DISABLED
+        fields = _extract_console(console_cfg, source)
+        if not any(fields.values()):
+            return None
 
-    def _build_cfg(fields: dict) -> dict:
-        # Prefer password_hash over plaintext password.
-        cfg = {"username": fields["username"], "session_secret": fields["secret"]}
-        if fields["password_hash"]:
-            cfg["password_hash"] = fields["password_hash"]
-        else:
-            cfg["password"] = fields["password"]
+        missing = []
+        if not fields["username"]:
+            missing.append("username")
+        if not (fields["password"] or fields["password_hash"]):
+            missing.append("password_hash")
+        if not fields["secret"]:
+            missing.append("session_secret")
+        if missing:
+            raise ConsoleAuthConfigError(
+                f"partial console config in {source} (missing: "
+                f"{', '.join(missing)}). Complete the console section and "
+                "restart, or remove it and set all three UNIHIVE_CONSOLE_* "
+                "env vars; an explicitly partial config is rejected instead "
+                "of silently running the console unauthenticated"
+            )
+        if len(fields["secret"]) < 32:
+            raise ConsoleAuthConfigError(
+                f"{source}: console.session_secret must be at least 32 "
+                f"characters (got {len(fields['secret'])})"
+            )
+        if not fields["password_hash"]:
+            # 明文 YAML 自 MED-6 起就会被 setup 拒绝; 这里给可操作的报错,
+            # 而不是让装配段抛 "must not include plaintext 'password'"。
+            raise ConsoleAuthConfigError(
+                f"{source}: plaintext console.password is not accepted — "
+                "use the UNIHIVE_CONSOLE_PASSWORD env var (hashed at "
+                "startup) or set console.password_hash generated by "
+                "src.unihive.console_auth.hash_password()"
+            )
+        cfg = {
+            "username": fields["username"],
+            "password_hash": fields["password_hash"],
+            "session_secret": fields["secret"],
+        }
+        # 照抄旧出厂公开默认凭证 → fail-closed。
+        reject_known_default_credentials(cfg)
+        # 哈希对应的弱口令 (随机盐使固定哈希黑名单失效) → fail-closed。
+        reject_weak_password(cfg)
         return cfg
 
+    def _from_section(console_cfg: object, source: str) -> tuple[dict | None, str | None]:
+        """统一处理一个 console 段 → (cfg, reason)。
+
+        cfg 非 None = 启用; reason 非 None = 显式关闭; 两者皆 None =
+        该源没有 console 段, 继续下一源。
+        """
+        if not isinstance(console_cfg, dict) or not console_cfg:
+            return None, None
+        resolved = _resolve_section(console_cfg, source)
+        if resolved is _CONSOLE_EXPLICITLY_DISABLED:
+            return None, f"disabled: console.enabled=false in {source}"
+        return (resolved, "ok") if resolved is not None else (None, None)
+
     # 1. config/config.yaml (standalone, runtime console config)
-    config_yaml_path = resolve_layout_root(Path(__file__)) / "config" / "config.yaml"
+    if config_yaml_path is None:
+        config_yaml_path = (
+            resolve_layout_root(Path(__file__)) / "config" / "config.yaml"
+        )
+    config_yaml_path = Path(config_yaml_path)
     if config_yaml_path.exists():
         try:
             with open(config_yaml_path, encoding="utf-8") as f:
                 config_yaml = yaml.safe_load(f) or {}
-            console_cfg = config_yaml.get("console", {})
-            if console_cfg:
-                fields = _extract_console(console_cfg)
-                if any(fields.values()):
-                    has_creds = bool(fields["password"] or fields["password_hash"])
-                    if not has_creds or not fields["username"] or not fields["secret"]:
-                        return None, _missing_fields_message(fields, "config/config.yaml")
-                    if len(fields["secret"]) < 32:
-                        return None, (
-                            "config/config.yaml: session_secret must be at least "
-                            "32 characters"
-                        )
-                    return _build_cfg(fields), "ok"
-        except Exception as e:
-            logger.warning(f"Failed to load config.yaml: {e}")
+        except ConsoleAuthConfigError:
+            raise
+        except (OSError, yaml.YAMLError) as e:
+            # M1 (round-13 review): 文件解析失败 = console 鉴权意图不可判定,
+            # 旧实现宽 except 吞掉后静默开放 /api/*。完整 env 配置是唯一
+            # 逃生路径; 否则 fail-closed (退出码 2)。
+            env_cfg, env_reason = _console_auth_config_from_env()
+            if env_cfg is not None:
+                logger.warning(
+                    "config/config.yaml failed to parse (%s); falling back "
+                    "to UNIHIVE_CONSOLE_* env config",
+                    _safe_config_error_detail(e),
+                )
+                return env_cfg, env_reason
+            raise ConsoleAuthConfigError(
+                "failed to parse config/config.yaml "
+                f"({_safe_config_error_detail(e)}): cannot determine console "
+                "auth intent. Fix the YAML syntax, or set all three "
+                "UNIHIVE_CONSOLE_* env vars to start; refusing to run with "
+                "an unauthenticated /api/* by default"
+            ) from e
+        cfg, reason = _from_section(
+            config_yaml.get("console"), "config/config.yaml"
+        )
+        if cfg is not None:
+            return cfg, reason
+        if reason is not None:
+            return None, reason
 
     # 2. config/upstreams.yaml (passed in as ``config``).
     if config:
-        console_cfg = config.get("console", {})
-        if console_cfg:
-            fields = _extract_console(console_cfg)
-            if any(fields.values()):
-                has_creds = bool(fields["password"] or fields["password_hash"])
-                if not has_creds or not fields["username"] or not fields["secret"]:
-                    return None, _missing_fields_message(fields, "config/upstreams.yaml")
-                if len(fields["secret"]) < 32:
-                    return None, (
-                        "config/upstreams.yaml: session_secret must be at least "
-                        "32 characters"
-                    )
-                return _build_cfg(fields), "ok"
+        cfg, reason = _from_section(
+            config.get("console"), "config/upstreams.yaml"
+        )
+        if cfg is not None:
+            return cfg, reason
+        if reason is not None:
+            return None, reason
 
-    # 3. Environment variables — helper handles partial-config + length checks.
+    # 3. Environment variables — helper handles partial-config + length
+    #    + known-default checks and raises ConsoleAuthConfigError itself.
     return _console_auth_config_from_env()
+
+
+def _has_top_level_console_key(raw_text: str) -> bool:
+    """原始 YAML 文本是否含顶层 ``console:`` 键 (列首, 无缩进)。
+
+    解析失败时无法判断 console 段内容, 但这个正则能回答 "部署者是否
+    表达过 console 配置意图", 用于决定 fail-closed 还是仅告警降级。
+    缩进的 console: (某上游/表的子键) 不匹配。
+    """
+    return re.search(r"(?m)^console\s*:", raw_text or "") is not None
+
+
+def _safe_config_error_detail(e: Exception) -> str:
+    """配置解析异常的安全摘要: 类型 + YAML 行号, 不含出错行文本。
+
+    ScannerError 的 str() 会回显源码行内容; 若语法错误恰好落在
+    session_secret 行, 32+ 字符密钥就会进日志/报错 (review L1)。
+    """
+    mark = getattr(e, "problem_mark", None)
+    line = getattr(mark, "line", None)
+    if isinstance(line, int):
+        return f"{type(e).__name__} at line {line + 1}"
+    return type(e).__name__
+
+
+def load_config_yaml_overlay(
+    config_yaml_path: "str | Path", *, strict_env: bool
+) -> "dict | None":
+    """加载 config.yaml 覆盖层; 文件缺失返回 None。
+
+    Review M1/L1 (round-13): 解析失败时按文件是否含顶层 ``console:`` 键分流 ——
+    含则抛 :class:`ConsoleAuthConfigError` (鉴权意图不可判定, 不允许吞错后
+    静默开放 /api/*); 不含则只告警并返回 None (db 模式下 config.db 是事实源,
+    yaml 模式由调用方决定是否继续传播)。异常只摘要类型+行号, 不回显源码行
+    (ScannerError 会带出出错文本, 可能是 session_secret 行)。
+    """
+    path = Path(config_yaml_path)
+    if not path.exists():
+        return None
+    try:
+        from ..utils.config_loader import load_config
+
+        return load_config(str(path), strict_env=strict_env)
+    except Exception as e:
+        from ..console_auth import ConsoleAuthConfigError
+
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+        except OSError:
+            raw_text = ""
+        detail = _safe_config_error_detail(e)
+        if _has_top_level_console_key(raw_text):
+            raise ConsoleAuthConfigError(
+                f"failed to parse config/config.yaml ({detail}) while a "
+                "top-level 'console:' section is present: cannot determine "
+                "console auth intent. Fix the YAML, or set all three "
+                "UNIHIVE_CONSOLE_* env vars"
+            ) from e
+        logger.warning("Failed to load config.yaml: %s", detail)
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Round-12 簇E: 数值配置字段强转 — 报错必须带点路径字段名, 便于定位配置行

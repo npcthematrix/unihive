@@ -1302,6 +1302,57 @@ def get_omni_sector_stocks(
     return result
 
 
+async def _read_json_object(req: "Request"):
+    """边界解析 POST JSON 体。
+
+    返回 ``(obj, None)`` 或 ``(None, JSONResponse)``:
+    坏 JSON / 非对象 (数组、字符串、数字、null) 一律 400,
+    不让 ``body.get`` 的 AttributeError 以 500 漏出去。
+    """
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await req.json()
+    except Exception:
+        return None, JSONResponse({"error": "请求体必须是 JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return None, JSONResponse(
+            {"error": "请求体必须是 JSON 对象"}, status_code=400
+        )
+    return body, None
+
+
+# 查询参数整数上限: 超大值 (如 999999999999999999999) 过了 int() 后会在
+# sqlite 绑定阶段溢出 int64 变成 500; 在边界直接 400。2^31-1 对任何分页/
+# 页码场景都绰绰有余。
+_MAX_POSITIVE_INT_PARAM = 2_147_483_647
+
+
+def _positive_int_param(params, key: str, default: int):
+    """解析正整数查询参数。返回 ``(value, None)`` 或 ``(None, JSONResponse)``。"""
+    from starlette.responses import JSONResponse
+
+    raw = params.get(key)
+    if raw is None:
+        return default, None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None, JSONResponse(
+            {"error": f"{key} 必须是正整数"}, status_code=400
+        )
+    if value < 1 or value > _MAX_POSITIVE_INT_PARAM:
+        return None, JSONResponse(
+            {
+                "error": (
+                    f"{key} 必须是 1..{_MAX_POSITIVE_INT_PARAM} 之间的正整数"
+                )
+            },
+            status_code=400,
+        )
+    return value, None
+
+
 def build_omni_routes() -> list:
     """Build OMNI routes for gateway to mount."""
     from starlette.routing import Route
@@ -1313,16 +1364,24 @@ def build_omni_routes() -> list:
 
     async def omni_query_api(req: Request):
         params = req.query_params
+        page, bad = _positive_int_param(params, "page", 1)
+        if bad is not None:
+            return bad
+        page_size, bad = _positive_int_param(params, "page_size", 50)
+        if bad is not None:
+            return bad
         return JSONResponse(query_omni_sectors(
             source=params.get("source", ""),
             board_type=params.get("board_type", ""),
             keyword=params.get("keyword", ""),
-            page=int(params.get("page", 1)),
-            page_size=int(params.get("page_size", 50)),
+            page=page,
+            page_size=page_size,
         ))
 
     async def omni_sync_api(req: Request):
-        body = await req.json()
+        body, bad = await _read_json_object(req)
+        if bad is not None:
+            return bad
         result = await run_omni_sync(
             source=body.get("source", "all"),
             board_type=body.get("board_type", "all"),
@@ -1376,10 +1435,11 @@ async def upstream_metrics_api(req: "Request") -> "JSONResponse":
         )
     try:
         metrics = getter()
-    except Exception as e:
-        logger.warning(f"upstream_metrics_api({name}) raised: {e}")
+    except Exception:
+        # 细节 (可能含内部路径/连接串) 只进日志, 对外固定错误码。
+        logger.exception("upstream_metrics_api(%s) raised", name)
         return JSONResponse(
-            {"error": str(e)[:200]},
+            {"error": "metrics_read_failed"},
             status_code=500,
         )
     return JSONResponse({
@@ -1594,13 +1654,14 @@ async def upstream_enabled_api(req: "Request") -> "JSONResponse":
             {"error": f"unknown upstream: {name}", "version": persisted["version"]},
             status_code=404,
         )
-    except Exception as e:
+    except Exception:
         # overlay 已落库但热切换失败: 不回滚 (重启即收敛到目标态),
         # 返回 500 + 新 version, 让前端提示用户可重试或重启。
-        logger.exception(f"set_upstream_enabled({name!r}, {enabled}) failed")
+        # 异常文本可能含内部路径/连接细节, 只进日志, 对外固定错误码。
+        logger.exception("set_upstream_enabled(%r, %s) failed", name, enabled)
         return JSONResponse(
             {
-                "error": f"runtime toggle failed: {type(e).__name__}: {e}"[:300],
+                "error": "runtime_toggle_failed",
                 "version": persisted["version"],
             },
             status_code=500,
@@ -1622,9 +1683,9 @@ async def config_entities_api(req: "Request") -> "JSONResponse":
         return JSONResponse({"source": "yaml"})
     try:
         summary = await _config_store.entities_summary()
-    except Exception as e:  # noqa: BLE001 - 只读浏览接口, 错误不外泄堆栈
+    except Exception:  # noqa: BLE001 - 只读浏览接口, 错误不外泄堆栈/路径
         logger.exception("config entities summary failed")
-        return JSONResponse({"error": f"entities load failed: {e}"[:300]}, status_code=500)
+        return JSONResponse({"error": "entities_load_failed"}, status_code=500)
     return JSONResponse({"source": "db", **summary})
 
 
@@ -1643,9 +1704,9 @@ async def config_tool_detail_api(req: "Request") -> "JSONResponse":
     try:
         tool = await _config_store.get_tool(name)
         revision = await _config_store.revision()
-    except Exception as e:  # noqa: BLE001 - 不外泄堆栈
+    except Exception:  # noqa: BLE001 - 不外泄堆栈/内部路径或 SQL
         logger.exception("config tool detail failed: %s", name)
-        return JSONResponse({"error": f"tool load failed: {e}"[:300]}, status_code=500)
+        return JSONResponse({"error": "tool_load_failed"}, status_code=500)
     if tool is None:
         return JSONResponse({"error": f"unknown tool: {name}"}, status_code=404)
     return JSONResponse({"source": "db", "revision": revision, "tool": tool})
@@ -1670,9 +1731,9 @@ async def config_upstream_detail_api(req: "Request") -> "JSONResponse":
     try:
         upstream = await _config_store.get_upstream(name)
         revision = await _config_store.revision()
-    except Exception as e:  # noqa: BLE001 - 不外泄堆栈
+    except Exception:  # noqa: BLE001 - 不外泄堆栈/内部路径或 SQL
         logger.exception("config upstream detail failed: %s", name)
-        return JSONResponse({"error": f"upstream load failed: {e}"[:300]}, status_code=500)
+        return JSONResponse({"error": "upstream_load_failed"}, status_code=500)
     if upstream is None:
         return JSONResponse({"error": f"unknown upstream: {name}"}, status_code=404)
     return JSONResponse({"source": "db", "revision": revision, "upstream": upstream})

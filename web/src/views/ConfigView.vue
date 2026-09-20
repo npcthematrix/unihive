@@ -12,7 +12,7 @@
           <el-button
             :icon="Refresh"
             :loading="manualLoading"
-            @click="load"
+            @click="load(true)"
           >立即刷新</el-button>
         </div>
       </div>
@@ -27,7 +27,7 @@
         class="load-error"
         :title="`加载失败：${loadError}`"
       >
-        <el-button size="small" @click="load">重试</el-button>
+        <el-button size="small" @click="load(false)">重试</el-button>
       </el-alert>
 
       <el-alert
@@ -157,23 +157,16 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getConfig, getConfigEntities } from '@/api/config'
-import type {
-  ConfigEntities,
-  ConfigRevision,
-  ConfigTool,
-  GatewayConfig,
-  ProxySettings,
-} from '@/api/config'
-import { getProxySettings } from '@/api/config'
+import { getConfig, getConfigEntities, getProxySettings } from '@/api/config'
+import type { ConfigRevision, GatewayConfig, ProxySettings } from '@/api/config'
 import { getInterfaces } from '@/api/interfaces'
-import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
 import { formatHMS } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type TabKey } from './config/format'
 import type { UpstreamEnabledChanged } from './config/upstreams'
 import { userModifiedCount } from './config/entities'
 import { parseHashTab } from './_shared/hashTab'
+import { createConfigPageLoader } from './config/pageLoader'
 import UpstreamsPanel from './config/UpstreamsPanel.vue'
 import MappingPanel from './config/MappingPanel.vue'
 import ToolsPanel from './config/ToolsPanel.vue'
@@ -186,26 +179,42 @@ import UpdateCenterPanel from './config/UpdateCenterPanel.vue'
 const route = useRoute()
 const router = useRouter()
 
-const config = ref<GatewayConfig | null>(null)
-const proxy = ref<ProxySettings | null>(null)
-const loading = ref(false)
-const proxyLoading = ref(false)
-const manualLoading = ref(false)
-const loadError = ref('')
-/** proxy 失败独立 ref, 不污染全局 loadError (后者只反映 getConfig 状态)。 */
-const proxyError = ref('')
-const lastRefresh = ref<number | null>(null)
-/** proxy 单独的时间戳 — 顶栏让用户区分 "config / 代理" 各自的加载时点。 */
-const proxyLastRefresh = ref<number | null>(null)
 const copyInFlight = ref(false)
 
-/** config.db v2 实体浏览摘要 (db 模式才有实体字段; yaml 逃生模式只回 source)。 */
-const entities = ref<ConfigEntities | null>(null)
 /**
- * /api/config 在 db 模式不携带 289 条 spec (避免快照臃肿); 工具规格面板与
- * FUYAO TTL 面板改吃 /api/interfaces 的全量 env 门控清单, 在此合成。
+ * 四路数据 (config / 实体摘要 / 全量工具清单 / proxy) 的并发加载编排,
+ * 各通道独立错误面。逻辑抽到 config/pageLoader 纯 composable 单测。
+ * isProxyActive 是惰性 getter, 引用下方稍后声明的 activeTab (闭包调用时才读)。
  */
-const interfaceTools = ref<ConfigTool[]>([])
+const {
+  config,
+  entities,
+  interfaceTools,
+  proxy,
+  loading,
+  manualLoading,
+  proxyLoading,
+  loadError,
+  proxyError,
+  lastRefresh,
+  proxyLastRefresh,
+  load: loaderLoad,
+  loadProxy,
+  loadEntities,
+  loadInterfaceTools,
+} = createConfigPageLoader(
+  {
+    getConfig,
+    getEntities: getConfigEntities,
+    getInterfaces,
+    getProxy: getProxySettings,
+  },
+  (message) => ElMessage.error(message),
+  () => activeTab.value === 'proxy',
+)
+
+/** 模板里的刷新/重试直接绑这个 (立即刷新传 true 走按钮 loading 态)。 */
+const load = loaderLoad
 
 /**
  * 面板统一吃的 config: 快照自带 tools (yaml 模式) 时原样, 否则用 interfaces
@@ -263,76 +272,6 @@ const TABS = computed(() => [
   // 出厂更新无静态角标计数 (模板 hash 信号在面板内拉取展示)
   { key: 'updateCenter' as const, title: TAB_TITLES.updateCenter, count: '' },
 ])
-
-async function loadProxy() {
-  proxyLoading.value = true
-  try {
-    proxy.value = await getProxySettings()
-    proxyError.value = ''
-    proxyLastRefresh.value = Date.now()
-  } catch (e) {
-    // proxy tab 单独失败不影响 config 渲染; 用户切到该 tab 时再感知。
-    // 写到 proxyError 独立 ref, 不污染全局 loadError (后者只反映 getConfig 状态)。
-    proxyError.value = errorMessage(e, '加载代理设置失败')
-  } finally {
-    proxyLoading.value = false
-  }
-}
-
-/** 拉 config.db v2 实体浏览摘要 (yaml 逃生模式只回 {source:'yaml'})。 */
-async function loadEntities() {
-  try {
-    entities.value = await getConfigEntities()
-  } catch (e) {
-    // 瞬时失败不阻塞配置渲染, 面板下次整体刷新时重试
-    ElMessage.error(errorMessage(e, '加载配置库实体失败'))
-  }
-}
-
-/** 拉全量工具清单 (/api/interfaces, env 门控后), 补 db 模式快照缺失的 tools。 */
-async function loadInterfaceTools() {
-  try {
-    const data = await getInterfaces()
-    // interfaces 的 ToolParamInfo 无 ConfigTool 的字符串索引签名, 结构上兼容,
-    // 这里显式收窄 (ToolsPanel/FuyaoCachePanel 只读 name/description/params)。
-    interfaceTools.value = data.tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      dangerous: t.dangerous,
-      cache_ttl_key: t.cache_ttl_key,
-      params: t.params,
-    })) as ConfigTool[]
-  } catch (e) {
-    ElMessage.error(errorMessage(e, '加载工具清单失败'))
-  }
-}
-
-async function load(isManual = false) {
-  if (isManual) manualLoading.value = true
-  else loading.value = true
-  loadError.value = ''
-  try {
-    const cfg = await getConfig()
-    config.value = cfg
-    lastRefresh.value = Date.now()
-  } catch (e) {
-    loadError.value = errorMessage(e, '加载配置失败')
-  } finally {
-    loading.value = false
-    manualLoading.value = false
-  }
-  // 配置库实体摘要 + 全量工具清单随 config 一起刷新 (独立失败, 不阻塞渲染)。
-  void loadEntities()
-  void loadInterfaceTools()
-  // proxy 单独拉, 失败不影响 config 渲染。
-  // 当前在 proxy tab 时同步等待 (用户切到该 tab 应看到立即加载的数据),
-  // 否则异步 (fire-and-forget) 不阻塞整体 load 延迟。
-  if (activeTab.value === 'proxy') {
-    await loadProxy()
-  } else {
-    void loadProxy()
-  }
-}
 
 function onProxyChange(updated: ProxySettings) {
   proxy.value = updated

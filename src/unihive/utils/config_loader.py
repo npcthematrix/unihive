@@ -227,14 +227,28 @@ def validate_config(config: dict) -> list[str]:
     # 运行时抓跨源 partial-config 的细粒度组合。运行时是 source of truth。
     console = config.get("console") or {}
     if console:
-        if not (console.get("username") or "").strip():
-            errors.append("console.username missing")
-        if not (console.get("password") or console.get("password_hash")):
-            errors.append("console.password or console.password_hash required")
-        secret = (console.get("session_secret") or "").strip()
-        if not secret:
-            errors.append("console.session_secret required")
-        elif len(secret) < 32:
-            errors.append("console.session_secret must be at least 32 characters")
+        # enabled: false 是显式关闭开关, 凭证字段一律不校验 (与运行时
+        # _get_console_auth_config 语义一致); 非布尔值才是配置错误。
+        enabled = console.get("enabled", True)
+        if not isinstance(enabled, bool):
+            errors.append(
+                f"console.enabled must be a boolean, got {enabled!r} "
+                f"({type(enabled).__name__})"
+            )
+        elif enabled is True:
+            username = console.get("username")
+            if not isinstance(username, str) or not username.strip():
+                errors.append("console.username missing or not a string")
+            if not (console.get("password") or console.get("password_hash")):
+                errors.append(
+                    "console.password or console.password_hash required"
+                )
+            secret_raw = console.get("session_secret")
+            if not isinstance(secret_raw, str) or not secret_raw.strip():
+                errors.append("console.session_secret required")
+            elif len(secret_raw.strip()) < 32:
+                errors.append(
+                    "console.session_secret must be at least 32 characters"
+                )
 
     return errors

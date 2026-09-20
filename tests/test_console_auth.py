@@ -12,7 +12,9 @@ from src.unihive.console_auth import (
 
 
 _DEV_HASH = hash_password("devpass")
-_SECRET = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+# Round-13: 旧出厂公开 secret ("0123..."*4) 现在被拒绝, 测试固定值必须
+# 与 KNOWN_DEFAULT_SESSION_SECRET 不同。
+_SECRET = "test-only-secret-not-the-factory-default-0123456789ab"
 
 
 def _creds(**overrides):
@@ -300,7 +302,7 @@ class TestJsonAuthApi:
         })
         resp = client.get("/api/auth/me")
         assert resp.status_code == 200
-        assert resp.json() == {"username": "admin"}
+        assert resp.json() == {"username": "admin", "auth_required": True}
 
     def test_json_logout_clears_session(self):
         client = TestClient(self.app)

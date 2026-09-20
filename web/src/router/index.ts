@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { resolveAuthRoute } from './authGuard'
 
 // hash 模式: Starlette 服务端零改动, 现有 cookie 中间件/静态挂载不变。
 const routes: RouteRecordRaw[] = [
@@ -73,17 +74,5 @@ export const router = createRouter({
 })
 
 // 唯一的鉴权规则: 无会话 → 登录页; 登录后所有页面可访问。无角色/按钮权限。
-router.beforeEach(async (to) => {
-  const auth = useAuthStore()
-
-  if (to.name === 'login') {
-    if (!auth.bootstrapped) await auth.bootstrap()
-    return auth.isAuthenticated ? { name: 'status' } : true
-  }
-
-  await auth.bootstrap()
-  if (!auth.isAuthenticated) {
-    return { name: 'login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : undefined }
-  }
-  return true
-})
+// 决策逻辑抽到 authGuard (纯函数, 单测覆盖 redirect 回跳与开放重定向防护)。
+router.beforeEach((to) => resolveAuthRoute(to, useAuthStore()))

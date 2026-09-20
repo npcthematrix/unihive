@@ -38,8 +38,10 @@ async def test_empty_db_auto_seeds_and_assembles(db_mode):
         cfg = server.config
         assert len(cfg["upstreams"]) == 9
         assert len(cfg["tools"]) == 289
-        # bootstrap 只来自 config.yaml
-        assert cfg.get("console", {}).get("username")
+        # bootstrap 只来自 config.yaml。Round-13 起出厂模板不再携带 console
+        # 凭证段 (固定凭证随公开仓库发布 = cookie 可伪造; 真实凭证走 .env /
+        # UNIHIVE_CONSOLE_*), 空库 seed 的装配配置里不应出现 console 段。
+        assert "console" not in cfg
         assert cfg["gateway"]["port"] == 18080
         # 库内调参段
         assert cfg["gateway"]["per_upstream_timeout"] == 10
