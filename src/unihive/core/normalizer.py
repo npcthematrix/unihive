@@ -40,12 +40,20 @@ class Normalizer:
         error: str | None = None,
         source: str | None = None,
         hops: list = None,
+        warn: str | None = None,
     ) -> dict:
-        """标准化网关响应格式"""
-        return {
+        """标准化网关响应格式。
+
+        ``warn`` 为成功路径的非阻断提示（消歧/no_data/truncated 等），
+        为 None 时不出现在信封中，保持既有消费者看到的字段集合不变。
+        """
+        resp = {
             "success": success,
             "data": data,
             "error": error,
             "source": source,
             "hops": hops or [],
         }
+        if warn is not None:
+            resp["warn"] = warn
+        return resp

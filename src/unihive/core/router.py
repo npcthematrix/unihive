@@ -41,6 +41,40 @@ class RouteResult:
     source: str | None = None
     hops: list[RouteHop] = field(default_factory=list)
     cache_hit: bool = False
+    # 成功响应的非阻断告警（如裸 000xxx 消歧提示、truncated、BJ 批次降级）。
+    # ToolResult.error 只在失败路径进信封，成功路径的提示经此字段透传。
+    warn: str | None = None
+
+
+# no_data 业务态标记（与 models 层 MooTDXErrorType.NO_DATA.value 保持字面量一致，
+# core 层不反向依赖各上游 error enum）
+_NO_DATA_MARKER = "no_data"
+
+
+def _warn_from_tool_result(result: ToolResult) -> str | None:
+    """从 ToolResult 提取成功路径的用户可见提示。
+
+    - ``error_detail.warn`` 为显式告警（消歧/truncated/部分降级）。
+    - 成功但 ``data is None`` 且 ``error_detail.error_type == 'no_data'``
+      时，说明文本（如"本地无 .day 文件"）作为 warn 透传，避免 HTTP
+      消费者拿到 ``success=true, data=null, error=null`` 的静默空响应。
+      必须带 no_data 标记：成功路径上的 ToolResult.error 默认不应面向
+      用户，未标记的文本不提升为 warn。
+    """
+    detail = getattr(result, "error_detail", None)
+    if not isinstance(detail, dict):
+        return None
+    warn = detail.get("warn")
+    if isinstance(warn, str) and warn.strip():
+        return warn
+    if (
+        result.data is None
+        and detail.get("error_type") == _NO_DATA_MARKER
+        and isinstance(result.error, str)
+        and result.error.strip()
+    ):
+        return result.error
+    return None
 
 
 class Router:
@@ -275,6 +309,7 @@ class Router:
                     data=result.data,
                     source=source,
                     hops=hops,
+                    warn=_warn_from_tool_result(result),
                 )
             else:
                 logger.warning(
@@ -359,6 +394,7 @@ class Router:
                 data=normalizer(result.data),
                 source="tdx_quant",
                 hops=[hop],
+                warn=_warn_from_tool_result(result),
             )
 
         logger.warning(

@@ -49,3 +49,14 @@ class TestToGatewayResponse:
         hops = [{"source": "a", "tool": "x"}]
         r = Normalizer.to_gateway_response(success=True, data=1, hops=hops)
         assert r["hops"] is hops
+
+    def test_warn_absent_by_default(self):
+        # 旧消费者看到的字段集合不变：无提示时信封里没有 warn 键
+        r = Normalizer.to_gateway_response(success=True, data=1)
+        assert "warn" not in r
+
+    def test_warn_included_when_provided(self):
+        r = Normalizer.to_gateway_response(
+            success=True, data=1, warn="代码 000001 为跨市场歧义码"
+        )
+        assert r["warn"] == "代码 000001 为跨市场歧义码"

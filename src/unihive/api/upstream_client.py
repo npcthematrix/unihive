@@ -42,6 +42,9 @@ class UpstreamConfig:
 class ToolResult:
     success: bool
     data: Any = None
+    # 失败路径：错误文本（进信封 error）。成功路径默认对消费者不可见；
+    # 仅当配合 error_detail.error_type="no_data"（success+data=None 业务态）
+    # 或 error_detail.warn 时，文本才会提升为信封顶层 warn 透传给用户。
     error: str | None = None
     error_detail: dict | None = None  # 详细错误信息 {"error_type": "...", "message": "...", "recoverable": true/false}
     source: str | None = None

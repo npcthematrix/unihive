@@ -150,6 +150,35 @@ class TestProxyEnabledTdxFailsAtRuntime:
         assert len(mootdx2.calls) == 1
 
 
+class TestProxyWarnPassthrough:
+    """proxy 成功分支（tdx_quant 命中）的 warn 也要透传到 RouteResult。"""
+
+    @pytest.mark.asyncio
+    async def test_proxy_success_carries_warn(self, tmp_yaml):
+        tmp_yaml.write_text("proxy:\n  enabled: true\n", encoding="utf-8")
+        proxy = ProxySettings(tmp_yaml)
+        mootdx2 = FakeMooTDX2()
+        tdx = FakeTdxQuant()
+        tdx.call_tool = AsyncMock(
+            return_value=ToolResult(
+                success=True,
+                data={"Now": 100.0},
+                source="tdx_quant",
+                error_detail={"warn": "部分字段降级", "recoverable": True},
+            )
+        )
+        router = Router(
+            upstreams={"mootdx2": mootdx2, "tdx_quant": tdx},
+            routing_config={"get_quote": {"chain": ["mootdx2"]}},
+            upstream_tool_mapping={},
+            proxy_settings=proxy,
+        )
+        result = await router.route("get_quote", {"code": "600519.SH"})
+        assert result.success is True
+        assert result.source == "tdx_quant"
+        assert result.warn == "部分字段降级"
+
+
 class TestProxyDoesNotAffectUnmappedTools:
     """未在 TOOL_MAP 的工具 (如 get_trade) 不被代理, 走原 chain."""
 

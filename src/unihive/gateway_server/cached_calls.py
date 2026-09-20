@@ -149,6 +149,9 @@ class CachedExecutionMixin:
                     error=result.error,
                     source=result.source,
                     hops=[h.source for h in result.hops],  # 真实 hops 留给消费者
+                    # 成功路径的非阻断提示（消歧/no_data/truncated）随信封透传，
+                    # 并随 {**resp} 一起进入缓存，命中路径经 **cached 自动带回。
+                    warn=getattr(result, "warn", None),
                 )
                 # 仅当本次实际命中远程 fuyao 源才写缓存：若链上本地源优先并成功，
                 # 不能把本地结果按 fuyao 的 key 缓存，否则后续 fuyao 直查会误命中。

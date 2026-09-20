@@ -865,3 +865,137 @@ class TestCacheScopePolicy:
         assert server.router.calls == 1, "远程 fuyao 非实时响应应被缓存"
         assert r2["cache_hit"] is True
         await cache.close()
+
+
+@dataclass
+class _WarnFakeResult:
+    success: bool
+    data: object = None
+    error: str | None = None
+    source: str | None = None
+    hops: list = None  # type: ignore
+    warn: str | None = None
+
+    def __post_init__(self):
+        if self.hops is None:
+            self.hops = []
+
+
+WARN_TEXT = "代码 000001 为跨市场歧义码，本次按深市股票解析"
+
+
+class TestExecuteCachedWarnPassthrough:
+    """成功路径的 warn（消歧/no_data 提示）必须进入 HTTP 信封。"""
+
+    async def test_warn_field_in_direct_response(self, tmp_path, gateway_server_minimal):
+        from src.unihive.storage.cache import Cache, CacheConfig
+
+        cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
+        await cache.initialize()
+
+        class FakeRouter:
+            async def route(self, route_key, params):
+                return _WarnFakeResult(
+                    success=True, data=[{"x": 1}], source="mootdx2", warn=WARN_TEXT,
+                )
+
+        server = gateway_server_minimal
+        server.cache = cache
+        server.router = FakeRouter()
+        server.config = {"cache": {"ttl": {"realtime_quote": 10}}}
+
+        resp = await server._execute_cached(
+            "get_daily_local", {"code": "000001"},
+            route_key="get_daily_local", ttl_key="realtime_quote",
+        )
+        assert resp["success"] is True
+        assert resp["warn"] == WARN_TEXT
+        await cache.close()
+
+    async def test_warn_replayed_on_mysql_cache_hit(self, tmp_path, gateway_server_minimal):
+        """fuyao 历史类响应：warn 随 {**resp} 入 MySQL 缓存，命中时原样带回。"""
+        import asyncio as _a
+        from src.unihive.storage.cache import Cache, CacheConfig
+
+        cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
+        await cache.initialize()
+
+        class FakeRouter:
+            def __init__(self):
+                self.calls = 0
+
+            async def route(self, route_key, params):
+                self.calls += 1
+                return _WarnFakeResult(
+                    success=True, data={"close": 100.0},
+                    source="fuyao_ashare", warn=WARN_TEXT,
+                )
+
+        server = gateway_server_minimal
+        server.cache = cache
+        router = FakeRouter()
+        server.router = router
+        server.config = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"hist_tool": {"fuyao_ashare": "x"}},
+        }
+        r1 = await server._execute_cached(
+            "hist_tool", {"thscodes": "600000.SH"},
+            route_key="hist_tool", ttl_key="historical",
+        )
+        r2 = await server._execute_cached(
+            "hist_tool", {"thscodes": "600000.SH"},
+            route_key="hist_tool", ttl_key="historical",
+        )
+        assert r1["warn"] == WARN_TEXT
+        assert router.calls == 1
+        assert r2["cache_hit"] is True
+        assert r2["warn"] == WARN_TEXT
+        await cache.close()
+
+    async def test_warn_replayed_to_single_flight_waiter(self, tmp_path, gateway_server_minimal):
+        """并发同 key miss：waiter 复用 leader 的响应，warn 不能丢。"""
+        from src.unihive.storage.cache import Cache, CacheConfig
+
+        cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
+        await cache.initialize()
+        gate = asyncio.Event()
+
+        class FakeRouter:
+            def __init__(self):
+                self.calls = 0
+
+            async def route(self, route_key, params):
+                self.calls += 1
+                await gate.wait()
+                return _WarnFakeResult(
+                    success=True, data={"close": 100.0},
+                    source="fuyao_ashare", warn=WARN_TEXT,
+                )
+
+        server = gateway_server_minimal
+        server.cache = cache
+        router = FakeRouter()
+        server.router = router
+        server.config = {
+            "cache": {"ttl": {"historical": 60}},
+            "upstream_tool_mapping": {"hist_tool": {"fuyao_ashare": "x"}},
+        }
+
+        t1 = asyncio.create_task(server._execute_cached(
+            "hist_tool", {"thscodes": "600000.SH"},
+            route_key="hist_tool", ttl_key="historical",
+        ))
+        await asyncio.sleep(0.1)
+        t2 = asyncio.create_task(server._execute_cached(
+            "hist_tool", {"thscodes": "600000.SH"},
+            route_key="hist_tool", ttl_key="historical",
+        ))
+        await asyncio.sleep(0.1)
+        gate.set()
+        r1, r2 = await asyncio.gather(t1, t2)
+
+        assert router.calls == 1, "waiter 必须复用 leader future，不重复路由"
+        assert r1["warn"] == WARN_TEXT
+        assert r2["warn"] == WARN_TEXT
+        await cache.close()

@@ -317,8 +317,18 @@ class HttpServeMixin:
             # 不等首页 404 才发现布局/构建问题。
             _preflight_console_html(_ca.CONSOLE_HTML_PATH)
 
+            # 2026-09-20: json_response=True — 工具结果直接以 application/json
+            # 返回（请求-响应语义），不再包进单个 SSE data: 事件。
+            # 原因: MCP Python SDK 的 httpx SSE 解析器对单个 event 有
+            # 1 MiB 硬上限（httpx2.SSEError: Server-sent event exceeded the
+            # 1048576 byte limit），离线分钟线（1min 全量 ~9MB / 5min ~1.8MB）
+            # 及长历史日线超限时客户端报 "SSE stream ended without a response"。
+            # JSON 响应走普通 HTTP body，无此限制；MCP 2025-11-25 spec 允许
+            # 在有状态会话中对单条请求返回 JSON（服务端主动推送仍走 GET SSE）。
+            # stateless_http 保持默认 False，会话/重连语义不变。
             mcp_app = self.mcp.http_app(
                 path="/",
+                json_response=True,
                 allowed_hosts=["127.0.0.1:*", "localhost:*"],
                 allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
                 host_origin_protection=True,
