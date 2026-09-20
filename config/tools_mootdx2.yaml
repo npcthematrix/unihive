@@ -1264,3 +1264,141 @@ tools:
         type: int
         required: false
         description: 返回最近 N 条（默认 100，最大 1000）
+
+  - name: get_index_minute_local
+    description: |-
+      【离线指数分钟线】读取通达信客户端本地指数 .lc1 / .lc5 文件，支持 1 分钟和 5 分钟周期。
+
+      【使用场景】
+      - 离线环境回放指数分钟级走势（不依赖网络）
+      - 与 get_index_kline_local（日/周/月）互补，覆盖分钟周期
+
+      【参数说明】
+      - code (必填): 指数代码，6 位数字或带 sh/sz/bj 前缀（也支持 .SH/.SZ/.BJ 后缀）
+        · sh 指数段：000xxx（上证指数/中证老系列）、880/881xxx（通达信板块指数）、
+          930/931/932xxx（中证新号段，如 932000=中证A500）
+        · sz 指数段：399xxx（如 399001 深证成指）
+        · bj 指数段：899xxx（北证指数，如 bj899050；裸码 899050 亦可）
+        · 裸 000xxx 为歧义码（上证指数 vs 深市股票），本工具按 sh 指数解析
+          （如 000001=上证指数、000300=沪深300）；显式前缀始终生效
+      - suffix (可选): '1' = 1 分钟线（默认）/ '5' = 5 分钟线
+      - start_date (可选): 起始日期，YYYY-MM-DD（如 2026-09-18，兼容
+        YYYYMMDD 紧凑写法），含当日
+      - end_date (可选): 结束日期，同上，含当日全天；非零填充/非法日历日或
+        start_date 晚于 end_date → invalid_param
+      - limit (可选): 返回最近 N 条，默认 1000，最大 20000；超出时截断为最近
+        N 条并在信封 warn 中说明（无日期窗时给文件总数，带日期窗时给窗内条数）
+
+      【数据源】
+      - suffix='1': {tdxdir}/vipdoc/{sh|sz|bj}/minline/xxx.lc1
+      - suffix='5': {tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
+      【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
+      成功但本地无文件时 success=true、data=null，缺失路径在顶层 warn 中给出。
+      【典型情况】
+      - invalid_param: suffix 非 '1'/'5'、日期非 YYYY-MM-DD/YYYYMMDD 合法日历日、
+        start_date 晚于 end_date、limit 非正整数或 >20000，success=false
+      - invalid_symbol: 传入股票代码（如 600000/sz000001）请改用 get_minute_local，success=false
+      - no_data: 指数分钟文件本地不存在或为空（TDX 未下载该数据），不代表代码错误；
+        文件存在但所选日期范围内无数据时，warn 会明确提示"文件存在但日期范围内无数据"
+    routing: get_index_minute_local
+    upstream_tool_mapping:
+      mootdx2: get_index_minute_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: code
+        type: str
+        required: true
+        description: 指数代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀；裸 000xxx 按 sh 指数解析）
+      - name: suffix
+        type: str
+        required: false
+        enum: ['1', '5']
+        description: '1=1 分钟线（默认，minline/.lc1）/ 5=5 分钟线（fzline/.lc5）'
+      - name: start_date
+        type: str
+        required: false
+        description: 起始日期 YYYY-MM-DD（兼容 YYYYMMDD，可选）
+      - name: end_date
+        type: str
+        required: false
+        description: 结束日期 YYYY-MM-DD（兼容 YYYYMMDD，含当日全天，可选）
+      - name: limit
+        type: int
+        required: false
+        description: 返回最近 N 条（默认 1000，最大 20000，超出截断并带 warn）
+
+  - name: get_index_fzline_local
+    description: |-
+      【离线指数 5 分钟线】读取通达信客户端本地指数 .lc5 文件（fzline 子目录）。
+
+      【使用场景】
+      - 离线环境回放指数 5 分钟走势
+      - 与 get_index_minute_local(code, suffix='5') 等价（相同数据源 fzline/*.lc5）
+
+      【参数说明】
+      - code (必填): 指数代码，前缀/歧义码约定同 get_index_minute_local
+        （000xxx 裸码按 sh 指数；399=sz；899=bj；880/881/930-932=sh）
+      - limit (可选): 返回最近 N 条，默认 1000，最大 20000；超出截断并在
+        信封 warn 中说明
+
+      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
+      【返回信封】同 get_index_minute_local（含截断 warn）；股票代码 → invalid_symbol 请改用 get_fzline_local。
+    routing: get_index_fzline_local
+    upstream_tool_mapping:
+      mootdx2: get_index_fzline_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: code
+        type: str
+        required: true
+        description: 指数代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀；裸 000xxx 按 sh 指数解析）
+      - name: limit
+        type: int
+        required: false
+        description: 返回最近 N 条（默认 1000，最大 20000，超出截断并带 warn）
+
+  - name: get_index_timeshare_local
+    description: |-
+      【离线指数分时图】由本地 1 分钟线（.lc1）最新交易日派生指数分时数据，不依赖网络。
+
+      【使用场景】
+      - 离线环境绘制指数分时图（价格线 + 均价线 + 成交量 + 昨收零轴）
+      - 与在线 get_minute_data（Quotes 实时、仅当日）对应，本工具取本地已下载的
+        最近一个交易日，返回的 trade_date 即为数据日期（盘后/未下载最新数据时
+        可能是上一交易日，调用方应以 trade_date 为准而非默认今天）
+
+      【参数说明】
+      - code (必填): 指数代码，前缀/歧义码约定同 get_index_minute_local
+        （000xxx 裸码按 sh 指数；399=sz；899=bj；880/881/930-932=sh）
+
+      【数据源】
+      - 分钟：{tdxdir}/vipdoc/{sh|sz|bj}/minline/xxx.lc1（切最新交易日 09:31–15:00 共 240 根）
+      - 昨收：{tdxdir}/vipdoc/{sh|sz|bj}/lday/xxx.day（严格前一交易日收盘；日线缺失时为 null）
+      【返回结构】data 为单个对象（非数组）：
+        {
+          "trade_date": "2026-09-18",
+          "prev_close": 3875.6,
+          "points": [{"time": "09:31", "price": 3900.0, "avg_price": 3900.0, "vol": 100.0}, ...]
+        }
+      - avg_price 为截至该分钟的累计成交额/累计成交量（标准分时均价线定义）；
+        零成交量分钟沿用上一点均价，不产生 NaN；部分行情源导出的指数分钟文件
+        amount≈vol×100（源文件单位约定），avg_price 会反映源数据口径
+      【典型情况】
+      - invalid_symbol: 传入股票代码（如 600000/sz000001），股票离线分钟线请用
+        get_minute_local、当日实时分时请用 get_minute_data，success=false
+      - no_data: 指数 .lc1 本地不存在或为空，无法派生，success=true、data=null，路径在 warn 中给出
+    routing: get_index_timeshare_local
+    upstream_tool_mapping:
+      mootdx2: get_index_timeshare_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: code
+        type: str
+        required: true
+        description: 指数代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀；裸 000xxx 按 sh 指数解析）

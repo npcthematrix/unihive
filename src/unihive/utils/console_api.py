@@ -348,7 +348,7 @@ def load_config() -> dict:
     """当前生效配置快照, 已脱敏, 带乐观锁 version。
 
     - v2 实体模式: gateway 启动时装配的 live config (库内实体 + config.yaml
-      bootstrap) 即生效配置, 不回读 YAML。290 条 tool spec 由
+      bootstrap) 即生效配置, 不回读 YAML。293 条 tool spec 由
       /api/interfaces 提供, /api/config 快照不重复携带 ``tools``。
       version 是 config.db 的整数 revision。
     - P1/yaml 模式: YAML 出厂基线 + overlay 行镜像, 零 DB IO; yaml 逃生
@@ -1049,7 +1049,7 @@ def get_interfaces() -> dict:
     )
 
     if runtime is not None:
-        # v2 实体模式: 290 条 spec 已在装配 config 中, 只补运行时 env 门控,
+        # v2 实体模式: 293 条 spec 已在装配 config 中, 只补运行时 env 门控,
         # 不回读 tools_*.yaml; 用未脱敏 live config 算 TTL/chain。
         config = runtime
         tools = filter_specs_by_env(list(runtime.get("tools") or []))

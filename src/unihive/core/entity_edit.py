@@ -33,7 +33,7 @@ PARAM_WRITABLE_KEYS = frozenset(
     {"name", "type", "required", "description", "enum", "normalize"}
 )
 
-#: 对外 MCP 工具名 (与 290 个现存工具名一致: 字母开头, 字母数字下划线)。
+#: 对外 MCP 工具名 (与 293 个现存工具名一致: 字母开头, 字母数字下划线)。
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

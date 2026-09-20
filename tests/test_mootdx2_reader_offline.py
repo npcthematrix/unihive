@@ -383,3 +383,564 @@ def test_yaml_has_get_index_kline_local_offline():
     params = {p["name"]: p for p in spec["params"]}
     assert params["type"]["enum"] == ["day", "week", "month"]
     assert params["code"]["required"] is True
+
+
+# ========== get_index_minute_local / get_index_fzline_local ==========
+
+def _minute_df(rows):
+    """构造 Reader.minute 风格 DataFrame；rows: [(datetime, close, vol, amount), ...]。"""
+    idx = pd.to_datetime([r[0] for r in rows])
+    return pd.DataFrame(
+        {
+            "open": [r[1] for r in rows],
+            "high": [r[1] for r in rows],
+            "low": [r[1] for r in rows],
+            "close": [r[1] for r in rows],
+            "vol": [r[2] for r in rows],
+            "amount": [r[3] for r in rows],
+        },
+        index=idx,
+    )
+
+
+def _real_minute_df(rows):
+    """构造与 mootdx2 Reader 真实输出同形的分钟 DataFrame。
+
+    真实 Reader：DatetimeIndex 名为 ``date``，自带原生字符串 ``datetime``
+    列（"YYYY-MM-DD HH:MM"）以及 year/month/day/hour/minute 拆分列。
+    rows: [(datetime, close, vol, amount), ...]
+    """
+    idx = pd.to_datetime([r[0] for r in rows])
+    idx.name = "date"
+    ts = list(idx)
+    return pd.DataFrame(
+        {
+            "open": [r[1] for r in rows],
+            "high": [r[1] for r in rows],
+            "low": [r[1] for r in rows],
+            "close": [r[1] for r in rows],
+            "vol": [r[2] for r in rows],
+            "amount": [r[3] for r in rows],
+            "year": [t.year for t in ts],
+            "month": [t.month for t in ts],
+            "day": [t.day for t in ts],
+            "hour": [t.hour for t in ts],
+            "minute": [t.minute for t in ts],
+            "datetime": [t.strftime("%Y-%m-%d %H:%M") for t in ts],
+        },
+        index=idx,
+    )
+
+
+def _patch_reader(**dfs):
+    """生成 mock_reader（dfs: minute=/daily=/fzline= 返回值）。"""
+    mock_reader = MagicMock()
+    mock_reader.minute.return_value = dfs.get("minute")
+    mock_reader.daily.return_value = dfs.get("daily")
+    mock_reader.fzline.return_value = dfs.get("fzline")
+    return mock_reader
+
+
+def test_index_minute_bare_000001_resolves_as_sh_index(client):
+    """裸 000001 在指数入口按 sh 解析，走 .lc1（suffix=1）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=_minute_df([
+        ("2026-09-18 09:31", 3900.0, 100.0, 390000.0),
+        ("2026-09-18 09:32", 3901.0, 200.0, 780200.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_minute_local("000001"))
+
+    assert r.success is True
+    assert mock_reader.minute.call_args.kwargs["symbol"] == "sh000001"
+    assert mock_reader.minute.call_args.kwargs["suffix"] == 1
+    assert r.data[0]["datetime"].startswith("2026-09-18")
+
+
+def test_index_minute_explicit_markets_sz_bj(client):
+    """399001 → sz399001；bj899050 显式前缀保持 bj（补丁后路由）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=_minute_df([
+        ("2026-09-18 09:31", 100.0, 1.0, 100.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r_sz = asyncio.run(client.get_index_minute_local("sz399001"))
+        r_bj = asyncio.run(client.get_index_minute_local("bj899050"))
+
+    assert r_sz.success and r_bj.success
+    assert mock_reader.minute.call_args_list[0].kwargs["symbol"] == "sz399001"
+    assert mock_reader.minute.call_args_list[1].kwargs["symbol"] == "bj899050"
+
+
+def test_index_minute_suffix_5_reads_lc5(client):
+    """suffix='5' → Reader.minute(suffix=5)（vipdoc/fzline/*.lc5）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=_minute_df([
+        ("2026-09-18 09:35", 3900.0, 500.0, 1_950_000.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_minute_local("000001", suffix="5"))
+
+    assert r.success is True
+    assert mock_reader.minute.call_args.kwargs["suffix"] == 5
+
+
+def test_index_minute_invalid_suffix_rejected(client):
+    """suffix 仅 1/5，其余 → invalid_param（不静默落 5）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(client.get_index_minute_local("000001", suffix="15"))
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_param"
+
+
+def test_index_minute_rejects_stock_codes(client):
+    """股票代码走指数入口 → invalid_symbol 并指引 get_minute_local。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    for code in ("600000", "sz000001"):
+        r = asyncio.run(client.get_index_minute_local(code))
+        assert r.success is False, f"{code} 必须拒绝"
+        assert r.error_detail["error_type"] == "invalid_symbol"
+        assert "get_minute_local" in r.error
+
+
+def test_index_minute_bad_symbol_invalid(client):
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(client.get_index_minute_local("abc"))
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_symbol"
+
+
+def test_index_minute_no_data_names_lc1_path(client):
+    """指数 .lc1 缺失 → no_data 文案给出实际市场路径。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=None)
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_minute_local("932000"))
+    assert r.success is True
+    assert r.data is None
+    assert "sh932000" in r.error and "minline" in r.error and ".lc1" in r.error
+
+
+def test_index_minute_start_end_date_filter(client):
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=_minute_df([
+        ("2026-09-17 10:00", 3900.0, 1.0, 3900.0),
+        ("2026-09-18 10:00", 3910.0, 1.0, 3910.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(
+            client.get_index_minute_local(
+                "000001", start_date="2026-09-18", end_date="2026-09-18"
+            )
+        )
+    assert r.success is True
+    assert len(r.data) == 1
+    assert r.data[0]["datetime"].startswith("2026-09-18")
+
+
+def test_index_fzline_reads_lc5(client):
+    """get_index_fzline_local 走 Reader.fzline（= .lc5）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(fzline=_minute_df([
+        ("2026-09-18 09:35", 3900.0, 500.0, 1_950_000.0),
+        ("2026-09-18 09:40", 3902.0, 600.0, 2_341_200.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_fzline_local("000001"))
+
+    assert r.success is True
+    assert mock_reader.fzline.call_args.kwargs["symbol"] == "sh000001"
+    assert len(r.data) == 2
+    assert r.data[1]["datetime"].endswith("09:40")
+
+
+def test_index_fzline_stock_rejected_and_no_data_path(client):
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r_stock = asyncio.run(client.get_index_fzline_local("600000"))
+    assert r_stock.success is False
+    assert r_stock.error_detail["error_type"] == "invalid_symbol"
+
+    mock_reader = _patch_reader(fzline=False)
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_fzline_local("sz399001"))
+    assert r.success is True and r.data is None
+    # 文案与 _index_minute_file_message(parsed, 5) 共用（DRY）
+    assert "sz399001" in r.error and "fzline" in r.error and ".lc5" in r.error
+    assert "5 分钟线数据" in r.error and "不存在或为空" in r.error
+
+
+# ========== get_index_timeshare_local（派生分时图） ==========
+
+def test_index_timeshare_derived_contract(client):
+    """分时派生：最新交易日切片 + 累计均价 + prev_close 零轴。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    minute_df = _minute_df([
+        ("2026-09-17 15:00", 3800.0, 99.0, 99 * 3800.0),   # 前一日，必须被切掉
+        ("2026-09-18 09:31", 3900.0, 100.0, 100 * 3900.0),
+        ("2026-09-18 09:32", 3920.0, 300.0, 300 * 3920.0),
+        ("2026-09-18 09:33", 3910.0, 0.0, 0.0),             # 零量分钟
+        ("2026-09-18 09:34", 3930.0, 400.0, 400 * 3930.0),
+    ])
+    daily_df = _daily_df(["2026-09-17", "2026-09-18"])
+    mock_reader = _patch_reader(minute=minute_df, daily=daily_df)
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_timeshare_local("000001"))
+
+    assert r.success is True
+    payload = r.data
+    assert payload["trade_date"] == "2026-09-18"
+    assert payload["prev_close"] == 10.0  # _daily_df 首日 close=10.0
+    points = payload["points"]
+    assert len(points) == 4
+    assert [p["time"] for p in points] == ["09:31", "09:32", "09:33", "09:34"]
+    assert set(points[0]) == {"time", "price", "avg_price", "vol"}
+    # 均价 = 累计成交额 / 累计成交量
+    assert points[0]["avg_price"] == 3900.0
+    expected_avg_1 = (100 * 3900 + 300 * 3920) / 400
+    assert abs(points[1]["avg_price"] - expected_avg_1) < 1e-6
+    # 零量分钟：累计量不变，均价沿用上一点（不得 NaN/inf）
+    assert points[2]["avg_price"] == expected_avg_1
+    assert points[2]["price"] == 3910.0
+    # 收盘点
+    assert points[-1]["price"] == 3930.0
+
+
+def test_index_timeshare_zero_cum_vol_guard(client):
+    """开盘首笔零量（累计量为 0）→ avg_price 回退当前价，不产生除零。"""
+    import math
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    minute_df = _minute_df([
+        ("2026-09-18 09:31", 3900.0, 0.0, 0.0),
+        ("2026-09-18 09:32", 3901.0, 100.0, 100 * 3901.0),
+    ])
+    mock_reader = _patch_reader(minute=minute_df, daily=None)
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_timeshare_local("000001"))
+    assert r.success is True
+    p0 = r.data["points"][0]
+    assert p0["avg_price"] == 3900.0
+    assert not math.isnan(p0["avg_price"])
+    # 日线缺失：prev_close 为 None 而非报错
+    assert r.data["prev_close"] is None
+
+
+def test_index_timeshare_prev_close_excludes_same_day(client):
+    """日线只有当天（无更早交易日）→ prev_close=None。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    minute_df = _minute_df([("2026-09-18 09:31", 3900.0, 100.0, 390000.0)])
+    daily_df = _daily_df(["2026-09-18"])
+    mock_reader = _patch_reader(minute=minute_df, daily=daily_df)
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_timeshare_local("000001"))
+    assert r.success is True
+    assert r.data["prev_close"] is None
+    assert r.data["points"][0]["time"] == "09:31"
+
+
+def test_index_timeshare_rejects_stock(client):
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    for code in ("600000", "sz000001"):
+        r = asyncio.run(client.get_index_timeshare_local(code))
+        assert r.success is False
+        assert r.error_detail["error_type"] == "invalid_symbol"
+
+
+def test_index_timeshare_no_data_names_lc1(client):
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=None)
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_timeshare_local("sh932000"))
+    assert r.success is True and r.data is None
+    assert "sh932000" in r.error and "minline" in r.error and ".lc1" in r.error
+
+
+def test_index_minute_real_reader_shape_preserves_native_datetime(client):
+    """真实 Reader 形态（index.name='date' + 原生 datetime 列）：
+    记录里不泄漏 date/index 键，原生字符串 datetime 原样保留（无 :00 尾缀）。
+    """
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=_real_minute_df([
+        ("2026-09-18 09:31", 3900.0, 100.0, 390000.0),
+        ("2026-09-18 15:00", 3910.0, 200.0, 782000.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_minute_local("000001"))
+
+    assert r.success is True
+    assert len(r.data) == 2
+    for rec in r.data:
+        assert "date" not in rec and "index" not in rec
+        assert rec["datetime"][-3] == ":"  # "HH:MM"，不含秒
+    assert r.data[0]["datetime"] == "2026-09-18 09:31"
+    assert r.data[1]["datetime"] == "2026-09-18 15:00"
+    # 未截断：不附 warn
+    assert r.error_detail is None
+
+
+def test_index_minute_tail_limit_truncates_with_warn(client):
+    """limit 截最近 N 条 + warn（含文件总数与上限提示）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    rows = [
+        ("2026-09-18 09:3%d" % i, 3900.0 + i, 100.0, 390000.0)
+        for i in range(1, 6)
+    ]
+    mock_reader = _patch_reader(minute=_minute_df(rows))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_minute_local("000001", limit=2))
+
+    assert r.success is True
+    assert len(r.data) == 2
+    # 截的是最近两条（尾部）
+    assert r.data[0]["datetime"].endswith("09:34")
+    assert r.data[1]["datetime"].endswith("09:35")
+    detail = r.error_detail
+    assert detail and detail["warn"]
+    assert "2" in detail["warn"] and detail["returned"] == 2
+    assert "5" in detail["warn"]  # 文件内总数
+    assert "文件内" in detail["warn"]
+
+
+def test_index_minute_truncation_warn_scope_with_date_window(client):
+    """带日期窗时截断 warn 的 total 口径是"窗内条数"，不能谎称文件总数。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    rows = [
+        ("2026-09-18 09:3%d" % i, 3900.0 + i, 100.0, 390000.0)
+        for i in range(1, 6)
+    ]
+    mock_reader = _patch_reader(minute=_minute_df(rows))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_minute_local(
+            "000001", start_date="2026-09-18", end_date="2026-09-18", limit=2,
+        ))
+    assert r.success is True and len(r.data) == 2
+    warn = r.error_detail["warn"]
+    assert "所选日期范围内" in warn
+    assert "文件内" not in warn
+
+
+def test_index_minute_non_string_date_rejected(client):
+    """直调传 int 日期（HTTP 边界不会出现）→ invalid_param 而非 TypeError。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(client.get_index_minute_local("000001", start_date=20260918))
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_param"
+
+
+@pytest.mark.parametrize("bad_limit", [0, -1, 20001, 100000, "1000", 1.5, True])
+def test_index_minute_bad_limit_rejected(client, bad_limit):
+    """limit 门控：正整数且 ≤ 20000（bool 不等于 int）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(client.get_index_minute_local("000001", limit=bad_limit))
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_param"
+
+
+@pytest.mark.parametrize("start_date,end_date", [
+    ("2026-9-1", ""),       # 非零补
+    ("2026-13-01", ""),     # 非法日历日
+    ("2026091", ""),        # 紧凑但只有 7 位
+    ("2026-09-18", "2026-09-17"),  # 起晚于止
+    ("20260918", "20260917"),      # 紧凑格式同样校验顺序
+    ("", "not-a-date"),     # 完全不沾边
+])
+def test_index_minute_bad_date_window_rejected(client, start_date, end_date):
+    """日期窗严格 YYYY-MM-DD 门控，非法 → invalid_param，且不碰 Reader。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(
+        client.get_index_minute_local(
+            "000001", start_date=start_date, end_date=end_date
+        )
+    )
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_param"
+
+
+def test_index_minute_window_no_match_distinguishes_from_missing_file(client):
+    """文件有数据但日期窗切空：warn 必须说"文件存在但范围内无数据"，
+    不能沿用"文件不存在"文案。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=_minute_df([
+        ("2026-09-17 10:00", 3900.0, 1.0, 3900.0),
+        ("2026-09-18 10:00", 3910.0, 1.0, 3910.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(
+            client.get_index_minute_local(
+                "000001", start_date="2026-09-10", end_date="2026-09-10"
+            )
+        )
+    assert r.success is True and r.data is None
+    assert "文件存在" in r.error
+    assert "日期范围" in r.error
+    assert "不存在或为空" not in r.error
+
+
+def test_index_minute_end_date_inclusive_full_day(client):
+    """end_date 含当日全天：09:31 与 15:00 两根都要保留（股票端曾有
+    按午夜字符串比较丢掉 end 当日全天数据的坑，指数端防回归）。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=_minute_df([
+        ("2026-09-18 09:31", 3900.0, 1.0, 3900.0),
+        ("2026-09-18 15:00", 3910.0, 1.0, 3910.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(
+            client.get_index_minute_local(
+                "000001", start_date="2026-09-18", end_date="2026-09-18"
+            )
+        )
+    assert r.success is True
+    assert len(r.data) == 2
+    assert [x["datetime"][-5:] for x in r.data] == ["09:31", "15:00"]
+
+
+def test_index_minute_compact_yyyymmdd_window_accepted(client):
+    """YYYYMMDD（registry 在 HTTP 边界归一后的格式）与 YYYY-MM-DD 等价：
+    两种写法对同一日期窗都只切出 9/18 当天的 bar。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    rows = [
+        ("2026-09-17 15:00", 3900.0, 1.0, 3900.0),
+        ("2026-09-18 09:31", 3910.0, 1.0, 3910.0),
+        ("2026-09-18 15:00", 3911.0, 1.0, 3911.0),
+    ]
+    mock_reader = _patch_reader(minute=_minute_df(rows))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r_dash = asyncio.run(client.get_index_minute_local(
+            "000001", start_date="2026-09-18", end_date="2026-09-18"))
+        r_compact = asyncio.run(client.get_index_minute_local(
+            "000001", start_date="20260918", end_date="20260918"))
+        r_mixed = asyncio.run(client.get_index_minute_local(
+            "000001", start_date="20260918"))
+    for r in (r_dash, r_compact, r_mixed):
+        assert r.success is True and len(r.data) == 2
+        assert all(x["datetime"].startswith("2026-09-18") for x in r.data)
+
+
+def test_index_minute_suffix_int_accepted(client):
+    """MCP JSON 整数 suffix=1 与字符串 '1' 等价。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=_minute_df([
+        ("2026-09-18 09:31", 3900.0, 100.0, 390000.0),
+    ]))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_minute_local("000001", suffix=1))
+    assert r.success is True
+    assert mock_reader.minute.call_args.kwargs["suffix"] == 1
+
+
+def test_index_minute_zero_bar_empty_file_message(client):
+    """空 DataFrame（文件存在但 0 根）与文件缺失同路：no_data 文案措辞
+    为"不存在或为空"，不谎称一定不存在。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = _patch_reader(minute=pd.DataFrame())
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_minute_local("932000"))
+    assert r.success is True and r.data is None
+    assert "sh932000" in r.error and "minline" in r.error
+    assert "不存在或为空" in r.error
+
+
+def test_index_fzline_tail_limit_truncates_with_warn(client):
+    """fzline 独立入口同样有 limit 截断 + warn。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    rows = [
+        ("2026-09-18 09:%02d" % (30 + 5 * i), 3900.0 + i, 100.0, 390000.0)
+        for i in range(4)
+    ]
+    mock_reader = _patch_reader(fzline=_minute_df(rows))
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_fzline_local("000001", limit=2))
+    assert r.success is True
+    assert len(r.data) == 2
+    assert r.data[-1]["datetime"].endswith("09:45")
+    assert r.error_detail and "截断" in r.error_detail["warn"]
+
+
+def test_index_timeshare_daily_newer_than_minute_day(client):
+    """日线导出比分钟线新（含 9/19）时，prev_close 仍严格取分钟当日
+    （9/18）的前一交易日收盘，不得取日线最后一行 9/19 的收盘。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    minute_df = _minute_df([
+        ("2026-09-18 09:31", 3900.0, 100.0, 100 * 3900.0),
+        ("2026-09-18 09:32", 3901.0, 100.0, 100 * 3901.0),
+    ])
+    # close: 9/17=10.0, 9/18=11.0, 9/19=12.0
+    daily_df = _daily_df(["2026-09-17", "2026-09-18", "2026-09-19"])
+    mock_reader = _patch_reader(minute=minute_df, daily=daily_df)
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_timeshare_local("000001"))
+    assert r.success is True
+    assert r.data["trade_date"] == "2026-09-18"
+    assert r.data["prev_close"] == 10.0
+
+
+def test_index_local_tools_registered_in_method_map(client):
+    """3 个指数离线工具注册进 _TOOL_METHOD_NAMES 且方法可调用。"""
+    from src.unihive.api.mootdx2_client import _TOOL_METHOD_NAMES
+
+    for name in (
+        "get_index_minute_local",
+        "get_index_fzline_local",
+        "get_index_timeshare_local",
+    ):
+        assert name in _TOOL_METHOD_NAMES, f"{name} 未注册"
+        assert callable(getattr(client, _TOOL_METHOD_NAMES[name], None))
+
+
+def test_yaml_has_index_minute_fzline_timeshare_offline():
+    """3 个新指数工具在 YAML 声明为 offline，参数合同正确。"""
+    import yaml
+    with open("config/tools_mootdx2.yaml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    by_name = {t["name"]: t for t in data["tools"]}
+
+    minute = by_name["get_index_minute_local"]
+    fzline = by_name["get_index_fzline_local"]
+    ts = by_name["get_index_timeshare_local"]
+    for spec in (minute, fzline, ts):
+        assert spec["data_source_type"] == "offline"
+        assert spec["params"][0]["name"] == "code"
+        assert spec["params"][0]["required"] is True
+
+    minute_params = {p["name"]: p for p in minute["params"]}
+    assert minute_params["suffix"]["enum"] == ["1", "5"]
+    # 分钟线参数合同：code/suffix/start_date/end_date/limit
+    assert [p["name"] for p in minute["params"]] == [
+        "code", "suffix", "start_date", "end_date", "limit",
+    ]
+    assert minute_params["limit"]["type"] == "int"
+    # 分时图只有 code 一个参数（固定取本地最新交易日）
+    assert [p["name"] for p in ts["params"]] == ["code"]
+    # fzline: code + limit（默认 1000 / 最大 20000，截断带 warn）
+    fzline_params = {p["name"]: p for p in fzline["params"]}
+    assert list(fzline_params) == ["code", "limit"]
+    assert fzline_params["limit"]["type"] == "int"

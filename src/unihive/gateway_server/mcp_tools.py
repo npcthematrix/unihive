@@ -23,7 +23,7 @@ class McpToolsMixin:
     def _load_all_tools(self) -> list[dict]:
         """全量工具 spec (运行时 env 门控后)。
 
-        db 模式: 实体装配时 290 条已在 config['tools'], 这里只补运行时
+        db 模式: 实体装配时 293 条已在 config['tools'], 这里只补运行时
         requires_env 门控 (与 yaml 模式 load_all_tools 默认行为一致),
         不再回读任何 tools_*.yaml。
         yaml 模式: 委托 tool_loader 合并内联 + 生成文件。

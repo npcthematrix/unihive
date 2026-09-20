@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import functools
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -52,6 +53,65 @@ def _daily_request_warn(parsed, adjust: str) -> str | None:
     return None
 
 
+# 分钟日期窗只收零填充 YYYY-MM-DD 或恰好 8 位 YYYYMMDD。不能直接用
+# strptime：CPython 的 %m/%d 正则是 \d{1,2}，"2026-9-1"/"2026091" 会被
+# 静默解析（前者非零补、后者只有 7 位）。
+_DASH_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_COMPACT_DATE_RE = re.compile(r"^\d{8}$")
+
+
+def _parse_strict_window_date(value: str) -> datetime.date | None:
+    """严格形状 + 合法日历日双校验，通过返 date，否则 None。"""
+    if _DASH_DATE_RE.match(value):
+        iso = value
+    elif _COMPACT_DATE_RE.match(value):
+        iso = f"{value[:4]}-{value[4:6]}-{value[6:]}"
+    else:
+        return None
+    try:
+        return datetime.date.fromisoformat(iso)
+    except ValueError:
+        return None
+
+
+def _normalize_date_window(
+    start_date: str, end_date: str,
+) -> tuple[str, str, str | None]:
+    """校验并归一离线分钟线日期窗。
+
+    同时接受 YYYY-MM-DD（文档合同）与 YYYYMMDD（registry 对 *_date 入参
+    的归一格式：HTTP 边界上 "2026-09-18" 会被改写成 "20260918"）；统一
+    输出零填充 YYYY-MM-DD 供分钟索引字典序过滤。非零填充（"2026-9-1"）、
+    非法日历日（"2026-13-01"）、7 位紧凑串均拒绝。
+
+    Returns:
+        (start_canonical, end_canonical, error)；error 非 None 时前两个为 ""。
+    """
+    canon: dict[str, str] = {}
+    for label, value in (("start_date", start_date), ("end_date", end_date)):
+        if not value:
+            canon[label] = ""
+            continue
+        # 防御直调进程内方法传入 int（HTTP/Pydantic 边界只会给 str）：
+        # re.match 对非 str 抛 TypeError，会逃出工具自己的 try/except
+        if not isinstance(value, str):
+            return "", "", (
+                f"{label} 需为 YYYY-MM-DD 或 YYYYMMDD 字符串，收到 {value!r}"
+            )
+        parsed_date = _parse_strict_window_date(value)
+        if parsed_date is None:
+            return "", "", (
+                f"{label} 需为 YYYY-MM-DD 或 YYYYMMDD 合法日历日，收到 {value!r}"
+            )
+        canon[label] = parsed_date.strftime("%Y-%m-%d")
+    start, end = canon["start_date"], canon["end_date"]
+    if start and end and start > end:
+        return "", "", (
+            f"start_date({start_date}) 不能晚于 end_date({end_date})"
+        )
+    return start, end, None
+
+
 if TYPE_CHECKING:
     from ..models.mootdx2_config import MooTDX2Settings
     from .mootdx2_pool import ConnectionPool
@@ -72,6 +132,10 @@ FREQ_MAP = {
 
 # 数据量限制常量
 MAX_LIMIT_KLINE = 1000  # K线最大返回条数
+# 离线分钟线默认/最大返回条数：1 分钟线 240 根/交易日，20000 ≈ 83 个
+# 交易日，覆盖本机当前全量 .lc1（约 1.7 万根）且拦住多年文件的超大响应
+DEFAULT_LIMIT_MINUTE = 1000
+MAX_LIMIT_MINUTE = 20_000
 MAX_LIMIT_BATCH_QUOTE = 50  # 批量行情最大股票数
 # 2026-09-19 合同修复: batch_bars YAML 合同明示 ≤20 只 / 每只 ≤500 根,
 # 违约返 invalid_param (旧实现静默截断 limit, >20 只也不拦)。
@@ -111,6 +175,9 @@ _TOOL_METHOD_NAMES: dict[str, str] = {
     "get_custom_sector_stocks": "get_custom_sector_stocks",
     "get_index_overview": "get_index_overview",
     "get_index_kline_local": "get_index_kline_local",
+    "get_index_minute_local": "get_index_minute_local",
+    "get_index_fzline_local": "get_index_fzline_local",
+    "get_index_timeshare_local": "get_index_timeshare_local",
     "stock_top_board": "stock_top_board",
     "stock_unusual": "stock_unusual",
     "indicator_atr": "indicator_atr",
@@ -2405,6 +2472,64 @@ class MooTDX2Client:
     # Reader.daily 只产日线；week/month 在本地按规则重采样
     _INDEX_RESAMPLE_RULES: dict[str, str] = {"week": "W-FRI", "month": "ME"}
 
+    def _parse_index_entry(
+        self, code: str, *, stock_hint: str,
+    ) -> tuple:
+        """指数离线工具统一入口校验。
+
+        4 个 *_local 指数入口（日K/分钟/5分钟/分时）共用同一套消歧规则，
+        防止守卫块复制漂移（kind 分支曾漏记 error_counts）。
+
+        Args:
+            stock_hint: 传入股票代码时的走错工具指引（如"股票分钟线请用
+                get_minute_local"），拼在"不是指数"之后。
+
+        Returns:
+            ``(parsed, None)`` 或 ``(None, error ToolResult)``。
+        """
+        try:
+            parsed = parse_symbol(code, intent=INDEX_KIND)
+        except ValueError as e:
+            self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
+            return None, self._invalid_symbol_result(str(e))
+
+        if parsed.kind != INDEX_KIND:
+            self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
+            return None, self._invalid_symbol_result(
+                f"代码 {code} 不是指数（kind={parsed.kind}），{stock_hint}"
+            )
+        return parsed, None
+
+    @staticmethod
+    def _tail_with_warn(
+        records: list, limit: int, *, scope_label: str = "文件内",
+    ) -> tuple[list, str | None]:
+        """超长离线分钟结果截最近 limit 条，返回 (records, warn)。
+
+        Reader 一次性读全文件，截断只防超大 JSON 响应（SSE 1MiB 上限
+        的老坑），不省本地解析。scope_label 标注 total 的口径：无日期窗
+        时 total 是文件总数；带日期窗时 total 只是窗内条数，措辞必须区分。
+        """
+        if limit and len(records) > limit:
+            total = len(records)
+            return records[-limit:], (
+                f"结果已截断为最近 {limit} 条（{scope_label}共 {total} 条），"
+                f"可用 limit 参数调整（最大 {MAX_LIMIT_MINUTE} 条）"
+            )
+        return records, None
+
+    def _validate_minute_limit(self, limit) -> ToolResult | None:
+        """分钟线 limit 门控：正整数且 ≤ MAX_LIMIT_MINUTE。"""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            return self._invalid_param_result(
+                f"limit 需为正整数，收到 {limit!r}"
+            )
+        if limit > MAX_LIMIT_MINUTE:
+            return self._invalid_param_result(
+                DATA_TOO_LARGE_MSG.format(limit=MAX_LIMIT_MINUTE)
+            )
+        return None
+
     def _get_index_kline_local_sync(
         self, code: str, limit: int, period: str = "day",
     ) -> tuple[list, dict]:
@@ -2496,35 +2621,13 @@ class MooTDX2Client:
             )
 
         self._metrics["total_requests"] += 1
-        # 入口解析（指数意图）: 非法后缀 / 非 6 位主体 → ValueError → invalid_symbol
-        try:
-            parsed = parse_symbol(code, intent=INDEX_KIND)
-        except ValueError as e:
-            self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
-            return ToolResult(
-                success=False,
-                error=str(e),
-                error_detail={
-                    "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
-                    "message": str(e),
-                    "recoverable": False,
-                },
-            )
-
+        # 入口解析（指数意图）: 非法后缀 / 非 6 位主体 → invalid_symbol；
         # kind=stock 走错工具: 明确告知用户
-        if parsed.kind != INDEX_KIND:
-            return ToolResult(
-                success=False,
-                error=(
-                    f"代码 {code} 不是指数（kind={parsed.kind}），"
-                    f"请用 get_daily_local / get_kline"
-                ),
-                error_detail={
-                    "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
-                    "message": f"{code} 不是指数",
-                    "recoverable": False,
-                },
-            )
+        parsed, guard_error = self._parse_index_entry(
+            code, stock_hint="请用 get_daily_local / get_kline",
+        )
+        if guard_error is not None:
+            return guard_error
 
         try:
             records, meta = await self._run_blocking(
@@ -2550,6 +2653,299 @@ class MooTDX2Client:
         except Exception as e:
             logger.error(f"get_index_kline_local failed: {e}")
             return self._error_result(e, f"get_index_kline_local({code})")
+
+    # ========== 离线指数分钟线（Reader.minute，本地 .lc1/.lc5） ==========
+    # 与 get_index_kline_local 同一套入口约定（_parse_index_entry 守卫）：
+    # intent='index' 解析（裸 000xxx 按 sh 指数）、股票代码走错入口给
+    # invalid_symbol。suffix=1 → minline/.lc1，5 → fzline/.lc5。
+    # 默认截最近 DEFAULT_LIMIT_MINUTE 根，防多年文件打出超大 JSON。
+    _INDEX_MINUTE_SUBDIR: dict[int, tuple[str, str]] = {
+        1: ("minline", "lc1"),
+        5: ("fzline", "lc5"),
+    }
+
+    @staticmethod
+    def _minute_records(df) -> list:
+        """分钟 DataFrame → records，DatetimeIndex 统一抽成字符串 ``datetime``。
+
+        Reader 返回的 df 自带字符串 ``datetime`` 列、索引名为 ``date``；
+        reset_index 后会混进不可 JSON 序列化的 Timestamp，这里以索引为准
+        覆盖（值与自带列一致），并移除索引列。
+        """
+        records = df.reset_index().to_dict(orient="records")
+        for r in records:
+            idx = r.pop("date", None)
+            if idx is None:
+                idx = r.pop("index", None)
+            # Reader 自带字符串 datetime 列（"YYYY-MM-DD HH:MM"）时保留；
+            # mock/无该列时按同一格式从索引生成，避免尾缀 ":00" 秒
+            if not isinstance(r.get("datetime"), str):
+                # pandas.Timestamp 自带 strftime，无需引入 pandas 依赖
+                r["datetime"] = (
+                    idx.strftime("%Y-%m-%d %H:%M") if idx is not None else None
+                )
+        return records
+
+    def _get_index_minute_sync(
+        self, code: str, suffix_int: int,
+        start_date: str = "", end_date: str = "",
+    ) -> tuple[list, bool]:
+        """同步读离线指数分钟线。
+
+        Returns:
+            ``(records, had_rows)``；had_rows=过滤前文件确实读出 K 线，
+            供入口区分"文件缺失/空文件"与"日期窗内无数据"两种 no_data。
+        """
+        parsed = parse_symbol(code, intent=INDEX_KIND)
+        reader = self._get_reader()
+        df = reader.minute(symbol=to_reader_symbol(parsed), suffix=suffix_int)
+        if df is None or getattr(df, "empty", True):
+            return [], False
+        # 用索引的日期串按字典序过滤（pandas 2 下 DatetimeIndex 与裸 str
+        # 比较不再隐式转换，直接 >= 会静默得到空集）；入参契约为 YYYY-MM-DD
+        if start_date:
+            df = df[df.index.strftime("%Y-%m-%d") >= start_date]
+        if end_date and not getattr(df, "empty", True):
+            df = df[df.index.strftime("%Y-%m-%d") <= end_date]
+        if getattr(df, "empty", True):
+            return [], True
+        return self._minute_records(df), True
+
+    def _index_minute_file_message(self, parsed, suffix_int: int) -> str:
+        """文件缺失/空文件的 no_data 文案（Reader 对两种情况都返回空 df，
+        无法区分，故措辞为"不存在或为空"，不谎称一定不存在）。"""
+        subdir, ext = self._INDEX_MINUTE_SUBDIR[suffix_int]
+        sym = to_reader_symbol(parsed)
+        return (
+            f"指数 {sym} 本地无 {suffix_int} 分钟线数据"
+            f"（vipdoc/{parsed.market}/{subdir}/{sym}.{ext} "
+            f"不存在或为空，可能该标的本地分钟数据未下载）"
+        )
+
+    async def get_index_minute_local(
+        self, code: str, suffix: str = "1",
+        start_date: str = "", end_date: str = "",
+        limit: int = DEFAULT_LIMIT_MINUTE,
+    ) -> ToolResult:
+        """离线指数分钟线（Reader.minute，本地 .lc1/.lc5 文件）。
+
+        入口按 ``intent='index'`` 解析：裸 000xxx 按 sh 指数；股票代码
+        （如 600000 / sz000001）→ invalid_symbol 并指引 get_minute_local。
+
+        Args:
+            code: 指数代码，6 位数字或带 sh/sz/bj 前缀 / .SH/.SZ/.BJ 后缀
+            suffix: '1' = 1 分钟线（默认，minline/.lc1）/ '5' = 5 分钟线
+                    （fzline/.lc5）；JSON 整数 1/5 亦可
+            start_date: 起始日期（可选，YYYY-MM-DD，兼容 YYYYMMDD，含当日）
+            end_date: 结束日期（可选，同上，含当日全天）
+            limit: 返回最近 N 条，默认 1000，最大 20000；超限截断并在
+                   信封 warn 说明
+        """
+        if str(suffix) not in ("1", "5"):
+            return self._invalid_param_result(
+                f"get_index_minute_local suffix 仅支持 '1'/'5'，收到 {suffix!r}"
+            )
+        limit_error = self._validate_minute_limit(limit)
+        if limit_error is not None:
+            return limit_error
+        start_date, end_date, date_error = _normalize_date_window(
+            start_date, end_date,
+        )
+        if date_error is not None:
+            return self._invalid_param_result(date_error)
+
+        suffix_int = 1 if str(suffix) == "1" else 5
+        self._metrics["total_requests"] += 1
+        parsed, guard_error = self._parse_index_entry(
+            code, stock_hint="股票分钟线请用 get_minute_local",
+        )
+        if guard_error is not None:
+            return guard_error
+
+        try:
+            records, had_rows = await self._run_blocking(
+                self._get_index_minute_sync,
+                code, suffix_int, start_date, end_date,
+            )
+            if records:
+                # 带日期窗时 total 只是窗内条数，warn 口径必须与无窗区分
+                scope_label = "所选日期范围内" if (start_date or end_date) else "文件内"
+                records, warn_text = self._tail_with_warn(
+                    records, limit, scope_label=scope_label,
+                )
+                result = ToolResult(success=True, data=records, source="mootdx2")
+                if warn_text is not None:
+                    result.error_detail = {
+                        "warn": warn_text,
+                        "returned": len(records),
+                        "requested": limit,
+                        "recoverable": True,
+                    }
+                return result
+            if had_rows:
+                # 文件有数据但日期窗切空：不能沿用"文件不存在"文案误导
+                sym = to_reader_symbol(parsed)
+                return self._no_data_result(
+                    f"指数 {sym} 本地{suffix_int}分钟文件存在，"
+                    f"但 {start_date or '最早'}~{end_date or '最新'} "
+                    f"日期范围内无数据（请检查/放宽 start_date、end_date）"
+                )
+            return self._no_data_result(
+                self._index_minute_file_message(parsed, suffix_int)
+            )
+        except Exception as e:
+            logger.error(f"get_index_minute_local failed: {e}")
+            return self._error_result(e, f"get_index_minute_local({code})")
+
+    # ========== 离线指数 5 分钟线（Reader.fzline，本地 .lc5） ==========
+    def _get_index_fzline_sync(self, code: str) -> list:
+        parsed = parse_symbol(code, intent=INDEX_KIND)
+        reader = self._get_reader()
+        df = reader.fzline(symbol=to_reader_symbol(parsed))
+        if df is None or isinstance(df, bool) or getattr(df, "empty", True):
+            return []
+        return self._minute_records(df)
+
+    async def get_index_fzline_local(
+        self, code: str, limit: int = DEFAULT_LIMIT_MINUTE,
+    ) -> ToolResult:
+        """离线指数 5 分钟线（Reader.fzline，本地 fzline/.lc5 文件）。
+
+        等价于 ``get_index_minute_local(code, suffix='5')`` 的独立入口；
+        股票代码 → invalid_symbol 并指引 get_fzline_local。
+
+        Args:
+            code: 指数代码（前缀/歧义码约定同 get_index_minute_local）
+            limit: 返回最近 N 条，默认 1000，最大 20000；超限截断带 warn
+        """
+        limit_error = self._validate_minute_limit(limit)
+        if limit_error is not None:
+            return limit_error
+
+        self._metrics["total_requests"] += 1
+        parsed, guard_error = self._parse_index_entry(
+            code, stock_hint="股票 5 分钟线请用 get_fzline_local",
+        )
+        if guard_error is not None:
+            return guard_error
+
+        try:
+            records = await self._run_blocking(self._get_index_fzline_sync, code)
+            if records:
+                records, warn_text = self._tail_with_warn(records, limit)
+                result = ToolResult(success=True, data=records, source="mootdx2")
+                if warn_text is not None:
+                    result.error_detail = {
+                        "warn": warn_text,
+                        "returned": len(records),
+                        "requested": limit,
+                        "recoverable": True,
+                    }
+                return result
+            return self._no_data_result(
+                self._index_minute_file_message(parsed, 5)
+            )
+        except Exception as e:
+            logger.error(f"get_index_fzline_local failed: {e}")
+            return self._error_result(e, f"get_index_fzline_local({code})")
+
+    # ========== 离线指数分时图（.lc1 最新交易日派生） ==========
+    # 在线 get_minute_data 是 Quotes 实时接口（仅当日 240 笔）；离线分时
+    # 从 1 分钟线派生：切出本地最新交易日 09:31–15:00 的 240 根分钟线，
+    # 均价 = 累计成交额/累计成交量（vol==0 的分钟沿用上一点，防除零），
+    # 昨收取日线严格前一交易日收盘（分时图零轴）。
+    def _get_index_timeshare_sync(self, code: str) -> dict | None:
+        parsed = parse_symbol(code, intent=INDEX_KIND)
+        reader = self._get_reader()
+        sym = to_reader_symbol(parsed)
+        df = reader.minute(symbol=sym, suffix=1)
+        if df is None or getattr(df, "empty", True):
+            return None
+
+        latest_day = df.index.max().normalize()
+        day = df[df.index.normalize() == latest_day].sort_index()
+
+        prev_close: float | None = None
+        daily = reader.daily(symbol=sym, adjust="none")
+        if daily is not None and not getattr(daily, "empty", True):
+            # 严格早于分钟线当日：日线比分钟导出更新时也不会误取当天收盘
+            prior = daily.loc[daily.index < latest_day]
+            if not getattr(prior, "empty", True):
+                prev_close = round(float(prior.iloc[-1]["close"]), 4)
+
+        points: list[dict] = []
+        cum_vol = 0.0
+        cum_amount = 0.0
+        for ts, row in day.iterrows():
+            price = float(row["close"])
+            vol = float(row.get("vol", 0) or 0)
+            amount = float(row.get("amount", 0) or 0)
+            cum_vol += vol
+            cum_amount += amount
+            # 零量分钟（指数 14:59 常见）累计量不变，均价自然沿用上一点；
+            # 开盘首笔即零量（累计量 0）时回退当前价，杜绝 NaN/inf。
+            avg_price = cum_amount / cum_vol if cum_vol > 0 else price
+            points.append({
+                "time": ts.strftime("%H:%M"),
+                "price": round(price, 4),
+                "avg_price": round(avg_price, 4),
+                "vol": vol,
+            })
+
+        return {
+            "trade_date": latest_day.strftime("%Y-%m-%d"),
+            "prev_close": prev_close,
+            "points": points,
+        }
+
+    async def get_index_timeshare_local(self, code: str) -> ToolResult:
+        """离线指数分时图（由本地 1 分钟线最新交易日派生）。
+
+        语义为"本地已下载的最近一个交易日"，不保证是今天（盘后/未下载
+        最新数据时 trade_date 为上一交易日，调用方应以返回的 trade_date
+        为准）。需要实时当日分时请用在线 get_minute_data。
+
+        Returns:
+            ToolResult data 结构::
+
+                {
+                  "trade_date": "2026-09-18",
+                  "prev_close": 3875.6,      # 严格前一交易日收盘，缺失为 null
+                  "points": [
+                      {"time": "09:31", "price": 3892.47,
+                       "avg_price": 3892.47, "vol": 3.7e8},
+                      ...
+                  ]
+                }
+
+        均价口径为累计成交额/累计成交量（标准分时均价线定义）；部分行情
+        源导出的指数分钟文件 amount≈vol×100（源文件单位约定如此），
+        avg_price 会随之反映源数据口径。
+        """
+        self._metrics["total_requests"] += 1
+        parsed, guard_error = self._parse_index_entry(
+            code,
+            stock_hint=(
+                "股票离线分钟线请用 get_minute_local，"
+                "当日实时分时请用 get_minute_data"
+            ),
+        )
+        if guard_error is not None:
+            return guard_error
+
+        try:
+            data = await self._run_blocking(self._get_index_timeshare_sync, code)
+            if data is not None:
+                return ToolResult(success=True, data=data, source="mootdx2")
+            sym = to_reader_symbol(parsed)
+            return self._no_data_result(
+                f"指数 {sym} 本地无 1 分钟线数据"
+                f"（vipdoc/{parsed.market}/minline/{sym}.lc1 "
+                f"不存在或为空，无法派生分时图，请先在通达信下载分钟数据）"
+            )
+        except Exception as e:
+            logger.error(f"get_index_timeshare_local failed: {e}")
+            return self._error_result(e, f"get_index_timeshare_local({code})")
 
 # ========== 指数K线（指定起止） ==========
     def _get_index_bars_sync(self, symbol: str, frequency: int = 9, start: int = 0, offset: int = 800):

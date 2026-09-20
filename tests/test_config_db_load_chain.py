@@ -37,7 +37,7 @@ async def test_empty_db_auto_seeds_and_assembles(db_mode):
         assert server.config_store is not None
         cfg = server.config
         assert len(cfg["upstreams"]) == 9
-        assert len(cfg["tools"]) == 290
+        assert len(cfg["tools"]) == 293
         # bootstrap 只来自 config.yaml。Round-13 起出厂模板不再携带 console
         # 凭证段 (固定凭证随公开仓库发布 = cookie 可伪造; 真实凭证走 .env /
         # UNIHIVE_CONSOLE_*), 空库 seed 的装配配置里不应出现 console 段。
@@ -47,7 +47,7 @@ async def test_empty_db_auto_seeds_and_assembles(db_mode):
         assert cfg["gateway"]["per_upstream_timeout"] == 10
         assert await server.config_store.revision() == 0
 
-        # console_api 实体模式同步读: 不回读 YAML, 不携带 290 条 spec
+        # console_api 实体模式同步读: 不回读 YAML, 不携带 293 条 spec
         snap = ca.load_config()
         assert snap["version"] == 0
         assert "tools" not in snap
@@ -56,14 +56,14 @@ async def test_empty_db_auto_seeds_and_assembles(db_mode):
         # interfaces/source_map 直接吃 live 装配 config, 数量与运行时门控一致
         iface_tools = ca.get_interfaces()["tools"]
         assert len(iface_tools) == len(server._load_all_tools())
-        assert len(ca._build_source_map()) == 290
+        assert len(ca._build_source_map()) == 293
 
         # 空库自动 seed 已落盘: 第二次启动不再 seed
         await server.config_store.close()
         server2 = GatewayServer(str(UPSTREAMS_YAML), strict_env=False, strict_validation=False)
         try:
             await server2._load_db_config()
-            assert len(server2.config["tools"]) == 290
+            assert len(server2.config["tools"]) == 293
             assert await server2.config_store.revision() == 0
         finally:
             await server2.stop()
@@ -89,7 +89,7 @@ async def test_entity_edit_before_startup_is_assembled(db_mode):
         # 异型连接字段不丢
         assert block["type"] == "ths_local_gateway"
         assert "base_url" in block
-        assert len(server.config["tools"]) == 290
+        assert len(server.config["tools"]) == 293
         assert ca.load_config()["version"] == 1
         # 实体模式下 console_api 写接口直接打实体表
         persisted = await ca.save_upstream_enabled(
@@ -160,7 +160,7 @@ async def test_yaml_mode_skips_db_entirely(tmp_path, monkeypatch):
     try:
         await server._load_db_config()
         assert server.config_store is None
-        assert len(server._load_all_tools()) == 290
+        assert len(server._load_all_tools()) == 293
         # 库文件根本没被创建
         assert not (tmp_path / "config.db").exists()
     finally:

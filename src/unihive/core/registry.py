@@ -253,8 +253,8 @@ def register_tools_from_config(
     """逐个注册 spec 为 FastMCP tool。返回**成功**注册的 name 列表。
 
     Round-12 簇G: 单个 spec 注册失败 (如 FastMCP 拒重名/签名构造异常)
-    不再让整个启动注册链崩掉 —— 290 个工具里一个坏 spec 不该藏起其余
-    289 个。失败记 ERROR (带工具名 + 异常), skip 后继续。
+    不再让整个启动注册链崩掉 —— 293 个工具里一个坏 spec 不该藏起其余
+    292 个。失败记 ERROR (带工具名 + 异常), skip 后继续。
     """
     registered: list[str] = []
     for spec in specs:
