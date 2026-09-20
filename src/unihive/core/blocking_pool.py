@@ -89,8 +89,16 @@ def get_blocking_executor() -> ThreadPoolExecutor:
 
 
 def shutdown_blocking_executor() -> None:
-    """进程退出时调用（可选）：关闭线程池。"""
+    """进程退出时调用（可选）：关闭线程池。
+
+    Round-12 簇H: cancel_futures 刻意为 False —— stop() 摘关 Quotes/tq 的
+    close job 可能排在一个卡死的 factory/initialize 后面 (唯一 worker 被
+    占住, mootdx2 stop 注释承诺 "最终必执行")。旧实现 cancel_futures=True
+    会把这个排队中的 close 直接取消, 晚赋值的活 TDX 连接/DLL 句柄无人释放。
+    daemon worker 会继续排空队列且不注册 atexit join, 不拖进程退出;
+    wait=False 让调用立即返回, 不影响关停时延。
+    """
     global _executor
     if _executor is not None:
-        _executor.shutdown(wait=False, cancel_futures=True)
+        _executor.shutdown(wait=False, cancel_futures=False)
         _executor = None

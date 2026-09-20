@@ -50,10 +50,28 @@ class CachedExecutionMixin:
 
             # FUYAO 嵌套 TTL 优先于全局 cache.ttl[ttl_key] — 前端可按 endpoint
             # / 工具粒度覆盖。若 fuyao_cache 未配置, 回退到 ttl_key 全局。
-            fuyao_ttl = cache_strategy.fuyao_ttl_for(self.config, name)
-            ttl = fuyao_ttl if fuyao_ttl is not None else (
-                cache_strategy.ttl_for(self.config, ttl_key) if ttl_key else None
-            )
+            # Round-12 H2 + 簇E: 整段 TTL 解析容错。TTL=0 合同语义是
+            # 「显式不缓存」, 旧链路只判 is not None, 0 透传到 Cache.set
+            # 被 `if ttl` 判假 → expires_at=NULL → 永久缓存; fuyao override
+            # 的非数值 (绕过 PUT pydantic 门的 YAML/手改库行) 会抛带字段
+            # 名的 ValueError。两类问题都在此降级为不缓存 + warning, 不把
+            # 配置错变成请求 500。
+            ttl: int | None = None
+            try:
+                fuyao_ttl = cache_strategy.fuyao_ttl_for(self.config, name)
+                ttl = fuyao_ttl if fuyao_ttl is not None else (
+                    cache_strategy.ttl_for(self.config, ttl_key) if ttl_key else None
+                )
+                if ttl is not None:
+                    ttl = cache_strategy.normalize_ttl(ttl)
+            except (TypeError, ValueError):
+                # 坏值细节 (含字段名) 在异常消息里, exc_info 带进日志
+                logger.warning(
+                    "[%s] invalid cache TTL config (ttl_key=%r); "
+                    "caching disabled for this call",
+                    name, ttl_key, exc_info=True,
+                )
+                ttl = None
             cache_enabled = self.cache is not None and self.cache.enabled
             # 候选路由链（与 Router.route 解析顺序一致）：显式 routing.chain
             # 优先，否则从 upstream_tool_mapping 推导。

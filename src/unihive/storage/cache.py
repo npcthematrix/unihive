@@ -95,14 +95,31 @@ class Cache:
         except Exception as e:
             logger.warning(f"Failed to persist cache stats: {e}")
 
+    def _stats_path(self) -> Path:
+        """STATS_FILE 相对路径锚定**项目根** (Round-12: 与启动 CWD 无关,
+        避免在 CWD 下另写 logs/cache_stats.json 与 cache.db 裂脑);
+        绝对路径 (含测试对实例属性的覆盖) 原样返回。"""
+        candidate = Path(self.STATS_FILE)
+        if candidate.is_absolute():
+            return candidate
+        # 延迟 import: storage → core 保持软依赖
+        from ..core.config_db import project_root
+        return project_root() / candidate
+
     def _persist_stats_sync(self):
-        # 同步版, 给 to_thread 调度或非 loop 上下文兜底
-        from pathlib import Path
-        Path(self.STATS_FILE).parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.STATS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"hits": self._hits, "misses": self._misses}, f)
-        Path(tmp).replace(self.STATS_FILE)
+        # 同步版, 给 to_thread 调度或非 loop 上下文兜底。
+        # 写盘失败只 warning, 不向 record_hit/miss 热路径抛 (无 loop 时
+        # _maybe_persist_stats 直接同步调本方法)。
+        try:
+            stats_path = self._stats_path()
+            stats_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = stats_path.with_name(stats_path.name + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump({"hits": self._hits, "misses": self._misses}, f)
+            tmp_path.replace(stats_path)
+        except OSError as e:
+            logger.warning(f"Failed to persist cache stats: {e}")
+        # 无论成败都清零计数: 目录长期不可写时避免每个 hit 都重试打盘
         self._dirty_events = 0
 
     def _maybe_persist_stats(self):
@@ -250,9 +267,27 @@ class Cache:
             return None
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
-        """设置缓存值。 M1: 包 operation_timeout。"""
+        """设置缓存值。 M1: 包 operation_timeout。
+
+        Round-12 H2 纵深防御: ttl ≤ 0 (合同语义 = 不缓存) / bool / 非数值
+        一律拒绝写入。旧实现 ``int(now + ttl) if ttl else None`` 会把 0
+        落成 expires_at=NULL, 读侧 ``if expires_at and ...`` 永不判过期,
+        该 key 沦为永久缓存。调用方 (_execute_cached) 已先行归一化, 这里
+        保证任何其他调用路径也无法写出永久行。
+        """
         if not self.enabled:
             return False
+        if ttl is not None:
+            # 延迟 import: storage 层不依赖 core 包加载顺序
+            from ..core.cache_strategy import normalize_ttl
+            try:
+                ttl = normalize_ttl(ttl)
+            except (TypeError, ValueError) as exc:
+                logger.warning("Cache.set refused invalid ttl=%r for key=%s: %s", ttl, key, exc)
+                return False
+            if ttl is None:
+                logger.debug("Cache.set skipped: ttl<=0 means no-cache for key=%s", key)
+                return False
         try:
             return await asyncio.wait_for(
                 self._set_impl(key, value, ttl),
@@ -271,7 +306,7 @@ class Cache:
                 async with self._session_factory() as session:
                     value_str = _dumps(value)
                     now = time.time()
-                    expires_at = int(now + ttl) if ttl else None
+                    expires_at = int(now + ttl) if ttl is not None else None
 
                     await session.execute(
                         text("""

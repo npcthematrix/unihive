@@ -477,10 +477,23 @@ class MooTDX2Client:
         return out
 
     def _get_reader(self):
-        """获取缓存的 Reader 实例（懒初始化，线程安全）。"""
+        """获取缓存的 Reader 实例（懒初始化，线程安全）。
+
+        Round-12 簇H: stop() 之后的晚到调用不得重新 factory 出无人关闭的
+        Reader; 锁内二次复检挡住 "过外层闸后 stop 抢先" 的竞态。start()
+        复位 _stopped 后恢复可用。
+        """
+        if self._stopped:
+            raise RuntimeError(
+                f"{self.name}: client has been stopped; call start() first"
+            )
         if self._reader is None:
             with self._reader_lock:
                 # 双重检查
+                if self._stopped:
+                    raise RuntimeError(
+                        f"{self.name}: client has been stopped; call start() first"
+                    )
                 if self._reader is None:
                     from mootdx2.reader import Reader
                     tdxdir = self._get_tdxdir()
@@ -794,10 +807,23 @@ class MooTDX2Client:
         settings.servers 非空时固定连配置的 IP (bestip=False + server=首台,
         其余经 _pin_quotes_servers 注入 failover 候选); 为空时保持原行为
         bestip=True 全网测速自动选优。
+
+        Round-12 簇H: stop() 已置 _stopped 并在 _quotes_lock 内摘除关闭
+        Quotes; 晚到调用 (在途 worker / stop 后的误调) 必须直接失败, 不得
+        重新 factory 出无人关闭的活 TDX 连接。锁内二次复检挡住 "过外层闸后
+        stop 抢先摘除" 的竞态。start() 复位 _stopped 后恢复可用。
         """
+        if self._stopped:
+            raise RuntimeError(
+                f"{self.name}: client has been stopped; call start() first"
+            )
         if self._quotes is None:
             with self._quotes_lock:
                 # 双重检查
+                if self._stopped:
+                    raise RuntimeError(
+                        f"{self.name}: client has been stopped; call start() first"
+                    )
                 if self._quotes is None:
                     from mootdx2.quotes import Quotes
                     settings = self.config.settings
@@ -977,6 +1003,11 @@ class MooTDX2Client:
         下次 tick 重试 (期间 start() 可重新触发 _get_quotes())。
         """
         def _do_probe():
+            # Round-12 簇H: stop() 后不再碰 quotes —— close 与 probe 间仍有
+            # q 快照竞态 (q.quotes 不在锁内), 但停止位先于摘除置位, 挡住
+            # 绝大多数晚到 probe; 残留竞态由 mootdx multithread + 异常兜底。
+            if self._stopped:
+                return False
             q = self._quotes
             if q is None:
                 return False

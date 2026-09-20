@@ -166,12 +166,19 @@ class Router:
         # 遍历路由链
         for source in chain:
             if source not in self.upstreams:
+                # Round-12 簇G: "Unknown upstream" 对运维不可操作 —— 链上的
+                # 名字不在运行表, 真实原因只有两种: 配置里被禁用, 或启动时
+                # 构造/初始化失败。消息直接说清楚并指向配置段。
                 hop = RouteHop(
                     source=source,
                     tool_name="",
                     duration_ms=0,
                     success=False,
-                    error=f"Unknown upstream: {source}"
+                    error=(
+                        f"upstream {source!r} is not running "
+                        f"(disabled in config/upstreams.yaml or failed to start); "
+                        f"check the upstreams.{source} section and startup logs"
+                    ),
                 )
                 hops.append(hop)
                 continue
@@ -194,7 +201,10 @@ class Router:
                     tool_name=tool_name,
                     duration_ms=0,
                     success=False,
-                    error="Upstream unavailable"
+                    error=(
+                        f"upstream {source!r} is not running "
+                        f"(offline client unavailable, e.g. board.db not synced)"
+                    ),
                 )
                 hops.append(hop)
                 logger.info(f"[{gateway_tool}] {source} unavailable, trying next...")

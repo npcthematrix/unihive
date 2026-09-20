@@ -195,9 +195,40 @@ class TdxQuantClient:
 
     def _dll_initialize(self, tdx_root: str) -> None:
         """tq.initialize 的持锁包装, 串行化所有 DLL initialize 调用
-        (首次初始化 / reconnect / 超时后的 late recovery)。"""
+        (首次初始化 / reconnect / 超时后的 late recovery)。
+
+        Round-12 簇H: stop() 之后晚到的 reconnect/late recovery 不得再打
+        进 DLL (stop 的 close 可能已排队在同一把锁后执行)。
+        """
+        if self._stopped:
+            raise RuntimeError(
+                f"[{self.name}] client has been stopped; call start() first"
+            )
         with self._dll_lock:
             self._tq.initialize(tdx_root)
+
+    def _dll_import_and_initialize(
+        self, tdx_root: str, tqcenter_dir: str
+    ) -> None:
+        """sys.path 注入 + import tqcenter + tq.initialize 一体的持锁同步段。
+
+        Round-12 簇H: 旧实现在事件循环线程做 sys.path.insert + import
+        tqcenter —— import 会执行 tqcenter.py 模块体 (ctypes 加载 TdxW
+        DLL), 可能冻结 boot 且 wait_for 无法打断。整体移入 unihive-upstream
+        阻塞池并持 _dll_lock, 与 reconnect / stop() 的 close 串行。
+        必须在 worker thread 经 run_in_executor 调用。
+        """
+        with self._dll_lock:
+            if self._stopped:
+                raise RuntimeError(
+                    f"[{self.name}] client has been stopped; call start() first"
+                )
+            if tqcenter_dir and tqcenter_dir not in sys.path:
+                sys.path.insert(0, tqcenter_dir)
+            import tqcenter
+            # tq 是 classmethod 集合, 不要实例化
+            self._tq = tqcenter.tq
+            tqcenter.tq.initialize(tdx_root)
 
     def _dll_close(self) -> None:
         """tq.close 的持锁包装, 与 initialize 互斥, 复刻 reconnect 的
@@ -248,20 +279,15 @@ class TdxQuantClient:
         """
         try:
             tqcenter_dir = str(self.config.tqcenter_dir)
-            if tqcenter_dir and tqcenter_dir not in sys.path:
-                sys.path.insert(0, tqcenter_dir)
-            import tqcenter  # noqa: F401
-            # tq 是 classmethod 集合, 不要实例化
-            self._tq = tqcenter.tq
             # tqcenter.initialize 仅接受 path 参数 (dll_path='')，不支持 strategy_id
             tdx_root = str(self.config.tdx_root_path)
-            # H1 (round 9 audit): initialize 是同步 DLL 调用 (加载 TdxW
-            # 插件 + 登录), 跑在事件循环上会冻结 boot 且 gateway 的
-            # wait_for(client.start()) 无法打断。与 stop() 的 tq.close()
-            # 对称, 包 run_in_executor 让 DLL 调用跑在 worker thread。
+            # H1 (round 9 audit) + 簇H (round 12): sys.path 注入/import (执行
+            # tqcenter.py 模块体, ctypes 加载 DLL) 与 initialize 同是同步阻塞段,
+            # 一体包进 worker thread 并持 _dll_lock; 旧实现把 import 留在事件
+            # 循环线程, import 期 DLL 加载仍会冻结 boot 且 wait_for 无法打断。
             await asyncio.get_event_loop().run_in_executor(
                 get_blocking_executor(),
-                lambda: self._dll_initialize(tdx_root),
+                lambda: self._dll_import_and_initialize(tdx_root, tqcenter_dir),
             )
             logger.info(f"[{self.name}] TQ strategy_id={self._strategy_id} (记录用, 未传给 DLL)")
             return True, None

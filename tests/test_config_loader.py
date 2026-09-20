@@ -103,11 +103,27 @@ class TestValidateConfig:
         })
         assert any("api_key" in e for e in errors)
 
-    def test_npx_missing_command(self):
+    def test_stdio_missing_command_and_package(self):
         errors = validate_config({
-            "upstreams": {"x": {"enabled": True, "type": "npx"}}
+            "upstreams": {"x": {"enabled": True, "type": "stdio"}}
         })
-        assert any("command" in e or "package" in e for e in errors)
+        assert any("stdio" in e and ("command" in e or "package" in e) for e in errors)
+
+    def test_stdio_with_package_passes(self):
+        errors = validate_config({
+            "upstreams": {"x": {
+                "enabled": True, "type": "stdio", "package": "some-mcp"}}
+        })
+        assert errors == []
+
+    @pytest.mark.parametrize("retired", ["http_jsonrpc", "python", "npx"])
+    def test_retired_types_rejected(self, retired):
+        # Round-12 簇G: 构造表只认 http/mootdx2/tdx_quant/omni/thsdk/
+        # ths_local_gateway/stdio; 历史类型不再静默放行。
+        errors = validate_config({
+            "upstreams": {"x": {"enabled": True, "type": retired}}
+        })
+        assert any("unknown type" in e for e in errors)
 
     def test_disabled_upstream_skipped(self):
         errors = validate_config({
@@ -130,12 +146,13 @@ class TestValidateConfig:
         })
         assert errors == []
 
-    def test_http_jsonrpc_validates_base_url(self):
-        """http_jsonrpc 必须有 base_url, 之前漏了这个分支。"""
+    def test_http_jsonrpc_retired_as_unknown(self):
+        """http_jsonrpc 类型已下线, 构造表无此分支, 按 unknown type 拒。"""
         errors = validate_config({
-            "upstreams": {"x": {"enabled": True, "type": "http_jsonrpc"}}
+            "upstreams": {"x": {"enabled": True, "type": "http_jsonrpc",
+                                "base_url": "u"}}
         })
-        assert any("base_url" in e for e in errors)
+        assert any("unknown type" in e for e in errors)
 
     def test_tdx_quant_validates_tdx_root(self):
         """tdx_quant 必须有 tdx_root。"""
@@ -151,12 +168,12 @@ class TestValidateConfig:
         })
         assert errors == []
 
-    def test_python_type_passes_without_extras(self):
-        """tokenwave_tdx 的 type=python 不需要 base_url/api_key/command 等额外字段。"""
+    def test_python_type_retired_as_unknown(self):
+        """type=python (TokenWave) 已下线, 构造表无此分支, 按 unknown type 拒。"""
         errors = validate_config({
             "upstreams": {"x": {"enabled": True, "type": "python", "mode": "auto"}}
         })
-        assert errors == []
+        assert any("unknown type" in e for e in errors)
 
 
 class TestMissingDedup:

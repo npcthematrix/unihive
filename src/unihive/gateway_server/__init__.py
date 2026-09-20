@@ -11,6 +11,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import yaml
+
 import uvicorn  # noqa: F401  (审计测试读 gs_mod.uvicorn; 用法在 http.py)
 from fastmcp import FastMCP
 
@@ -21,8 +23,7 @@ from ..api.tdx_quant_client import TdxQuantClient
 from ..api.thsdk_client import ThsdkClient
 from ..api.upstream_client import UpstreamClient, UpstreamConfig
 from ..core.config_db import resolve_project_path
-# register_tool: 测试 setup 直调/保存原函数的历史 facade 入口;
-# 子模块内部统一走 registry.register_tool 模块限定 binding。
+# register_tool: 历史 facade 入口 (测试依赖), 子模块内部走 registry.register_tool。
 from ..core.registry import register_tool  # noqa: F401
 from ..core.router import Router
 from ..models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
@@ -44,10 +45,13 @@ logger = logging.getLogger(__name__)
 from ._helpers import (  # noqa: F401
     GATEWAY_VERSION,
     RESERVED_TOOL_NAMES,
+    _configure_stdio_utf8,
     _console_auth_config_from_env,
     _get_console_auth_config,
     _parse_mootdx2_servers,
     _sanitize_sync_message,
+    coerce_float_field,
+    coerce_int_field,
 )
 from .cached_calls import CachedExecutionMixin
 from .config_edits import ConfigEditsMixin
@@ -222,20 +226,41 @@ class GatewayServer(
         让控制台对 gateway 调参段的修改无需重启即可被 router/limiter 读到。
         """
         gateway_cfg = self.config.get("gateway", {})
-        self._per_upstream_timeout = gateway_cfg.get("per_upstream_timeout", self.DEFAULT_REQUEST_TIMEOUT)
+        # Round-12 簇E: 裸强转坏值 (字符串/bool/负数) 以前抛无名错误;
+        # 统一过 coerce_* 助手, ValueError 带点路径字段名。
+        self._per_upstream_timeout = coerce_float_field(
+            gateway_cfg.get("per_upstream_timeout", self.DEFAULT_REQUEST_TIMEOUT),
+            "gateway.per_upstream_timeout",
+            default=self.DEFAULT_REQUEST_TIMEOUT,
+            minimum=0.0,
+            exclusive_min=True,
+        )
         # 初始化限流器：从配置读取每个上游的 QPS 限制
         from ..core.rate_limiter import get_default_limiter
         self.limiter = get_default_limiter()
         rate_cfg = gateway_cfg.get("rate_limit", {})
         for upstream_name, params in rate_cfg.items():
+            field = f"gateway.rate_limit.{upstream_name}"
             if isinstance(params, dict):
-                self.limiter.configure(
-                    upstream_name,
-                    rate=float(params.get("rate", 20.0)),
-                    capacity=float(params.get("capacity", 40.0)),
+                rate = coerce_float_field(
+                    params.get("rate", 20.0), f"{field}.rate",
+                    minimum=0.0, exclusive_min=True,
                 )
-            elif isinstance(params, (int, float)):
-                self.limiter.configure(upstream_name, rate=float(params))
+                capacity = coerce_float_field(
+                    params.get("capacity", 40.0), f"{field}.capacity",
+                    minimum=0.0, exclusive_min=True,
+                )
+                self.limiter.configure(upstream_name, rate=rate, capacity=capacity)
+            elif isinstance(params, (int, float)) and not isinstance(params, bool):
+                rate = coerce_float_field(
+                    params, field, minimum=0.0, exclusive_min=True,
+                )
+                self.limiter.configure(upstream_name, rate=rate)
+            else:
+                raise ValueError(
+                    f"{field} 必须是正数或含 rate/capacity 的 object, "
+                    f"got {params!r} ({type(params).__name__})"
+                )
 
     def _construct_upstream_client(self, name: str, cfg: dict):
         """按 cfg.type 构造 (但不启动) 一个上游 client。
@@ -317,7 +342,26 @@ class GatewayServer(
                     connect_timeout_seconds=cfg.get("connect_timeout_seconds", 5.0),
                 )
             )
-        # stdio MCP 客户端
+        upstream_type = cfg.get("type")
+        if upstream_type is None:
+            # 历史契约: 缺 type 键 = 通用 stdio MCP 扩展点 (UpstreamClient)。
+            # validate_config 在 strict 模式仍会报 "missing 'type'";
+            # 这里给非 strict / 旧配置保留默认, 也让启动失败的 client 能被
+            # 登记进 upstreams 走 stop() 清理 (见 test_startup_init_failure)。
+            upstream_type = "stdio"
+        if upstream_type != "stdio":
+            # Round-12 簇E: 显式未知 type 以前静默落到 stdio 分支,
+            # 用空 command 构造出一个永远启动不了的客户端, 延迟到调用期
+            # 才以费解错误爆炸。构造期 fail-fast 并列出合法值。
+            valid_types = (
+                "http", "mootdx2", "tdx_quant", "omni",
+                "thsdk", "ths_local_gateway", "stdio",
+            )
+            raise ValueError(
+                f"upstream {name!r}: 未知 type={cfg.get('type')!r}; "
+                f"合法值: {', '.join(valid_types)}"
+            )
+        # 通用 stdio MCP 客户端 (自定义 MCP server 扩展点)
         upstream_cfg = UpstreamConfig(
             name=name,
             enabled=True,
@@ -331,14 +375,19 @@ class GatewayServer(
         return UpstreamClient(upstream_cfg)
 
 
-
 async def async_main(transport: str = "stdio", host: str | None = None, port: int | None = None, config_path: str | None = None):
-    if sys.platform == "win32":
-        os.environ["PYTHONIOENCODING"] = "utf-8"
-
     configure_logging(transport)
 
     cfg_path = config_path or "config/upstreams.yaml"
+    if transport == "stdio":
+        _configure_stdio_utf8()
+        # Round-12 簇I: stdio 只走 stdin/stdout, 显式给的 host/port 会被静默忽略。
+        if host is not None or port is not None:
+            logger.warning(
+                "transport=stdio ignores host/port (got host=%r, port=%r); "
+                "they only apply to transport=http",
+                host, port,
+            )
     server = GatewayServer(config_path=cfg_path)
     logger.info(
         f"unihive starting: transport={transport} config={cfg_path} "
@@ -377,9 +426,10 @@ def main():
             port=args.port,
             config_path=args.config,
         ))
-    except ValueError as e:
-        # 配置校验失败 / 未知 transport: 给一个干净消息 + 退出码 2
-        print(f"error: {e}", file=sys.stderr)
+    except (ValueError, yaml.YAMLError, KeyError) as e:
+        # 配置类失败: 校验失败 / YAML 语法错 / 必填键缺失 / 未知 transport,
+        # 给一个干净消息 + 退出码 2, 不裸打 traceback (Round-12 簇E)。
+        print(f"error: configuration error: {e}", file=sys.stderr)
         sys.exit(2)
     except (OSError, sqlite3.Error, RuntimeError) as e:
         # L3 (round 11): 已知启动失败 — 端口/文件/磁盘 OSError、config.db

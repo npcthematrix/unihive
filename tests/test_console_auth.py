@@ -100,6 +100,20 @@ class TestLoginPage:
         assert response.status_code == 200
         assert b"<form" in response.content.lower()
 
+    def test_login_get_escapes_error_param(self):
+        """Round-12 簇F: ?error= 是反射点, 必须 HTML 转义防 XSS。"""
+        response = self.client.get("/login?error=" + "<script>alert(1)</script>")
+        assert response.status_code == 200
+        body = response.text
+        assert "<script>alert(1)</script>" not in body
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+    def test_login_get_escapes_quotes_in_error_param(self):
+        """属性注入向量: 引号必须转义。"""
+        response = self.client.get('/login?error=x" onmouseover="alert(1)')
+        assert '" onmouseover="' not in response.text
+        assert "&quot;" in response.text
+
 
 class TestLoginFlow:
     """Test login POST flow."""

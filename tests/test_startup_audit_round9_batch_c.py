@@ -99,6 +99,9 @@ async def test_h1b_tdx_quant_initialize_runs_off_event_loop(monkeypatch):
     client._strategy_id = "sid"
     # M2 (round 11): initialize 经 _dll_initialize 持 _dll_lock 串行化
     client._dll_lock = threading.Lock()
+    # Round-12 簇H: import+initialize 一体走 _dll_import_and_initialize,
+    # 锁内先检 _stopped; __new__ 测试实例需手工补该字段。
+    client._stopped = False
 
     loop_thread = threading.get_ident()
     ok, err = await client._try_initialize()

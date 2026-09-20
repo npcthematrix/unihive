@@ -13,6 +13,12 @@ from .normalizer import Normalizer
 
 logger = logging.getLogger(__name__)
 
+#: 手写/状态工具名: 实体工具 spec 不得占用, 否则与
+#: _register_status_tools 的手写注册撞车 (FastMCP 拒重名, 启动注册失败)。
+#: 2026-09-19: 常量下沉到本模块, 注册/校验/热改名共用同一事实源;
+#: search_stock 已移除 (死手写工具, 从未被调用, mootdx2 有 search_stock_local)。
+RESERVED_TOOL_NAMES = frozenset({"get_server_status", "get_health"})
+
 _TYPE_MAP: dict[str, type] = {
     "str": str,
     "int": int,
@@ -244,8 +250,20 @@ def register_tools_from_config(
     server: Any,
     specs: list[dict],
 ) -> list[str]:
-    """注册所有 spec 为 FastMCP tool。返回注册的 name 列表。"""
-    return [register_tool(server, spec) for spec in specs]
+    """逐个注册 spec 为 FastMCP tool。返回**成功**注册的 name 列表。
+
+    Round-12 簇G: 单个 spec 注册失败 (如 FastMCP 拒重名/签名构造异常)
+    不再让整个启动注册链崩掉 —— 289 个工具里一个坏 spec 不该藏起其余
+    288 个。失败记 ERROR (带工具名 + 异常), skip 后继续。
+    """
+    registered: list[str] = []
+    for spec in specs:
+        name = spec.get("name", "<unknown>")
+        try:
+            registered.append(register_tool(server, spec))
+        except Exception:
+            logger.error("failed to register tool %s; skipping", name, exc_info=True)
+    return registered
 
 
 def validate_specs(
@@ -254,26 +272,84 @@ def validate_specs(
     upstream_tool_mapping: dict,
     *,
     strict: bool = True,
+    known_upstreams: set[str] | None = None,
 ) -> list[str]:
     """校验 spec 中的 routing 都在 routing_config / upstream_tool_mapping 中，
-    或 spec 自带 upstream_tool_mapping（self-routing，如 TQ-Local codegen 产物）。"""
+    或 spec 自带 upstream_tool_mapping（self-routing，如 TQ-Local codegen 产物）。
+
+    known_upstreams: 配置里实际存在的上游名集合 (启用/禁用都算 —— 引用一个
+    禁用上游是合法的, 该 spec 只是被隐藏; 引用**配置里根本不存在**的上游才
+    是悬空错误)。传入时额外校验 mapping/chain/self-mapping 的上游引用,
+    启动门用它把 "Unknown upstream" 类运行时错误提前到启动期。None 保持
+    lint 调用方的旧行为 (悬空引用由 config_lint M001/M002 负责)。
+    """
     errors: list[str] = []
     for spec in specs:
         name = spec.get("name")
         if not name:
             errors.append("Tool missing 'name'")
             continue
+        if name in RESERVED_TOOL_NAMES:
+            errors.append(
+                f"Tool {name!r} uses a reserved built-in tool name "
+                f"(reserved: {sorted(RESERVED_TOOL_NAMES)})"
+            )
         routing_key = spec.get("routing")
         if not routing_key:
             errors.append(f"Tool {name!r} missing 'routing'")
             continue
         in_routing = routing_key in routing_config
         in_mapping = routing_key in upstream_tool_mapping
-        has_self_mapping = bool(spec.get("upstream_tool_mapping"))
+        self_mapping = spec.get("upstream_tool_mapping")
+        has_self_mapping = bool(self_mapping)
         if not (in_routing or in_mapping or has_self_mapping):
             errors.append(
                 f"Tool {name!r} routing={routing_key!r} not in routing config nor upstream mapping"
             )
+
+        if known_upstreams is None:
+            continue
+
+        # 上游引用完整性: mapping 值必须是 dict 且键全部是已配置上游。
+        mapping_entry = upstream_tool_mapping.get(routing_key)
+        if mapping_entry is not None and not isinstance(mapping_entry, dict):
+            errors.append(
+                f"upstream_tool_mapping[{routing_key!r}] for tool {name!r} "
+                f"must be an object mapping upstream name -> upstream tool, "
+                f"got {type(mapping_entry).__name__}"
+            )
+        elif isinstance(mapping_entry, dict):
+            for upstream_name in mapping_entry:
+                if upstream_name not in known_upstreams:
+                    errors.append(
+                        f"Tool {name!r} upstream_tool_mapping references "
+                        f"unknown upstream {upstream_name!r} "
+                        f"(not in config upstreams)"
+                    )
+        # self-routing spec (TQ codegen 产物) 同样校验。
+        if self_mapping is not None and not isinstance(self_mapping, dict):
+            errors.append(
+                f"Tool {name!r} upstream_tool_mapping field must be an object, "
+                f"got {type(self_mapping).__name__}"
+            )
+        elif isinstance(self_mapping, dict):
+            for upstream_name in self_mapping:
+                if upstream_name not in known_upstreams:
+                    errors.append(
+                        f"Tool {name!r} self upstream_tool_mapping references "
+                        f"unknown upstream {upstream_name!r} "
+                        f"(not in config upstreams)"
+                    )
+        # routing chain 里的上游名。
+        chain_entry = routing_config.get(routing_key)
+        chain = chain_entry.get("chain") if isinstance(chain_entry, dict) else None
+        if chain:
+            for upstream_name in chain:
+                if upstream_name not in known_upstreams:
+                    errors.append(
+                        f"Tool {name!r} routing chain references unknown "
+                        f"upstream {upstream_name!r} (not in config upstreams)"
+                    )
     if strict and errors:
         raise ValueError("Registry validation failed: " + "; ".join(errors))
     return errors

@@ -245,3 +245,26 @@ def test_error_severity_values() -> None:
     severities = {i.code: i.severity for i in issues}
     assert severities["M001"] == "error"
     assert severities["M004"] == "warning"
+
+
+def test_reserved_tool_name_is_t001_error() -> None:
+    """spec 占用手写内置名 (get_health/get_server_status) 必须被 lint T001 拦下。"""
+    config = _clean_config(
+        upstreams={"fuyao_meta": _upstream()},
+        upstream_tool_mapping={"get_health": {"fuyao_meta": "x"}},
+    )
+    specs = [_spec(name="get_health", routing="get_health", backer=None)]
+    issues = lint_config(config, specs)
+    t001 = [i for i in issues if i.code == "T001"]
+    assert any("get_health" in i.message and "reserved" in i.message.lower() for i in t001)
+
+
+def test_search_stock_name_is_allowed() -> None:
+    """search_stock 已从保留名移除 (死手写工具删除), 配置可自由定义。"""
+    config = _clean_config(
+        upstreams={"fuyao_meta": _upstream()},
+        upstream_tool_mapping={"search_stock": {"fuyao_meta": "x"}},
+    )
+    specs = [_spec(name="search_stock", routing="search_stock", backer=None)]
+    issues = lint_config(config, specs)
+    assert not [i for i in issues if i.code == "T001" and "search_stock" in i.message]

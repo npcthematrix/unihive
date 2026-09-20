@@ -200,19 +200,19 @@ def validate_config(config: dict) -> list[str]:
                 errors.append(f"upstream {name!r} type=http missing 'base_url'")
             if not cfg.get("api_key"):
                 errors.append(f"upstream {name!r} type=http missing 'api_key'")
-        elif cfg.get("type") == "http_jsonrpc":
-            if not cfg.get("base_url"):
-                errors.append(f"upstream {name!r} type=http_jsonrpc missing 'base_url'")
-        elif cfg.get("type") == "python":
-            pass  # TokenWave TDX client, no extra fields required
         elif cfg.get("type") == "mootdx2":
             pass  # MooTDX2 client, no extra fields required
         elif cfg.get("type") == "tdx_quant":
             if not cfg.get("tdx_root"):
                 errors.append(f"upstream {name!r} type=tdx_quant missing 'tdx_root'")
-        elif cfg.get("type") == "npx":
+        elif cfg.get("type") == "stdio":
+            # Round-12 簇G: 类型表与 _construct_upstream_client 对齐。
+            # http_jsonrpc/python/npx 是已下线的历史类型, 构造表里没有,
+            # 旧校验却放行 → 启动构造期才 fail-fast。统一按 unknown type 拒。
             if not cfg.get("command") and not cfg.get("package"):
-                errors.append(f"upstream {name!r} type=npx missing 'command' or 'package'")
+                errors.append(
+                    f"upstream {name!r} type=stdio missing 'command' or 'package'"
+                )
         elif cfg.get("type") == "omni":
             pass  # OMNIDATA client, no extra fields required
         elif cfg.get("type") == "thsdk":

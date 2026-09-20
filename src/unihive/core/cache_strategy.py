@@ -78,7 +78,15 @@ def fuyao_ttl_for(
     value = tools.get(tool_name)
     if value is None:
         return None
-    return int(value)
+    # Round-12 簇E: PUT 侧有 pydantic StrictInt 门, 但 YAML 出厂模板/
+    # 手改库内行可能绕过。裸 int() 对 "1h" 报无名 ValueError, 在请求路径
+    # 上变成 500; 这里报出点路径字段名, 由调用方降级。
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"fuyao_cache.tools.{tool_name} 必须是 ≥0 的整数秒, "
+            f"got {value!r} ({type(value).__name__})"
+        )
+    return value
 
 
 def is_fuyao_source(source: str | None) -> bool:
@@ -104,3 +112,25 @@ def chain_has_remote_http(chain: list[str] | None) -> bool:
     缓存命中才有意义。实际是否写缓存仍由命中源 is_fuyao_source 决定。
     """
     return bool(chain) and any(is_fuyao_source(s) for s in chain)
+
+def normalize_ttl(ttl: Any) -> int | None:
+    """把配置里的 TTL 值归一化成正整数秒, 或 None(不缓存)。
+
+    合同 (见 fuyao_cache 模型与 cache_strategy 模块):
+      - None: 未配置 → 不缓存;
+      - 0 或负数: 显式不缓存 (Round-12 H2: 旧链路把 0 透传到
+        ``Cache.set``, ``if ttl`` 判定为假 → expires_at=NULL → 永久缓存);
+      - 正整数/正浮点: 秒数 (浮点向下取整);
+      - bool / 字符串 / 其他类型: 配置错误, 抛 TypeError/ValueError,
+        调用方应记 warning 后按"不缓存"降级, 而不是静默写错值。
+    """
+    if ttl is None:
+        return None
+    # bool 是 int 子类, 必须先挡
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+        raise TypeError(f"TTL 必须是 int/float 秒数, got {ttl!r} ({type(ttl).__name__})")
+    if ttl != ttl or ttl in (float("inf"), float("-inf")):
+        raise ValueError(f"TTL 必须是有限数值, got {ttl!r}")
+    if ttl <= 0:
+        return None
+    return int(ttl)

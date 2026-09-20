@@ -14,12 +14,27 @@ import time
 from ..core.config_db import resolve_project_path
 from ..core.proxy_settings import ProxySettings
 from ..core.router import Router
+from ._helpers import coerce_float_field, coerce_int_field
 from ..storage import cache as cache_mod
 from ..storage.cache import CacheConfig
 from ..storage.config_store import ConfigStore
 from ..utils.config_loader import validate_config
 
 logger = logging.getLogger(__name__)
+
+
+async def _await_cleanup(aw, *, timeout: float, what: str) -> None:
+    """init 失败清理工具: 限时、屏蔽外层取消与一切异常。
+
+    Round-12 簇H: init 在被取消 (CancelledError) 时也要完成 client/cache/
+    config_store 清理。直接 await 的清理协程在外层任务已取消时会立刻再抛
+    CancelledError; asyncio.shield 让清理动作不被外层取消打断, wait_for 给
+    时限防卡死, 任何异常仅 debug 日志 (清理路径不能再抛)。
+    """
+    try:
+        await asyncio.wait_for(asyncio.shield(aw), timeout=timeout)
+    except BaseException as e:  # noqa: BLE001 — 清理路径, 记录后继续
+        logger.debug("init cleanup step %s skipped/failed: %s", what, e)
 
 
 class LifecycleMixin:
@@ -57,6 +72,10 @@ class LifecycleMixin:
 
         if not self._uses_db_source():
             logger.info("UNIHIVE_CONFIG_SOURCE=yaml, 配置事实源=YAML 文件 (无 SQLite)")
+            # Round-12 簇H: yaml 逃生模式同样重放 gateway 调参。db 分支在
+            # 装配末尾重放; 旧实现在此直接 return, 控制台/热改写入 YAML 基线
+            # 后经此路径重启时 router timeout / 限流器仍是 __init__ 的旧值。
+            self._apply_gateway_tuning()
             _ca.set_config_db(None)
             return
 
@@ -132,8 +151,16 @@ class LifecycleMixin:
                 db_path=str(resolve_project_path(
                     cache_cfg.get("db_path"), "logs/cache.db"
                 )),
-                max_entries=int(cache_cfg.get("max_entries", 50000)),
-                operation_timeout=float(cache_cfg.get("operation_timeout", 3.0)),
+                # Round-12 簇E: 坏值必须报出字段名, 不抛裸 ValueError/TypeError
+                max_entries=coerce_int_field(
+                    cache_cfg.get("max_entries", 50000),
+                    "cache.max_entries", default=50000, minimum=1,
+                ),
+                operation_timeout=coerce_float_field(
+                    cache_cfg.get("operation_timeout", 3.0),
+                    "cache.operation_timeout", default=3.0,
+                    minimum=0.0, exclusive_min=True,
+                ),
             ))
             await self.cache.initialize()
 
@@ -220,43 +247,38 @@ class LifecycleMixin:
             # 注册 + capability filter 安装一气呵成, 防止未来 refactor 跳过 filter。
             await self._create_and_register_gateway_mcp(tool_specs)
 
-        except Exception:
-            # LOW6: 改为 except Exception, 不再吃 CancelledError / KeyboardInterrupt /
-            # SystemExit. CancelledError 自 Py3.8 起是 BaseException 子类
-            # (而非 Exception), 它应直接传播让 asyncio.run() 处理取消;
-            # KeyboardInterrupt 同理. 这里只清理真正的 init 失败。
+        except (Exception, asyncio.CancelledError):
+            # LOW6: 不吃 KeyboardInterrupt / SystemExit。
+            # Round-12 簇H: CancelledError (Py3.8+ 是 BaseException 子类)
+            # 以前直接传播跳过整个清理块 —— init 期间被取消 (启动 wait_for
+            # 超时链路之外的外层 cancel) 时, 已启动 client / cache engine /
+            # config_store engine / cleanup task 全部泄漏。现在取消同样清理;
+            # 各清理动作用 _await_cleanup (shield + 限时 + 吞异常), 防止
+            # "清理中再被取消" 导致后续步骤被跳过。
             # M2 (round 11): 先取消 late-start 自愈任务, 再 stop client。
-            await self._cancel_late_starts()
-            for client in self.upstreams.values():
-                try:
-                    await asyncio.wait_for(client.stop(), timeout=2.0)
-                except Exception:
-                    pass
+            await _await_cleanup(
+                self._cancel_late_starts(), timeout=2.0, what="cancel-late-starts"
+            )
+            for client in list(self.upstreams.values()):
+                await _await_cleanup(client.stop(), timeout=2.0, what="client.stop")
             self.upstreams.clear()
             # M4 (round 9 audit): 取消半建的 cache cleanup task, 否则它引用
             # 即将关闭的 cache 且重试时会泄漏第二个 task。
             cleanup_task = getattr(self, "_cache_cleanup_task", None)
             if cleanup_task is not None:
                 cleanup_task.cancel()
-                try:
-                    await cleanup_task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                await _await_cleanup(cleanup_task, timeout=2.0, what="cleanup-task")
                 self._cache_cleanup_task = None
             if self.cache:
-                try:
-                    await asyncio.wait_for(self.cache.close(), timeout=2.0)
-                except Exception:
-                    pass
+                await _await_cleanup(self.cache.close(), timeout=2.0, what="cache.close")
                 self.cache = None
             # M4: v2 配置库 engine 也须 dispose, 否则直接 await initialize()
             # 的嵌入宿主/同实例重试会泄漏第二个 SQLAlchemy engine。
             config_store = getattr(self, "config_store", None)
             if config_store is not None:
-                try:
-                    await config_store.close()
-                except Exception:
-                    pass
+                await _await_cleanup(
+                    config_store.close(), timeout=2.0, what="config_store.close"
+                )
                 self.config_store = None
             # M4: 复位 console_api 写目标全局, 不再指向已死 server 的 store/config。
             _ca.set_config_db(None)
@@ -394,9 +416,15 @@ class LifecycleMixin:
 
             # 关闭 SQLite 配置覆盖层连接池
             # getattr 兜底: 测试用 __new__ 跳过 __init__ 时字段不存在
+            # Round-12 簇H: close() 异常 (磁盘/锁) 以前会截断后续复位
+            # (cleanup task 取消、upstreams/状态归零全部跳过, 同实例重启状态
+            # 错位); 与 init 失败清理路径一致, 记日志后继续完成关停复位。
             config_store = getattr(self, "config_store", None)
             if config_store is not None:
-                await config_store.close()
+                try:
+                    await config_store.close()
+                except Exception as e:
+                    logger.warning(f"config_store.close() failed during stop: {e}")
                 self.config_store = None
 
             # 取消周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4)。
@@ -426,6 +454,13 @@ class LifecycleMixin:
         self.tool_specs = []
         self._db_hidden_tools = set()
         self._initialized = False
+        # Round-12 簇H: single-flight future 表也要清空 —— 旧实现 stop 后
+        # 残留已完成/已失败 future 引用, 同实例重启期间同 key 调用可能误判
+        # 在途或 await 到一个属于上一生命周期的 future。getattr 兜底 __new__
+        # 测试实例 (与上方 config_store/cleanup_task 同风格)。
+        in_flight = getattr(self, "_in_flight_requests", None)
+        if in_flight is not None:
+            in_flight.clear()
 
         # M1 (2026-09-15 MCP 二次审视): 重置全局限流器单例，支持 stop/start 循环
         from ..core.rate_limiter import reset_default_limiter

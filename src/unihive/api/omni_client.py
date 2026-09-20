@@ -352,7 +352,9 @@ class OmniClient:
         # M2 (round 10 audit): 写路径自建表 —— __init__ 不再为缺库物化空文件,
         # 控制台在未预同步 (board.db 不存在) 时触发同步必须能落 sync_log;
         # board_sync CLI 在构造 client 前已 init_db, 重复 ensure 是 IF NOT EXISTS 幂等。
-        self._ensure_db()
+        # Round-12 簇H: mkdir + sqlite connect/DDL 是同步文件 IO, 经 to_thread
+        # 执行, 缺库首同步时不冻结事件循环。
+        await asyncio.to_thread(self._ensure_db)
         log_id = self._insert_running_log(source, board_type)
 
         try:

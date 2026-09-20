@@ -1,6 +1,7 @@
 """Console authentication module."""
 import hashlib
 import hmac
+import html
 import secrets
 from typing import Optional
 
@@ -137,7 +138,12 @@ class ConsoleAuthMiddleware:
 async def login_get(request: Request) -> HTMLResponse:
     """Serve login page."""
     error = request.query_params.get("error", "")
-    error_html = f'<div class="login-error" role="alert">{error}</div>' if error else ""
+    # Round-12 簇F: error 是反射进 HTML 的查询参数, 必须转义防 XSS
+    # (quote=True 同时挡属性注入向量)。
+    safe_error = html.escape(error, quote=True)
+    error_html = (
+        f'<div class="login-error" role="alert">{safe_error}</div>' if safe_error else ""
+    )
     return HTMLResponse(LOGIN_HTML.replace("{error}", error_html))
 
 

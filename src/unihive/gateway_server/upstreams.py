@@ -6,6 +6,8 @@
 import asyncio
 import logging
 
+from ..api.upstream_client import UpstreamStatus
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +59,17 @@ class UpstreamControlMixin:
             )
             self.upstreams[name] = client
             self._spawn_late_start(name, client)
+            # Round-12 簇I: 没有 late-recovery 钩子的 client (thsdk/fuyao/
+            # omni/stdio) start() 被 wait_for cancel 时, 其内部
+            # `except Exception` 接不住 CancelledError (Py3.8+ 属
+            # BaseException), 状态永远停在初始 UNKNOWN, 控制台长期显示
+            # "未知"。本次 boot 已等不起又无后台自愈, 诚实落 UNAVAILABLE;
+            # 有钩子的 mootdx2/tdx_quant 保留 UNKNOWN, 等阻塞调用返回后由
+            # start_after_timeout 重跑 start() 自行定状态, 不提前判死。
+            if not hasattr(client, "start_after_timeout"):
+                status = getattr(client, "status", None)
+                if status is UpstreamStatus.UNKNOWN:
+                    client._status = UpstreamStatus.UNAVAILABLE
             return False
         except Exception as e:
             # 非超时异常 (FileNotFoundError / OSError / 等) 同样登记 client,
