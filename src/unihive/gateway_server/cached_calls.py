@@ -95,8 +95,6 @@ class CachedExecutionMixin:
             )
             # 向后兼容：原变量名在下方逻辑中代表"本次走缓存路径"。
             can_cache = can_read_cache
-            # hit/miss 统计跟踪范围与读缓存前提一致。
-            tracks_stats = can_read_cache
 
             key: str | None = None
             if can_cache:
@@ -123,11 +121,6 @@ class CachedExecutionMixin:
                         ],
                         "cache_hit": True,
                     }
-
-            if tracks_stats and not can_cache:
-                # 计 miss 但不走单飞：例如实时 key、链上无远程 fuyao 源。
-                # 每个请求各自路由, 用于运维观测命中率。
-                self.cache.record_miss()
 
             # 路由 + 缓存写入的内部闭包 (不再管 _active_requests)
             async def _route_and_respond() -> dict:

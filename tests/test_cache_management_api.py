@@ -197,7 +197,9 @@ def test_breakdown_groups_by_tool_prefix(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(console_api, "CACHE_DB_PATH", str(db_path))
 
-    rows = console_api.get_cache_breakdown()
+    result = console_api.get_cache_breakdown()
+    rows = result["tools"]
+    assert result["total_tools"] == 2
     by_tool = {r["tool"]: r for r in rows}
     assert by_tool["tool_a"]["entries"] == 2
     assert by_tool["tool_a"]["live"] == 1

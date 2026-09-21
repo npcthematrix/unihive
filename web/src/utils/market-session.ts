@@ -3,11 +3,14 @@
  * 的边界语义保持一致):
  *
  *   周末      休市, 短档缓存到次日零点 (跨周末逐日续期)
- *   盘前      00:00–9:30, 短档缓存到 9:30 开盘
+ *   盘前      00:00–9:15 / 9:25–9:30, 短档缓存到 9:30 开盘
+ *   集合竞价  9:15–9:25, 通用短档仍缓存到 9:30; 竞价快照走 60s 档
+ *             (cache_strategy.auction_snapshot_ttl), 9:25 定格
  *   上午盘    9:30–11:30, 短档按配置值生效
  *   午间休市  11:30–13:00, 短档缓存到 13:00 开盘
  *   下午盘    13:00–15:00, 短档按配置值生效
- *   收盘后    15:00–24:00, 短档缓存到次日零点
+ *   收盘后    15:00–24:00, 短档缓存到次日零点; 龙虎榜等盘后榜单另有
+ *             18:00 发布边界 (cache_strategy M9)
  *
  * 不区分法定节假日 (与后端一致, 代价仅是节假日多几次无害重拉)。
  * 时间一律按 UTC+8 显式换算, 不依赖浏览器所在时区。
@@ -16,6 +19,7 @@
 export type MarketPhase =
   | 'weekend'
   | 'pre_open'
+  | 'auction'
   | 'morning'
   | 'lunch'
   | 'afternoon'
@@ -79,11 +83,27 @@ export function marketSession(now: Date = new Date()): MarketSessionInfo {
       secondsToBoundary: secondsTo(nextMidnight),
     }
   }
-  if (hour < 9 || (hour === 9 && minute < 30)) {
+  if (
+    hour < 9
+    || (hour === 9 && minute < 15)
+    || (hour === 9 && minute >= 25 && minute < 30)
+  ) {
     return {
       phase: 'pre_open',
       label: '盘前',
       range: '00:00–9:30',
+      shortTtlActive: false,
+      boundaryLabel: '9:30 开盘',
+      secondsToBoundary: secondsTo(at(9, 30)),
+    }
+  }
+  if (hour === 9 && minute < 25) {
+    // 9:15–9:25 集合竞价: 通用短档语义不变 (9:30 前数据会变, 缓存到 9:30);
+    // 仅竞价快照工具特殊 — 竞价进行中走 60s 档, 由时段条注释另行说明。
+    return {
+      phase: 'auction',
+      label: '集合竞价',
+      range: '9:15–9:25',
       shortTtlActive: false,
       boundaryLabel: '9:30 开盘',
       secondsToBoundary: secondsTo(at(9, 30)),

@@ -210,6 +210,10 @@ class Cache:
 
             self._initialized = True
             logger.info(f"Cache initialized at {self.config.db_path}")
+            # 启动即刷盘: 用当前 pid + 0/0 覆盖残留的旧进程 stats 文件,
+            # 控制台在本进程产生首批计数前不可能读到异进程的陈旧命中率
+            # (旧文件要满 50 个事件才重写, 重启后低流量窗口可长达数小时)。
+            await self._persist_stats_async()
         except Exception as e:
             logger.error(f"Failed to initialize cache: {e}")
             self.enabled = False
@@ -498,6 +502,11 @@ class Cache:
                     await session.execute(text("DELETE FROM cache"))
                     await session.commit()
                     self._access_times.clear()
+                    # 清空同时归零命中计数并立即刷盘: 命中率语义与「全部条目」
+                    # 保持一致, 不留旧内容累计出的陈旧比率。
+                    self._hits = 0
+                    self._misses = 0
+                    await self._persist_stats_async()
                     logger.info("Cache cleared")
                     return True
 

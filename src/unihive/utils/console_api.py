@@ -689,7 +689,7 @@ def _query_cache_row_counts(cur, now_ts: int) -> dict:
             COUNT(*),
             COALESCE(SUM(CASE WHEN expires_at IS NOT NULL AND expires_at > :now
                               THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN expires_at IS NOT NULL AND expires_at <= :now
+            COALESCE(SUM(CASE WHEN expires_at IS NOT NULL AND expires_at < :now
                               THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN expires_at IS NULL
                               THEN 1 ELSE 0 END), 0),
@@ -717,8 +717,12 @@ def _query_cache_row_counts(cur, now_ts: int) -> dict:
     }
 
 
-def get_cache_breakdown(limit: int = 20) -> list[dict]:
-    """按工具 (cache key 的 ``name:`` 前缀) 聚合条目数, 降序 Top N。"""
+def get_cache_breakdown(limit: int = 20) -> dict:
+    """按工具 (cache key 的 ``name:`` 前缀) 聚合条目数, 降序 Top N。
+
+    返回 ``{"tools": Top N 行, "total_tools": 有缓存条目的工具总数}`` —
+    占比分母要用全库总条目, 截断提示要用工具总数, 都不能从 Top N 行反推。
+    """
     import sqlite3
 
     now_ts = int(time.time())
@@ -741,10 +745,22 @@ def get_cache_breakdown(limit: int = 20) -> list[dict]:
             """,
             {"now": now_ts, "lim": limit},
         )
-        return [
+        tools = [
             {"tool": tool, "entries": entries, "live": live}
             for tool, entries, live in cur.fetchall()
         ]
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM (
+                SELECT 1 FROM cache GROUP BY
+                    CASE WHEN instr(key, ':') > 0
+                         THEN substr(key, 1, instr(key, ':') - 1)
+                         ELSE key END
+            )
+            """
+        )
+        total_tools = int(cur.fetchone()[0])
+        return {"tools": tools, "total_tools": total_tools}
     finally:
         conn.close()
 
@@ -2554,11 +2570,15 @@ async def cache_tool_breakdown_api(req: "Request") -> "JSONResponse":
     if error_resp is not None:
         return error_resp
     try:
-        rows = await asyncio.to_thread(get_cache_breakdown, value)
+        result = await asyncio.to_thread(get_cache_breakdown, value)
     except Exception:
         logger.exception("cache_tool_breakdown_api raised")
         return JSONResponse({"error": "breakdown_read_failed"}, status_code=500)
-    return JSONResponse({"tools": rows, "timestamp": int(time.time())})
+    return JSONResponse({
+        "tools": result["tools"],
+        "total_tools": result["total_tools"],
+        "timestamp": int(time.time()),
+    })
 
 
 async def cache_cleanup_api(req: "Request") -> "JSONResponse":

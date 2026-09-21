@@ -10,6 +10,8 @@ export interface CacheToolBreakdownRow {
 
 export interface CacheBreakdownResponse {
   tools: CacheToolBreakdownRow[]
+  /** 有缓存条目的工具总数 (tools 为 Top N 截断, 总数另给)。 */
+  total_tools: number
   timestamp: number
 }
 

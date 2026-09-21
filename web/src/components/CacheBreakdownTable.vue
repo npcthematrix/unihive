@@ -44,10 +44,18 @@ import type { CacheToolBreakdownRow } from '@/api/cache'
 const props = defineProps<{
   rows: CacheToolBreakdownRow[]
   loading?: boolean
+  /** 全库总条目 (含未进 Top N 的工具), 占比的正确分母; 缺省时退回行和。 */
+  totalEntries?: number | null
 }>()
 
-const totalEntries = computed(() =>
+const rowsTotal = computed(() =>
   props.rows.reduce((sum, row) => sum + row.entries, 0),
+)
+
+const totalEntries = computed(() =>
+  props.totalEntries != null && props.totalEntries > 0
+    ? props.totalEntries
+    : rowsTotal.value,
 )
 
 function sharePct(row: CacheToolBreakdownRow): number {
