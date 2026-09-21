@@ -32,22 +32,31 @@ disable_dangerous: false
 strict_registry: true
 
 # 缓存配置
+# 注意: 本段(bootstrap)会覆盖 config/upstreams.yaml 的同名 cache 段 —
+# 真正生效的 TTL 以这里为准, 两处需保持一致 (2026-09-21 核对)。
 cache:
   enabled: true
   db_path: "logs/cache.db"
 
   ttl:
-    index_data: 60
-    fundamentals: 3600
-    fund_data: 300
-    search: 300
-    special_data: 60
-    valuation: 300
-    fund_holdings: 3600
-    fund_history: 3600
-    ticker_list: 3600
-    workday: 86400
-    historical: 3600
+    # realtime_quote 故意不配 —— 实时行情不缓存
+    # 通用规则：任何值 ≤1 小时（3600s）的档都是「交易时段短档」——
+    # 交易时段用该值，非交易时段自动缓存到下一变化边界（9:30/13:00/次日
+    # 零点，见 cache_strategy.intraday_session_ttl）。当前为 special_data /
+    # index_data。
+    historical: 86400          # 历史K线/复权因子，1 天
+    fundamentals: 604800       # 财报三表/财务指标（随财报披露，不常变），7 天
+    valuation: 86400           # 估值快照（无需敏感），1 天
+    # special_data 传过去日期会提升到 historical_immutable 档≈永久。
+    special_data: 60           # 当日特色数据（涨停池/异动/榜单）交易时段，1 分钟
+    auction_snapshot: 86400    # 集合竞价快照（无日期恒指当天，9:25 开盘后数值全天固定），1 天
+    historical_immutable: 315360000  # 过去交易日冻结快照（special_data 传早于今天的日期自动套用），约 10 年≈永久
+    ticker_list: 604800        # 证券代码/板块目录/成分股（新股上市、调样时变），7 天
+    workday: 15552000          # 交易日历提前发布、常年不变，180 天
+    fund_data: 604800          # 基金资料/业绩/经理，7 天
+    fund_holdings: 7776000     # 基金持仓/行业配置（随季报披露，约每季度更新），90 天
+    fund_history: 86400        # ETF/LOF 历史行情/历史业绩指标，1 天
+    index_data: 60             # 指数行情快照，60s
 
 # 日志配置
 logging:

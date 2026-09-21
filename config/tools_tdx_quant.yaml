@@ -6,7 +6,6 @@ tools:
   routing: get_market_data
   upstream_tool_mapping:
     tdx_quant: get_market_data
-  cache_ttl_key: historical
   dangerous: false
   params:
   - name: field_list
@@ -59,7 +58,6 @@ tools:
   routing: get_market_snapshot
   upstream_tool_mapping:
     tdx_quant: get_market_snapshot
-  cache_ttl_key: realtime_quote
   dangerous: false
   params:
   - name: stock_code
@@ -75,7 +73,6 @@ tools:
   routing: get_stock_info
   upstream_tool_mapping:
     tdx_quant: get_stock_info
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_code
@@ -91,7 +88,6 @@ tools:
   routing: get_relation
   upstream_tool_mapping:
     tdx_quant: get_relation
-  cache_ttl_key: ticker_list
   dangerous: false
   params:
   - name: stock_code
@@ -103,7 +99,6 @@ tools:
   routing: get_divid_factors
   upstream_tool_mapping:
     tdx_quant: get_divid_factors
-  cache_ttl_key: historical
   dangerous: false
   params:
   - name: stock_code
@@ -123,7 +118,6 @@ tools:
   routing: get_more_info
   upstream_tool_mapping:
     tdx_quant: get_more_info
-  cache_ttl_key: realtime_quote
   dangerous: false
   params:
   - name: stock_code
@@ -139,7 +133,6 @@ tools:
   routing: get_gb_info
   upstream_tool_mapping:
     tdx_quant: get_gb_info
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_code
@@ -159,7 +152,6 @@ tools:
   routing: get_kzz_info
   upstream_tool_mapping:
     tdx_quant: get_kzz_info
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_code
@@ -175,7 +167,6 @@ tools:
   routing: get_ipo_info
   upstream_tool_mapping:
     tdx_quant: get_ipo_info
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: ipo_type
@@ -198,7 +189,6 @@ tools:
   routing: get_trackzs_etf_info
   upstream_tool_mapping:
     tdx_quant: get_trackzs_etf_info
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: zs_code
@@ -210,7 +200,6 @@ tools:
   routing: get_financial_data
   upstream_tool_mapping:
     tdx_quant: get_financial_data
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -238,7 +227,6 @@ tools:
   routing: get_financial_data_by_date
   upstream_tool_mapping:
     tdx_quant: get_financial_data_by_date
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -268,7 +256,6 @@ tools:
   routing: get_gpjy_value
   upstream_tool_mapping:
     tdx_quant: get_gpjy_value
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -292,7 +279,6 @@ tools:
   routing: get_gpjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_gpjy_value_by_date
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -321,7 +307,6 @@ tools:
   routing: get_bkjy_value
   upstream_tool_mapping:
     tdx_quant: get_bkjy_value
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -345,7 +330,6 @@ tools:
   routing: get_bkjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_bkjy_value_by_date
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -374,7 +358,6 @@ tools:
   routing: get_scjy_value
   upstream_tool_mapping:
     tdx_quant: get_scjy_value
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: field_list
@@ -394,7 +377,6 @@ tools:
   routing: get_scjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_scjy_value_by_date
-  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: field_list
@@ -419,7 +401,6 @@ tools:
   routing: get_gp_one_data
   upstream_tool_mapping:
     tdx_quant: get_gp_one_data
-  cache_ttl_key: realtime_quote
   dangerous: false
   params:
   - name: stock_list
@@ -435,7 +416,6 @@ tools:
   routing: get_stock_list
   upstream_tool_mapping:
     tdx_quant: get_stock_list
-  cache_ttl_key: ticker_list
   dangerous: false
   params:
   - name: market
@@ -454,7 +434,6 @@ tools:
   routing: get_sector_list
   upstream_tool_mapping:
     tdx_quant: get_sector_list
-  cache_ttl_key: ticker_list
   dangerous: false
   params:
   - name: list_type
@@ -472,7 +451,6 @@ tools:
   routing: get_stock_list_in_sector
   upstream_tool_mapping:
     tdx_quant: get_stock_list_in_sector
-  cache_ttl_key: ticker_list
   dangerous: false
   params:
   - name: block_code
@@ -492,7 +470,6 @@ tools:
   routing: get_user_sector
   upstream_tool_mapping:
     tdx_quant: get_user_sector
-  cache_ttl_key: ticker_list
   dangerous: false
   params: []
 - name: create_sector
@@ -500,7 +477,6 @@ tools:
   routing: create_sector
   upstream_tool_mapping:
     tdx_quant: create_sector
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -516,7 +492,6 @@ tools:
   routing: delete_sector
   upstream_tool_mapping:
     tdx_quant: delete_sector
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -528,7 +503,6 @@ tools:
   routing: rename_sector
   upstream_tool_mapping:
     tdx_quant: rename_sector
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -544,7 +518,6 @@ tools:
   routing: clear_sector
   upstream_tool_mapping:
     tdx_quant: clear_sector
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -556,7 +529,6 @@ tools:
   routing: refresh_cache
   upstream_tool_mapping:
     tdx_quant: refresh_cache
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: market
@@ -572,7 +544,6 @@ tools:
   routing: refresh_kline
   upstream_tool_mapping:
     tdx_quant: refresh_kline
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_list
@@ -592,7 +563,6 @@ tools:
   routing: subscribe_hq
   upstream_tool_mapping:
     tdx_quant: subscribe_hq
-  cache_ttl_key: null
   dangerous: false
   params:
   - name: stock_list
@@ -604,7 +574,6 @@ tools:
   routing: unsubscribe_hq
   upstream_tool_mapping:
     tdx_quant: unsubscribe_hq
-  cache_ttl_key: null
   dangerous: false
   params:
   - name: stock_list
@@ -616,7 +585,6 @@ tools:
   routing: get_subscribe_hq_stock_list
   upstream_tool_mapping:
     tdx_quant: get_subscribe_hq_stock_list
-  cache_ttl_key: null
   dangerous: false
   params: []
 - name: send_message
@@ -624,7 +592,6 @@ tools:
   routing: send_message
   upstream_tool_mapping:
     tdx_quant: send_message
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: msg_str
@@ -636,7 +603,6 @@ tools:
   routing: send_file
   upstream_tool_mapping:
     tdx_quant: send_file
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: file_path
@@ -648,7 +614,6 @@ tools:
   routing: send_warn
   upstream_tool_mapping:
     tdx_quant: send_warn
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_list
@@ -695,7 +660,6 @@ tools:
   routing: send_bt_data
   upstream_tool_mapping:
     tdx_quant: send_bt_data
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_code
@@ -719,7 +683,6 @@ tools:
   routing: send_user_block
   upstream_tool_mapping:
     tdx_quant: send_user_block
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -739,7 +702,6 @@ tools:
   routing: exec_to_tdx
   upstream_tool_mapping:
     tdx_quant: exec_to_tdx
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: url
@@ -751,7 +713,6 @@ tools:
   routing: print_to_tdx
   upstream_tool_mapping:
     tdx_quant: print_to_tdx
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: df_list
@@ -791,7 +752,6 @@ tools:
   routing: get_trading_dates
   upstream_tool_mapping:
     tdx_quant: get_trading_dates
-  cache_ttl_key: workday
   dangerous: false
   params:
   - name: market
@@ -815,7 +775,6 @@ tools:
   routing: formula_format_data
   upstream_tool_mapping:
     tdx_quant: formula_format_data
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: data_dict
@@ -827,7 +786,6 @@ tools:
   routing: formula_set_data
   upstream_tool_mapping:
     tdx_quant: formula_set_data
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_code
@@ -859,7 +817,6 @@ tools:
   routing: formula_set_data_info
   upstream_tool_mapping:
     tdx_quant: formula_set_data_info
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_code
@@ -891,7 +848,6 @@ tools:
   routing: formula_zb
   upstream_tool_mapping:
     tdx_quant: formula_zb
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -911,7 +867,6 @@ tools:
   routing: formula_xg
   upstream_tool_mapping:
     tdx_quant: formula_xg
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -927,7 +882,6 @@ tools:
   routing: formula_exp
   upstream_tool_mapping:
     tdx_quant: formula_exp
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -943,7 +897,6 @@ tools:
   routing: formula_get_data
   upstream_tool_mapping:
     tdx_quant: formula_get_data
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -991,7 +944,6 @@ tools:
   routing: formula_process_mul_zb
   upstream_tool_mapping:
     tdx_quant: formula_process_mul_zb
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -1043,7 +995,6 @@ tools:
   routing: stock_account
   upstream_tool_mapping:
     tdx_quant: stock_account
-  cache_ttl_key: null
   dangerous: false
   params:
   - name: account
@@ -1059,7 +1010,6 @@ tools:
   routing: query_stock_orders
   upstream_tool_mapping:
     tdx_quant: query_stock_orders
-  cache_ttl_key: null
   dangerous: false
   params:
   - name: account_id
@@ -1079,7 +1029,6 @@ tools:
   routing: query_stock_positions
   upstream_tool_mapping:
     tdx_quant: query_stock_positions
-  cache_ttl_key: null
   dangerous: false
   params:
   - name: account_id
@@ -1091,7 +1040,6 @@ tools:
   routing: order_stock
   upstream_tool_mapping:
     tdx_quant: order_stock
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: account_id
@@ -1123,7 +1071,6 @@ tools:
   routing: cancel_order_stock
   upstream_tool_mapping:
     tdx_quant: cancel_order_stock
-  cache_ttl_key: null
   dangerous: true
   params:
   - name: account_id
@@ -1143,7 +1090,6 @@ tools:
   routing: query_stock_asset
   upstream_tool_mapping:
     tdx_quant: query_stock_asset
-  cache_ttl_key: null
   dangerous: false
   params:
   - name: account_id

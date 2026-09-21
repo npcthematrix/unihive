@@ -6,6 +6,10 @@
 """
 import hashlib
 import json
+import re
+import time
+from datetime import date as date_cls
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -89,6 +93,202 @@ def fuyao_ttl_for(
     return value
 
 
+# ===== 参数(日期)感知 TTL（2026-09-21）=====
+
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+# 归一化后 params 里可能承载"截至日期(as-of date)"的键，按优先级取第一个。
+# 不同工具归一后日期落在不同键：
+#   - 涨停/跌停/炸板池（normalize: date_ms）→ date_ms，上海零点毫秒戳；
+#   - 龙虎榜/竞价基准/热门股历史（无 normalize）→ date，原始 "YYYY-MM-DD" 串；
+#   - 热门股排名趋势 → end_date，归一为 8 位 "YYYYMMDD" 串。
+_AS_OF_DATE_KEYS = ("date_ms", "date", "end_date", "start_date")
+
+# 过去交易日冻结快照所用的 TTL 档名（cache.ttl.historical_immutable）。
+HISTORICAL_IMMUTABLE_KEY = "historical_immutable"
+
+# 哪些 ttl_key 的工具允许"过去日期 → 冻结档"提升。只放开 special_data：
+# 当日特色榜单在历史日收盘后冻结。刻意不含 historical（前复权K线会因未来
+# 除权整体平移）与 fund_history，避免误冻。
+_FREEZABLE_TTL_KEYS = frozenset({"special_data"})
+
+
+def shanghai_today(now: float | None = None) -> date_cls:
+    """当前上海(北京)时区的日历日。"""
+    if now is None:
+        now = time.time()
+    return datetime.fromtimestamp(now, tz=_SHANGHAI_TZ).date()
+
+
+def _coerce_as_of_date(value: Any) -> date_cls | None:
+    """把单个归一化日期值转成日历日；无法识别返回 None。
+
+    - int/float: 上海零点毫秒戳（date_ms）；
+    - str: "YYYY-MM-DD" / "YYYY/MM/DD" / "YYYYMMDD"。
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value) / 1000.0, tz=_SHANGHAI_TZ).date()
+    if isinstance(value, str):
+        digits = re.sub(r"\D", "", value)
+        if len(digits) == 8:
+            try:
+                return datetime.strptime(digits, "%Y%m%d").date()
+            except ValueError:
+                return None
+    return None
+
+
+def as_of_date(params: dict[str, Any]) -> date_cls | None:
+    """从归一化 params 解析本次调用的 as-of 日期；无日期返回 None。"""
+    for key in _AS_OF_DATE_KEYS:
+        if key in params and params[key] is not None:
+            parsed = _coerce_as_of_date(params[key])
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def is_frozen_snapshot(
+    params: dict[str, Any],
+    *,
+    today: date_cls | None = None,
+) -> bool:
+    """as-of 日期是否严格早于今天（历史交易日 → 数据收盘后冻结）。
+
+    当天、未来（池子通常返空）、无日期（多数工具默认当天）均返回 False。
+    """
+    day = as_of_date(params)
+    if day is None:
+        return False
+    if today is None:
+        today = shanghai_today()
+    return day < today
+
+
+def is_historical_special_data(
+    ttl_key: str | None,
+    params: dict[str, Any],
+    *,
+    today: date_cls | None = None,
+) -> bool:
+    """该 special_data 工具本次是否查"过去交易日"（可按冻结档长缓存）。"""
+    return (
+        ttl_key in _FREEZABLE_TTL_KEYS
+        and is_frozen_snapshot(params, today=today)
+    )
+
+
+# ===== 短档 TTL 的交易时段感知（2026-09-21）=====
+#
+# 任何配置值 ≤ SESSION_AWARE_TTL_MAX（1 小时）的 TTL 档，都按交易时段
+# 感知处理（当前为 special_data 300s / index_data 60s）：
+#   - 交易时段内，数据可能变化 → 用该分钟级短档；
+#   - 非交易时段，数据不再变化 → 不必按分钟重拉，缓存到「下一次数据会
+#     变化的边界」为止（开盘/午后开盘/当日结束），而不是机械地到当天
+#     24:00 —— 那样会把昨日数据一路缓存到今天开盘之后。
+# A 股连续竞价时段（上海/深圳一致）；忽略法定节假日（节假日落在工作日
+# 会按交易日报短档，影响仅为多几次无害重拉）。
+SESSION_AWARE_TTL_MAX = 3600
+_MORNING_OPEN = (9, 30)
+_MORNING_CLOSE = (11, 30)
+_AFTERNOON_OPEN = (13, 0)
+_MARKET_CLOSE = (15, 0)
+
+
+def _seconds_until(now_dt: datetime, hour: int, minute: int) -> int:
+    """now_dt（上海时区）到当天 hour:minute 的整秒差（下限 1 秒）。"""
+    target = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return max(1, int((target - now_dt).total_seconds()))
+
+
+def _seconds_to_midnight(now_dt: datetime) -> int:
+    """到下一个本地零点的整秒差（下限 1 秒）。"""
+    tomorrow = datetime(
+        now_dt.year, now_dt.month, now_dt.day, tzinfo=now_dt.tzinfo
+    ) + timedelta(days=1)
+    return max(1, int((tomorrow - now_dt).total_seconds()))
+
+
+def intraday_session_ttl(
+    session_ttl: int,
+    *,
+    now: float | None = None,
+) -> int:
+    """短档（≤1h）TTL 请求的时段感知 TTL（秒）。传入该短档的配置秒数。
+
+    规则（上海时区）：
+      - 周末：市场全天休市，数据自上周五收盘冻结 → 缓存到次日零点；
+      - 开盘前(00:00–9:30)：当前是昨日/空数据，9:30 会变 → 缓存到 9:30；
+      - 上午盘(9:30–11:30)：分钟级短档；
+      - 午间休市(11:30–13:00)：数据冻结 → 缓存到 13:00；
+      - 下午盘(13:00–15:00)：分钟级短档；
+      - 收盘后(15:00–24:00)：当日定格 → 缓存到次日零点。
+    """
+    if now is None:
+        now = time.time()
+    now_dt = datetime.fromtimestamp(now, tz=_SHANGHAI_TZ)
+
+    # 周六=5, 周日=6：全天休市，缓存到次日零点（跨周末逐日自愈）。
+    if now_dt.weekday() >= 5:
+        return _seconds_to_midnight(now_dt)
+
+    minutes = now_dt.hour * 60 + now_dt.minute
+    open_am = _MORNING_OPEN[0] * 60 + _MORNING_OPEN[1]
+    close_am = _MORNING_CLOSE[0] * 60 + _MORNING_CLOSE[1]
+    open_pm = _AFTERNOON_OPEN[0] * 60 + _AFTERNOON_OPEN[1]
+    close_pm = _MARKET_CLOSE[0] * 60 + _MARKET_CLOSE[1]
+
+    if minutes < open_am:
+        return _seconds_until(now_dt, *_MORNING_OPEN)
+    if minutes < close_am:
+        return int(session_ttl)
+    if minutes < open_pm:
+        return _seconds_until(now_dt, *_AFTERNOON_OPEN)
+    if minutes < close_pm:
+        return int(session_ttl)
+    return _seconds_to_midnight(now_dt)
+
+
+def effective_ttl(
+    config: dict,
+    tool_name: str,
+    ttl_key: str | None,
+    params: dict[str, Any],
+    *,
+    now: float | None = None,
+) -> int | None:
+    """解析本次调用的 TTL（秒），None = 不缓存。命中顺序：
+
+    1. ``fuyao_cache.tools[tool_name]`` 工具级 override —— 手工指定，最高优先；
+    2. ``special_data`` 传了严格早于今天的日期 → ``cache.ttl.
+       historical_immutable``（≈永久）；
+    3. 该 ttl_key 的全局档：
+       a. 值 ≤1 小时（交易时段短档）→ 交易时段用该值、非交易时段缓存到
+          下一变化边界（见 ``intraday_session_ttl``）；
+       b. 否则直接用该全局档。
+    """
+    override = fuyao_ttl_for(config, tool_name)
+    if override is not None:
+        return override
+    if ttl_key in _FREEZABLE_TTL_KEYS and is_frozen_snapshot(params):
+        frozen = ttl_for(config, HISTORICAL_IMMUTABLE_KEY)
+        if frozen is not None:
+            return frozen
+    base = ttl_for(config, ttl_key) if ttl_key else None
+    if base is None:
+        return None
+    # 0 / 负数 = 显式不缓存 (Round-12 H2 合同), 必须在时段感知换算之前
+    # 短路; 否则 base=0 也满足 ≤1h, 会被 intraday_session_ttl 提升成
+    # 「缓存到下一变化边界」的长 TTL, 显式不缓存反而缓存得最久。
+    if base <= 0:
+        return None
+    if base <= SESSION_AWARE_TTL_MAX:
+        return intraday_session_ttl(base, now=now)
+    return base
+
+
 def is_fuyao_source(source: str | None) -> bool:
     """是否远程同花顺 HTTP 源：仅以 fuyao_ 开头（myfuyao_xx 不算）。
 
@@ -103,6 +303,21 @@ def is_fuyao_source(source: str | None) -> bool:
 def is_realtime_ttl(ttl_key: str | None) -> bool:
     """实时行情不缓存：行情要求最新，且本地终端获取本身足够快。"""
     return ttl_key == "realtime_quote"
+
+
+# 完全不参与缓存的上游（2026-09-21 用户指定）：
+# 通达信量化终端 (tdx_quant) 与 THSDK 本地终端 (thsdk)。这些本地终端数据
+# 实时性要求高、本地取数本身足够快，不套任何缓存（不读、不单飞、不写）。
+NON_CACHED_UPSTREAMS = frozenset({"tdx_quant", "thsdk"})
+
+
+def chain_is_cache_exempt(chain: list[str] | None) -> bool:
+    """路由候选链是否全部由「免缓存上游」构成（纯 tdx_quant / thsdk 链）。
+
+    仅当链上每个源都免缓存才返回 True；混合链（含 fuyao 等）不算，
+    以便远程降级响应仍可正常缓存。
+    """
+    return bool(chain) and all(source in NON_CACHED_UPSTREAMS for source in chain)
 
 
 def chain_has_remote_http(chain: list[str] | None) -> bool:

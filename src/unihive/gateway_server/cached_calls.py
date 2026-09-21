@@ -48,8 +48,10 @@ class CachedExecutionMixin:
             # 顶层循环依赖。
             from ..core import cache_strategy
 
-            # FUYAO 嵌套 TTL 优先于全局 cache.ttl[ttl_key] — 前端可按 endpoint
-            # / 工具粒度覆盖。若 fuyao_cache 未配置, 回退到 ttl_key 全局。
+            # TTL 解析顺序 (见 cache_strategy.effective_ttl): fuyao_cache 工具
+            # 级 override → special_data 传过去日期提升 historical_immutable
+            # ≈永久 → ttl_key 全局档: 值 ≤1h 时交易时段用该值、非交易时段
+            # 缓存到下一变化边界, 否则原值生效。
             # Round-12 H2 + 簇E: 整段 TTL 解析容错。TTL=0 合同语义是
             # 「显式不缓存」, 旧链路只判 is not None, 0 透传到 Cache.set
             # 被 `if ttl` 判假 → expires_at=NULL → 永久缓存; fuyao override
@@ -58,10 +60,7 @@ class CachedExecutionMixin:
             # 配置错变成请求 500。
             ttl: int | None = None
             try:
-                fuyao_ttl = cache_strategy.fuyao_ttl_for(self.config, name)
-                ttl = fuyao_ttl if fuyao_ttl is not None else (
-                    cache_strategy.ttl_for(self.config, ttl_key) if ttl_key else None
-                )
+                ttl = cache_strategy.effective_ttl(self.config, name, ttl_key, params)
                 if ttl is not None:
                     ttl = cache_strategy.normalize_ttl(ttl)
             except (TypeError, ValueError):
@@ -84,10 +83,13 @@ class CachedExecutionMixin:
                     .get(route_key, {})
                     .keys()
                 )
-            # 是否走缓存读/单飞：有 TTL、非实时、链上存在远程 fuyao 源。
+            # 是否走缓存读/单飞：有 TTL、非实时、链上存在远程 fuyao 源，
+            # 且不是「免缓存上游」(纯 tdx_quant/thsdk 链一律不缓存)。
+            cache_exempt = cache_strategy.chain_is_cache_exempt(chain)
             can_read_cache = (
                 ttl is not None
                 and cache_enabled
+                and not cache_exempt
                 and not cache_strategy.is_realtime_ttl(ttl_key)
                 and cache_strategy.chain_has_remote_http(chain)
             )

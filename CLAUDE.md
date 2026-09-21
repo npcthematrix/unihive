@@ -93,7 +93,7 @@ MCP 端点: http://127.0.0.1:18080/mcp
 - **请求/响应 only**,无 SSE 流;`/mcp` 保持开放,**不**做鉴权
 - **鉴权范围**: `/api/*` + `console.html` 用 cookie session (见 `src/console_auth.py`)
 - **代码标准化**: `600519.SH` / `000001.SZ` (fuyao 格式) 与 `sh600519` (TDX 格式) 互转 (`src/core/normalizer.py`)
-- **缓存**: SQLite (`logs/cache.db`),按 `cache_ttl_key` 区分 TTL 档 (realtime_quote / historical / fundamentals / ...)
+- **缓存**: SQLite (`logs/cache.db`),按 `cache_ttl_key` 区分 TTL 档 (realtime_quote / historical / fundamentals / ...);TTL 是**日期/时段感知**的,两条规则:(1) `special_data` 工具(涨停/跌停/炸板池、龙虎榜、热门股历史等)传入**过去日期**时提升 `historical_immutable`(约 10 年≈永久,Round-12 禁止真永久 expires_at=NULL;历史交易日收盘后冻结);(2) **任何配置值 ≤1 小时的档**(当前 special_data 60s / index_data 60s,盘中均 1 分钟)都按交易时段感知:交易时段用该短档,非交易时段自动缓存到下一变化边界(9:30 开盘 / 13:00 午后开盘 / 收盘后到次日零点),不按分钟空转重拉。通达信量化终端(tdx_quant)与 THSDK 本地终端(thsdk)两个上游**完全不缓存**(纯该两源的链不读/不单飞/不写;混合链含 fuyao 时远程响应仍缓存)。交易日历 180 天、代码/板块目录 7 天;基金 fund_data/fund_holdings/fund_history 为 7d/90d/1d (持仓随季报每季度披露,故 90 天)
 - **板块数据**: OMNI 离线使用,先 `python -m src.unihive.sync.board_sync` 同步 `data/board.db`,再调 `omni_*` 工具
 
 ## 技术栈

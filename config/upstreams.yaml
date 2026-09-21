@@ -14,13 +14,27 @@ cache:
   operation_timeout: 3.0
   ttl:
     # realtime_quote: 故意不配置 —— 实时行情不缓存
+    # 通用规则：值 ≤1 小时（3600s）的档都是「交易时段短档」—— 交易时段
+    # 用该值, 非交易时段自动缓存到下一变化边界 (9:30 / 13:00 / 次日零点;
+    # 见 cache_strategy.intraday_session_ttl)。当前为 special_data / index_data。
     historical: 86400        # 历史K线/复权因子等（收盘后不变），缓存 1 天
-    fundamentals: 86400      # 财报三表/财务指标，缓存 1 天
-    valuation: 30            # 估值快照，30s（兼顾新鲜度与上游削峰）
-    special_data: 300        # 涨停池/异动等特色数据，5 分钟
-    ticker_list: 3600        # 证券代码/板块列表，1 小时
-    workday: 604800          # 交易日历，7 天
-    search: 60               # 证券搜索，1 分钟
+    fundamentals: 604800     # 财报三表/财务指标（随财报披露，不常变），7 天
+    valuation: 86400         # 估值快照（无需敏感），1 天
+    # special_data 传过去日期会提升到 historical_immutable 档≈永久。
+    special_data: 60         # 涨停池/异动等当日特色数据，交易时段 1 分钟
+    auction_snapshot: 86400  # 集合竞价快照（无日期恒指当天，9:25 后全天固定），1 天
+    ticker_list: 604800      # 证券代码/板块目录/成分股（新股上市/调样时变），7 天
+    workday: 15552000        # 交易日历提前发布、常年不变，180 天
+    # 过去交易日冻结的历史快照：special_data 工具传入严格早于今天的日期时
+    # 自动套用（见 cache_strategy.effective_ttl）。数据收盘后永久不变，
+    # Round-12 合同禁止 expires_at=NULL 真永久，故取约 10 年的极大有限值≈永久。
+    historical_immutable: 315360000
+    # 基金：此前 cache_ttl_key 配了 fund_data/fund_holdings/fund_history 但
+    # cache.ttl 未给档 → 基金工具实际不缓存，补齐（2026-09-21）。
+    fund_data: 604800        # 基金资料/业绩/经理等，7 天
+    fund_holdings: 7776000   # 基金持仓/行业配置（随季报披露，约每季度更新），90 天
+    fund_history: 86400      # ETF/LOF 历史行情/历史业绩指标，1 天
+    index_data: 60           # 指数行情快照，交易时段 60s（非交易时段缓存到下一变化边界）
 
 upstreams:
   mootdx2:
@@ -274,7 +288,7 @@ tools:
   - {name: a_share_special_data_hot_stock_list_history, description: "A 股热门股历史", routing: a_share_special_data_hot_stock_list_history, params: [{name: date, type: str, required: true, description: "目标日期，格式 yyyy-MM-dd，只支持一年内数据"}], cache_ttl_key: special_data, data_source_type: online}
   - {name: a_share_special_data_hot_stock_rank_trend, description: "A 股热门股排名趋势", routing: a_share_special_data_hot_stock_rank_trend, params: [{name: thscode, type: str, required: true, normalize: code, description: "THS 代码，如 '600519.SH'"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd，需 >= start_date"}], cache_ttl_key: special_data, data_source_type: online}
   - {name: a_share_special_data_dragon_tiger_list, description: "A 股龙虎榜", routing: a_share_special_data_dragon_tiger_list, params: [{name: board_type, type: str, required: false, enum: [all, org, hot_money], description: "榜单类型：all=全部（默认）/ org=机构榜 / hot_money=游资榜"}, {name: date, type: str, required: false, description: "目标日期，格式 yyyy-MM-dd，省略则默认最近可用交易日"}], cache_ttl_key: special_data, data_source_type: online}
-  - {name: a_share_auction_snapshot, description: "A 股集合竞价快照", routing: a_share_auction_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，省略则返回全市场"}], cache_ttl_key: special_data, data_source_type: online}
+  - {name: a_share_auction_snapshot, description: "A 股集合竞价快照", routing: a_share_auction_snapshot, params: [{name: thscodes, type: str, required: false, description: "逗号分隔的 THS 代码列表，省略则返回全市场"}], cache_ttl_key: auction_snapshot, data_source_type: online}
   - {name: a_share_auction_short_term_benchmark, description: "A 股短期竞价基准", routing: a_share_auction_short_term_benchmark, params: [{name: date, type: str, required: false, description: "目标日期，格式 yyyy-MM-dd，省略默认当天"}], cache_ttl_key: special_data, data_source_type: online}
 
   # === Fuyao a-share-index (4) ===
@@ -289,14 +303,14 @@ tools:
   # === Fuyao fund (27) ===
   - {name: fund_profile_detail, description: "基金基础资料", routing: fund_profile_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
   - {name: fund_portfolio_holdings, description: "基金持仓(最新)", routing: fund_portfolio_holdings, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-  - {name: fund_performance_returns, description: "基金各期收益 (1M/3M/6M/1Y/3Y/5Y/成立来)", routing: fund_performance_returns, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
+  - {name: fund_performance_returns, description: "基金各期收益 (1M/3M/6M/1Y/3Y/5Y/成立来)", routing: fund_performance_returns, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_history, data_source_type: online}
   - {name: fund_holders_detail, description: "基金持有人结构(合并/单类)", routing: fund_holders_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
   - {name: fund_market_historical, description: "ETF/LOF 历史行情", routing: fund_market_historical, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: interval, type: str, required: false, enum: [1d, 1w, 1M], description: "K 线周期：1d=日（默认）/ 1w=周 / 1M=月"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}], cache_ttl_key: fund_history, data_source_type: online}
   - {name: fund_market_snapshot, description: "场内基金实时行情快照 (ETF/LOF/REITs, 仅场内品种有效, 场外基金返回 code=3004)", routing: fund_market_snapshot, params: [{name: thscode, type: str, required: true, description: "场内基金 THS 代码，如 '510300.SH'"}], cache_ttl_key: realtime_quote, data_source_type: online}
   - {name: fund_companies_detail, description: "基金公司信息", routing: fund_companies_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
   - {name: fund_portfolio_industry_allocation, description: "基金行业配置", routing: fund_portfolio_industry_allocation, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
   - {name: fund_performance_indicators_historical, description: "基金历史业绩指标", routing: fund_performance_indicators_historical, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: start_date, type: str, required: false, description: "起始日期，格式 yyyy-MM-dd"}, {name: end_date, type: str, required: false, description: "结束日期，格式 yyyy-MM-dd"}], cache_ttl_key: fund_history, data_source_type: online}
-  - {name: fund_performance_drawdowns, description: "基金回撤指标", routing: fund_performance_drawdowns, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
+  - {name: fund_performance_drawdowns, description: "基金回撤指标", routing: fund_performance_drawdowns, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_history, data_source_type: online}
   - {name: fund_holders_top, description: "基金前十大持有人", routing: fund_holders_top, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
   - {name: fund_corporate_actions_dividends, description: "基金分红记录", routing: fund_corporate_actions_dividends, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
   - {name: fund_diagnostics_detail, description: "基金诊断", routing: fund_diagnostics_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
@@ -307,7 +321,7 @@ tools:
   - {name: fund_managers_performance, description: "基金经理业绩", routing: fund_managers_performance, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
   - {name: fund_managers_experience, description: "基金经理经验", routing: fund_managers_experience, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
   - {name: fund_managers_detail, description: "基金经理详情", routing: fund_managers_detail, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_data, data_source_type: online}
-  - {name: fund_news_article_list, description: "基金新闻", routing: fund_news_article_list, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: offset, type: int, required: false, description: "分页偏移"}, {name: limit, type: int, required: false, description: "返回条数"}], data_source_type: online}
+  - {name: fund_news_article_list, description: "基金新闻", routing: fund_news_article_list, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}, {name: offset, type: int, required: false, description: "分页偏移"}, {name: limit, type: int, required: false, description: "返回条数"}], cache_ttl_key: special_data, data_source_type: online}
   - {name: fund_offerings_list, description: "基金募集列表", routing: fund_offerings_list, params: [], cache_ttl_key: fund_data, data_source_type: online}
   - {name: fund_portfolio_stock_history, description: "基金股票持仓历史", routing: fund_portfolio_stock_history, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
   - {name: fund_portfolio_stock_report_dates, description: "基金股票持仓报告日", routing: fund_portfolio_stock_report_dates, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}

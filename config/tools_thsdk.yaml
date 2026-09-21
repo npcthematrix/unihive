@@ -20,7 +20,6 @@ tools:
     routing: ths_auth_status
     upstream_tool_mapping:
       thsdk: ths_auth_status
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params: []
@@ -32,7 +31,6 @@ tools:
     routing: ths_account_permissions
     upstream_tool_mapping:
       thsdk: ths_account_permissions
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params: []
@@ -44,7 +42,6 @@ tools:
     routing: ths_get_account_watchlist
     upstream_tool_mapping:
       thsdk: ths_get_account_watchlist
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params: []
@@ -56,7 +53,6 @@ tools:
     routing: ths_get_account_watchlist_groups
     upstream_tool_mapping:
       thsdk: ths_get_account_watchlist_groups
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params: []
@@ -68,7 +64,6 @@ tools:
     routing: ths_get_all_watchlist
     upstream_tool_mapping:
       thsdk: ths_get_all_watchlist
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params: []
@@ -85,7 +80,6 @@ tools:
     routing: ths_search_symbols
     upstream_tool_mapping:
       thsdk: ths_search_symbols
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params:
@@ -100,7 +94,6 @@ tools:
     routing: ths_complete_ths_code
     upstream_tool_mapping:
       thsdk: ths_complete_ths_code
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params:
@@ -122,7 +115,6 @@ tools:
     routing: ths_get_price
     upstream_tool_mapping:
       thsdk: ths_get_price
-    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -146,7 +138,6 @@ tools:
     routing: ths_klines
     upstream_tool_mapping:
       thsdk: ths_klines
-    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -167,7 +158,6 @@ tools:
     routing: ths_intraday_data
     upstream_tool_mapping:
       thsdk: ths_intraday_data
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -182,7 +172,6 @@ tools:
     routing: ths_depth
     upstream_tool_mapping:
       thsdk: ths_depth
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -199,7 +188,6 @@ tools:
     routing: ths_tick_level1
     upstream_tool_mapping:
       thsdk: ths_tick_level1
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -218,7 +206,6 @@ tools:
     routing: ths_corporate_action
     upstream_tool_mapping:
       thsdk: ths_corporate_action
-    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -238,7 +225,6 @@ tools:
     routing: ths_wencai_nlp
     upstream_tool_mapping:
       thsdk: ths_wencai_nlp
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params:
@@ -257,7 +243,6 @@ tools:
     routing: ths_news
     upstream_tool_mapping:
       thsdk: ths_news
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params:
@@ -276,7 +261,6 @@ tools:
     routing: ths_block_constituents
     upstream_tool_mapping:
       thsdk: ths_block_constituents
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -295,7 +279,6 @@ tools:
     routing: ths_market_securities
     upstream_tool_mapping:
       thsdk: thsdk.list_market_securities
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -318,7 +301,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: securities, type: "List[str]", required: true, description: "完整 THSCODE 数组，如 ['USHA600519']；短代码自动补全"}
@@ -335,7 +317,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: securities, type: "List[str]", required: true, description: "完整 THSCODE 数组；短代码自动补全"}
@@ -354,7 +335,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: securities, type: "List[str]", required: true, description: "替换后的完整 THSCODE 数组；短代码自动补全"}
@@ -370,7 +350,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: confirm, type: bool, required: true, description: "必须显式传 true 才执行，否则拒绝"}
@@ -388,7 +367,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: name, type: str, required: true, description: "新分组名称"}
@@ -407,7 +385,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: group_id, type: int, required: true, description: "分组 ID，取自 ths_get_account_watchlist_groups"}
@@ -425,7 +402,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: group_id, type: int, required: true, description: "分组 ID"}
@@ -443,7 +419,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: group_id, type: int, required: true, description: "分组 ID"}
@@ -461,7 +436,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: group_id, type: int, required: true, description: "分组 ID"}
@@ -481,7 +455,6 @@ tools:
     requires_env: ALLOW_WATCHLIST_WRITE
     dangerous: true
     annotations: {read_only_hint: false, destructive_hint: true}
-    cache_ttl_key:
     data_source_type: online
     params:
       - {name: group_id, type: int, required: true, description: "分组 ID"}
@@ -497,7 +470,6 @@ tools:
     routing: ths_list_block_descriptions
     upstream_tool_mapping:
       thsdk: ths_list_block_descriptions
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -510,7 +482,6 @@ tools:
     routing: ths_list_security_block_memberships
     upstream_tool_mapping:
       thsdk: ths_list_security_block_memberships
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -523,7 +494,6 @@ tools:
     routing: ths_get_security_concept_tags
     upstream_tool_mapping:
       thsdk: ths_get_security_concept_tags
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -536,7 +506,6 @@ tools:
     routing: ths_get_security_industry
     upstream_tool_mapping:
       thsdk: ths_get_security_industry
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -549,7 +518,6 @@ tools:
     routing: ths_list_industry_children
     upstream_tool_mapping:
       thsdk: ths_list_industry_children
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -568,7 +536,6 @@ tools:
     routing: ths_rank_block_securities
     upstream_tool_mapping:
       thsdk: ths_rank_block_securities
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -591,7 +558,6 @@ tools:
     routing: ths_query_wencai
     upstream_tool_mapping:
       thsdk: ths_query_wencai
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params:
@@ -609,7 +575,6 @@ tools:
     routing: ths_query_wencai_securities
     upstream_tool_mapping:
       thsdk: ths_query_wencai_securities
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params:
@@ -624,7 +589,6 @@ tools:
     routing: ths_list_wencai_hot_blocks
     upstream_tool_mapping:
       thsdk: ths_list_wencai_hot_blocks
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params:
@@ -639,7 +603,6 @@ tools:
     routing: ths_rank_securities_by_popularity
     upstream_tool_mapping:
       thsdk: ths_rank_securities_by_popularity
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params: []
@@ -651,7 +614,6 @@ tools:
     routing: ths_get_security_popularity_rank
     upstream_tool_mapping:
       thsdk: ths_get_security_popularity_rank
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params:
@@ -669,7 +631,6 @@ tools:
     routing: ths_list_hot_event_news
     upstream_tool_mapping:
       thsdk: ths_list_hot_event_news
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params:
@@ -683,7 +644,6 @@ tools:
     routing: ths_list_security_news_events
     upstream_tool_mapping:
       thsdk: ths_list_security_news_events
-    cache_ttl_key: special_data
     data_source_type: online
     dangerous: false
     params:
@@ -699,7 +659,6 @@ tools:
     routing: ths_calculate_security_realtime_statistics
     upstream_tool_mapping:
       thsdk: ths_calculate_security_realtime_statistics
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -712,7 +671,6 @@ tools:
     routing: ths_get_security_short_term_highlights
     upstream_tool_mapping:
       thsdk: ths_get_security_short_term_highlights
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -725,7 +683,6 @@ tools:
     routing: ths_list_security_price_volume_levels
     upstream_tool_mapping:
       thsdk: ths_list_security_price_volume_levels
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -741,7 +698,6 @@ tools:
     routing: ths_list_security_corporate_actions
     upstream_tool_mapping:
       thsdk: ths_list_security_corporate_actions
-    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -757,7 +713,6 @@ tools:
     routing: ths_list_security_financial_snapshots
     upstream_tool_mapping:
       thsdk: ths_list_security_financial_snapshots
-    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -775,7 +730,6 @@ tools:
     routing: ths_analyze_security_limit_up
     upstream_tool_mapping:
       thsdk: ths_analyze_security_limit_up
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -793,7 +747,6 @@ tools:
     routing: ths_get_security_price_limit_events
     upstream_tool_mapping:
       thsdk: ths_get_security_price_limit_events
-    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -809,7 +762,6 @@ tools:
     routing: ths_list_futures_related_securities
     upstream_tool_mapping:
       thsdk: ths_list_futures_related_securities
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params: []
@@ -821,7 +773,6 @@ tools:
     routing: ths_list_security_ah_relations
     upstream_tool_mapping:
       thsdk: ths_list_security_ah_relations
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -835,7 +786,6 @@ tools:
     routing: ths_list_security_futures_relations
     upstream_tool_mapping:
       thsdk: ths_list_security_futures_relations
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:
@@ -852,7 +802,6 @@ tools:
     routing: ths_search_securities
     upstream_tool_mapping:
       thsdk: ths_search_securities
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params:
@@ -866,7 +815,6 @@ tools:
     routing: ths_resolve_securities
     upstream_tool_mapping:
       thsdk: ths_resolve_securities
-    cache_ttl_key:
     data_source_type: online
     dangerous: false
     params:
@@ -881,7 +829,6 @@ tools:
     routing: ths_list_security_ticks
     upstream_tool_mapping:
       thsdk: ths_list_security_ticks
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -896,7 +843,6 @@ tools:
     routing: ths_list_security_intraday_bars
     upstream_tool_mapping:
       thsdk: ths_list_security_intraday_bars
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -912,7 +858,6 @@ tools:
     routing: ths_list_security_order_books
     upstream_tool_mapping:
       thsdk: ths_list_security_order_books
-    cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
     params:
@@ -926,7 +871,6 @@ tools:
     routing: ths_list_security_daily_capital_flows
     upstream_tool_mapping:
       thsdk: ths_list_security_daily_capital_flows
-    cache_ttl_key: historical
     data_source_type: online
     dangerous: false
     params:
@@ -940,7 +884,6 @@ tools:
     routing: ths_get_market_security_names
     upstream_tool_mapping:
       thsdk: ths_get_market_security_names
-    cache_ttl_key: ticker_list
     data_source_type: online
     dangerous: false
     params:

@@ -1,6 +1,7 @@
 """FUYAO-only 策略 + LRU 驱逐 + execute_cached 行为测试。"""
 import asyncio
 from dataclasses import dataclass
+from datetime import date, datetime, time as dtime, timedelta, timezone
 
 import pytest
 
@@ -740,9 +741,12 @@ class TestAsyncStatsPersistence:
         import json
         with open(cache.STATS_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        assert data == {"hits": 0, "misses": 3}, (
+        assert data["hits"] == 0 and data["misses"] == 3, (
             f"close 后 stats 应已落盘, got {data}"
         )
+        # updated_at/pid 让控制台能识别统计是否来自当前进程
+        assert isinstance(data["updated_at"], int)
+        assert isinstance(data["pid"], int)
 
     async def test_hot_path_flushes_via_background_task(self, tmp_path):
         """越过 STATS_FLUSH_INTERVAL 时, record_hit/record_miss 必须
@@ -769,9 +773,11 @@ class TestAsyncStatsPersistence:
 
         with open(cache.STATS_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        assert data == {"hits": cache.STATS_FLUSH_INTERVAL, "misses": 0}, (
+        assert data["hits"] == cache.STATS_FLUSH_INTERVAL and data["misses"] == 0, (
             f"热路径 async flush 应已落盘, got {data}"
         )
+        assert isinstance(data["updated_at"], int)
+        assert isinstance(data["pid"], int)
 
         await cache.close()
 
@@ -999,3 +1005,295 @@ class TestExecuteCachedWarnPassthrough:
         assert r1["warn"] == WARN_TEXT
         assert r2["warn"] == WARN_TEXT
         await cache.close()
+
+
+# ===== 日期(参数)感知 TTL（2026-09-21）=====
+
+_TZ = timezone(timedelta(hours=8))
+
+# 冻结用时钟: 工作日 (周一 2026-09-14) 上午连续竞价时段 10:00。
+# 此区间内短档 TTL 必须返回配置原值; 不冻结的话用例在周末/盘后跑
+# 会拿到「到下一变化边界」秒数, 随时钟漂移而失败。
+_IN_SESSION_NOW = datetime(2026, 9, 14, 10, 0, tzinfo=_TZ).timestamp()
+
+
+def _midnight_ms(day: date) -> int:
+    """上海(北京)零点毫秒戳, 与 registry._date_str_to_ms 同口径。"""
+    return int(datetime.combine(day, dtime(), tzinfo=_TZ).timestamp() * 1000)
+
+
+class TestAsOfDateParsing:
+    """归一化后日期落在不同键/格式, as_of_date 需统一解析。"""
+
+    def test_date_ms_integer(self):
+        day = date(2026, 9, 18)
+        assert cache_strategy.as_of_date({"date_ms": _midnight_ms(day)}) == day
+
+    def test_date_string_dashed(self):
+        assert cache_strategy.as_of_date({"date": "2026-09-18"}) == date(2026, 9, 18)
+
+    def test_end_date_eight_digits(self):
+        assert cache_strategy.as_of_date({"end_date": "20260918"}) == date(2026, 9, 18)
+
+    def test_key_precedence_date_ms_first(self):
+        # 同一次调用不会同时出现, 但优先级确定: date_ms > date > end_date > start_date
+        params = {
+            "date_ms": _midnight_ms(date(2026, 9, 18)),
+            "date": "2026-09-10",
+            "end_date": "20260905",
+        }
+        assert cache_strategy.as_of_date(params) == date(2026, 9, 18)
+
+    def test_no_recognised_date(self):
+        assert cache_strategy.as_of_date({"thscode": "600519.SH"}) is None
+
+    def test_bad_values_ignored(self):
+        assert cache_strategy._coerce_as_of_date("not-a-date") is None
+        assert cache_strategy._coerce_as_of_date(True) is None
+        assert cache_strategy._coerce_as_of_date("2026-13-99") is None
+
+
+class TestFrozenSnapshot:
+    """is_frozen_snapshot / is_historical_special_data 语义。"""
+
+    TODAY = date(2026, 9, 21)
+
+    def test_past_date_is_frozen(self):
+        params = {"date_ms": _midnight_ms(self.TODAY - timedelta(days=1))}
+        assert cache_strategy.is_frozen_snapshot(params, today=self.TODAY) is True
+
+    def test_today_not_frozen(self):
+        params = {"date": "2026-09-21"}
+        assert cache_strategy.is_frozen_snapshot(params, today=self.TODAY) is False
+
+    def test_future_not_frozen(self):
+        params = {"date": "2026-09-30"}
+        assert cache_strategy.is_frozen_snapshot(params, today=self.TODAY) is False
+
+    def test_no_date_not_frozen(self):
+        # 日期留空 → 工具默认当天, 不可按冻结档
+        assert cache_strategy.is_frozen_snapshot({}, today=self.TODAY) is False
+
+    def test_historical_special_data_gate(self):
+        past = {"date_ms": _midnight_ms(self.TODAY - timedelta(days=2))}
+        assert cache_strategy.is_historical_special_data("special_data", past, today=self.TODAY)
+        # 当天/无日期不算
+        assert not cache_strategy.is_historical_special_data(
+            "special_data", {"date_ms": _midnight_ms(self.TODAY)}, today=self.TODAY
+        )
+        assert not cache_strategy.is_historical_special_data("special_data", {}, today=self.TODAY)
+        # historical 键即使 end_date 在过去也不提升（前复权K线会变）
+        assert not cache_strategy.is_historical_special_data(
+            "historical", {"end_date": "20260918"}, today=self.TODAY
+        )
+
+
+def _factory_ttl_config() -> dict:
+    """出厂 cache.ttl（与 upstreams.yaml 同步）+ 纯 fuyao 路由链。"""
+    return {
+        "cache": {"ttl": {
+            "historical": 86400,
+            "fundamentals": 86400,
+            "valuation": 30,
+            "special_data": 300,
+            "ticker_list": 604800,
+            "workday": 15552000,
+            "search": 60,
+            "historical_immutable": 15552000,
+            "fund_data": 604800,
+            "fund_holdings": 86400,
+            "fund_history": 86400,
+        }},
+        "upstream_tool_mapping": {"pool_tool": {"fuyao_ashare": "x"}},
+    }
+
+
+class TestEffectiveTtl:
+    """effective_ttl 三档解析。"""
+
+    TODAY = date(2026, 9, 21)
+
+    def test_past_special_data_promoted_to_immutable(self):
+        cfg = _factory_ttl_config()
+        params = {"date_ms": _midnight_ms(self.TODAY - timedelta(days=1))}
+        assert cache_strategy.effective_ttl(cfg, "pool_tool", "special_data", params) == 15552000
+
+    def test_today_special_data_keeps_short_ttl(self):
+        cfg = _factory_ttl_config()
+        params = {"date_ms": _midnight_ms(self.TODAY)}
+        assert cache_strategy.effective_ttl(
+            cfg, "pool_tool", "special_data", params, now=_IN_SESSION_NOW
+        ) == 300
+
+    def test_missing_date_special_data_keeps_short_ttl(self):
+        cfg = _factory_ttl_config()
+        assert cache_strategy.effective_ttl(
+            cfg, "pool_tool", "special_data", {}, now=_IN_SESSION_NOW
+        ) == 300
+
+    def test_historical_key_with_past_end_date_not_promoted(self):
+        cfg = _factory_ttl_config()
+        params = {"end_date": "20260918"}
+        assert cache_strategy.effective_ttl(cfg, "hist", "historical", params) == 86400
+
+    def test_fuyao_tool_override_wins_over_promotion(self):
+        cfg = _factory_ttl_config()
+        # 手工给该工具 60s，即使查过去交易日也尊重手工值
+        cfg["fuyao_cache"] = {"tools": {"pool_tool": 60}}
+        params = {"date_ms": _midnight_ms(self.TODAY - timedelta(days=5))}
+        assert cache_strategy.effective_ttl(cfg, "pool_tool", "special_data", params) == 60
+
+    def test_missing_immutable_falls_back_to_special_data(self):
+        cfg = _factory_ttl_config()
+        del cfg["cache"]["ttl"]["historical_immutable"]
+        params = {"date_ms": _midnight_ms(self.TODAY - timedelta(days=1))}
+        # 注: 日期恰为"上一个交易日", 冻结档缺失时回退到 special_data 短档;
+        # 锁死在盘中时钟, 避免周末回退值变成到零点的秒数。
+        assert cache_strategy.effective_ttl(
+            cfg, "pool_tool", "special_data", params, now=_IN_SESSION_NOW
+        ) == 300
+
+    def test_zero_base_ttl_returns_none(self):
+        """0 = 显式不缓存: 不得进入时段感知换算被提升为长 TTL。"""
+        cfg = _factory_ttl_config()
+        cfg["cache"]["ttl"]["special_data"] = 0
+        assert cache_strategy.effective_ttl(
+            cfg, "pool_tool", "special_data", {}, now=_IN_SESSION_NOW
+        ) is None
+
+    def test_negative_base_ttl_returns_none(self):
+        cfg = _factory_ttl_config()
+        cfg["cache"]["ttl"]["special_data"] = -30
+        assert cache_strategy.effective_ttl(
+            cfg, "pool_tool", "special_data", {}, now=_IN_SESSION_NOW
+        ) is None
+
+    def test_workday_and_fund_keys_resolve(self):
+        cfg = _factory_ttl_config()
+        assert cache_strategy.effective_ttl(cfg, "cal", "workday", {}) == 15552000
+        assert cache_strategy.effective_ttl(cfg, "fp", "fund_data", {}) == 604800
+        assert cache_strategy.effective_ttl(cfg, "fh", "fund_holdings", {}) == 86400
+
+    def test_unknown_key_returns_none(self):
+        cfg = _factory_ttl_config()
+        assert cache_strategy.effective_ttl(cfg, "x", "index_data", {}) is None
+
+
+class TestDateAwareCachedWrites:
+    """_execute_cached 写库时 TTL 随日期变（过去→冻结档，当天/留空→短档）。"""
+
+    async def _server_with_spy(self, tmp_path, gateway_server_minimal):
+        from src.unihive.storage.cache import Cache, CacheConfig
+
+        cache = Cache(CacheConfig(enabled=True, db_path=str(tmp_path / "cache.db")))
+        await cache.initialize()
+
+        @dataclass
+        class FakeResult:
+            success: bool = True
+            data: object = None
+            error: str | None = None
+            source: str | None = "fuyao_ashare"
+            hops: list = None  # type: ignore
+
+            def __post_init__(self):
+                if self.hops is None:
+                    self.hops = []
+
+        class FakeRouter:
+            async def route(self, route_key, params):
+                return FakeResult(data={"rows": []})
+
+        server = gateway_server_minimal
+        server.cache = cache
+        server.router = FakeRouter()
+        server.config = _factory_ttl_config()
+
+        captured: dict = {}
+        orig_set = cache.set
+
+        async def spy_set(key, value, ttl=None):
+            captured["ttl"] = ttl
+            return await orig_set(key, value, ttl=ttl)
+
+        cache.set = spy_set
+        return server, cache, captured
+
+    async def test_past_date_writes_immutable_ttl(self, tmp_path, gateway_server_minimal):
+        server, cache, captured = await self._server_with_spy(tmp_path, gateway_server_minimal)
+        past = cache_strategy.shanghai_today() - timedelta(days=3)
+        await server._execute_cached(
+            "pool_tool", {"date_ms": _midnight_ms(past)},
+            route_key="pool_tool", ttl_key="special_data",
+        )
+        assert captured["ttl"] == 15552000
+        await cache.close()
+
+    async def test_today_date_writes_short_ttl(
+        self, tmp_path, gateway_server_minimal, monkeypatch
+    ):
+        # 锁死在工作日盘中: 短档写配置原值 300s (周末会写成到零点的秒数)。
+        monkeypatch.setattr(cache_strategy.time, "time", lambda: _IN_SESSION_NOW)
+        server, cache, captured = await self._server_with_spy(tmp_path, gateway_server_minimal)
+        today = cache_strategy.shanghai_today()
+        await server._execute_cached(
+            "pool_tool", {"date_ms": _midnight_ms(today)},
+            route_key="pool_tool", ttl_key="special_data",
+        )
+        assert captured["ttl"] == 300
+        await cache.close()
+
+    async def test_missing_date_writes_short_ttl(
+        self, tmp_path, gateway_server_minimal, monkeypatch
+    ):
+        monkeypatch.setattr(cache_strategy.time, "time", lambda: _IN_SESSION_NOW)
+        server, cache, captured = await self._server_with_spy(tmp_path, gateway_server_minimal)
+        await server._execute_cached(
+            "pool_tool", {},
+            route_key="pool_tool", ttl_key="special_data",
+        )
+        assert captured["ttl"] == 300
+        await cache.close()
+
+
+class TestIntradaySessionTtl:
+    """时段感知短档: 六个时段分支 + 周末 (2026-09-14=周一 ... 09-20=周日)。"""
+
+    def _at(self, day: int, hour: int, minute: int = 0) -> float:
+        return datetime(2026, 9, day, hour, minute, tzinfo=_TZ).timestamp()
+
+    def test_pre_open_waits_for_morning_open(self):
+        # 08:00 → 9:30 = 5400s
+        assert cache_strategy.intraday_session_ttl(300, now=self._at(14, 8)) == 5400
+
+    def test_morning_session_uses_configured_short_ttl(self):
+        assert cache_strategy.intraday_session_ttl(300, now=self._at(14, 10)) == 300
+
+    def test_lunch_break_waits_for_afternoon_open(self):
+        # 12:00 → 13:00 = 3600s
+        assert cache_strategy.intraday_session_ttl(300, now=self._at(14, 12)) == 3600
+
+    def test_afternoon_session_uses_configured_short_ttl(self):
+        assert cache_strategy.intraday_session_ttl(300, now=self._at(14, 14)) == 300
+
+    def test_post_close_waits_until_midnight(self):
+        # 16:00 → 次日零点 = 8h = 28800s
+        assert cache_strategy.intraday_session_ttl(300, now=self._at(14, 16)) == 28800
+
+    def test_saturday_caches_to_midnight(self):
+        # 周六 10:00 → 次日零点 = 14h = 50400s
+        assert cache_strategy.intraday_session_ttl(300, now=self._at(19, 10)) == 50400
+
+    def test_sunday_evening_caches_to_midnight(self):
+        # 周日 23:00 → 零点 = 3600s
+        assert cache_strategy.intraday_session_ttl(300, now=self._at(20, 23)) == 3600
+
+    def test_floor_is_one_second_near_boundary(self):
+        # 紧贴 9:30 边界时下限 1s, 不返回 0 (0 另有"不缓存"语义)
+        near = datetime(2026, 9, 14, 9, 29, 59, tzinfo=_TZ).timestamp()
+        assert cache_strategy.intraday_session_ttl(300, now=near) == 1
+
+    def test_index_data_sixty_second_short_ttl_same_branches(self):
+        # 另一短档 index_data=60s: 盘中返回配置原值, 午间仍等到 13:00
+        assert cache_strategy.intraday_session_ttl(60, now=self._at(14, 10)) == 60
+        assert cache_strategy.intraday_session_ttl(60, now=self._at(14, 12)) == 3600
