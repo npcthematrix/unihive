@@ -13,19 +13,19 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/',
     component: () => import('@/layouts/DefaultLayout.vue'),
-    redirect: { name: 'status' },
+    redirect: { name: 'guides' },
     children: [
       {
         path: 'status',
         name: 'status',
         component: () => import('@/views/StatusView.vue'),
-        meta: { title: '上游状态' },
+        meta: { title: '上游数据源状态' },
       },
       {
         path: 'l1-cache',
         name: 'l1-cache',
         component: () => import('@/views/L1CacheView.vue'),
-        meta: { title: 'L1 缓存指标' },
+        meta: { title: '网关缓存监控' },
       },
       {
         path: 'interfaces',
@@ -65,7 +65,7 @@ const routes: RouteRecordRaw[] = [
       },
     ],
   },
-  { path: '/:pathMatch(.*)*', redirect: { name: 'status' } },
+  { path: '/:pathMatch(.*)*', redirect: { name: 'guides' } },
 ]
 
 export const router = createRouter({

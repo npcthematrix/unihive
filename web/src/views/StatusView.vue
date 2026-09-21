@@ -1,10 +1,10 @@
 <template>
   <div class="status-page">
-    <!-- 上游服务状态 -->
+    <!-- 上游数据源状态 -->
     <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="card-toolbar">
-          <h2 class="card-title">上游服务状态</h2>
+          <h2 class="card-title">上游数据源状态</h2>
           <div class="toolbar-actions">
             <span
               class="last-refresh"
@@ -140,63 +140,6 @@
         </el-table-column>
       </el-table>
     </el-card>
-
-    <!-- 缓存 -->
-    <el-card shadow="never" class="panel-card">
-      <template #header>
-        <div class="card-toolbar">
-          <h2 class="card-title">缓存 <small class="sub">(运行时统计)</small></h2>
-          <div class="toolbar-actions">
-            <span class="timestamp">{{ cacheTimeText }}</span>
-            <el-button :icon="Refresh" :loading="manualLoading" @click="load(true)">立即刷新</el-button>
-          </div>
-        </div>
-      </template>
-
-      <div v-loading="initialLoading" class="cache-grid">
-        <div class="cache-hitrate-card">
-          <div class="cache-hitrate-head">
-            <span class="mini-label">命中率</span>
-            <span class="cache-hitrate-value">{{ hitRateText }}</span>
-          </div>
-          <el-progress
-            v-if="hitRatePct !== null"
-            :percentage="hitRatePct"
-            :stroke-width="10"
-            :show-text="false"
-            :color="hitRateColor"
-          />
-          <div v-else class="hitrate-bar-empty" />
-          <div class="cache-hitrate-meta">
-            <span><strong>{{ cache?.hits ?? 0 }}</strong> 命中</span>
-            <span><strong>{{ cache?.misses ?? 0 }}</strong> 未命中</span>
-            <span class="hint">{{ hitRateHint }}</span>
-          </div>
-        </div>
-
-        <div class="cache-mini-stat">
-          <div class="mini-label">状态</div>
-          <div class="mini-value">
-            <span class="status-dot" :class="cache?.enabled ? 'status-online' : 'status-disabled'" />
-            <span :class="cache?.enabled ? 'on' : 'off'">{{ cache?.enabled ? '启用' : '停用' }}</span>
-          </div>
-        </div>
-        <div class="cache-mini-stat">
-          <div class="mini-label">活跃条目</div>
-          <div class="mini-value">{{ cache?.enabled && cache.live_entries != null ? cache.live_entries : '—' }}</div>
-          <div class="mini-hint">未过期</div>
-        </div>
-        <div class="cache-mini-stat">
-          <div class="mini-label">总条目</div>
-          <div class="mini-value">{{ cache?.enabled && cache.entries != null ? cache.entries : '—' }}</div>
-        </div>
-        <div class="cache-mini-stat">
-          <div class="mini-label">数据库</div>
-          <div class="mini-value">{{ cache?.enabled ? `${(cache.db_size_mb || 0).toFixed(2)} MB` : '—' }}</div>
-        </div>
-      </div>
-      <p v-if="cache && !cache.enabled" class="cache-off-hint">{{ cache.error || '缓存数据库未创建' }}</p>
-    </el-card>
   </div>
 </template>
 
@@ -209,7 +152,6 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { STALE_THRESHOLD_SEC } from '@/constants/time'
 import {
   getStatus,
-  type CacheStats,
   type StatusSummary,
   type UpstreamStatus,
   type UpstreamStatusValue,
@@ -252,7 +194,6 @@ const UPSTREAM_DISPLAY_NAME: Record<string, string> = {
 
 const rows = ref<UpstreamRow[]>([])
 const summary = ref<StatusSummary | null>(null)
-const cache = ref<CacheStats | null>(null)
 
 const initialLoading = ref(false)
 const manualLoading = ref(false)
@@ -334,38 +275,6 @@ const refreshLabel = computed(() => {
   return `${Math.floor(sec / 3600)} 小时前刷新`
 })
 
-const cacheTimeText = computed(() =>
-  cache.value?.timestamp ? new Date(cache.value.timestamp * 1000).toLocaleTimeString('zh-CN') : '-',
-)
-
-const hitRatePct = computed(() => {
-  const c = cache.value
-  if (!c?.enabled || c.hit_rate == null) return null
-  return Number((c.hit_rate * 100).toFixed(1))
-})
-
-// 展示固定一位小数 (旧版 toFixed(1)); hitRatePct 是数字, 供 el-progress 宽度用。
-const hitRateText = computed(() => {
-  const c = cache.value
-  if (!c?.enabled || c.hit_rate == null) return '—'
-  return `${(c.hit_rate * 100).toFixed(1)}%`
-})
-
-const hitRateHint = computed(() => {
-  const c = cache.value
-  if (!c?.enabled) return c?.error || '缓存数据库未创建'
-  const total = (c.hits ?? 0) + (c.misses ?? 0)
-  return total > 0 && c.hit_rate != null ? `共 ${total} 次请求` : '网关启动后累计 (尚未请求)'
-})
-
-const hitRateColor = computed(() => {
-  const pct = hitRatePct.value
-  if (pct === null) return undefined
-  if (pct > 70) return 'var(--el-color-success)'
-  if (pct > 40) return 'var(--el-color-warning)'
-  return 'var(--el-color-danger)'
-})
-
 function displayName(name: string): string {
   return UPSTREAM_DISPLAY_NAME[name] ?? name
 }
@@ -430,7 +339,6 @@ async function load(manual = false): Promise<void> {
     const data = await getStatus()
     rows.value = Object.entries(data.upstreams ?? {}).map(([name, info]) => ({ name, ...info }))
     summary.value = data.summary
-    cache.value = data.cache
     markFetched()
   } catch (error) {
     loadError.value = errorMessage(error, '请检查网关是否运行')
@@ -467,12 +375,6 @@ async function load(manual = false): Promise<void> {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-}
-
-.sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--el-text-color-secondary);
 }
 
 .toolbar-actions {
@@ -612,32 +514,6 @@ async function load(manual = false): Promise<void> {
   opacity: 0.75;
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.status-online {
-  background: var(--el-color-success);
-  box-shadow: 0 0 0 3px var(--el-color-success-light-9);
-}
-
-.status-degraded {
-  background: var(--el-color-warning);
-  box-shadow: 0 0 0 3px var(--el-color-warning-light-9);
-}
-
-.status-offline {
-  background: var(--el-color-danger);
-  box-shadow: 0 0 0 3px var(--el-color-danger-light-9);
-}
-
-.status-disabled {
-  background: var(--el-text-color-placeholder);
-}
-
 .latency-cell {
   font-variant-numeric: tabular-nums;
   font-weight: 500;
@@ -669,94 +545,6 @@ async function load(manual = false): Promise<void> {
   opacity: 0.5;
 }
 
-.timestamp {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.cache-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-}
-
-.cache-hitrate-card {
-  grid-column: span 2;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  background: var(--el-fill-color-blank);
-}
-
-.cache-hitrate-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.cache-hitrate-value {
-  font-size: 22px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.hitrate-bar-empty {
-  height: 10px;
-  border-radius: 5px;
-  background: var(--el-fill-color-light);
-}
-
-.cache-hitrate-meta {
-  display: flex;
-  gap: 14px;
-  font-size: 12px;
-  color: var(--el-text-color-regular);
-}
-
-.cache-hitrate-meta .hint {
-  color: var(--el-text-color-secondary);
-}
-
-.cache-mini-stat {
-  padding: 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  background: var(--el-fill-color-blank);
-}
-
-.mini-label {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 6px;
-}
-
-.mini-value {
-  font-size: 18px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.mini-value .on { color: var(--el-color-success); }
-.mini-value .off { color: var(--el-text-color-secondary); }
-
-.mini-hint {
-  font-size: 11px;
-  /* placeholder(#a8abb2) 在 11px 下对比度仅 2.4:1, 提到 regular */
-  color: var(--el-text-color-regular);
-  margin-top: 2px;
-}
-
-.cache-off-hint {
-  margin: 10px 2px 0;
-  font-size: 12px;
-  color: var(--el-text-color-regular);
-}
-
 @media (max-width: 1100px) {
   .summary-grid {
     grid-template-columns: repeat(3, 1fr);
@@ -772,12 +560,6 @@ async function load(manual = false): Promise<void> {
 @media (max-width: 560px) {
   .summary-grid {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 700px) {
-  .cache-hitrate-card {
-    grid-column: span 1;
   }
 }
 </style>

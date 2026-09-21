@@ -60,7 +60,7 @@ function reload(): void {
 
 function goHome(): void {
   reset()
-  void router.replace({ name: 'status' })
+  void router.replace({ name: 'guides' })
 }
 </script>
 

@@ -33,10 +33,10 @@ describe('resolveAuthRoute — /login 分支', () => {
     expect(auth.bootstrap).not.toHaveBeenCalled()
   })
 
-  it('已认证 + 无 redirect → 默认回 status', async () => {
+  it('已认证 + 无 redirect → 默认回 guides (接入指南为缺省页)', async () => {
     const auth = authState({ isAuthenticated: true })
     const decision = await resolveAuthRoute(to({ name: 'login' }), auth)
-    expect(decision).toEqual({ name: 'status' })
+    expect(decision).toEqual({ name: 'guides' })
   })
 
   it('已认证 + 合法 redirect (/config?tab=proxy) → 回跳目标', async () => {
@@ -48,52 +48,52 @@ describe('resolveAuthRoute — /login 分支', () => {
     expect(decision).toEqual({ path: '/config?tab=proxy' })
   })
 
-  it('协议相对地址 //evil.com → 拒绝, 回 status (防开放重定向)', async () => {
+  it('协议相对地址 //evil.com → 拒绝, 回 guides (防开放重定向)', async () => {
     const auth = authState({ isAuthenticated: true })
     const decision = await resolveAuthRoute(
       to({ name: 'login', query: { redirect: '//evil.com/x' } }),
       auth,
     )
-    expect(decision).toEqual({ name: 'status' })
+    expect(decision).toEqual({ name: 'guides' })
   })
 
-  it('绝对 URL https://evil.com → 拒绝, 回 status', async () => {
+  it('绝对 URL https://evil.com → 拒绝, 回 guides', async () => {
     const auth = authState({ isAuthenticated: true })
     const decision = await resolveAuthRoute(
       to({ name: 'login', query: { redirect: 'https://evil.com' } }),
       auth,
     )
-    expect(decision).toEqual({ name: 'status' })
+    expect(decision).toEqual({ name: 'guides' })
   })
 
-  it('redirect=/login → 回 status (避免守卫自跳循环)', async () => {
+  it('redirect=/login → 回 guides (避免守卫自跳循环)', async () => {
     const auth = authState({ isAuthenticated: true })
     const decision = await resolveAuthRoute(
       to({ name: 'login', query: { redirect: '/login' } }),
       auth,
     )
-    expect(decision).toEqual({ name: 'status' })
+    expect(decision).toEqual({ name: 'guides' })
   })
 
-  it('redirect 含反斜杠/控制字符 → 回 status', async () => {
+  it('redirect 含反斜杠/控制字符 → 回 guides', async () => {
     const auth = authState({ isAuthenticated: true })
     for (const redirect of ['/\\evil.com', '/config\n', '/a\tb']) {
       const decision = await resolveAuthRoute(
         to({ name: 'login', query: { redirect } }),
         auth,
       )
-      expect(decision).toEqual({ name: 'status' })
+      expect(decision).toEqual({ name: 'guides' })
     }
   })
 
-  it('redirect 非字符串 (数组/数字) → 回 status', async () => {
+  it('redirect 非字符串 (数组/数字) → 回 guides', async () => {
     const auth = authState({ isAuthenticated: true })
     for (const redirect of [['/config'], 42, null]) {
       const decision = await resolveAuthRoute(
         to({ name: 'login', query: { redirect } }),
         auth,
       )
-      expect(decision).toEqual({ name: 'status' })
+      expect(decision).toEqual({ name: 'guides' })
     }
   })
 })

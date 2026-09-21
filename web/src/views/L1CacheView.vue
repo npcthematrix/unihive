@@ -98,6 +98,79 @@
       </p>
     </el-card>
 
+    <!-- SQLite 响应缓存 (原"上游数据源状态"页缓存卡片, 2026-09-21 并入本页) -->
+    <el-card shadow="never" class="panel-card">
+      <template #header>
+        <div class="card-toolbar">
+          <h2 class="card-title">
+            响应缓存 <small class="sub">SQLite · logs/cache.db</small>
+          </h2>
+          <div class="toolbar-actions">
+            <span class="timestamp">{{ respCacheTimeText }}</span>
+            <el-button :icon="Refresh" :loading="manualLoading" @click="load(true)">
+              立即刷新
+            </el-button>
+          </div>
+        </div>
+      </template>
+
+      <div v-loading="initialLoading" class="stat-grid">
+        <!-- 命中率主卡 -->
+        <div class="hitrate-card">
+          <div class="hitrate-head">
+            <span class="mini-label">命中率</span>
+            <span class="hitrate-value">{{ respHitRateText }}</span>
+          </div>
+          <el-progress
+            v-if="respHitRatePct !== null"
+            :percentage="respHitRatePct"
+            :stroke-width="10"
+            :show-text="false"
+            :color="respHitRateColor"
+          />
+          <div v-else class="hitrate-bar-empty" />
+          <div class="hitrate-meta">
+            <span><strong>{{ respCache?.hits ?? 0 }}</strong> 命中</span>
+            <span><strong>{{ respCache?.misses ?? 0 }}</strong> 未命中</span>
+            <span class="hint">{{ respHitRateHint }}</span>
+          </div>
+        </div>
+
+        <div class="mini-stat">
+          <div class="mini-label">状态</div>
+          <div class="mini-value">
+            <span
+              class="status-dot"
+              :class="respCache?.enabled ? 'status-online' : 'status-disabled'"
+            />
+            <span :class="respCache?.enabled ? 'on' : 'off'">
+              {{ respCache?.enabled ? '启用' : '停用' }}
+            </span>
+          </div>
+        </div>
+
+        <div class="mini-stat">
+          <div class="mini-label">活跃条目</div>
+          <div class="mini-value">{{ respLiveEntriesText }}</div>
+          <div class="mini-hint">未过期</div>
+        </div>
+
+        <div class="mini-stat">
+          <div class="mini-label">总条目</div>
+          <div class="mini-value">{{ respEntriesText }}</div>
+        </div>
+
+        <div class="mini-stat">
+          <div class="mini-label">数据库</div>
+          <div class="mini-value">{{ respDbSizeText }}</div>
+        </div>
+      </div>
+
+      <p v-if="respCache && !respCache.enabled" class="off-hint">
+        {{ respCache.error || '缓存数据库未创建' }}
+      </p>
+    </el-card>
+
     <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="card-toolbar">
@@ -128,10 +201,13 @@ import { Refresh } from '@element-plus/icons-vue'
 import { errorMessage } from '@/api/client'
 import { getUpstreamMetrics } from '@/api/upstream-metrics'
 import type { UpstreamMetrics } from '@/api/upstream-metrics'
+import { getStatus } from '@/api/status'
+import type { CacheStats } from '@/api/status'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { STALE_THRESHOLD_SEC } from '@/constants/time'
 
 const metrics = ref<UpstreamMetrics | null>(null)
+const respCache = ref<CacheStats | null>(null)
 const initialLoading = ref(false)
 const manualLoading = ref(false)
 const loadError = ref('')
@@ -191,19 +267,77 @@ const ttlText = computed(() => {
   return `${t}s`
 })
 
+// ---------------------------------------------------------------------------
+// SQLite 响应缓存派生 (字段语义见后端 console_api.get_cache_stats)
+// ---------------------------------------------------------------------------
+
+const respCacheTimeText = computed(() =>
+  respCache.value?.timestamp
+    ? new Date(respCache.value.timestamp * 1000).toLocaleTimeString('zh-CN')
+    : '-',
+)
+
+const respHitRatePct = computed(() => {
+  const rate = respCache.value?.hit_rate
+  return rate == null ? null : Number((rate * 100).toFixed(1))
+})
+
+const respHitRateText = computed(() => {
+  const rate = respCache.value?.hit_rate
+  return rate == null ? '—' : `${(rate * 100).toFixed(1)}%`
+})
+
+const respHitRateHint = computed(() => {
+  const c = respCache.value
+  if (!c?.enabled) return c?.error || '缓存数据库未创建'
+  const total = (c.hits ?? 0) + (c.misses ?? 0)
+  return total > 0 && c.hit_rate != null
+    ? `共 ${total} 次请求`
+    : '网关启动后累计 (尚未请求)'
+})
+
+const respHitRateColor = computed(() => {
+  const pct = respHitRatePct.value
+  if (pct === null) return undefined
+  if (pct > 70) return 'var(--el-color-success)'
+  if (pct > 40) return 'var(--el-color-warning)'
+  return 'var(--el-color-danger)'
+})
+
+const respLiveEntriesText = computed(() => {
+  const c = respCache.value
+  return c?.enabled && c.live_entries != null ? c.live_entries : '—'
+})
+
+const respEntriesText = computed(() => {
+  const c = respCache.value
+  return c?.enabled && c.entries != null ? c.entries : '—'
+})
+
+const respDbSizeText = computed(() => {
+  const c = respCache.value
+  return c?.enabled ? `${(c.db_size_mb || 0).toFixed(2)} MB` : '—'
+})
+
 async function load(manual = false): Promise<void> {
   if (inFlight) {
     if (manual) manualLoading.value = true
     return
   }
   inFlight = true
-  const firstLoad = metrics.value === null
+  const firstLoad = metrics.value === null && respCache.value === null
   if (firstLoad) initialLoading.value = true
   if (manual) manualLoading.value = true
   loadError.value = ''
   try {
-    const resp = await getUpstreamMetrics('mootdx2')
-    metrics.value = resp.metrics
+    // L1 指标 (/api/upstreams/mootdx2/metrics) 与 SQLite 缓存统计
+    // (/api/status) 同源并发, 任一失败统一进错误面。
+    const [metricsResp, status] = await Promise.all([
+      getUpstreamMetrics('mootdx2'),
+      getStatus(),
+    ])
+    metrics.value = metricsResp.metrics
+    respCache.value = status.cache
     markFetched()
   } catch (error) {
     loadError.value = errorMessage(error, '请检查网关是否运行')
@@ -376,6 +510,11 @@ async function load(manual = false): Promise<void> {
 
 .off-hint {
   margin: 10px 2px 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.timestamp {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }

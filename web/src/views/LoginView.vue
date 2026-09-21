@@ -112,7 +112,7 @@ const rules: FormRules = {
 /** 登录成功/探测恢复后的落地页: 只接受站内路径, 防开放重定向。 */
 function redirectTarget(): string {
   const redirect = route.query.redirect
-  return isSafeRedirect(redirect) && redirect !== '/login' ? redirect : '/status'
+  return isSafeRedirect(redirect) && redirect !== '/login' ? redirect : '/guides'
 }
 
 async function onSubmit(): Promise<void> {

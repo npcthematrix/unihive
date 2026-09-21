@@ -119,8 +119,8 @@ function toggleCollapsed(): void {
 
 const MENU = [
   { path: '/guides', title: '接入指南', icon: Document },
-  { path: '/status', title: '上游状态', icon: Monitor },
-  { path: '/l1-cache', title: 'L1 缓存指标', icon: DataLine },
+  { path: '/status', title: '上游数据源状态', icon: Monitor },
+  { path: '/l1-cache', title: '网关缓存监控', icon: DataLine },
   { path: '/interfaces', title: 'MCP APIs', icon: Connection },
   { path: '/config', title: '配置信息', icon: Setting },
   { path: '/omni', title: 'OMNI板块管理', icon: Grid },

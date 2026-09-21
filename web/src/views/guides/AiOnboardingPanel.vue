@@ -83,10 +83,10 @@
       <p>若失败, 按以下顺序排查:</p>
       <ul>
         <li>确认网关已启动: 浏览器访问 <code>{{ origin }}</code> 能看到控制台首页。</li>
-        <li>查看 <strong>"上游状态"</strong> 标签页, 确认上游是否全绿。</li>
+        <li>查看 <strong>"上游数据源状态"</strong> 标签页, 确认上游是否全绿。</li>
         <li>查看客户端日志: Claude Desktop 的 "Developer" 菜单 / Cursor 的 "Output → MCP"。</li>
       </ul>
-      <el-button type="primary" @click="jumpToStatus">→ 上游状态</el-button>
+      <el-button type="primary" @click="jumpToStatus">→ 上游数据源状态</el-button>
     </section>
 
     <!-- 6. 自定义端口 -->
