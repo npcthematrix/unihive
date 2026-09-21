@@ -324,6 +324,7 @@ class HttpServeMixin:
                     *_ca.build_omni_routes(),
                     *_ca.build_mcp_browser_routes(),
                     Route("/api/upstreams/{name}/metrics", _ca.upstream_metrics_api),
+                    *_ca.build_cache_routes(),
                     *_proxy_routes(),
                     Route("/api/interfaces", _interfaces_api),
                     Route("/api/config", _config_api),

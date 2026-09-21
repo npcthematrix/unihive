@@ -636,32 +636,125 @@ async def reset_config_overlays(
 # ---------------------------------------------------------------------------
 
 
+def _cache_stats_path() -> Path:
+    """cache_stats.json 锚定运行时根 (与 Cache._stats_path 的 project_root
+    同根)。旧实现写死 CWD 相对路径, CWD 变化时读不到网关写入的统计 →
+    命中率静默变 None (裂脑)。"""
+    return _RUNTIME_ROOT / "logs" / "cache_stats.json"
+
+
+def _query_cache_row_counts(cur, now_ts: int) -> dict:
+    """条目聚合: 总数 / 活跃 / 过期 / 无过期行 / 最快到期 / 最旧写入。"""
+    cur.execute(
+        """
+        SELECT
+            COUNT(*),
+            COALESCE(SUM(CASE WHEN expires_at IS NOT NULL AND expires_at > :now
+                              THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN expires_at IS NOT NULL AND expires_at <= :now
+                              THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN expires_at IS NULL
+                              THEN 1 ELSE 0 END), 0),
+            MIN(CASE WHEN expires_at > :now THEN expires_at END),
+            MIN(created_at)
+        FROM cache
+        """,
+        {"now": now_ts},
+    )
+    (
+        total,
+        live,
+        expired,
+        null_expiry,
+        nearest_expiry,
+        oldest_created,
+    ) = cur.fetchone()
+    return {
+        "entries": total,
+        "live_entries": live,
+        "expired_entries": expired,
+        "null_expiry_entries": null_expiry,
+        "nearest_expiry": nearest_expiry,
+        "oldest_created": oldest_created,
+    }
+
+
+def get_cache_breakdown(limit: int = 20) -> list[dict]:
+    """按工具 (cache key 的 ``name:`` 前缀) 聚合条目数, 降序 Top N。"""
+    import sqlite3
+
+    now_ts = int(time.time())
+    conn = sqlite3.connect(CACHE_DB_PATH, timeout=5)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                CASE WHEN instr(key, ':') > 0
+                     THEN substr(key, 1, instr(key, ':') - 1)
+                     ELSE key END AS tool,
+                COUNT(*) AS entries,
+                COALESCE(SUM(CASE WHEN expires_at IS NOT NULL AND expires_at > :now
+                                  THEN 1 ELSE 0 END), 0) AS live
+            FROM cache
+            GROUP BY tool
+            ORDER BY entries DESC
+            LIMIT :lim
+            """,
+            {"now": now_ts, "lim": limit},
+        )
+        return [
+            {"tool": tool, "entries": entries, "live": live}
+            for tool, entries, live in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
 def get_cache_stats() -> dict:
     cache_path = Path(CACHE_DB_PATH)
-    stats_path = Path("logs/cache_stats.json")
+    stats_path = _cache_stats_path()
     if not cache_path.exists():
         return {"enabled": False, "error": "Cache DB not found", "timestamp": int(time.time())}
     try:
         size_bytes = cache_path.stat().st_size
-        entries = None
-        hits = None
-        misses = None
-        hit_rate = None
+        row_counts: dict = {
+            "entries": None,
+            "live_entries": None,
+            "expired_entries": None,
+            "null_expiry_entries": None,
+            "nearest_expiry": None,
+            "oldest_created": None,
+        }
+        freelist_count = None
+        page_count = None
+        page_size = None
         try:
             import sqlite3
 
-            conn = sqlite3.connect(CACHE_DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM cache")
-            entries = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT COUNT(*) FROM cache WHERE expires_at IS NOT NULL AND expires_at > ?",
-                (int(time.time()),),
-            )
-            live_entries = cursor.fetchone()[0]
-            conn.close()
+            conn = sqlite3.connect(CACHE_DB_PATH, timeout=5)
+            try:
+                cursor = conn.cursor()
+                row_counts = _query_cache_row_counts(cursor, int(time.time()))
+                # 存储健康度: freelist 是 DELETE 后未回收的死页, VACUUM 可回收
+                cursor.execute("PRAGMA freelist_count")
+                freelist_count = cursor.fetchone()[0]
+                cursor.execute("PRAGMA page_count")
+                page_count = cursor.fetchone()[0]
+                cursor.execute("PRAGMA page_size")
+                page_size = cursor.fetchone()[0]
+            finally:
+                conn.close()
         except Exception:
-            live_entries = None
+            pass
+        # WAL 增量页: checkpoint 前先落 cache.db-wal
+        wal_path = cache_path.with_name(cache_path.name + "-wal")
+        wal_size_bytes = wal_path.stat().st_size if wal_path.exists() else 0
+        hits = None
+        misses = None
+        hit_rate = None
+        stats_updated_at = None
+        stats_pid = None
         if stats_path.exists():
             try:
                 with open(stats_path, encoding="utf-8") as f:
@@ -670,20 +763,84 @@ def get_cache_stats() -> dict:
                 misses = int(s.get("misses", 0))
                 total = hits + misses
                 hit_rate = (hits / total) if total > 0 else None
+                stats_updated_at = s.get("updated_at")
+                stats_pid = s.get("pid")
             except Exception:
                 pass
         return {
             "enabled": True,
-            "entries": entries,
-            "live_entries": live_entries,
+            **row_counts,
             "db_size_mb": round(size_bytes / (1024 * 1024), 3),
+            "wal_size_bytes": wal_size_bytes,
+            "freelist_count": freelist_count,
+            "page_count": page_count,
+            "page_size": page_size,
             "hits": hits,
             "misses": misses,
             "hit_rate": hit_rate,
+            "stats_updated_at": stats_updated_at,
+            "stats_pid": stats_pid,
             "timestamp": int(time.time()),
         }
     except Exception as e:
         return {"enabled": False, "error": str(e), "timestamp": int(time.time())}
+
+
+# ---------------------------------------------------------------------------
+# Cache management
+# ---------------------------------------------------------------------------
+
+
+def _live_cache() -> Any:
+    """网关活实例上的 Cache (经注入的 gateway_server 解析)。"""
+    server = _gateway_server
+    return getattr(server, "cache", None) if server is not None else None
+
+
+async def run_cache_cleanup() -> int:
+    """立即触发过期条目清理, 返回删除条数。"""
+    cache = _live_cache()
+    if cache is None:
+        raise RuntimeError("live cache unavailable")
+    return int(await cache.cleanup_expired())
+
+
+async def run_cache_clear() -> bool:
+    """清空全部缓存条目。"""
+    cache = _live_cache()
+    if cache is None:
+        raise RuntimeError("live cache unavailable")
+    return bool(await cache.clear())
+
+
+def _vacuum_cache_sync(db_path: str) -> None:
+    """VACUUM 回收死页 (sqlite3 直连)。
+
+    VACUUM 不能在事务内执行: isolation_level=None 走 autocommit;
+    先 wal_checkpoint(TRUNCATE) 把 WAL 收回主库再 VACUUM。
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(db_path, timeout=5)
+    try:
+        conn.isolation_level = None
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+
+
+async def run_cache_vacuum() -> dict:
+    """整理缓存数据库, 返回新的文件大小。"""
+    if not Path(CACHE_DB_PATH).exists():
+        raise RuntimeError("cache db not found")
+    await asyncio.to_thread(_vacuum_cache_sync, CACHE_DB_PATH)
+    size_bytes = Path(CACHE_DB_PATH).stat().st_size
+    wal_path = Path(CACHE_DB_PATH + "-wal")
+    return {
+        "db_size_mb": round(size_bytes / (1024 * 1024), 3),
+        "wal_size_bytes": wal_path.stat().st_size if wal_path.exists() else 0,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -882,6 +1039,7 @@ def get_upstream_status() -> dict:
             summary[bucket] = summary.get(bucket, 0) + 1
     return {
         "timestamp": int(time.time()),
+        "pid": os.getpid(),
         "summary": summary,
         "upstreams": upstreams_status,
         "cache": get_cache_stats(),
@@ -1323,6 +1481,43 @@ async def upstream_metrics_api(req: "Request") -> "JSONResponse":
     return JSONResponse({
         "upstream": name,
         "metrics": metrics,
+        "timestamp": int(time.time()),
+    })
+
+
+async def upstream_l1_reset_api(req: "Request") -> "JSONResponse":
+    """POST /api/upstreams/<name>/l1/reset — 手动清空上游 L1 内存缓存。
+
+    状态码语义同 upstream_metrics_api: 200 已清 / 404 上游未注册 /
+    501 客户端未实现 reset_l1_caches() / 500 内部异常。
+    """
+    from starlette.responses import JSONResponse
+
+    name = req.path_params["name"]
+    client = _get_upstream_client(name)
+    if client is None:
+        return JSONResponse(
+            {"error": f"upstream '{name}' not registered"},
+            status_code=404,
+        )
+    reset = getattr(client, "reset_l1_caches", None)
+    if not callable(reset):
+        return JSONResponse(
+            {"error": f"upstream '{name}' does not expose L1 reset"},
+            status_code=501,
+        )
+    try:
+        result = reset()
+    except Exception:
+        # 细节只进日志, 对外固定错误码
+        logger.exception("upstream_l1_reset_api(%s) raised", name)
+        return JSONResponse(
+            {"error": "l1_reset_failed"},
+            status_code=500,
+        )
+    return JSONResponse({
+        "upstream": name,
+        "result": result,
         "timestamp": int(time.time()),
     })
 
@@ -2231,5 +2426,91 @@ def build_upstream_routes() -> list:
             "/api/config/entities",
             config_entities_api,
             methods=["GET"],
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Cache monitor / management HTTP handlers
+# ---------------------------------------------------------------------------
+
+
+async def cache_tool_breakdown_api(req: "Request") -> "JSONResponse":
+    """GET /api/cache/tool-breakdown — 各工具缓存条目 Top N (?limit=, 默认20)。"""
+    from starlette.responses import JSONResponse
+
+    value, error_resp = _positive_int_param(req.query_params, "limit", 20)
+    if error_resp is not None:
+        return error_resp
+    try:
+        rows = await asyncio.to_thread(get_cache_breakdown, value)
+    except Exception:
+        logger.exception("cache_tool_breakdown_api raised")
+        return JSONResponse({"error": "breakdown_read_failed"}, status_code=500)
+    return JSONResponse({"tools": rows, "timestamp": int(time.time())})
+
+
+async def cache_cleanup_api(req: "Request") -> "JSONResponse":
+    """POST /api/cache/cleanup — 立即清理过期条目, 返回删除条数。"""
+    from starlette.responses import JSONResponse
+
+    try:
+        deleted = await run_cache_cleanup()
+    except RuntimeError:
+        return JSONResponse({"error": "live cache unavailable"}, status_code=503)
+    except Exception:
+        logger.exception("cache_cleanup_api raised")
+        return JSONResponse({"error": "cleanup_failed"}, status_code=500)
+    return JSONResponse({"deleted": deleted, "timestamp": int(time.time())})
+
+
+async def cache_clear_api(req: "Request") -> "JSONResponse":
+    """POST /api/cache/clear — 清空全部缓存 (强确认: body {"confirm": true})。"""
+    from starlette.responses import JSONResponse
+
+    body, bad_request = await _read_json_object(req)
+    if bad_request is not None:
+        return bad_request
+    if body.get("confirm") is not True:
+        return JSONResponse(
+            {"error": "需 confirm: true 强确认"}, status_code=400
+        )
+    try:
+        await run_cache_clear()
+    except RuntimeError:
+        return JSONResponse({"error": "live cache unavailable"}, status_code=503)
+    except Exception:
+        logger.exception("cache_clear_api raised")
+        return JSONResponse({"error": "clear_failed"}, status_code=500)
+    return JSONResponse({"cleared": True, "timestamp": int(time.time())})
+
+
+async def cache_vacuum_api(req: "Request") -> "JSONResponse":
+    """POST /api/cache/vacuum — VACUUM 回收死页, 返回新的 DB 大小。"""
+    from starlette.responses import JSONResponse
+
+    try:
+        result = await run_cache_vacuum()
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception:
+        logger.exception("cache_vacuum_api raised")
+        return JSONResponse({"error": "vacuum_failed"}, status_code=500)
+    return JSONResponse({**result, "timestamp": int(time.time())})
+
+
+def build_cache_routes() -> list:
+    """缓存监控 + 管理路由 (挂载进 gateway_server http app)。"""
+    from starlette.routing import Route
+
+    return [
+        Route("/api/cache/tool-breakdown", cache_tool_breakdown_api),
+        Route("/api/cache/cleanup", cache_cleanup_api, methods=["POST"]),
+        Route("/api/cache/clear", cache_clear_api, methods=["POST"]),
+        Route("/api/cache/vacuum", cache_vacuum_api, methods=["POST"]),
+        Route(
+            "/api/upstreams/{name}/l1/reset",
+            upstream_l1_reset_api,
+            methods=["POST"],
         ),
     ]

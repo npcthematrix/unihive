@@ -1,7 +1,7 @@
 import { http } from './client'
 
-/** get_daily L1 内存缓存运行时统计 (与后端 MooTDX2Client.get_metrics() 对齐) */
-export interface DailyL1Stats {
+/** 单个 L1 内存缓存的运行时统计 (与后端 mootdx2 get_metrics 各子块对齐) */
+export interface L1CacheStats {
   enabled: boolean
   hits?: number
   misses?: number
@@ -9,19 +9,21 @@ export interface DailyL1Stats {
   hit_rate?: number | null
   size?: number
   maxsize?: number
+  /** 静态档为配置 TTL; daily_l1 为动态计算到次日 9:00 的剩余秒数 */
   ttl_seconds?: number
-  inflight_keys?: number
-  /** Reader 并发信号量上限 (后端 f768729 引入) */
+  /** 仅 daily_l1: Reader 并发信号量上限 */
   reader_semaphore_limit?: number
 }
 
-/** 单个 upstream client 的运行时指标 (key 可能随实现扩展) */
+/** 单个 upstream client 的运行时指标 (key 随实现扩展) */
 export interface UpstreamMetrics {
   total_requests?: number
   total_errors?: number
   error_counts?: Record<string, number>
   pool_stats?: Record<string, unknown>
-  daily_l1?: DailyL1Stats
+  daily_l1?: L1CacheStats
+  top_board_l1?: L1CacheStats
+  unusual_l1?: L1CacheStats
   [k: string]: unknown
 }
 

@@ -4,6 +4,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,7 +116,17 @@ class Cache:
             stats_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = stats_path.with_name(stats_path.name + ".tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump({"hits": self._hits, "misses": self._misses}, f)
+                # updated_at/pid: 让控制台能识别文件是否来自当前网关进程
+                # (重启后计数器从 0 开始, 旧文件可能被误当成实时值)。
+                json.dump(
+                    {
+                        "hits": self._hits,
+                        "misses": self._misses,
+                        "updated_at": int(time.time()),
+                        "pid": os.getpid(),
+                    },
+                    f,
+                )
             tmp_path.replace(stats_path)
         except OSError as e:
             logger.warning(f"Failed to persist cache stats: {e}")
