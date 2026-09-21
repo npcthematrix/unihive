@@ -1,10 +1,10 @@
 <template>
   <div class="status-page">
-    <!-- 上游数据Provider状态 -->
+    <!-- 上游数据PROVIDERs -->
     <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="card-toolbar">
-          <h2 class="card-title">上游数据Provider状态</h2>
+          <h2 class="card-title">上游数据PROVIDERs</h2>
           <div class="toolbar-actions">
             <span
               class="last-refresh"

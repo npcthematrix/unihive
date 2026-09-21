@@ -19,7 +19,7 @@ const routes: RouteRecordRaw[] = [
         path: 'status',
         name: 'status',
         component: () => import('@/views/StatusView.vue'),
-        meta: { title: '上游数据Provider状态' },
+        meta: { title: '上游数据PROVIDERs' },
       },
       {
         path: 'l1-cache',
