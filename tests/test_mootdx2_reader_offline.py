@@ -579,97 +579,6 @@ def test_index_fzline_stock_rejected_and_no_data_path(client):
     assert "5 分钟线数据" in r.error and "不存在或为空" in r.error
 
 
-# ========== get_index_timeshare_local（派生分时图） ==========
-
-def test_index_timeshare_derived_contract(client):
-    """分时派生：最新交易日切片 + 累计均价 + prev_close 零轴。"""
-    client.config.settings = MagicMock()
-    client.config.settings.tdxdir = "/fake/tdx"
-    minute_df = _minute_df([
-        ("2026-09-17 15:00", 3800.0, 99.0, 99 * 3800.0),   # 前一日，必须被切掉
-        ("2026-09-18 09:31", 3900.0, 100.0, 100 * 3900.0),
-        ("2026-09-18 09:32", 3920.0, 300.0, 300 * 3920.0),
-        ("2026-09-18 09:33", 3910.0, 0.0, 0.0),             # 零量分钟
-        ("2026-09-18 09:34", 3930.0, 400.0, 400 * 3930.0),
-    ])
-    daily_df = _daily_df(["2026-09-17", "2026-09-18"])
-    mock_reader = _patch_reader(minute=minute_df, daily=daily_df)
-
-    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_index_timeshare_local("000001"))
-
-    assert r.success is True
-    payload = r.data
-    assert payload["trade_date"] == "2026-09-18"
-    assert payload["prev_close"] == 10.0  # _daily_df 首日 close=10.0
-    points = payload["points"]
-    assert len(points) == 4
-    assert [p["time"] for p in points] == ["09:31", "09:32", "09:33", "09:34"]
-    assert set(points[0]) == {"time", "price", "avg_price", "vol"}
-    # 均价 = 累计成交额 / 累计成交量
-    assert points[0]["avg_price"] == 3900.0
-    expected_avg_1 = (100 * 3900 + 300 * 3920) / 400
-    assert abs(points[1]["avg_price"] - expected_avg_1) < 1e-6
-    # 零量分钟：累计量不变，均价沿用上一点（不得 NaN/inf）
-    assert points[2]["avg_price"] == expected_avg_1
-    assert points[2]["price"] == 3910.0
-    # 收盘点
-    assert points[-1]["price"] == 3930.0
-
-
-def test_index_timeshare_zero_cum_vol_guard(client):
-    """开盘首笔零量（累计量为 0）→ avg_price 回退当前价，不产生除零。"""
-    import math
-    client.config.settings = MagicMock()
-    client.config.settings.tdxdir = "/fake/tdx"
-    minute_df = _minute_df([
-        ("2026-09-18 09:31", 3900.0, 0.0, 0.0),
-        ("2026-09-18 09:32", 3901.0, 100.0, 100 * 3901.0),
-    ])
-    mock_reader = _patch_reader(minute=minute_df, daily=None)
-    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_index_timeshare_local("000001"))
-    assert r.success is True
-    p0 = r.data["points"][0]
-    assert p0["avg_price"] == 3900.0
-    assert not math.isnan(p0["avg_price"])
-    # 日线缺失：prev_close 为 None 而非报错
-    assert r.data["prev_close"] is None
-
-
-def test_index_timeshare_prev_close_excludes_same_day(client):
-    """日线只有当天（无更早交易日）→ prev_close=None。"""
-    client.config.settings = MagicMock()
-    client.config.settings.tdxdir = "/fake/tdx"
-    minute_df = _minute_df([("2026-09-18 09:31", 3900.0, 100.0, 390000.0)])
-    daily_df = _daily_df(["2026-09-18"])
-    mock_reader = _patch_reader(minute=minute_df, daily=daily_df)
-    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_index_timeshare_local("000001"))
-    assert r.success is True
-    assert r.data["prev_close"] is None
-    assert r.data["points"][0]["time"] == "09:31"
-
-
-def test_index_timeshare_rejects_stock(client):
-    client.config.settings = MagicMock()
-    client.config.settings.tdxdir = "/fake/tdx"
-    for code in ("600000", "sz000001"):
-        r = asyncio.run(client.get_index_timeshare_local(code))
-        assert r.success is False
-        assert r.error_detail["error_type"] == "invalid_symbol"
-
-
-def test_index_timeshare_no_data_names_lc1(client):
-    client.config.settings = MagicMock()
-    client.config.settings.tdxdir = "/fake/tdx"
-    mock_reader = _patch_reader(minute=None)
-    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_index_timeshare_local("sh932000"))
-    assert r.success is True and r.data is None
-    assert "sh932000" in r.error and "minline" in r.error and ".lc1" in r.error
-
-
 def test_index_minute_real_reader_shape_preserves_native_datetime(client):
     """真实 Reader 形态（index.name='date' + 原生 datetime 列）：
     记录里不泄漏 date/index 键，原生字符串 datetime 原样保留（无 :00 尾缀）。
@@ -884,40 +793,20 @@ def test_index_fzline_tail_limit_truncates_with_warn(client):
     assert r.error_detail and "截断" in r.error_detail["warn"]
 
 
-def test_index_timeshare_daily_newer_than_minute_day(client):
-    """日线导出比分钟线新（含 9/19）时，prev_close 仍严格取分钟当日
-    （9/18）的前一交易日收盘，不得取日线最后一行 9/19 的收盘。"""
-    client.config.settings = MagicMock()
-    client.config.settings.tdxdir = "/fake/tdx"
-    minute_df = _minute_df([
-        ("2026-09-18 09:31", 3900.0, 100.0, 100 * 3900.0),
-        ("2026-09-18 09:32", 3901.0, 100.0, 100 * 3901.0),
-    ])
-    # close: 9/17=10.0, 9/18=11.0, 9/19=12.0
-    daily_df = _daily_df(["2026-09-17", "2026-09-18", "2026-09-19"])
-    mock_reader = _patch_reader(minute=minute_df, daily=daily_df)
-    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        r = asyncio.run(client.get_index_timeshare_local("000001"))
-    assert r.success is True
-    assert r.data["trade_date"] == "2026-09-18"
-    assert r.data["prev_close"] == 10.0
-
-
 def test_index_local_tools_registered_in_method_map(client):
-    """3 个指数离线工具注册进 _TOOL_METHOD_NAMES 且方法可调用。"""
+    """2 个指数离线工具注册进 _TOOL_METHOD_NAMES 且方法可调用。"""
     from src.unihive.api.mootdx2_client import _TOOL_METHOD_NAMES
 
     for name in (
         "get_index_minute_local",
         "get_index_fzline_local",
-        "get_index_timeshare_local",
     ):
         assert name in _TOOL_METHOD_NAMES, f"{name} 未注册"
         assert callable(getattr(client, _TOOL_METHOD_NAMES[name], None))
 
 
-def test_yaml_has_index_minute_fzline_timeshare_offline():
-    """3 个新指数工具在 YAML 声明为 offline，参数合同正确。"""
+def test_yaml_has_index_minute_fzline_offline():
+    """2 个新指数工具在 YAML 声明为 offline，参数合同正确。"""
     import yaml
     with open("config/tools_mootdx2.yaml", encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -925,8 +814,7 @@ def test_yaml_has_index_minute_fzline_timeshare_offline():
 
     minute = by_name["get_index_minute_local"]
     fzline = by_name["get_index_fzline_local"]
-    ts = by_name["get_index_timeshare_local"]
-    for spec in (minute, fzline, ts):
+    for spec in (minute, fzline):
         assert spec["data_source_type"] == "offline"
         assert spec["params"][0]["name"] == "code"
         assert spec["params"][0]["required"] is True
@@ -938,9 +826,11 @@ def test_yaml_has_index_minute_fzline_timeshare_offline():
         "code", "suffix", "start_date", "end_date", "limit",
     ]
     assert minute_params["limit"]["type"] == "int"
-    # 分时图只有 code 一个参数（固定取本地最新交易日）
-    assert [p["name"] for p in ts["params"]] == ["code"]
     # fzline: code + limit（默认 1000 / 最大 20000，截断带 warn）
     fzline_params = {p["name"]: p for p in fzline["params"]}
     assert list(fzline_params) == ["code", "limit"]
     assert fzline_params["limit"]["type"] == "int"
+
+    # 离线分时图工具已下线（2026-09-21）：当日实时分时用 get_minute_data
+    assert "get_index_timeshare_local" not in by_name
+    assert "get_timeshare_local" not in by_name

@@ -177,7 +177,6 @@ _TOOL_METHOD_NAMES: dict[str, str] = {
     "get_index_kline_local": "get_index_kline_local",
     "get_index_minute_local": "get_index_minute_local",
     "get_index_fzline_local": "get_index_fzline_local",
-    "get_index_timeshare_local": "get_index_timeshare_local",
     "stock_top_board": "stock_top_board",
     "stock_unusual": "stock_unusual",
     "indicator_atr": "indicator_atr",
@@ -2419,9 +2418,12 @@ class MooTDX2Client:
             logger.error(f"get_minute failed: {e}")
             return self._error_result(e, f"get_minute({code})")
 
-    # ========== 离线分时线（Reader.fzline，本地 .lc5 文件） ==========
+    # ========== 离线 5 分钟K线（Reader.fzline，本地 .lc5 文件） ==========
+    # 注意：fzline 是通达信目录名（5 分钟K线存 fzline/*.lc5），不是"分时
+    # 图"。Reader.fzline() 等价于 Reader.minute(suffix=5)，返回跨多日的
+    # 5 分钟 OHLC K线；当日实时分时请用在线 get_minute_data。
     def _get_fzline_sync(self, code: str) -> list:
-        """同步读取离线分时线数据。
+        """同步读取离线 5 分钟K线数据。
 
         Args:
             code: 6 位股票代码
@@ -2445,7 +2447,7 @@ class MooTDX2Client:
         return records
 
     async def get_fzline(self, code: str) -> ToolResult:
-        """获取股票分时线数据（离线，TDX 本地 .lc5 文件）
+        """获取股票 5 分钟K线数据（离线，TDX 本地 .lc5 文件）
 
         Args:
             code: 股票代码（6 位数字）
@@ -2457,7 +2459,7 @@ class MooTDX2Client:
             data = await self._run_blocking(self._get_fzline_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
-            return self._no_data_result(f"未找到 {code} 的分时线数据")
+            return self._no_data_result(f"未找到 {code} 的 5 分钟K线数据")
         except Exception as e:
             logger.error(f"get_fzline failed: {e}")
             return self._error_result(e, f"get_fzline({code})")
@@ -2477,7 +2479,7 @@ class MooTDX2Client:
     ) -> tuple:
         """指数离线工具统一入口校验。
 
-        4 个 *_local 指数入口（日K/分钟/5分钟/分时）共用同一套消歧规则，
+        3 个 *_local 指数入口（日K/分钟/5分钟）共用同一套消歧规则，
         防止守卫块复制漂移（kind 分支曾漏记 error_counts）。
 
         Args:
@@ -2848,104 +2850,6 @@ class MooTDX2Client:
         except Exception as e:
             logger.error(f"get_index_fzline_local failed: {e}")
             return self._error_result(e, f"get_index_fzline_local({code})")
-
-    # ========== 离线指数分时图（.lc1 最新交易日派生） ==========
-    # 在线 get_minute_data 是 Quotes 实时接口（仅当日 240 笔）；离线分时
-    # 从 1 分钟线派生：切出本地最新交易日 09:31–15:00 的 240 根分钟线，
-    # 均价 = 累计成交额/累计成交量（vol==0 的分钟沿用上一点，防除零），
-    # 昨收取日线严格前一交易日收盘（分时图零轴）。
-    def _get_index_timeshare_sync(self, code: str) -> dict | None:
-        parsed = parse_symbol(code, intent=INDEX_KIND)
-        reader = self._get_reader()
-        sym = to_reader_symbol(parsed)
-        df = reader.minute(symbol=sym, suffix=1)
-        if df is None or getattr(df, "empty", True):
-            return None
-
-        latest_day = df.index.max().normalize()
-        day = df[df.index.normalize() == latest_day].sort_index()
-
-        prev_close: float | None = None
-        daily = reader.daily(symbol=sym, adjust="none")
-        if daily is not None and not getattr(daily, "empty", True):
-            # 严格早于分钟线当日：日线比分钟导出更新时也不会误取当天收盘
-            prior = daily.loc[daily.index < latest_day]
-            if not getattr(prior, "empty", True):
-                prev_close = round(float(prior.iloc[-1]["close"]), 4)
-
-        points: list[dict] = []
-        cum_vol = 0.0
-        cum_amount = 0.0
-        for ts, row in day.iterrows():
-            price = float(row["close"])
-            vol = float(row.get("vol", 0) or 0)
-            amount = float(row.get("amount", 0) or 0)
-            cum_vol += vol
-            cum_amount += amount
-            # 零量分钟（指数 14:59 常见）累计量不变，均价自然沿用上一点；
-            # 开盘首笔即零量（累计量 0）时回退当前价，杜绝 NaN/inf。
-            avg_price = cum_amount / cum_vol if cum_vol > 0 else price
-            points.append({
-                "time": ts.strftime("%H:%M"),
-                "price": round(price, 4),
-                "avg_price": round(avg_price, 4),
-                "vol": vol,
-            })
-
-        return {
-            "trade_date": latest_day.strftime("%Y-%m-%d"),
-            "prev_close": prev_close,
-            "points": points,
-        }
-
-    async def get_index_timeshare_local(self, code: str) -> ToolResult:
-        """离线指数分时图（由本地 1 分钟线最新交易日派生）。
-
-        语义为"本地已下载的最近一个交易日"，不保证是今天（盘后/未下载
-        最新数据时 trade_date 为上一交易日，调用方应以返回的 trade_date
-        为准）。需要实时当日分时请用在线 get_minute_data。
-
-        Returns:
-            ToolResult data 结构::
-
-                {
-                  "trade_date": "2026-09-18",
-                  "prev_close": 3875.6,      # 严格前一交易日收盘，缺失为 null
-                  "points": [
-                      {"time": "09:31", "price": 3892.47,
-                       "avg_price": 3892.47, "vol": 3.7e8},
-                      ...
-                  ]
-                }
-
-        均价口径为累计成交额/累计成交量（标准分时均价线定义）；部分行情
-        源导出的指数分钟文件 amount≈vol×100（源文件单位约定如此），
-        avg_price 会随之反映源数据口径。
-        """
-        self._metrics["total_requests"] += 1
-        parsed, guard_error = self._parse_index_entry(
-            code,
-            stock_hint=(
-                "股票离线分钟线请用 get_minute_local，"
-                "当日实时分时请用 get_minute_data"
-            ),
-        )
-        if guard_error is not None:
-            return guard_error
-
-        try:
-            data = await self._run_blocking(self._get_index_timeshare_sync, code)
-            if data is not None:
-                return ToolResult(success=True, data=data, source="mootdx2")
-            sym = to_reader_symbol(parsed)
-            return self._no_data_result(
-                f"指数 {sym} 本地无 1 分钟线数据"
-                f"（vipdoc/{parsed.market}/minline/{sym}.lc1 "
-                f"不存在或为空，无法派生分时图，请先在通达信下载分钟数据）"
-            )
-        except Exception as e:
-            logger.error(f"get_index_timeshare_local failed: {e}")
-            return self._error_result(e, f"get_index_timeshare_local({code})")
 
 # ========== 指数K线（指定起止） ==========
     def _get_index_bars_sync(self, symbol: str, frequency: int = 9, start: int = 0, offset: int = 800):
