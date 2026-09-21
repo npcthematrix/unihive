@@ -5,9 +5,8 @@
       <span v-if="isDbMode">
         此处为当前生效的 <code>cache</code> 全局配置 — 存于配置库
         <code>data/config.db</code> 的 <code>config_section</code>
-        (空库由出厂 YAML 模板 seed; 与"上游状态"标签页的运行时缓存是不同概念)。
-        只读展示, <strong>修改后需重启网关</strong>生效;
-        单工具 TTL 覆盖请到「FUYAO 缓存」标签页 (可热生效)。
+        (空库由出厂 YAML 模板 seed; 与"上游数据源状态"标签页的运行时缓存是不同概念)。
+        只读展示, <strong>修改后需重启网关</strong>生效。
       </span>
       <span v-else>
         网关以 <code>UNIHIVE_CONFIG_SOURCE=yaml</code> 逃生模式启动, 此处为

@@ -70,7 +70,7 @@ export interface ConfigPageLoader {
 
 function mapInterfaceTools(tools: InterfaceToolRow[]): ConfigTool[] {
   // interfaces 的 ToolSpec 无 ConfigTool 的字符串索引签名, 结构上兼容;
-  // 显式收窄 (ToolsPanel/FuyaoCachePanel 只读这 5 个字段)。
+  // 显式收窄 (ToolsPanel 只读这 5 个字段)。
   return tools.map((t) => ({
     name: t.name,
     description: t.description,

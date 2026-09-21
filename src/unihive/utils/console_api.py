@@ -390,138 +390,16 @@ def _compute_config_version() -> str:
 
 
 # ---------------------------------------------------------------------------
-# FUYAO cache 配置读写 (嵌套 mapping)
+# FUYAO cache 运行时热同步
+#
+# fuyao_cache.tools 工具级 TTL 覆盖的编辑端点已于 2026-09-21 下线 (控制台
+# 标签页移除); 配置段仍由 YAML 出厂模板/config.db 提供, 运行时经
+# cache_strategy.fuyao_ttl_for 生效。
 # ---------------------------------------------------------------------------
 
 
-def get_fuyao_cache() -> dict:
-    """读取生效中的 fuyao 工具级 TTL: ``{"tools": {...}, "version": int}``。
-
-    实体模式来源 = config.db 的 fuyao_cache section (经 live 装配 config);
-    P1 模式 = YAML 基线合并 config_overlay 行镜像。两种模式都不直接读 DB,
-    保持同步零 IO。
-    """
-    config = load_config()
-    fc = config.get("fuyao_cache")
-    tools = dict(fc.get("tools") or {}) if isinstance(fc, dict) else {}
-    return {"tools": tools, "version": config.get("version", 0)}
-
-
-def parse_fuyao_cache_put_body(body: Any) -> tuple[dict, Any]:
-    """解析 PUT /api/config/fuyao-cache 请求体, 返回 ``(fuyao_cache, version)``。
-
-    M3: ``fuyao_cache`` 必须显式是 JSON object。旧实现用
-    ``body.get("fuyao_cache") or {}`` 兜底, 前端发错体 (字段缺失 / null /
-    非法 JSON 解析成空) 会被静默解释成"清空全部 TTL 覆盖"; 显式传
-    ``{"tools": {}}`` 仍是合法的有意清空。形态非法抛 ValueError → 400。
-    """
-    if not isinstance(body, dict):
-        raise ValueError("请求体必须是 JSON object")
-    payload = body.get("fuyao_cache")
-    if not isinstance(payload, dict):
-        raise ValueError(
-            "'fuyao_cache' 缺失或不是 object; 如需清空请显式传 "
-            '{"fuyao_cache": {"tools": {}}}'
-        )
-    return payload, body.get("version")
-
-
-async def save_fuyao_cache(payload: dict, *, expected_version: int | str | None = None) -> dict:
-    """保存 fuyao 工具级 TTL 配置 (事务化, 乐观锁 version)。
-
-    v2 实体模式: 整段 ``fuyao_cache`` 作为 config_section 行写入 config.db
-    (DB 是事实源, 不再做"与出厂值比较后删行"的差异覆盖); 成功后热改
-    进程内 config, TTL 即时生效。
-
-    P1 薄覆盖层模式 (兼容/测试):
-    - payload: ``{"tools": {gateway 工具名: 秒数}}``, pydantic 校验;
-    - 与 YAML 出厂值相同 (或出厂无此键且值缺失) 的行删除而非写入, overlay 只留差异;
-    - 面板未提交的旧覆盖行 (tools 里已没有) 一并删除。
-    """
-    global _db_revision
-
-    from pydantic import ValidationError
-
-    from ..models.fuyao_cache import FuyaoCacheConfig
-
-    store = _require_store()
-    try:
-        new_cfg = FuyaoCacheConfig.model_validate(payload)
-    except ValidationError as e:
-        raise ValueError(f"fuyao_cache 校验失败: {e}") from e
-
-    expected = _coerce_revision(expected_version)
-
-    if _db_mode:
-        try:
-            revision = await store.upsert_section(
-                "fuyao_cache",
-                {"tools": dict(new_cfg.tools)},
-                origin="user",
-                expected_revision=expected,
-            )
-        except _StoreRevisionConflict as e:
-            raise VersionConflict(
-                f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
-                "请刷新页面后重试"
-            ) from e
-        _db_revision = int(revision)
-        # 热改进程内 live config (同一引用), fuyao_ttl_for 下一次调用即读到。
-        _sync_runtime_fuyao_tools(dict(new_cfg.tools))
-        _interfaces_cache.clear()
-        _mcp_tools_cache.clear()
-        return {"fuyao_cache": {"tools": dict(new_cfg.tools)}, "version": revision}
-    baseline_tools = dict(
-        ((_read_yaml_config().get("fuyao_cache") or {}).get("tools") or {})
-    )
-
-    prefix = "fuyao_cache.tools."
-    existing = await store.list_overlays(prefix=prefix)
-    upserts: dict[str, int] = {}
-    deletes: list[str] = []
-    for tool, seconds in new_cfg.tools.items():
-        path = prefix + tool
-        _validate_overlay_path(path)
-        base = baseline_tools.get(tool)
-        same_as_baseline = (
-            isinstance(base, int)
-            and not isinstance(base, bool)
-            and int(base) == int(seconds)
-        )
-        if same_as_baseline:
-            # 恢复出厂: 删行 (行不存在时 apply_changes 是 no-op)
-            deletes.append(path)
-        else:
-            upserts[path] = int(seconds)
-    for row in existing:
-        tool = row.path[len(prefix):]
-        if tool not in new_cfg.tools:
-            deletes.append(row.path)
-
-    try:
-        revision = await store.apply_changes(upserts, deletes, expected)
-    except _StoreRevisionConflict as e:
-        raise VersionConflict(
-            f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
-            "请刷新页面后重试"
-        ) from e
-
-    await _refresh_overlay_snapshot()
-
-    # 热改进程内 config: 用 load_config() 算出的生效 tools 直接同步,
-    # 保证 fuyao_ttl_for 下一次调用即读到新值。
-    effective = load_config()
-    effective_tools = (effective.get("fuyao_cache") or {}).get("tools") or {}
-    _sync_runtime_fuyao_tools(effective_tools)
-
-    _interfaces_cache.clear()
-    _mcp_tools_cache.clear()
-
-    return {"fuyao_cache": {"tools": dict(new_cfg.tools)}, "version": revision}
-
-
 def _sync_runtime_fuyao_tools(tools: dict) -> None:
-    """TTL 保存后热改 GatewayServer 注入的运行时 config (同一引用)。"""
+    """overlay 写入后热改 GatewayServer 注入的运行时 config (同一引用)。"""
     cfg = _GW_CFG if _INJECTED and isinstance(_GW_CFG, dict) else None
     if cfg is None:
         return

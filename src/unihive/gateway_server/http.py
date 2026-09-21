@@ -216,45 +216,6 @@ class HttpServeMixin:
         _config_api = _blocking_json_api(_ca.load_config)
         _health_api = _blocking_json_api(_ca.get_health)
 
-        async def _fuyao_cache_get_api(req: Request):
-            return JSONResponse(_ca.get_fuyao_cache())
-
-        async def _fuyao_cache_put_api(req: Request):
-            # M3: 非法 JSON 体 → 400 (旧实现裸 await req.json() 直接 500);
-            # fuyao_cache 缺失/null 不再被 ``or {}`` 静默当成清空。
-            try:
-                body = await req.json()
-            except Exception:
-                return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-            try:
-                payload, expected_version = _ca.parse_fuyao_cache_put_body(body)
-            except ValueError as e:
-                return JSONResponse(
-                    {"error": "validation_failed", "message": str(e)},
-                    status_code=400,
-                )
-            try:
-                result = await _ca.save_fuyao_cache(
-                    payload,
-                    expected_version=expected_version,
-                )
-            except _ca.ConfigStoreUnavailable as e:
-                return JSONResponse(
-                    {"error": "config_store_unavailable", "message": str(e)},
-                    status_code=503,
-                )
-            except _ca.VersionConflict as e:
-                return JSONResponse(
-                    {"error": "version_conflict", "message": str(e)},
-                    status_code=409,
-                )
-            except ValueError as e:
-                return JSONResponse(
-                    {"error": "validation_failed", "message": str(e)},
-                    status_code=400,
-                )
-            return JSONResponse(result)
-
         async def _mcp_tools_api(req: Request):
             # L3 (2026-09-07 5th-round audit): mcp 未初始化时返回 503,
             # 避免 AttributeError。实际不可达 (serve_http 必先 await init),
@@ -366,8 +327,6 @@ class HttpServeMixin:
                     *_proxy_routes(),
                     Route("/api/interfaces", _interfaces_api),
                     Route("/api/config", _config_api),
-                    Route("/api/config/fuyao-cache", _fuyao_cache_get_api),
-                    Route("/api/config/fuyao-cache", _fuyao_cache_put_api, methods=["PUT"]),
                     # 2026-09-18: 上游启用/禁用热开关 (鉴权随 /api/* 中间件继承)
                     *_ca.build_upstream_routes(),
                     Route("/health", _health_api),

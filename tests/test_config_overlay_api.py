@@ -79,7 +79,8 @@ async def test_delete_single_overlay_bumps_revision(overlay_env):
     assert result["warnings"] == []
     assert await overlay_env.list_overlays() == []
     # 镜像同步: 生效值回落出厂 30
-    assert ca.get_fuyao_cache()["tools"] == {"t_base": 30}
+    effective = ca.load_config()
+    assert (effective.get("fuyao_cache") or {}).get("tools") == {"t_base": 30}
 
 
 async def test_delete_missing_is_noop_no_revision_bump(overlay_env):

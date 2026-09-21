@@ -1,17 +1,12 @@
-"""配置审视批次4: 快速后端硬化 (H6 + M1 + M3)。
+"""配置审视批次4: 快速后端硬化 (H6 + M1)。
 
 - H6: 控制台写库的三条实体写路径 (update_tool / upsert_tools /
   upsert_section) 与上游连接块写入门同构 —— 疑似明文密钥 fail-closed;
   工具 params 条目不许多余键透传进 spec (键白名单)。
 - M1: RevisionConflict 的 409 消息必须是中文且含 "revision 不一致",
   与 fuyao / enabled 写路径的 VersionConflict 文案一致。
-- M3: PUT /api/config/fuyao-cache —— 非法 JSON 体 → 400; 缺失/null
-  fuyao_cache → 400 (旧实现 ``body.get(...) or {}`` 会把"前端发错体"
-  静默解释成"清空全部 TTL 覆盖")。显式 ``{"tools": {}}`` 仍是合法清空。
 """
 from __future__ import annotations
-
-import inspect
 
 import pytest
 
@@ -259,40 +254,3 @@ async def test_m1_entity_edit_error_mapping_carries_chinese_409():
     assert payload["expected"] == 1
     assert payload["actual"] == 2
 
-
-# ========== M3: fuyao-cache PUT 请求体门 ==========
-
-
-def test_m3_body_parser_rejects_missing_and_null_fuyao_cache():
-    with pytest.raises(ValueError):
-        ca.parse_fuyao_cache_put_body({})
-    with pytest.raises(ValueError):
-        ca.parse_fuyao_cache_put_body({"fuyao_cache": None})
-    with pytest.raises(ValueError):
-        ca.parse_fuyao_cache_put_body({"fuyao_cache": "not-an-object"})
-    with pytest.raises(ValueError):
-        ca.parse_fuyao_cache_put_body(["not", "object"])
-
-
-def test_m3_body_parser_accepts_object_including_explicit_empty():
-    payload, version = ca.parse_fuyao_cache_put_body(
-        {"fuyao_cache": {"tools": {}}, "version": 7}
-    )
-    assert payload == {"tools": {}}
-    assert version == 7
-    # 显式空 object = 有意清空, 合法; version 可省略
-    payload2, version2 = ca.parse_fuyao_cache_put_body({"fuyao_cache": {}})
-    assert payload2 == {}
-    assert version2 is None
-
-
-def test_m3_fuyao_put_route_guards_json_and_body_shape():
-    """闭包 handler 无法直调; 按仓库既定约定检查 serve_http 源码接线。"""
-    from src.unihive.gateway_server import GatewayServer
-
-    source = inspect.getsource(GatewayServer.serve_http)
-    # 非法 JSON → 400 (旧实现裸 await req.json() → 500)
-    assert "invalid JSON body" in source
-    # 走共享解析门, 不再用静默清空的 ``or {}``
-    assert "parse_fuyao_cache_put_body" in source
-    assert 'body.get("fuyao_cache") or {}' not in source

@@ -59,7 +59,7 @@
       </button>
     </nav>
 
-    <!-- 8 个 panel, 切换只显示 active -->
+    <!-- 7 个 panel, 切换只显示 active -->
     <div v-loading="loading && !config" class="cfg-panel-stack">
       <section
         v-show="activeTab === 'upstreams'"
@@ -120,20 +120,6 @@
       </section>
 
       <section
-        v-show="activeTab === 'fuyaoCache'"
-        class="cfg-panel"
-        aria-labelledby="cfg-tab-fuyao-cache"
-      >
-        <FuyaoCachePanel
-          :fuyao-cache="displayConfig?.fuyao_cache"
-          :config-version="displayConfig?.version"
-          :all-tools="displayConfig?.tools"
-          :upstream-tool-mapping="displayConfig?.upstream_tool_mapping"
-          @saved="onFuyaoCacheSaved"
-        />
-      </section>
-
-      <section
         v-show="activeTab === 'database'"
         class="cfg-panel"
         aria-labelledby="cfg-tab-database"
@@ -172,7 +158,6 @@ import MappingPanel from './config/MappingPanel.vue'
 import ToolsPanel from './config/ToolsPanel.vue'
 import CachePanel from './config/CachePanel.vue'
 import ProxyPanel from './config/ProxyPanel.vue'
-import FuyaoCachePanel from './config/FuyaoCachePanel.vue'
 import DatabasePanel from './config/DatabasePanel.vue'
 import UpdateCenterPanel from './config/UpdateCenterPanel.vue'
 
@@ -250,11 +235,6 @@ const mappingCount = computed(() => Object.keys(config.value?.upstream_tool_mapp
 const toolsCount = computed(() => (displayConfig.value?.tools || []).length)
 const ttlCount = computed(() => Object.keys(config.value?.cache?.ttl || {}).length)
 const coverageCount = computed(() => proxy.value?.coverage?.length ?? 0)
-/** FUYAO 工具级 override 总条数; 0 个显示 0 (扁平 tools dict, 2026-09-15 重构)。*/
-const fuyaoOverrideCount = computed(() => {
-  const tools = config.value?.fuyao_cache?.tools
-  return tools ? Object.keys(tools).length : 0
-})
 /** 配置库 tab 角标: 用户改动实体行数 (yaml 逃生模式 0)。 */
 const userModifiedEntitiesCount = computed(() => userModifiedCount(entities.value))
 
@@ -267,7 +247,6 @@ const TABS = computed(() => [
   { key: 'tools' as const, title: TAB_TITLES.tools, count: toolsCount.value },
   { key: 'cache' as const, title: TAB_TITLES.cache, count: ttlCount.value },
   { key: 'proxy' as const, title: TAB_TITLES.proxy, count: coverageCount.value },
-  { key: 'fuyaoCache' as const, title: TAB_TITLES.fuyaoCache, count: fuyaoOverrideCount.value },
   { key: 'database' as const, title: TAB_TITLES.database, count: userModifiedEntitiesCount.value },
   // 出厂更新无静态角标计数 (模板 hash 信号在面板内拉取展示)
   { key: 'updateCenter' as const, title: TAB_TITLES.updateCenter, count: '' },
@@ -328,21 +307,6 @@ function onUpstreamConnectionSaved(payload: {
     config.value = { ...config.value, version: payload.revision }
   }
   void load(false)
-}
-
-/** FUYAO 缓存保存成功 — 把新 fuyao_cache 与 revision 回写到本地 config。 */
-function onFuyaoCacheSaved(payload: {
-  fuyao_cache: NonNullable<GatewayConfig['fuyao_cache']>
-  version: ConfigRevision
-}) {
-  if (config.value) {
-    config.value = {
-      ...config.value,
-      fuyao_cache: payload.fuyao_cache,
-      version: payload.version,
-    }
-  }
-  void loadEntities()
 }
 
 /**

@@ -116,7 +116,7 @@ def chain_has_remote_http(chain: list[str] | None) -> bool:
 def normalize_ttl(ttl: Any) -> int | None:
     """把配置里的 TTL 值归一化成正整数秒, 或 None(不缓存)。
 
-    合同 (见 fuyao_cache 模型与 cache_strategy 模块):
+    合同 (见 config 的 fuyao_cache 段与 cache_strategy 模块):
       - None: 未配置 → 不缓存;
       - 0 或负数: 显式不缓存 (Round-12 H2: 旧链路把 0 透传到
         ``Cache.set``, ``if ttl`` 判定为假 → expires_at=NULL → 永久缓存);

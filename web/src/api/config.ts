@@ -74,8 +74,6 @@ export interface GatewayConfig {
   logging?: Record<string, LoggingValue>
   disable_dangerous?: boolean
   strict_registry?: boolean
-  /** FUYAO 工具级 TTL 覆盖 (fuyao_cache.tools) */
-  fuyao_cache?: FuyaoCacheConfig
   /**
    * 乐观锁版本: config.db 模式下是整数 revision, yaml 逃生模式下是
    * 16 位文件 hash 字符串。提交 PUT 时原样回带。
@@ -87,87 +85,6 @@ export interface GatewayConfig {
 /** GET /api/config — 全量配置快照。 */
 export async function getConfig(): Promise<GatewayConfig> {
   const { data } = await http.get<GatewayConfig>('/api/config')
-  return data
-}
-
-// ---------------------------------------------------------------------------
-// /api/config/fuyao-cache — FUYAO 工具级缓存 TTL (config.db fuyao_cache 实体段)
-// ---------------------------------------------------------------------------
-
-/** 4 个固定 endpoint — 仅用于面板分组展示 (后端 mapping 中的 fuyao_* 上游名)。 */
-export const FUYAO_ENDPOINT_KEYS = [
-  'fuyao_ashare',
-  'fuyao_index',
-  'fuyao_meta',
-  'fuyao_fund',
-] as const
-export type FuyaoEndpointKey = (typeof FUYAO_ENDPOINT_KEYS)[number]
-
-/** endpoint 中文标签 — 用于 UI 标题。 */
-export const FUYAO_ENDPOINT_TITLES: Record<FuyaoEndpointKey, string> = {
-  fuyao_ashare: 'A 股行情 (a-share)',
-  fuyao_index: 'A 股指数 (a-share-index)',
-  fuyao_meta: '跨市场元数据 (meta)',
-  fuyao_fund: '基金 (fund)',
-}
-
-export interface FuyaoCacheConfig {
-  /**
-   * 工具级 TTL 覆盖: 键为 MCP tool 名称, 值为 TTL 秒数 (≥ 0, 0=不缓存)。
-   * 生效值 = YAML 基线 tools 合并 config.db 覆盖行; 由 FuyaoCachePanel
-   * 提交到后端 `/api/config/fuyao-cache` (与出厂相同的行会被服务端自动删行)。
-   */
-  tools?: Record<string, number>
-  version?: ConfigRevision
-}
-
-/**
- * 派生某 gateway tool 对应的 FUYAO endpoint。
- *
- * 数据源是后端 `config.upstream_tool_mapping`:
- *   { gatewayToolName: { upstreamName: upstreamToolName, ... } }
- * 上游名即 4 个固定 endpoint 之一 (fuyao_ashare/fuyao_index/fuyao_meta/
- * fuyao_fund)。一个 gateway 工具可挂多个上游 (路由降级链), 此时按
- * FUYAO_ENDPOINT_KEYS 的固定顺序取第一个命中的 fuyao_* backer;
- * 没有任何 fuyao backer 返回 undefined (该工具不属于本面板)。
- */
-export function fuyaoEndpointOf(
-  toolName: string,
-  upstreamToolMapping?: Record<string, Record<string, string>> | null,
-): FuyaoEndpointKey | undefined {
-  const backers = upstreamToolMapping?.[toolName]
-  if (!backers) return undefined
-  for (const ep of FUYAO_ENDPOINT_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(backers, ep)) return ep
-  }
-  return undefined
-}
-
-/** GET /api/config/fuyao-cache — 当前生效的 FUYAO 工具级 TTL (基线 + 覆盖)。 */
-export async function getFuyaoCache(): Promise<FuyaoCacheConfig> {
-  const { data } = await http.get<FuyaoCacheConfig>('/api/config/fuyao-cache')
-  return data
-}
-
-/** PUT /api/config/fuyao-cache — 写入工具级 TTL 覆盖, 附带乐观锁 revision。
-
-  fuyao_cache 整段作为 config_section 行写入 config.db; 保存后热生效, 无需重启。
-
-  Returns:
-    { fuyao_cache, version } — 新 revision 必须让前端更新本地 state。
-  Throws:
-    409 (version_conflict) — 前端应提示刷新后重试
-    400 (validation_failed) — payload 校验失败, 含后端 message
-    503 (config_store_unavailable) — 网关以 yaml 逃生模式启动, 配置库不可用
-*/
-export async function saveFuyaoCache(
-  payload: FuyaoCacheConfig,
-  version: ConfigRevision,
-): Promise<{ fuyao_cache: FuyaoCacheConfig; version: ConfigRevision }> {
-  const { data } = await http.put<{
-    fuyao_cache: FuyaoCacheConfig
-    version: ConfigRevision
-  }>('/api/config/fuyao-cache', { fuyao_cache: payload, version })
   return data
 }
 

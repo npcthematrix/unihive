@@ -2,7 +2,7 @@
 
 覆盖三层:
 1. tool_loader 纯函数: backer 解析 / enabled 过滤 (含多 backer 兜底语义);
-2. console_api: save_upstream_enabled / save_fuyao_cache 写 SQLite overlay,
+2. console_api: save_upstream_enabled 写 SQLite overlay,
    乐观锁 revision、恢复出厂 (与出厂值相同则删行)、镜像合并读;
 3. GatewayServer.set_upstream_enabled: 热摘除/发布工具 + 断连/重连差集。
 """
@@ -195,70 +195,6 @@ async def test_save_without_store_is_503_class(tmp_path, monkeypatch):
     ca.set_config_store(None)
     with pytest.raises(ca.ConfigStoreUnavailable):
         await ca.save_upstream_enabled("alpha", False)
-
-
-async def test_fuyao_save_upserts_tool_rows_and_hot_updates_runtime(store_env, monkeypatch):
-    runtime_cfg = {"cache": {"ttl": {}}}
-    monkeypatch.setattr(ca, "_GW_CFG", runtime_cfg)
-    monkeypatch.setattr(ca, "_INJECTED", True)
-
-    result = await ca.save_fuyao_cache(
-        {"tools": {"get_x": 60, "get_y": 0}}, expected_version=0
-    )
-    assert result["version"] == 1
-    paths = {r.path: r.value for r in await store_env["store"].list_overlays()}
-    assert paths == {
-        "fuyao_cache.tools.get_x": 60,
-        "fuyao_cache.tools.get_y": 0,
-    }
-    got = ca.get_fuyao_cache()
-    assert got["tools"] == {"get_x": 60, "get_y": 0}
-    assert got["version"] == 1
-    # 热改进程内 config, fuyao_ttl_for 下次调用即生效
-    assert runtime_cfg["fuyao_cache"]["tools"] == {"get_x": 60, "get_y": 0}
-
-
-async def test_fuyao_save_dropped_tool_deletes_row(store_env, monkeypatch):
-    monkeypatch.setattr(ca, "_GW_CFG", {})
-    monkeypatch.setattr(ca, "_INJECTED", True)
-    await ca.save_fuyao_cache({"tools": {"get_x": 60, "get_y": 10}})
-    result = await ca.save_fuyao_cache({"tools": {"get_x": 60}})
-    rows = {r.path for r in await store_env["store"].list_overlays()}
-    assert rows == {"fuyao_cache.tools.get_x"}
-    assert result["version"] == 2
-
-
-async def test_fuyao_save_equal_to_baseline_deletes_row(tmp_path, monkeypatch):
-    yaml_text = SAMPLE_YAML + "fuyao_cache:\n  tools:\n    get_x: 30\n"
-    cfg_file = tmp_path / "upstreams.yaml"
-    cfg_file.write_text(yaml_text, encoding="utf-8")
-    monkeypatch.setattr(ca, "GATEWAY_CONFIG_PATH", str(cfg_file))
-    store = ConfigStore(tmp_path / "config.db")
-    await store.initialize()
-    ca.set_config_store(store, [], 0)
-    try:
-        await ca.save_fuyao_cache({"tools": {"get_x": 60}})
-        # 改成出厂值 30 → 覆盖行删除, 生效值回落 YAML 30
-        await ca.save_fuyao_cache({"tools": {"get_x": 30}})
-        assert await store.list_overlays() == []
-        assert ca.get_fuyao_cache()["tools"] == {"get_x": 30}
-    finally:
-        ca.set_config_store(None)
-        await store.close()
-
-
-async def test_fuyao_save_validation(store_env):
-    with pytest.raises(ValueError):
-        await ca.save_fuyao_cache({"tools": {"get_x": -1}})
-    with pytest.raises(ValueError):
-        await ca.save_fuyao_cache({"tools": {"get_x": "60"}})
-    with pytest.raises(ValueError):
-        await ca.save_fuyao_cache({"endpoints": {}})  # 旧 shape, extra forbid
-
-
-async def test_fuyao_batch_save_is_single_revision(store_env):
-    await ca.save_fuyao_cache({"tools": {f"t{i}": 10 + i for i in range(5)}})
-    assert await store_env["store"].revision() == 1
 
 
 # ---------------------------------------------------------------------------
