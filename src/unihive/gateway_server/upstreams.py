@@ -66,10 +66,7 @@ class UpstreamControlMixin:
             # "未知"。本次 boot 已等不起又无后台自愈, 诚实落 UNAVAILABLE;
             # 有钩子的 mootdx2/tdx_quant 保留 UNKNOWN, 等阻塞调用返回后由
             # start_after_timeout 重跑 start() 自行定状态, 不提前判死。
-            if not hasattr(client, "start_after_timeout"):
-                status = getattr(client, "status", None)
-                if status is UpstreamStatus.UNKNOWN:
-                    client._status = UpstreamStatus.UNAVAILABLE
+            self._settle_unavailable_if_unknown(client)
             return False
         except Exception as e:
             # 非超时异常 (FileNotFoundError / OSError / 等) 同样登记 client,
@@ -79,11 +76,27 @@ class UpstreamControlMixin:
                 f"marking unavailable"
             )
             self.upstreams[name] = client
+            # 与超时分支同语义: 异常逃出 start() 且 client 未自置状态时,
+            # 诚实落 UNAVAILABLE — 否则状态永久残留 UNKNOWN, aggregate_health
+            # 把它计入 degraded 而非 unhealthy, 健康结论被乐观化。
+            self._settle_unavailable_if_unknown(client)
             return False
         self.upstreams[name] = client
         connected = bool(client.is_available)
         logger.info(f"[{name}] {'Connected' if connected else 'Failed'}")
         return connected
+
+    @staticmethod
+    def _settle_unavailable_if_unknown(client) -> None:
+        """Round-12 簇I / Round-14: start() 超时或异常已让本次 boot 等不起,
+        没有 late-recovery 钩子 (mootdx2/tdx_quant 才有) 的 client 若状态仍停
+        在初始 UNKNOWN, 诚实落 UNAVAILABLE; 有钩子的保留 UNKNOWN, 等阻塞调用
+        返回后由 start_after_timeout 自行定状态, 不提前判死。
+        """
+        if not hasattr(client, "start_after_timeout"):
+            status = getattr(client, "status", None)
+            if status is UpstreamStatus.UNKNOWN:
+                client._status = UpstreamStatus.UNAVAILABLE
 
     # ------------------------------------------------------------------
     # M2 (round 11): 启动超时后的后台自愈

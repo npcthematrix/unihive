@@ -110,7 +110,10 @@ class LifecycleMixin:
                     f"DB config validation failed ({len(errors)} error(s)): "
                     + "; ".join(errors)
                 )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
+            # CancelledError 是 BaseException: self.config_store 赋值前的窗口
+            # (initialize/ensure_seeded/template 加载中被外层取消) 旧链路接不
+            # 住, 外层清理块读 self.config_store 为 None → engine 泄漏。
             await store.close()
             raise
 
@@ -172,18 +175,24 @@ class LifecycleMixin:
                 name="unihive-cache-cleanup",
             )
 
-            # 初始化上游客户端
+            # 初始化上游客户端 (并发 gather)
             # 用 `or {}` 归一化, 防 YAML `upstreams: null` 让 .items() 抛 AttributeError (HIGH #2)
             # 构造/启动拆成 _construct_upstream_client / _start_upstream_client,
             # 供上游启用/禁用热开关复用 (2026-09-18)。
-            for name, cfg in (self.config.get("upstreams") or {}).items():
-                if not cfg.get("enabled", False):
-                    continue
+            # Round-14: 旧链路顺序 await, 单源 start() 挂起时启动总预算 = Σ 各源
+            # 超时 (实测最坏 70-80s), 期间 HTTP 端口无应答、纯本地工具被远端源
+            # 连坐; 改为并发后总预算塌缩为最慢单源 (~30s)。
+            enabled_upstreams = [
+                (name, cfg)
+                for name, cfg in (self.config.get("upstreams") or {}).items()
+                if cfg.get("enabled", False)
+            ]
+
+            async def _construct_and_start(name: str, cfg: dict) -> None:
                 # H2 (round 9 audit): 单个上游构造/启动抛错 (如 mootdx2 非法
-                # servers、tdx_quant 缺 DLL) 不得让整个网关拒启 —— 与
-                # _start_upstream_client 已有的 "失败也登记为不可用" 语义一致,
-                # 这里把构造也纳入 try, 该上游跳过 + log, 其余照常启动。
-                # CancelledError (BaseException) 仍传播, 不被吞。
+                # servers、tdx_quant 缺 DLL) 不得让整个网关拒启 —— 该源跳过 +
+                # log, 其余源并发继续。CancelledError (BaseException) 仍传播
+                # (外层取消会经 gather 取消全部在途子任务)。
                 try:
                     client = self._construct_upstream_client(name, cfg)
                     await self._start_upstream_client(name, cfg, client)
@@ -196,6 +205,11 @@ class LifecycleMixin:
                         name,
                         e,
                     )
+
+            if enabled_upstreams:
+                await asyncio.gather(
+                    *(_construct_and_start(n, c) for n, c in enabled_upstreams)
+                )
 
             # 2026-09-15: 让 console_api 能查到已注册的 upstream client,
             # 服务 /api/upstreams/<name>/metrics 端点。必须在装配循环结束、
@@ -286,6 +300,11 @@ class LifecycleMixin:
             _ca.set_gateway_server(None)
             _ca.set_upstream_registry({})
             _ca.set_omni_client(None)
+            # Round-14: configure_proxy_api 之后若 _create_and_register_gateway_mcp
+            # 抛错, proxy_api 全局仍持有旧 proxy_settings 和已关 client 的
+            # upstreams dict; 与 stop() 末尾对齐, 这里一并复位。
+            from ..utils.proxy_api import reset_proxy_api
+            reset_proxy_api()
             # M1 (2026-09-07 audit): 半构造的 router / mcp 也归零, 否则后续
             # get_server_status / 路由调用拿到指向未完全初始化对象的引用。
             self.router = None

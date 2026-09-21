@@ -105,6 +105,44 @@ def is_non_loopback_host(host: str | None) -> bool:
     return not ip.is_loopback
 
 
+def _precheck_bind(host: str, port: int) -> None:
+    """端口占用预检: bind 一次首个解析地址, 占用则退出码 2 + 明确消息。
+
+    Round-14: 旧实现写死 AF_INET, 配置 ``::1`` / ``::`` 等 IPv6 host 时预检
+    抛 gaierror/EAFNOSUPPORT 并 re-raise, uvicorn (本身支持 IPv6) 从未被尝试。
+    改按 getaddrinfo 解析出的实际地址族建探针; 解析不出任何地址则跳过预检,
+    交给 uvicorn 报错 (不比真实服务更严格)。仅探首个地址, 与 uvicorn 绑定
+    首个解析结果的行为一致。
+    """
+    try:
+        infos = socket.getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_PASSIVE,
+        )
+    except socket.gaierror:
+        return
+    if not infos:
+        return
+    family, socktype, proto, _canonname, sockaddr = infos[0]
+    probe = socket.socket(family, socktype, proto)
+    try:
+        try:
+            probe.bind(sockaddr)
+        except OSError as e:
+            if e.errno in (98, 10048) or "address already in use" in str(e).lower():
+                print(
+                    f"error: cannot bind {host}:{port} — port already in use",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            raise
+    finally:
+        # 无论 bind 成功还是非占用 OSError 路径, 都释放探针 fd。
+        probe.close()
+
+
 def _preflight_console_html(html_path: str | Path) -> None:
     """启动预检 console.html 存在; 缺失给可操作的构建提示。
 
@@ -441,23 +479,7 @@ class HttpServeMixin:
         # 在 outer try/finally 里面, 否则端口冲突时 stop() 不跑,
         # health_task / upstreams / cache 全部泄漏。
         try:
-            _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                try:
-                    _probe.bind((host, port))
-                except OSError as e:
-                    if e.errno in (98, 10048) or "address already in use" in str(e).lower():
-                        print(
-                            f"error: cannot bind {host}:{port} — port already in use",
-                            file=sys.stderr,
-                        )
-                        sys.exit(2)
-                    raise
-            finally:
-                # Always release the probe fd regardless of bind outcome
-                # (including non-errno-98 OSError paths that re-raise).
-                _probe.close()
-
+            _precheck_bind(host, port)
             await uvicorn.Server(config).serve()
         finally:
             await self.stop()
