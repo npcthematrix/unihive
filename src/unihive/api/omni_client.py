@@ -552,7 +552,15 @@ class OmniClient:
             self._resolve_sector_stocks_sync, sector_code, sector_name, source
         )
         if stocks is None:
-            return ToolResult(success=True, data=[], error="Sector not found")
+            # None=板块不存在, 与"板块存在但成分股为空"([]) 区分; 挂 no_data
+            # 标记让 router 把 "Sector not found" 提升为信封 warn, 否则
+            # success=true + data=null + error 被吞, 调用方无法区分两种空。
+            return ToolResult(
+                success=True,
+                data=None,
+                error="Sector not found",
+                error_detail={"error_type": "no_data"},
+            )
         return ToolResult(success=True, data=stocks, source=self.name)
 
     def _resolve_sector_stocks_sync(

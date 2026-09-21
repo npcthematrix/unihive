@@ -64,20 +64,19 @@
       <section
         v-show="activeTab === 'upstreams'"
         class="cfg-panel"
-        aria-labelledby="cfg-tab-upstreams"
       >
         <UpstreamsPanel
           :config="displayConfig"
           :editable="isDbMode"
           @changed="onUpstreamEnabled"
           @connection-saved="onUpstreamConnectionSaved"
+          @kill-switch-changed="onKillSwitchChanged"
         />
       </section>
 
       <section
         v-show="activeTab === 'mapping'"
         class="cfg-panel"
-        aria-labelledby="cfg-tab-mapping"
       >
         <MappingPanel :config="displayConfig" />
       </section>
@@ -85,7 +84,6 @@
       <section
         v-show="activeTab === 'tools'"
         class="cfg-panel"
-        aria-labelledby="cfg-tab-tools"
       >
         <ToolsPanel
           :config="displayConfig"
@@ -97,7 +95,6 @@
       <section
         v-show="activeTab === 'cache'"
         class="cfg-panel"
-        aria-labelledby="cfg-tab-cache"
       >
         <!-- entities 未加载完时默认按 db 措辞, 避免逃生模式 banner 闪烁 -->
         <CachePanel
@@ -109,20 +106,13 @@
       <section
         v-show="activeTab === 'proxy'"
         class="cfg-panel"
-        aria-labelledby="cfg-tab-proxy"
       >
-        <ProxyPanel
-          :proxy="proxy"
-          :loading="proxyLoading"
-          :load-error="proxyError"
-          @change="onProxyChange"
-        />
+        <ProxyPanel :proxy="proxy" @change="onProxyChange" />
       </section>
 
       <section
         v-show="activeTab === 'database'"
         class="cfg-panel"
-        aria-labelledby="cfg-tab-database"
       >
         <DatabasePanel :entities="entities" />
       </section>
@@ -130,7 +120,6 @@
       <section
         v-show="activeTab === 'updateCenter'"
         class="cfg-panel"
-        aria-labelledby="cfg-tab-update-center"
       >
         <UpdateCenterPanel :entities="entities" @applied="onFactoryUpgradeApplied" />
       </section>
@@ -178,7 +167,6 @@ const {
   proxy,
   loading,
   manualLoading,
-  proxyLoading,
   loadError,
   proxyError,
   lastRefresh,
@@ -270,6 +258,22 @@ function onUpstreamEnabled(payload: UpstreamEnabledChanged) {
     version: payload.version,
   }
   // enabled 已写实体行, 刷新「配置库」tab 的 origin/updated_at 与 revision
+  void loadEntities()
+  void loadInterfaceTools()
+}
+
+/** dangerous kill switch 热切换成功 — patch 顶层 disable_dangerous + revision。 */
+function onKillSwitchChanged(payload: {
+  disabled: boolean
+  version: ConfigRevision
+}) {
+  const current = config.value
+  if (!current) return
+  config.value = {
+    ...current,
+    disable_dangerous: payload.disabled,
+    version: payload.version,
+  }
   void loadEntities()
   void loadInterfaceTools()
 }

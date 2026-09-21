@@ -116,19 +116,17 @@
       />
 
       <div v-if="preview" class="uc-preview">
-        <details class="cfg-section" open>
-          <summary class="cfg-section-header">
-            <span class="cfg-section-title">
-              <span class="cfg-section-toggle">▾</span>
-              合并预览
-              <code class="uc-version-arrow">
-                {{ shortTemplateVersion(preview.old_version) }}
-                →
-                {{ shortTemplateVersion(preview.new_version) }}
-              </code>
-            </span>
-          </summary>
-          <div class="cfg-section-body">
+        <!-- 不再用外层折叠包全部内容 (里面还有台账折叠, 折叠套折叠); 改为普通区段常驻展开 -->
+        <section class="uc-preview-section">
+          <h3 class="uc-preview-title">
+            合并预览
+            <code class="uc-version-arrow">
+              {{ shortTemplateVersion(preview.old_version) }}
+              →
+              {{ shortTemplateVersion(preview.new_version) }}
+            </code>
+          </h3>
+          <div class="uc-preview-body">
             <div v-if="!preview.changed" class="cfg-banner uc-banner-ok">
               <span class="cfg-info-icon" aria-hidden="true">✓</span>
               <span>已是最新:出厂模板相对库内快照无净变更 (revision {{ previewRevision }} 不变)。</span>
@@ -267,45 +265,31 @@
                 </div>
               </section>
 
-              <!-- 台账 -->
-              <details class="cfg-section uc-ledger">
-                <summary class="cfg-section-header">
-                  <span class="cfg-section-title">
-                    <span class="cfg-section-toggle">▾</span>
-                    配置段台账 ({{ sectionRows.length }})
-                  </span>
-                </summary>
-                <div class="cfg-section-body">
+              <!-- 变更台账: 原三个近重复折叠合并为一个区段, 按实体类型分 3 子段 -->
+              <section class="uc-ledger-book">
+                <h4>变更台账</h4>
+                <div class="uc-ledger-group">
+                  <div class="uc-ledger-group-title">
+                    配置段 ({{ sectionRows.length }})
+                  </div>
                   <LedgerTable v-if="sectionRows.length" :rows="sectionRows" />
                   <div v-else class="uc-ledger-empty">无</div>
                 </div>
-              </details>
-
-              <details class="cfg-section uc-ledger">
-                <summary class="cfg-section-header">
-                  <span class="cfg-section-title">
-                    <span class="cfg-section-toggle">▾</span>
-                    上游台账 ({{ upstreamRows.length }})
-                  </span>
-                </summary>
-                <div class="cfg-section-body">
+                <div class="uc-ledger-group">
+                  <div class="uc-ledger-group-title">
+                    上游 ({{ upstreamRows.length }})
+                  </div>
                   <LedgerTable v-if="upstreamRows.length" :rows="upstreamRows" />
                   <div v-else class="uc-ledger-empty">无</div>
                 </div>
-              </details>
-
-              <details class="cfg-section uc-ledger">
-                <summary class="cfg-section-header">
-                  <span class="cfg-section-title">
-                    <span class="cfg-section-toggle">▾</span>
-                    工具台账 ({{ toolRows.length }})
-                  </span>
-                </summary>
-                <div class="cfg-section-body">
+                <div class="uc-ledger-group">
+                  <div class="uc-ledger-group-title">
+                    工具 ({{ toolRows.length }})
+                  </div>
                   <LedgerTable v-if="toolRows.length" :rows="toolRows" />
                   <div v-else class="uc-ledger-empty">无</div>
                 </div>
-              </details>
+              </section>
 
               <!-- apply 栏 -->
               <div class="uc-apply-bar">
@@ -330,7 +314,7 @@
               </div>
             </template>
           </div>
-        </details>
+        </section>
       </div>
 
       <!-- apply 结果 -->
@@ -648,6 +632,27 @@ onMounted(() => {
   font-size: 0.78rem;
 }
 
+/* 普通区段 (替代原 cfg-section 折叠), 卡片外观与全局 cfg-section 一致 */
+.uc-preview-section {
+  border: 1px solid var(--cfg-border);
+  border-radius: 6px;
+  background: var(--cfg-bg);
+}
+
+.uc-preview-title {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--cfg-border);
+}
+
+.uc-preview-body {
+  padding: 12px 14px;
+}
+
 .uc-banner-ok {
   align-items: center;
 }
@@ -808,8 +813,27 @@ onMounted(() => {
   gap: 4px;
 }
 
-.uc-ledger {
-  margin-top: 8px;
+.uc-ledger-book {
+  margin-top: 12px;
+}
+
+.uc-ledger-book h4 {
+  margin: 0 0 8px;
+  font-size: 0.92rem;
+}
+
+.uc-ledger-group {
+  margin-top: 10px;
+}
+
+.uc-ledger-group:first-of-type {
+  margin-top: 0;
+}
+
+.uc-ledger-group-title {
+  margin-bottom: 4px;
+  font-size: 0.82rem;
+  color: var(--el-text-color-secondary);
 }
 
 .uc-ledger-empty {

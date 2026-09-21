@@ -100,8 +100,9 @@ class TestCacheHeaders:
         assert resp.headers["cache-control"].lower() == "no-cache"
 
     def test_hashed_assets_immutable_others_not(self, tmp_path):
-        assets = tmp_path / "assets"
-        assets.mkdir()
+        # 生产布局: STATIC_DIR/console/assets/<指纹 chunk>, 默认前缀 /console/assets/
+        assets = tmp_path / "console" / "assets"
+        assets.mkdir(parents=True)
         (assets / "index-abc123.js").write_text("/* hash chunk */", encoding="utf-8")
         (tmp_path / "login.css").write_text("/* non-hashed */", encoding="utf-8")
 
@@ -116,7 +117,7 @@ class TestCacheHeaders:
             ]
         )
         with TestClient(app) as client:
-            hashed = client.get("/static/assets/index-abc123.js")
+            hashed = client.get("/static/console/assets/index-abc123.js")
             unhashed = client.get("/static/login.css")
 
         assert hashed.status_code == 200

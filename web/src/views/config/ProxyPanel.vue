@@ -1,23 +1,11 @@
 <template>
   <div class="proxy-panel">
-    <h3 class="proxy-title">
-      代理设置
-      <small class="sub">(mootdx2 → TDX_QUANT 透明代理)</small>
-    </h3>
     <p class="proxy-description">
-      启用后, 以下 <strong>{{ coverageCount }}</strong> 个行情类工具优先走
-      TDX_QUANT (本地 DLL, 更稳定), 失败时自动降级到 MOOTDX2 (远程 TDX)。
+      mootdx2 → TDX_QUANT 透明代理。启用后, 以下 <strong>{{ coverageCount }}</strong> 个行情类
+      工具优先走 TDX_QUANT (本地 DLL, 更稳定), 失败时自动降级到 MOOTDX2 (远程 TDX)。
     </p>
 
     <!-- TDX_QUANT 实时状态 -->
-    <el-alert
-      v-if="loadError"
-      type="warning"
-      :closable="false"
-      show-icon
-      class="proxy-load-error"
-      :title="`加载失败: ${loadError}`"
-    />
     <div class="proxy-status">
       <span class="proxy-status-label">TDX_QUANT 状态:</span>
       <span
@@ -97,9 +85,6 @@ import { errorMessage } from '@/api/client'
 
 interface Props {
   proxy: ProxySettings | null
-  loading: boolean
-  /** 加载失败时由父级传入, 仅本面板内 alert, 不污染 ConfigView 全局 alert。 */
-  loadError?: string
 }
 
 const props = defineProps<Props>()
@@ -176,20 +161,7 @@ async function onToggle(value: boolean | string | number) {
 .proxy-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-}
-
-.proxy-title {
-  margin: 0 0 4px;
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.proxy-title .sub {
-  font-weight: 400;
-  font-size: 0.8rem;
-  color: var(--cfg-text-secondary);
-  margin-left: 6px;
+  gap: 12px;
 }
 
 .proxy-description {

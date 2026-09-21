@@ -5,6 +5,7 @@
  * 编辑而非逐键表单; 后端 entity_edit.validate_upstream_config 是最终权威。
  */
 import type { UpstreamEntity } from '@/api/config'
+import { stableJson } from './jsonCompare'
 
 /**
  * 后端 config_loader 接受的上游 type (2026-09-18)。select 优先列这些,
@@ -100,12 +101,3 @@ export function isUpstreamChanged(
   return type !== entity.type || stableJson(config) !== stableJson(entity.config || {})
 }
 
-function stableJson(v: unknown): string {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v)
-  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
-  const obj = v as Record<string, unknown>
-  return `{${Object.keys(obj)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`)
-    .join(',')}}`
-}

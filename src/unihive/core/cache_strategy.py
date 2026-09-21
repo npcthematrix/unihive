@@ -102,7 +102,9 @@ _SHANGHAI_TZ = timezone(timedelta(hours=8))
 #   - 涨停/跌停/炸板池（normalize: date_ms）→ date_ms，上海零点毫秒戳；
 #   - 龙虎榜/竞价基准/热门股历史（无 normalize）→ date，原始 "YYYY-MM-DD" 串；
 #   - 热门股排名趋势 → end_date，归一为 8 位 "YYYYMMDD" 串。
-_AS_OF_DATE_KEYS = ("date_ms", "date", "end_date", "start_date")
+# 刻意不含 start_date：热门股排名趋势语义是「start_date → 今天」(end_date
+# 可省), 只有 start_date 时结果含今日仍在变的排名, 误判冻结会把 TTL 锁 10 年。
+_AS_OF_DATE_KEYS = ("date_ms", "date", "end_date")
 
 # 过去交易日冻结快照所用的 TTL 档名（cache.ttl.historical_immutable）。
 HISTORICAL_IMMUTABLE_KEY = "historical_immutable"
@@ -215,6 +217,7 @@ def intraday_session_ttl(
     session_ttl: int,
     *,
     now: float | None = None,
+    post_close_boundary: tuple[int, int] | None = None,
 ) -> int:
     """短档（≤1h）TTL 请求的时段感知 TTL（秒）。传入该短档的配置秒数。
 
@@ -224,7 +227,9 @@ def intraday_session_ttl(
       - 上午盘(9:30–11:30)：分钟级短档；
       - 午间休市(11:30–13:00)：数据冻结 → 缓存到 13:00；
       - 下午盘(13:00–15:00)：分钟级短档；
-      - 收盘后(15:00–24:00)：当日定格 → 缓存到次日零点。
+      - 收盘后(15:00–24:00)：当日定格 → 缓存到次日零点；若给了
+        ``post_close_boundary`` (时,分) 且当前未到该点, 则只缓存到该点
+        —— 龙虎榜等盘后才发布的榜单, 15:00 拿到的还是前一交易日数据。
     """
     if now is None:
         now = time.time()
@@ -248,7 +253,63 @@ def intraday_session_ttl(
         return _seconds_until(now_dt, *_AFTERNOON_OPEN)
     if minutes < close_pm:
         return int(session_ttl)
+    if post_close_boundary is not None:
+        bh, bm = post_close_boundary
+        if minutes < bh * 60 + bm:
+            return _seconds_until(now_dt, bh, bm)
     return _seconds_to_midnight(now_dt)
+
+
+# M9 (2026-09-21 round-2): 盘后实际发布时间晚于收盘的 special_data 工具。
+# 龙虎榜交易所盘后披露, 实际 17:30–18:00 才可查当日; 不给这个边界,
+# 15:00 的缓存 (默认日期仍解析为前一交易日) 会一路锁到次日零点。
+_POST_CLOSE_PUBLICATION_BOUNDARY: dict[str, tuple[int, int]] = {
+    "a_share_special_data_dragon_tiger_list": (18, 0),
+}
+
+# M8: 集合竞价快照在 9:25 才定格; 9:15–9:25 集合竞价期间数据逐秒变化,
+# 空/半成品快照若按 86400 长档锁死, 全天都拿不到真实竞价结果。
+_AUCTION_START = (9, 15)
+_AUCTION_FIXED = (9, 25)
+_AUCTION_INTRADAY_TTL = 60
+
+
+def auction_snapshot_ttl(base_ttl: int, *, now: float | None = None) -> int:
+    """集合竞价快照 (base 为 1 天长档) 的时段感知 TTL。
+
+    - 周末：休市 → 缓存到次日零点 (跨周末逐日自愈, 不把空结果带到周一);
+    - 00:00–9:15：昨日/空数据, 9:15 开始竞价 → 缓存到 9:15;
+    - 9:15–9:25：竞价进行中 → 60s 短档;
+    - 9:25 之后：竞价定格全天不变 → base 长档。
+    """
+    if now is None:
+        now = time.time()
+    now_dt = datetime.fromtimestamp(now, tz=_SHANGHAI_TZ)
+    if now_dt.weekday() >= 5:
+        return _seconds_to_midnight(now_dt)
+    minutes = now_dt.hour * 60 + now_dt.minute
+    start_min = _AUCTION_START[0] * 60 + _AUCTION_START[1]
+    fixed_min = _AUCTION_FIXED[0] * 60 + _AUCTION_FIXED[1]
+    if minutes < start_min:
+        return _seconds_until(now_dt, *_AUCTION_START)
+    if minutes < fixed_min:
+        return _AUCTION_INTRADAY_TTL
+    return int(base_ttl)
+
+
+# M7: "省略日期 → 返回当年全部交易日" 的工具: 无日期入参时缓存必须在
+# 年末断开, 否则 12 月缓存的 2026 全年日历 (workday 档 180 天) 在
+# 2027-01 仍被命中, 调用方拿到旧一年数据。
+_YEAR_BOUNDARY_TOOLS = frozenset({"a_share_calendar_trading_days"})
+
+
+def _seconds_to_year_boundary(now: float | None = None) -> int:
+    """到下一个公历年 1 月 1 日零点 (上海时区) 的整秒数, 下限 1 秒。"""
+    if now is None:
+        now = time.time()
+    now_dt = datetime.fromtimestamp(now, tz=_SHANGHAI_TZ)
+    next_jan1 = datetime(now_dt.year + 1, 1, 1, tzinfo=_SHANGHAI_TZ)
+    return max(1, int((next_jan1 - now_dt).total_seconds()))
 
 
 def effective_ttl(
@@ -266,8 +327,11 @@ def effective_ttl(
        historical_immutable``（≈永久）；
     3. 该 ttl_key 的全局档：
        a. 值 ≤1 小时（交易时段短档）→ 交易时段用该值、非交易时段缓存到
-          下一变化边界（见 ``intraday_session_ttl``）；
-       b. 否则直接用该全局档。
+          下一变化边界（见 ``intraday_session_ttl``）; 龙虎榜等盘后发布
+          榜单额外缓存到 18:00 发布边界;
+       b. 集合竞价快照 → 9:25 定格前按竞价时段缩短（M8）；
+       c. 交易日历无日期入参 → 不超过年末边界（M7）；
+       d. 否则直接用该全局档。
     """
     override = fuyao_ttl_for(config, tool_name)
     if override is not None:
@@ -285,7 +349,17 @@ def effective_ttl(
     if base <= 0:
         return None
     if base <= SESSION_AWARE_TTL_MAX:
-        return intraday_session_ttl(base, now=now)
+        return intraday_session_ttl(
+            base,
+            now=now,
+            post_close_boundary=_POST_CLOSE_PUBLICATION_BOUNDARY.get(tool_name),
+        )
+    if tool_name == "a_share_auction_snapshot":
+        # M8: 9:25 定格前按短档/边界缓存, 定格后才给全天长档。
+        return auction_snapshot_ttl(base, now=now)
+    if tool_name in _YEAR_BOUNDARY_TOOLS and not params.get("date"):
+        # M7: 无日期入参 (返回当年全年) 时不超过年末边界。
+        return min(base, _seconds_to_year_boundary(now))
     return base
 
 

@@ -96,6 +96,15 @@ class AsyncTokenBucketLimiter:
         # 简化：直接重建桶（清空令牌），让新限流立即生效
         self._buckets.pop(key, None)
 
+    def reset_configurations(self) -> None:
+        """清空全部 per-key 配置与桶, 回到默认兜底。
+
+        gateway 热升级/热编辑重跑调参前调用: 否则被删掉的 rate_limit
+        条目仍留在旧配置里继续生效 (configure 只能覆盖不能移除)。
+        """
+        self._configs.clear()
+        self._buckets.clear()
+
     async def _get_bucket(self, key: str) -> TokenBucket:
         async with self._lock:
             bucket = self._buckets.get(key)

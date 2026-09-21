@@ -28,7 +28,7 @@
         <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) /
         <code>~/.config/Claude/claude_desktop_config.json</code> (Linux)
       </p>
-      <CodeBlock :code="claudeDesktopHttp" />
+      <CodeBlock :code="httpConfig" />
 
       <!-- 2.2 Cursor -->
       <h4>Cursor</h4>
@@ -36,7 +36,7 @@
         配置文件路径: <code>~/.cursor/mcp.json</code>(全局) 或
         项目根目录 <code>.cursor/mcp.json</code>(项目级优先)
       </p>
-      <CodeBlock :code="cursorHttp" />
+      <CodeBlock :code="httpConfig" />
 
       <!-- 2.3 Cline (VS Code) -->
       <h4>Cline (VS Code 扩展)</h4>
@@ -44,7 +44,7 @@
         在 VS Code 左侧活动栏点击 Cline 图标 → 顶栏 "MCP Servers" → "Configure" 按钮, 会自动打开
         <code>cline_mcp_settings.json</code>。配置 schema 与 Cursor 相同。
       </p>
-      <CodeBlock :code="clineHttp" />
+      <CodeBlock :code="httpConfig" />
     </section>
 
     <!-- 3. STDIO 模式 (备选) -->
@@ -83,10 +83,10 @@
       <p>若失败, 按以下顺序排查:</p>
       <ul>
         <li>确认网关已启动: 浏览器访问 <code>{{ origin }}</code> 能看到控制台首页。</li>
-        <li>查看 <strong>"上游数据源状态"</strong> 标签页, 确认上游是否全绿。</li>
+        <li>查看 <strong>"上游数据Provider状态"</strong> 标签页, 确认上游是否全绿。</li>
         <li>查看客户端日志: Claude Desktop 的 "Developer" 菜单 / Cursor 的 "Output → MCP"。</li>
       </ul>
-      <el-button type="primary" @click="jumpToStatus">→ 上游数据源状态</el-button>
+      <el-button type="primary" @click="jumpToStatus">→ 上游数据Provider状态</el-button>
     </section>
 
     <!-- 6. 自定义端口 -->
@@ -111,17 +111,10 @@ const router = useRouter()
 const origin = computed(() => gatewayOrigin())
 const mcpUrl = computed(() => mcpHttpUrl())
 
-// --- HTTP 配置 (3 个客户端共享同一 schema, 仅文件名差异) ---
-function buildHttpConfig(): string {
-  return JSON.stringify(
-    { mcpServers: { unihive: { url: mcpHttpUrl() } } },
-    null,
-    2,
-  )
-}
-const claudeDesktopHttp = computed(buildHttpConfig)
-const cursorHttp = computed(buildHttpConfig)
-const clineHttp = computed(buildHttpConfig)
+// --- HTTP 配置 (3 个客户端 schema 完全一致, 共用同一份) ---
+const httpConfig = computed(() =>
+  JSON.stringify({ mcpServers: { unihive: { url: mcpHttpUrl() } } }, null, 2),
+)
 
 // --- STDIO 配置 (3 个客户端共享同一 schema) ---
 const stdioConfig = computed(() =>

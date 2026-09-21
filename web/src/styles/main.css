@@ -320,6 +320,28 @@ details[open] .cfg-section-toggle {
   gap: 8px 18px;
 }
 
+/* 可点击的开关 (disable_dangerous kill switch) */
+.cfg-switch.interactive {
+  cursor: pointer;
+  user-select: none;
+  transition: filter 120ms ease, box-shadow 120ms ease;
+}
+
+.cfg-switch.interactive:hover {
+  filter: brightness(0.97);
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-8, #d9ecff);
+}
+
+.cfg-switch.interactive:focus-visible {
+  outline: 2px solid var(--el-color-primary, #409eff);
+  outline-offset: 2px;
+}
+
+.cfg-switch.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 /* ============================================================================
    通用小元素
    ============================================================================ */

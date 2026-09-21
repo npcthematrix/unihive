@@ -281,7 +281,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { errorMessage } from '@/api/client'
@@ -298,6 +298,8 @@ import {
 } from '@/api/cache'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { STALE_THRESHOLD_SEC } from '@/constants/time'
+import { formatRefreshLabel } from '@/utils/time'
+import { formatPercent, formatTtl } from '@/utils/number'
 import { formatCountdown, marketSession } from '@/utils/market-session'
 import Sparkline from '@/components/Sparkline.vue'
 import L1CacheBlock from '@/components/L1CacheBlock.vue'
@@ -312,15 +314,12 @@ const loadError = ref('')
 let inFlight = false
 
 /** 自动刷新 + 时钟 + tab 可见时陈旧重拉 — 见 composables/useAutoRefresh.ts */
-const { autoRefresh, lastFetchSec, ageSec, markFetched, resetFetched } = useAutoRefresh({
+const { autoRefresh, nowSec, lastFetchSec, ageSec, markFetched, resetFetched } = useAutoRefresh({
   onPoll: () => { void load(false) },
 })
 
-// 1s 心跳: 驱动时段倒计时
-const nowTick = ref(new Date())
-const tickTimer = window.setInterval(() => { nowTick.value = new Date() }, 1000)
-onUnmounted(() => window.clearInterval(tickTimer))
-const session = computed(() => marketSession(nowTick.value))
+// 1s 时钟复用 composable 的 nowSec, 驱动时段倒计时
+const session = computed(() => marketSession(new Date(nowSec.value * 1000)))
 
 // 趋势采样环 (最多 60 点, 与 10s 轮询配合 ≈ 最近 10 分钟)
 interface TrendSample {
@@ -339,15 +338,13 @@ const cleanupLoading = ref(false)
 const vacuumLoading = ref(false)
 const clearLoading = ref(false)
 
-const refreshLabel = computed(() => {
-  if (loadError.value && lastFetchSec.value === 0) return `刷新失败 (${loadError.value})`
-  if (!lastFetchSec.value) return '从未刷新'
-  const sec = ageSec.value
-  if (sec < 5) return '刚刚刷新'
-  if (sec < 60) return `${sec} 秒前刷新`
-  if (sec < 3600) return `${Math.floor(sec / 60)} 分钟前刷新`
-  return `${Math.floor(sec / 3600)} 小时前刷新`
-})
+const refreshLabel = computed(() =>
+  formatRefreshLabel({
+    loadError: loadError.value,
+    lastFetchSec: lastFetchSec.value,
+    ageSec: ageSec.value,
+  }),
+)
 
 const dailyL1 = computed(() => metrics.value?.daily_l1 ?? null)
 
@@ -358,7 +355,7 @@ const hitRatePct = computed(() => {
 
 const hitRateText = computed(() => {
   const rate = dailyL1.value?.hit_rate
-  return rate == null ? '—' : `${(rate * 100).toFixed(1)}%`
+  return rate == null ? '—' : formatPercent(rate)
 })
 
 const hitRateHint = computed(() => {
@@ -383,10 +380,7 @@ const sizeText = computed(() => {
 
 const ttlText = computed(() => {
   const t = dailyL1.value?.ttl_seconds
-  if (t == null) return '—'
-  if (t >= 3600) return `${Math.floor(t / 3600)}h`
-  if (t >= 60) return `${Math.floor(t / 60)}min`
-  return `${t}s`
+  return t == null ? '—' : formatTtl(t)
 })
 
 // 趋势序列: 过滤掉 null 采样
@@ -419,7 +413,7 @@ const respHitRatePct = computed(() => {
 
 const respHitRateText = computed(() => {
   const rate = respCache.value?.hit_rate
-  return rate == null ? '—' : `${(rate * 100).toFixed(1)}%`
+  return rate == null ? '—' : formatPercent(rate)
 })
 
 const respHitRateHint = computed(() => {

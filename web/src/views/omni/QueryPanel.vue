@@ -11,16 +11,20 @@
         @clear="onSearch"
       />
       <el-select v-model="source" placeholder="全部数据源" clearable style="width: 160px" @change="onSearch">
-        <el-option label="全部数据源" value="" />
-        <el-option label="同花顺" value="fuyao" />
-        <el-option label="TDX-QUANT" value="tqquant" />
+        <el-option
+          v-for="key in SOURCE_KEYS"
+          :key="key"
+          :label="displaySource(key)"
+          :value="key"
+        />
       </el-select>
       <el-select v-model="boardType" placeholder="全部类型" clearable style="width: 160px" @change="onSearch">
-        <el-option label="全部类型" value="" />
-        <el-option label="行业板块" value="industry" />
-        <el-option label="概念板块" value="concept" />
-        <el-option label="风格板块" value="style" />
-        <el-option label="地域板块" value="region" />
+        <el-option
+          v-for="key in BOARD_TYPE_KEYS"
+          :key="key"
+          :label="displayBoardType(key)"
+          :value="key"
+        />
       </el-select>
       <el-button type="primary" :loading="loading" @click="onSearch">查询</el-button>
     </div>
@@ -165,7 +169,13 @@ import {
   type OmniSource,
 } from '@/api/omni'
 import { errorMessage, isCanceledError } from '@/api/client'
-import { displayBoardType, displaySource, formatDate } from './format'
+import {
+  BOARD_TYPE_KEYS,
+  SOURCE_KEYS,
+  displayBoardType,
+  displaySource,
+  formatDate,
+} from './format'
 
 interface Props {
   sectors: OmniSector[]
@@ -237,7 +247,7 @@ const modalTitle = ref('板块成分股')
 
 const modalRequest = ref<{ cancel: () => void } | null>(null)
 
-async function openSectorModal(row: OmniSector) {
+function openSectorModal(row: OmniSector) {
   modalTitle.value = row.name
   modalMeta.value = `${row.code} · ${displayBoardType(row.board_type)} · ${displaySource(row.source)}`
   modalSector.value = {

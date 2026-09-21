@@ -1,10 +1,10 @@
 <template>
   <div class="status-page">
-    <!-- 上游数据源状态 -->
+    <!-- 上游数据Provider状态 -->
     <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="card-toolbar">
-          <h2 class="card-title">上游数据源状态</h2>
+          <h2 class="card-title">上游数据Provider状态</h2>
           <div class="toolbar-actions">
             <span
               class="last-refresh"
@@ -149,6 +149,7 @@ import { Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { formatRefreshLabel } from '@/utils/time'
 import { STALE_THRESHOLD_SEC } from '@/constants/time'
 import {
   getStatus,
@@ -265,15 +266,13 @@ const tableEmptyText = computed(() => {
   return '没有匹配的上游'
 })
 
-const refreshLabel = computed(() => {
-  if (loadError.value && lastFetchSec.value === 0) return `刷新失败 (${loadError.value})`
-  if (!lastFetchSec.value) return '从未刷新'
-  const sec = ageSec.value
-  if (sec < 5) return '刚刚刷新'
-  if (sec < 60) return `${sec} 秒前刷新`
-  if (sec < 3600) return `${Math.floor(sec / 60)} 分钟前刷新`
-  return `${Math.floor(sec / 3600)} 小时前刷新`
-})
+const refreshLabel = computed(() =>
+  formatRefreshLabel({
+    loadError: loadError.value,
+    lastFetchSec: lastFetchSec.value,
+    ageSec: ageSec.value,
+  }),
+)
 
 function displayName(name: string): string {
   return UPSTREAM_DISPLAY_NAME[name] ?? name

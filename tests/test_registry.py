@@ -46,7 +46,8 @@ class TestBuildSignature:
         # 数值可选参数默认 None（非 0）：0 会被当显式值转发给上游（FQGate
         # requestTimeoutMs minimum:1 直接 400），None 才表示"调用方未提供"
         assert sig.parameters["limit"].default is None
-        assert sig.parameters["limit"].annotation is int
+        # 可选参数自动 union None: 显式传 null 不再被 Pydantic 400
+        assert sig.parameters["limit"].annotation == int | None
 
     def test_unknown_type_falls_back_to_str(self):
         sig = build_signature([{"name": "x", "type": "weird", "required": True}])
@@ -56,7 +57,7 @@ class TestBuildSignature:
         """array 类型必须映射 list: FQGate 运行时只收原生 JSON 数组,
         误回落成 str 会把数组当字符串转发, 上游 REST 层直接 400。"""
         sig = build_signature([{"name": "securities", "type": "array", "required": False}])
-        assert sig.parameters["securities"].annotation is list
+        assert sig.parameters["securities"].annotation == list | None
         assert sig.parameters["securities"].default is None
 
 

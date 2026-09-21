@@ -30,7 +30,8 @@
     </nav>
 
     <!-- 3 个 panel, 切换只显示 active -->
-    <div v-loading="loading && !hasData" class="omni-panel-stack">
+    <!-- 首屏加载由各 panel 内部 skeleton 承担, 不套外层遮罩 (避免 mask + skeleton 同屏) -->
+    <div class="omni-panel-stack">
       <section
         v-show="activeTab === 'stats'"
         class="cfg-panel"
@@ -291,8 +292,6 @@ onBeforeUnmount(() => {
   syncPanelRef.value?.cancelInFlight()
   queryPanelRef.value?.closeModal()
 })
-
-defineExpose({ refreshAll })
 </script>
 
 <style scoped>

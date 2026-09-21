@@ -4,6 +4,7 @@
  * 纯函数不依赖 Vue, 便于 vitest; 后端 entity_edit.py 是唯一权威,
  * 这里的正则/字段分层必须与其保持一致 (常量上方标注了对应来源)。
  */
+import { stableJson } from './jsonCompare'
 import type {
   ToolEntity,
   ToolEntityParam,
@@ -268,16 +269,6 @@ function canonicalParams(entity: ToolEntity): ToolEntityParam[] {
     | Array<string | ToolEntityParam>
     | undefined
   return paramsFromForm(paramsToForm(raw)).value ?? []
-}
-
-function stableJson(v: unknown): string {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v)
-  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
-  const obj = v as Record<string, unknown>
-  return `{${Object.keys(obj)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`)
-    .join(',')}}`
 }
 
 export interface BuiltToolPatch {

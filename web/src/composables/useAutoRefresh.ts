@@ -1,4 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { POLL_INTERVAL_MS, STALE_THRESHOLD_SEC } from '@/constants/time'
 
 /** 自动刷新 + 时钟同步 composable。
  *
@@ -35,8 +36,8 @@ export interface UseAutoRefreshReturn {
 }
 
 export function useAutoRefresh(options: UseAutoRefreshOptions = {}): UseAutoRefreshReturn {
-  const intervalMs = options.intervalMs ?? 10_000
-  const staleThresholdSec = options.staleThresholdSec ?? 30
+  const intervalMs = options.intervalMs ?? POLL_INTERVAL_MS
+  const staleThresholdSec = options.staleThresholdSec ?? STALE_THRESHOLD_SEC
   const onPoll = options.onPoll
 
   const autoRefresh = ref(false)

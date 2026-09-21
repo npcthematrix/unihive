@@ -110,8 +110,10 @@ def backing_upstreams(routing_key: str, config: dict) -> list[str]:
     routing = config.get("routing") or {}
     entry = routing.get(routing_key)
     chain = entry.get("chain") if isinstance(entry, dict) else None
-    if chain:
-        return list(chain)
+    # chain 必须是 list; 标量 (e.g. "fuyao") 若直接 list() 会被拆成
+    # 单字符上游名, 与 router._get_routing_chain 的守卫保持同规则。
+    if isinstance(chain, list) and chain:
+        return [str(upstream) for upstream in chain if upstream]
     mapping = config.get("upstream_tool_mapping") or {}
     return list((mapping.get(routing_key) or {}).keys())
 

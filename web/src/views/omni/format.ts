@@ -34,7 +34,9 @@ export function displayBoardType(raw: string | undefined | null): string {
  * `all` 是 UI 哨兵, 后端透传 → 全量同步; 不属于 BOARD_TYPE_DISPLAY。
  */
 export const BOARD_TYPE_KEYS = ['industry', 'concept', 'style', 'region'] as const
-export type BoardTypeKey = (typeof BOARD_TYPE_KEYS)[number]
+
+/** 控制台内部数据源取值 (注意与 MCP 工具对外的 THS/TDX 不同, 勿混用)。 */
+export const SOURCE_KEYS = ['fuyao', 'tqquant'] as const
 
 /** sync status → Element Plus el-tag type. */
 export function statusTagType(status: string | undefined): 'success' | 'warning' | 'danger' | 'info' {

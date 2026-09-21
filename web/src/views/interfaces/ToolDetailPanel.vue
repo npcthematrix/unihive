@@ -10,8 +10,8 @@ function asInfo(param: string | ToolParamInfo): ToolParamInfo | null {
 }
 
 function ttlText(tool: ToolSpec): string {
-  if (!tool.cache_ttl_key) return '无'
-  if (tool.cache_ttl_seconds == null) return 'no TTL'
+  // 调用点在 v-if="tool.cache_ttl_key" 内; 无缓存由外层 v-else 直接渲染。
+  if (tool.cache_ttl_seconds == null) return '未设 TTL'
   return `${tool.cache_ttl_seconds} 秒`
 }
 </script>

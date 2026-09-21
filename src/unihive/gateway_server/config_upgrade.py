@@ -106,10 +106,16 @@ class ConfigUpgradeMixin:
         """
         from ..core.tool_loader import filter_specs_by_enabled
 
+        # 与 _publishable_specs 同规则: 这里不能直接调它 (dry-run 要能在
+        # 候选 config 上计算), 必须复刻 hidden + disable_dangerous 两重过滤,
+        # 否则 kill switch 开启时出厂升级/OpenAPI 导入会把 dangerous 工具
+        # 重新发布回来。
+        dangerous_blocked = bool(candidate_config.get("disable_dangerous", False))
         wanted = {
             spec["name"]
             for spec in filter_specs_by_enabled(candidate_specs, candidate_config)
             if spec.get("name") not in candidate_hidden
+            and not (dangerous_blocked and spec.get("dangerous"))
         }
         old_by_name = {s["name"]: s for s in old_specs}
         new_by_name = {s["name"]: s for s in candidate_specs}
@@ -276,6 +282,10 @@ class ConfigUpgradeMixin:
                     "upstream_tool_mapping", {}
                 )
                 self.router.replace_tool_specs(candidate_specs)
+            # gateway 调参 (per_upstream_timeout / rate_limit) 也要热生效:
+            # 旧链路换了 config 却不重跑 _apply_gateway_tuning, 改超时/限流
+            # 要重启才生效, 与其 docstring 矛盾。回滚路径同样重跑一次复原。
+            self._apply_gateway_tuning()
 
             warnings: list[str] = []
             attached: list[str] = []
@@ -492,3 +502,5 @@ class ConfigUpgradeMixin:
                 "upstream_tool_mapping", {}
             )
             self.router.replace_tool_specs(old_specs)
+        # 复原 gateway 调参 (per_upstream_timeout / rate_limit)。
+        self._apply_gateway_tuning()

@@ -27,6 +27,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { L1CacheStats } from '@/api/upstream-metrics'
+import { formatPercent, formatTtl } from '@/utils/number'
 
 /** mootdx2 单个 L1 内存缓存的紧凑展示块 (板块扫描 / 异动扫描等)。 */
 const props = defineProps<{
@@ -37,7 +38,7 @@ const props = defineProps<{
 
 const hitRateText = computed(() => {
   const rate = props.stats?.hit_rate
-  return rate == null ? '—' : `${(rate * 100).toFixed(1)}%`
+  return rate == null ? '—' : formatPercent(rate)
 })
 
 const sizeText = computed(() => {
@@ -48,10 +49,7 @@ const sizeText = computed(() => {
 
 const ttlText = computed(() => {
   const t = props.stats?.ttl_seconds
-  if (t == null) return '—'
-  if (t >= 3600) return `${Math.floor(t / 3600)}h`
-  if (t >= 60) return `${Math.floor(t / 60)}min`
-  return `${t}s`
+  return t == null ? '—' : formatTtl(t)
 })
 </script>
 

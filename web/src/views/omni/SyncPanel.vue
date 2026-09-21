@@ -10,7 +10,6 @@
         :image-size="60"
       />
       <div v-else class="last-sync-card" :class="lastSyncStatusClass">
-        <div class="last-sync-label">上次同步</div>
         <div class="last-sync-main">
           <span class="last-sync-source">{{ displaySource(lastLog.source) }}</span>
           <span class="last-sync-type">{{ displayBoardType(lastLog.board_type) }}</span>
@@ -77,31 +76,7 @@
     <!-- 最近 N 次同步历史 -->
     <section class="history-section">
       <h3>最近同步</h3>
-      <el-empty
-        v-if="!recentLogs.length"
-        description="暂无同步记录"
-        :image-size="60"
-      />
-      <ul v-else class="log-list">
-        <li
-          v-for="l in recentLogs"
-          :key="l.id ?? `${l.source}-${l.start_time}`"
-          class="log-item"
-        >
-          <span class="log-time">{{ formatTime(l.start_time) }}</span>
-          <span class="log-source">{{ displaySource(l.source) }}</span>
-          <span class="log-type">{{ displayBoardType(l.board_type) }}</span>
-          <el-tag
-            :type="statusTagType(l.status)"
-            size="small"
-            effect="light"
-            :aria-label="`同步状态: ${l.status}`"
-          >
-            {{ statusIcon(l.status) }}{{ l.status }}
-          </el-tag>
-          <span class="log-count">{{ l.record_count || 0 }} 条</span>
-        </li>
-      </ul>
+      <SyncLogList :logs="recentLogs" :loading="loading" />
     </section>
   </div>
 </template>
@@ -121,6 +96,7 @@ import {
   statusIcon,
   statusTagType,
 } from './format'
+import SyncLogList from './SyncLogList.vue'
 
 interface Props {
   recentLogs: OmniSyncLog[]
@@ -216,33 +192,25 @@ h3 {
   padding: 14px 16px;
 }
 
+/* 状态高亮块: 只保留浅色底, 不再套边框 (避免 card > section > card 三层嵌套) */
 .last-sync-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: 6px;
-  border: 1px solid var(--el-border-color-lighter);
 }
 
 .last-sync-success {
   background: var(--el-color-success-light-9);
-  border-color: var(--el-color-success-light-7);
 }
 
 .last-sync-running {
   background: var(--el-color-warning-light-9);
-  border-color: var(--el-color-warning-light-7);
 }
 
 .last-sync-failed {
   background: var(--el-color-danger-light-9);
-  border-color: var(--el-color-danger-light-7);
-}
-
-.last-sync-label {
-  font-size: 0.78rem;
-  color: var(--el-text-color-secondary);
 }
 
 .last-sync-main {
@@ -305,58 +273,4 @@ h3 {
   color: var(--el-text-color-secondary);
 }
 
-.log-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.log-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  background: var(--el-fill-color-blank);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
-  font-size: 0.82rem;
-}
-
-.log-time {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.78rem;
-  color: var(--el-text-color-secondary);
-  min-width: 140px;
-}
-
-.log-source {
-  font-weight: 500;
-  min-width: 80px;
-}
-
-.log-type {
-  color: var(--el-text-color-secondary);
-  min-width: 90px;
-}
-
-.log-count {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
-
-@media (max-width: 640px) {
-  .log-item {
-    flex-wrap: wrap;
-  }
-  .log-time {
-    min-width: 100px;
-  }
-  .log-source,
-  .log-type {
-    min-width: auto;
-  }
-}
 </style>

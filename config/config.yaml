@@ -28,8 +28,10 @@ gateway:
 #   session_secret: "<32+ chars random hex>"
 
 # 全局开关
-disable_dangerous: false
 strict_registry: true
+# 危险工具一键封禁 (operator kill switch): true 时所有 dangerous: true
+# 的工具不发布到 /mcp (含启动与热路径), 控制台可热切换, 无需重启。
+disable_dangerous: false
 
 # 缓存配置
 # 注意: 本段(bootstrap)会覆盖 config/upstreams.yaml 的同名 cache 段 —

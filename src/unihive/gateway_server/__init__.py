@@ -121,14 +121,12 @@ class GatewayServer(
 
         # YAML 预检基线。db 模式下真正的事实源是 config.db, YAML 损坏不得阻止
         # 健康库启动 (M9): 预检失败只告警并以空 dict 占位, _load_db_config()
-        # 会用库内实体整体替换; 空库 seed 时坏模板仍在装配门 fail-closed (H4)。
-        # yaml 逃生模式保持原严格语义: 加载/校验失败直接抛出。
+        # 会用库内实体整体替换; 空库 seed 坏模板仍 fail-closed (H4); yaml
+        # 逃生模式保持严格: 加载/校验失败直接抛出。
         try:
-            # Load upstreams.yaml
             # L3 (round 10 audit): 必须用锚定后的 self.config_path 而非原始
-            # config_path 参数 — 后者在从非 repo 根启动时锚定 CWD, yaml 逃生
-            # 模式下直接 FileNotFoundError; db 模式预检基线也会静默落空,
-            # 空库首启拿不到出厂模板。
+            # config_path 参数 — 后者锚定 CWD, yaml 逃生模式 FileNotFoundError,
+            # db 预检基线落空则空库首启拿不到出厂模板。
             self.config = load_config(
                 str(self.config_path), strict_env=strict_env
             )
@@ -172,9 +170,8 @@ class GatewayServer(
         self.mcp: FastMCP | None = None
         # 上游启用/禁用热开关 (2026-09-18):
         # tool_specs 存全量 spec (validate 对全部生效, 与 enabled 无关);
-        # _published_tools 是当前真正发布到对外 /mcp 的 spec 工具名集合
-        # (不含 get_server_status/get_health 手写工具), 热增删以此为真来源;
-        # toggle 锁串行化并发的启用/禁用操作。
+        # _published_tools 是真正发布到 /mcp 的 spec 工具名集合 (不含手写
+        # get_server_status/get_health), 热增删以此为真来源; toggle 锁串行化。
         self.tool_specs: list[dict] = []
         self._published_tools: set[str] = set()
         # publish_mode=hidden 的工具名 (仅 db 模式有内容): 不发布,
@@ -191,9 +188,9 @@ class GatewayServer(
         self._late_start_tasks: dict[str, set[asyncio.Task]] = {}
         self._running = False
         # initialize() 幂等位 + stop() 取消 health loop 的事件。
-        # 之前 initialize 在 start/serve_http 都调一次, 部分 client (stdio UpstreamClient
-        # 有保护, Fuyao 没) 重入会状态混乱。health loop 的 asyncio.sleep(30)
-        # 也不响应 stop, 要等下一次 tick, 期间可能再调 cache.cleanup_expired。
+        # initialize 旧实现会在 start/serve_http 各调一次, 部分 client 重入
+        # (stdio UpstreamClient 有保护, Fuyao 没) 状态混乱; health loop 的
+        # asyncio.sleep(30) 不响应 stop, 要等下个 tick, 期间可能再跑清理。
         self._initialized = False
         self._shutdown_event = asyncio.Event()
         # 在途请求计数 + 优雅关闭
@@ -238,6 +235,9 @@ class GatewayServer(
         # 初始化限流器：从配置读取每个上游的 QPS 限制
         from ..core.rate_limiter import get_default_limiter
         self.limiter = get_default_limiter()
+        # 清掉旧 per-key 配置: 本次未列出的条目应回到默认兜底,
+        # 而不是沿用上一份 config 的限流 (热升级/热编辑重跑时关键)。
+        self.limiter.reset_configurations()
         rate_cfg = gateway_cfg.get("rate_limit", {})
         for upstream_name, params in rate_cfg.items():
             field = f"gateway.rate_limit.{upstream_name}"

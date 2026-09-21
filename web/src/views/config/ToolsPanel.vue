@@ -174,7 +174,6 @@ const tools = computed<ToolRow[]>(() => {
         name: t.name,
         description: desc,
         descDisplay: showFull ? desc : desc.length > 80 ? desc.slice(0, 80) + '…' : desc,
-        // 不再依赖 expanded 触发的 key 变化 — 直接绑 expandedNames 响应即可
         cache_ttl_key: t.cache_ttl_key,
         dangerous: t.dangerous,
         params: paramCells(t.params),
@@ -203,7 +202,7 @@ const emptyText = computed(() => {
 .tools-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .tools-desc {

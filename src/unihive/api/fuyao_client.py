@@ -243,6 +243,19 @@ class FuyaoClient:
                         try:
                             inner_data = json.loads(text)
                             if isinstance(inner_data, dict):
+                                # 检查内层业务信封: 非零 code 是业务错误
+                                # (如 3004=非场内品种), 不得静默当成功
+                                inner_code = inner_data.get("code")
+                                if inner_code not in (None, 0):
+                                    inner_msg = inner_data.get("msg") or inner_data.get("message")
+                                    msg_text = str(inner_msg).strip() if inner_msg else ""
+                                    error = f"fuyao 业务错误 code={inner_code}"
+                                    if msg_text:
+                                        error += f": {msg_text}"
+                                    return ToolResult(
+                                        success=False, error=error,
+                                        source=self.name, duration_ms=duration_ms,
+                                    )
                                 inner_result = inner_data.get("data", inner_data)
                                 if isinstance(inner_result, dict):
                                     return ToolResult(
@@ -256,7 +269,12 @@ class FuyaoClient:
                                     source=self.name, duration_ms=duration_ms,
                                 )
                         except json.JSONDecodeError:
-                            pass
+                            # 上游畸形报文: 明确失败, 不再落到末尾当成功返回
+                            return ToolResult(
+                                success=False,
+                                error="fuyao 返回了无法解析的内容 (非 JSON 文本)",
+                                source=self.name, duration_ms=duration_ms,
+                            )
 
         return ToolResult(
             success=True, data=result,

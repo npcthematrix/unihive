@@ -134,10 +134,31 @@ class Router:
         self._tool_metadata = {spec.get("name"): spec for spec in self.tool_specs}
 
     def _get_routing_chain(self, gateway_tool: str) -> list[str]:
-        """获取路由链"""
-        if gateway_tool in self.routing_config:
-            return self.routing_config[gateway_tool].get("chain", [])
-        return []
+        """获取路由链。
+
+        畸形条目 (null / 标量 / list 等非 mapping 形态) 按空链处理而不是
+        抛 AttributeError: 此时工具无可路由上游, route() 走 "no chain"
+        错误路径, 配置错误由 config_lint C004 在写入门/出厂升级时拦截。
+        """
+        entry = self.routing_config.get(gateway_tool)
+        if not isinstance(entry, dict):
+            if gateway_tool in self.routing_config:
+                logger.warning(
+                    "routing entry for %r is malformed (expected mapping with "
+                    "'chain', got %r)",
+                    gateway_tool,
+                    type(entry).__name__,
+                )
+            return []
+        chain = entry.get("chain", [])
+        if not isinstance(chain, list):
+            logger.warning(
+                "routing chain for %r is malformed (expected list, got %r)",
+                gateway_tool,
+                type(chain).__name__,
+            )
+            return []
+        return [str(upstream) for upstream in chain if upstream]
 
     def _get_upstream_tool_mapping(self, gateway_tool: str) -> dict[str, str]:
         """网关工具到上游工具的映射。从 config 读取。"""

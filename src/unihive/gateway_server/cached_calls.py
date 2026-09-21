@@ -135,10 +135,18 @@ class CachedExecutionMixin:
                 # (特别是 MooTDX2 同步库走 run_in_executor, 0 个内部 timeout)
                 # 卡死整个 request。MooTDX2 call_tool 内部无 timeout, executor
                 # 任务挂死会拖到 stop() 等不到 _active_requests==0。
-                result = await asyncio.wait_for(
-                    self.router.route(route_key, params),
-                    timeout=self.DEFAULT_REQUEST_TIMEOUT,
-                )
+                try:
+                    result = await asyncio.wait_for(
+                        self.router.route(route_key, params),
+                        timeout=self.DEFAULT_REQUEST_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    # 裸 TimeoutError 的 str() 为空, 经 JSON-RPC 边界会变成
+                    # 不透明的 {code:0, message:""}; 补明确的超时消息
+                    raise RuntimeError(
+                        f"请求总超时: {self.DEFAULT_REQUEST_TIMEOUT}s 内上游链未返回 "
+                        f"(tool={name})"
+                    ) from None
                 # hops 是请求级诊断信息，留在响应里随返回消费者；
                 # 进缓存的副本中我们设 []，避免历史 hops 被复用。
                 logger.debug(
@@ -186,8 +194,12 @@ class CachedExecutionMixin:
                             "hops": cached_resp.get("hops", []),
                             "cache_hit": False,
                         }
-                    except BaseException:
-                        pass  # leader 失败, 自己升级为新 leader
+                    except asyncio.CancelledError:
+                        # waiter 自身被取消 (客户端断连/关停): 必须重新抛出,
+                        # 否则会继续升级为僵尸 leader, 空跑整条路由并拖慢关停
+                        raise
+                    except Exception:
+                        pass  # leader 业务失败, 自己升级为新 leader
                 # leader: 跑路由 + 写缓存, 失败要传播给 waiter
                 future = asyncio.get_running_loop().create_future()
                 self._in_flight_requests[key] = future

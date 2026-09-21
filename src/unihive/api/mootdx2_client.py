@@ -1450,6 +1450,14 @@ class MooTDX2Client:
                 else:
                     failed_bj.append(tok)
 
+            # 沪深帧不保证逐码返回: 停牌/代码无效/服务端漏行会被静默丢弃,
+            # 必须拿 parsed 全集对照 rows_by_key, 否则调用方以为少传了代码。
+            missing_main = [
+                f"{pref}{bare}"
+                for pref, bare, _ in parsed
+                if pref in ("sh", "sz") and (pref, bare) not in rows_by_key
+            ]
+
             ordered = [
                 rows_by_key[(pref, bare)]
                 for pref, bare, _ in parsed
@@ -1458,12 +1466,15 @@ class MooTDX2Client:
             if not ordered:
                 return self._no_data_result()
             result = ToolResult(success=True, data=ordered, source="mootdx2")
+            warn_parts: list[str] = []
+            if missing_main:
+                warn_parts.append(f"沪深行情无返回: {','.join(missing_main)}")
             if failed_bj:
+                warn_parts.append(f"北交所行情批次无返回: {','.join(failed_bj)}")
+            if warn_parts:
+                warn_parts.append(f"已返回其余 {len(ordered)} 只")
                 result.error_detail = {
-                    "warn": (
-                        f"北交所行情批次无返回: {','.join(failed_bj)} "
-                        f"(已返回其余 {len(ordered)} 只)"
-                    ),
+                    "warn": "；".join(warn_parts),
                     "recoverable": True,
                 }
             return result

@@ -516,6 +516,44 @@ async def save_upstream_enabled(
     return {"version": revision}
 
 
+async def save_disable_dangerous(
+    disabled: bool, *, expected_version: int | str | None = None
+) -> dict:
+    """持久化 dangerous kill switch (``disable_dangerous`` 标量 config_section)。
+
+    db 实体模式: 作为顶层标量段入库 (db_assembler 装配时回铺顶层); 仅支持
+    db 模式 —— yaml 逃生模式下该开关无实体可写。随后 HTTP handler 调
+    GatewayServer.set_disable_dangerous() 完成热摘除/补回。
+    """
+    global _db_revision
+
+    if not isinstance(disabled, bool):
+        raise ValueError("'disabled' must be a boolean")
+    store = _require_store()
+    if not _db_mode:
+        raise ConfigStoreUnavailable(
+            "disable_dangerous kill switch 仅支持 config.db 实体模式 "
+            "(UNIHIVE_CONFIG_SOURCE=yaml 逃生模式不可用)"
+        )
+    expected = _coerce_revision(expected_version)
+    try:
+        revision = await store.upsert_section(
+            "disable_dangerous",
+            bool(disabled),
+            origin="user",
+            expected_revision=expected,
+        )
+    except _StoreRevisionConflict as e:
+        raise VersionConflict(
+            f"config revision 不一致 (expected={e.expected}, actual={e.actual}); "
+            "请刷新页面后重试"
+        ) from e
+    _db_revision = int(revision)
+    _interfaces_cache.clear()
+    _mcp_tools_cache.clear()
+    return {"version": revision}
+
+
 async def _after_overlay_write() -> None:
     """任意 overlay 写操作后的统一收尾: 刷新镜像 + fuyao TTL 热同步 + 清缓存。"""
     await _refresh_overlay_snapshot()
@@ -1743,6 +1781,73 @@ async def upstream_enabled_api(req: "Request") -> "JSONResponse":
     return JSONResponse({**runtime, "version": persisted["version"]})
 
 
+async def disable_dangerous_api(req: "Request") -> "JSONResponse":
+    """PUT /api/config/disable-dangerous
+
+    body: ``{"disabled": bool, "version": int}`` —— 先把标量段写 config.db,
+    再调 GatewayServer 热摘除/补回全部 dangerous 工具。
+
+    状态码:
+      200: 成功 (body 含 disabled/tools_added/tools_removed/version)
+      400: body 非法或 disabled 非布尔
+      409: 乐观锁 version 不匹配
+      500: 运行时热切换部分失败 (已落库, body 带 version; 重试可自愈)
+      503: config.db 实体模式未启用 / GatewayServer 未注入
+    """
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    disabled = body.get("disabled")
+    if not isinstance(disabled, bool):
+        return JSONResponse(
+            {"error": "'disabled' must be a boolean (true/false)"},
+            status_code=400,
+        )
+
+    try:
+        persisted = await save_disable_dangerous(
+            disabled, expected_version=body.get("version")
+        )
+    except VersionConflict as e:
+        return JSONResponse(
+            {"error": "version_conflict", "message": str(e)},
+            status_code=409,
+        )
+    except ConfigStoreUnavailable as e:
+        return JSONResponse(
+            {"error": "config_store_unavailable", "message": str(e)},
+            status_code=503,
+        )
+    except ValueError as e:
+        logger.warning("save_disable_dangerous(%s) bad request: %s", disabled, e)
+        msg = f"invalid request: {type(e).__name__}: {e}"[:300]
+        return JSONResponse({"error": msg}, status_code=400)
+
+    server = _gateway_server
+    if server is None:
+        return JSONResponse(
+            {"error": "gateway runtime not available", "version": persisted["version"]},
+            status_code=503,
+        )
+
+    try:
+        runtime = await server.set_disable_dangerous(disabled)
+    except Exception:
+        # 已落库但热切换失败: 不回滚 (重启即收敛), 对外固定错误码。
+        logger.exception("set_disable_dangerous(%s) failed", disabled)
+        return JSONResponse(
+            {"error": "runtime_toggle_failed", "version": persisted["version"]},
+            status_code=500,
+        )
+
+    return JSONResponse({**runtime, "version": persisted["version"]})
+
+
 async def config_entities_api(req: "Request") -> "JSONResponse":
     """GET /api/config/entities — v2 实体表只读浏览摘要。
 
@@ -2366,6 +2471,12 @@ def build_upstream_routes() -> list:
         Route(
             "/api/config/upstreams/{name}/enabled",
             upstream_enabled_api,
+            methods=["PUT"],
+        ),
+        # dangerous kill switch (顶层标量段, 热批量摘除/补回)
+        Route(
+            "/api/config/disable-dangerous",
+            disable_dangerous_api,
             methods=["PUT"],
         ),
         # P3: 单实体编辑 (工具白名单热编辑 + 上游连接块热重连)

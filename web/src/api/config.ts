@@ -72,8 +72,9 @@ export interface GatewayConfig {
   tools?: ConfigTool[]
   cache?: CacheConfig
   logging?: Record<string, LoggingValue>
-  disable_dangerous?: boolean
   strict_registry?: boolean
+  /** dangerous kill switch: true 时 dangerous 工具不发布。 */
+  disable_dangerous?: boolean
   /**
    * 乐观锁版本: config.db 模式下是整数 revision, yaml 逃生模式下是
    * 16 位文件 hash 字符串。提交 PUT 时原样回带。
@@ -126,6 +127,42 @@ export async function setUpstreamEnabled(
   const { data } = await http.put<UpstreamToggleResult>(
     `/api/config/upstreams/${encodeURIComponent(name)}/enabled`,
     { enabled, version },
+  )
+  return data
+}
+
+// ---------------------------------------------------------------------------
+// /api/config/disable-dangerous — 危险工具一键封禁热开关
+// ---------------------------------------------------------------------------
+
+/** PUT kill switch 响应: 持久化 version + 运行时批量摘除/补回结果。 */
+export interface DisableDangerousToggleResult {
+  disabled: boolean
+  tools_added: string[]
+  tools_removed: string[]
+  /** 目标态与当前态一致时后端 no-op。 */
+  changed?: boolean
+  version: ConfigRevision
+}
+
+/**
+ * PUT /api/config/disable-dangerous — 热切换 dangerous kill switch。
+ *
+ * true: 已发布的 dangerous 工具实时全部摘除; false: 当前可发布的
+ * dangerous 工具补回。无需重启; yaml 逃生模式返 503。
+ *
+ * Throws:
+ *   409 (version_conflict) — 配置已被其他会话改动, 应提示刷新后重试
+ *   500 — 已落库但运行时热切换失败 (重启可收敛到目标态)
+ *   503 (config_store_unavailable) — yaml 逃生模式, 只读不可写
+ */
+export async function setDisableDangerous(
+  disabled: boolean,
+  version: ConfigRevision,
+): Promise<DisableDangerousToggleResult> {
+  const { data } = await http.put<DisableDangerousToggleResult>(
+    '/api/config/disable-dangerous',
+    { disabled, version },
   )
   return data
 }

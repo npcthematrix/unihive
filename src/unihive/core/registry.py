@@ -79,6 +79,10 @@ _LIST_PARAM_NAMES = frozenset({"stock_list", "field_list"})
 # 未知参数并回落"当前自然日" —— 直接透传 `date` 会不报错但恒为空, 必须在此改写。
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
+#: 已实现的参数 normalize 名; config_lint 交叉校验以此为事实源。
+#: 新增归一器必须先在此登记, 否则 YAML/库里写了名字也只是静默不生效。
+KNOWN_PARAM_NORMALIZERS = frozenset({"code", "date_ms"})
+
 
 def _date_str_to_ms(tool: str, pname: str, raw: Any) -> int:
     """yyyy-MM-dd / yyyy/MM/dd / yyyyMMdd → 上海时区零点毫秒时间戳。
@@ -104,6 +108,9 @@ def _annotation_for(p: dict) -> Any:
     """根据 spec 构造类型注解。
 
     - 有 enum → Literal[*values]，FastMCP 会把它转成 JSON Schema enum
+    - 可选参数 → 额外包 ``| None``: 裸 int/float/bool/Literal 会被
+      Pydantic 以显式 null 400 打回, 而 null 的正确语义就是"未提供"
+      (_validate_and_normalize 当缺失丢弃, 不会转发上游)
     - 有 description → Annotated[X, Field(description=...)]，Pydantic FastMCP 会提取
     """
     resolved = resolve_python_type(p.get("type", "str"))
@@ -112,6 +119,8 @@ def _annotation_for(p: dict) -> Any:
     description = p.get("description")
     if enum_values:
         base = Literal[tuple(enum_values)]  # type: ignore[valid-type]
+    if not p.get("required", True):
+        base = base | None
     if description:
         return Annotated[base, Field(description=description)]
     return base

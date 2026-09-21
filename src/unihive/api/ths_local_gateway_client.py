@@ -127,8 +127,22 @@ class ThsLocalClient:
                 self.config.base_url,
                 json=request
             )
-            data = response.json()
             duration_ms = int((time.time() - start_time) * 1000)
+
+            # HTTP 层先判: FastAPI 422 返 {"detail":[...]}、401/403/5xx 同样
+            # 是无 "error" 键的 JSON, 不拦截会静默变成 success+None。
+            if response.status_code >= 400:
+                snippet = response.text[:300] if response.text else ""
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"{self.name} HTTP {response.status_code}: {snippet}"
+                    ),
+                    source=self.name,
+                    duration_ms=duration_ms
+                )
+
+            data = response.json()
 
             if "error" in data:
                 return ToolResult(

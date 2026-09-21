@@ -96,10 +96,15 @@ class McpToolsMixin:
             publishable = self._publishable_specs(specs)
             registered = registry.register_tools_from_config(self, publishable)
             self._published_tools = set(registered)
-            hidden = len(specs) - len(registered)
+            disable_dangerous = bool(self.config.get("disable_dangerous", False))
+            blocked_dangerous = sum(
+                1 for s in specs if disable_dangerous and s.get("dangerous")
+            )
+            hidden = len(specs) - len(registered) - blocked_dangerous
             logger.info(
                 f"Registered {len(registered)} tools from config "
                 f"(dangerous={any(s.get('dangerous') for s in publishable)}, "
+                f"blocked_by_disable_dangerous={blocked_dangerous}, "
                 f"hidden_by_disabled_upstream={hidden})"
             )
 

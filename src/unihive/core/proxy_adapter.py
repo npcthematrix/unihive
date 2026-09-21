@@ -1,6 +1,6 @@
 """Mootdx2 → TDX_QUANT transparent adapter for 行情类 tools.
 
-7 tools covered. Writes the mapping/period/param conventions as code-level
+6 tools covered. Writes the mapping/period/param conventions as code-level
 constants — these are protocol-level and not user-editable.
 
 Usage:
@@ -62,6 +62,15 @@ _BARE_EXCHANGE_PREFIXES: tuple[tuple[str, str], ...] = (
 
 class ProxyAdapterError(Exception):
     """Raised when adapter cannot translate mootdx2 → tdx_quant."""
+
+
+def _has_exchange_marker(code: str) -> bool:
+    """代码是否显式携带交易所信息 (sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀)。
+
+    裸指数代码无法可靠判交易所：按 spec 裸 ``000001`` 是上证指数,
+    裸码号段启发式却会判成 SZ, 代理只接带有显式交易所标记的指数代码。
+    """
+    return bool(_CODE_SUFFIX_RE.match(code) or _CODE_PREFIX_RE.match(code))
 
 
 def _normalize_stock_code_for_tdxquant(code: str | None) -> str | None:
@@ -133,6 +142,9 @@ class Mootdx2ToTdxQuantAdapter:
         "minute60": "1h",
     }
 
+    #: get_index_bars 的整数 frequency (9=日/5=周/6=月) → tqcenter period
+    INDEX_FREQUENCY_MAP: dict[int, str] = {9: "1d", 5: "1w", 6: "1mon"}
+
     def supports(self, mootdx2_tool: str) -> bool:
         return mootdx2_tool in self.TOOL_MAP
 
@@ -161,6 +173,8 @@ class Mootdx2ToTdxQuantAdapter:
             tdx_params = self._adapt_get_quote(params)
         elif tdx_tool == "get_market_data" and mootdx2_tool == "get_minute_data":
             tdx_params = self._adapt_get_minute_data_to_market_data(params)
+        elif tdx_tool == "get_market_data" and mootdx2_tool == "get_index_bars":
+            tdx_params = self._adapt_get_index_bars(params)
         elif tdx_tool == "get_market_data":
             tdx_params = self._adapt_get_kline(mootdx2_tool, params)
         else:
@@ -181,25 +195,60 @@ class Mootdx2ToTdxQuantAdapter:
         return {"stock_code": stock_code}
 
     def _adapt_get_kline(self, mootdx2_tool: str, params: dict) -> dict:
-        """get_kline(code, period, limit) → get_market_data(stock_list, period, count).
+        """get_kline / get_index_kline / get_index_all → get_market_data.
 
-        mootdx2_tool is preserved for debugging — all 4 mootdx2 K-line tools
-        share the same tdx_quant target.
+        mootdx2_tool preserved for debugging — 参数约定随源工具不同:
+        mootdx2 K线周期参数名是 ``type`` (不是 period), 根数参数 ``limit``
+        缺省 100; count=0 会让 tqcenter 走 start/end 模式返回全历史。
         """
-        period_raw = params.get("period", "day")
-        period = self.PERIOD_MAP.get(period_raw, period_raw)
+        is_index = mootdx2_tool in ("get_index_kline", "get_index_all")
         code = params.get("code") or params.get("codes", "")
         raw_codes = [c.strip() for c in str(code).split(",") if c.strip()]
-        # 标准化为 tdx_quant 格式
+        if is_index and not all(
+            _has_exchange_marker(re.sub(r"\s+", "", c)) for c in raw_codes
+        ):
+            # 裸指数代码交给 mootdx2 链处理 (其 get_index 自行判交易所),
+            # 避免裸 000001 被号段启发式误判成深市。
+            raise ProxyAdapterError(
+                f"proxy requires exchange-marked index code, got {code!r}"
+            )
         stock_list = [_normalize_stock_code_for_tdxquant(c) for c in raw_codes]
-        # mootdx2 limit (>0 取最近 n 条) ↔ tdx_quant count (>0 取截止 end_time 最近 n 条)
-        limit = int(params.get("limit", 0))
-        out: dict[str, Any] = {
+        type_raw = params.get("type", "day")
+        period = self.PERIOD_MAP.get(type_raw, type_raw)
+        count = int(params.get("limit", 100) or 100)
+        return {
             "stock_list": stock_list,
             "period": period,
-            "count": limit,
+            "count": count,
         }
-        return out
+
+    def _adapt_get_index_bars(self, params: dict) -> dict:
+        """get_index_bars(symbol, frequency, start, offset) → get_market_data。
+
+        - ``start`` 是位置偏移, tqcenter 的 count 只支持「最近 n 条」,
+          指定 start>0 时不代理, 回落 mootdx2;
+        - frequency: 9=日/5=周/6=月;
+        - offset 缺省 800。
+        """
+        symbol = re.sub(r"\s+", "", str(params.get("symbol") or ""))
+        if not symbol:
+            raise ProxyAdapterError("get_index_bars requires symbol")
+        if not _has_exchange_marker(symbol):
+            raise ProxyAdapterError(
+                f"proxy requires exchange-marked index symbol, got {symbol!r}"
+            )
+        if int(params.get("start", 0) or 0) > 0:
+            raise ProxyAdapterError("get_index_bars start>0 unsupported by tqcenter")
+        frequency = int(params.get("frequency", 9) or 9)
+        period = self.INDEX_FREQUENCY_MAP.get(frequency)
+        if period is None:
+            raise ProxyAdapterError(f"unsupported index frequency {frequency}")
+        count = int(params.get("offset", 800) or 800)
+        return {
+            "stock_list": [_normalize_stock_code_for_tdxquant(symbol)],
+            "period": period,
+            "count": count,
+        }
 
     def _adapt_get_minute_data_to_market_data(self, params: dict) -> dict:
         """get_minute_data(code) → get_market_data(stock_list=[code], period='1m', count=N).

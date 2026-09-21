@@ -119,7 +119,7 @@ function toggleCollapsed(): void {
 
 const MENU = [
   { path: '/guides', title: '接入指南', icon: Document },
-  { path: '/status', title: '上游数据源状态', icon: Monitor },
+  { path: '/status', title: '上游数据Provider状态', icon: Monitor },
   { path: '/l1-cache', title: '网关缓存监控', icon: DataLine },
   { path: '/interfaces', title: 'MCP APIs', icon: Connection },
   { path: '/config', title: '配置信息', icon: Setting },

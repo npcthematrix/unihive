@@ -135,7 +135,7 @@ class TestAdaptParams:
     )
     def test_adapt_get_kline_period_mapping(self, mootdx2_period, tdx_period):
         tool, params, _normalizer = self.adapter.adapt(
-            "get_kline", {"code": "600519.SH", "period": mootdx2_period, "limit": 10}
+            "get_kline", {"code": "600519.SH", "type": mootdx2_period, "limit": 10}
         )
         assert tool == "get_market_data"
         assert params["period"] == tdx_period
@@ -174,7 +174,7 @@ class TestAdaptParams:
 
     def test_adapt_get_kline_accepts_tdx_prefix_form(self):
         tool, params, _normalizer = self.adapter.adapt(
-            "get_kline", {"code": "sz000001", "period": "day", "limit": 5}
+            "get_kline", {"code": "sz000001", "type": "day", "limit": 5}
         )
         assert tool == "get_market_data"
         assert params["stock_list"] == ["000001.SZ"]
@@ -199,7 +199,7 @@ class TestResponseNormalize:
             {"time": "2026-01-02", "open": 1850.0, "close": 1860.0},
         ]
         _tool, _params, normalizer = self.adapter.adapt(
-            "get_kline", {"code": "600519.SH", "period": "day", "limit": 2}
+            "get_kline", {"code": "600519.SH", "type": "day", "limit": 2}
         )
         out = normalizer(tdx_result)
         assert out == tdx_result

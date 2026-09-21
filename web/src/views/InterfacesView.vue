@@ -42,7 +42,7 @@
         </div>
 
         <el-radio-group v-model="dataSourceFilter" size="small" class="dst-chips">
-          <span class="chips-label">数据源:</span>
+          <span class="chips-label">在线状态:</span>
           <el-radio-button value="">全部 {{ tools.length }}</el-radio-button>
           <el-radio-button value="online">在线 {{ countOnline }}</el-radio-button>
           <el-radio-button value="offline">离线 {{ countOffline }}</el-radio-button>
@@ -83,7 +83,7 @@
         <div v-else-if="filtersActive && visibleTools.length === 0" class="ifs-empty">
           <div class="ifs-empty-icon">无结果</div>
           <div class="ifs-empty-text">此分组无匹配工具</div>
-          <el-button size="small" @click="clearSearch">清空搜索</el-button>
+          <el-button size="small" @click="clearFilters">清空全部筛选</el-button>
         </div>
 
         <el-table
@@ -145,7 +145,7 @@
             </template>
           </el-table-column>
 
-          <el-table-column v-if="activeGroup === ALL_KEY" width="150" label="数据源">
+          <el-table-column v-if="activeGroup === ALL_KEY" width="150" label="上游分组">
             <template #default="{ row }">
               <el-button
                 link
@@ -253,7 +253,7 @@ const timestampText = computed(() =>
   timestamp.value ? new Date(timestamp.value * 1000).toLocaleTimeString('zh-CN') : '',
 )
 
-const metaText = computed(() => `${groupTitle(activeGroup.value)} · ${visibleTools.value.length} 个工具`)
+const metaText = computed(() => `${GROUP_TITLE[activeGroup.value] ?? activeGroup.value} · ${visibleTools.value.length} 个工具`)
 
 // ---- 左侧导航 ----
 interface NavItem {
@@ -275,7 +275,7 @@ const navItems = computed<NavItem[]>(() => {
     const filtering = filtersActive.value
     return {
       key,
-      title: groupTitle(key),
+      title: GROUP_TITLE[key] ?? key,
       active: key === activeGroup.value,
       disabled: filtering && matched === 0,
       countText: filtering && total > 0 ? `${matched}/${total}` : `${total}`,
@@ -284,10 +284,6 @@ const navItems = computed<NavItem[]>(() => {
     }
   })
 })
-
-function groupTitle(key: string): string {
-  return GROUP_TITLE[key] || key
-}
 
 function canJump(source: string): boolean {
   return Boolean(source) && groupOrder.value.includes(source)
@@ -403,9 +399,14 @@ function selectGroup(key: string): void {
   activeGroup.value = key
 }
 
-function clearSearch(): void {
+/** 清空全部筛选 (搜索词 + 3 个 toggle + 在线状态), 纯 toggle 造成的空态也能恢复。 */
+function clearFilters(): void {
   rawQuery.value = ''
   appliedQuery.value = ''
+  toggles.dangerous = false
+  toggles.cache = false
+  toggles.noparam = false
+  dataSourceFilter.value = ''
   searchInputRef.value?.focus()
 }
 
@@ -484,9 +485,9 @@ function onKeydown(event: KeyboardEvent): void {
   }
 
   if (event.key === 'Escape') {
-    if (inField || rawQuery.value) {
+    if (inField || filtersActive.value) {
       event.preventDefault()
-      clearSearch()
+      clearFilters()
       ;(target as HTMLInputElement | null)?.blur?.()
     }
     return
@@ -609,8 +610,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 560px;
-  overflow-y: auto;
 }
 
 .ifs-nav-item {

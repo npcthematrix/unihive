@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..utils.config_loader import validate_config
-from .registry import resolve_python_type, validate_specs
+from .registry import KNOWN_PARAM_NORMALIZERS, resolve_python_type, validate_specs
 from .tool_loader import backing_upstreams, enabled_upstream_names
 
 ERROR = "error"
@@ -110,8 +110,21 @@ def lint_config(config: dict, specs: list[dict]) -> list[LintIssue]:
     for rk in sorted(routing_cfg):
         entry = routing_cfg[rk]
         if not isinstance(entry, dict):
+            issues.append(LintIssue(
+                ERROR, "M002",
+                f"routing[{rk!r}] must be a mapping with a 'chain' list, got "
+                f"{type(entry).__name__}: {entry!r}",
+            ))
             continue
-        for up in entry.get("chain") or []:
+        chain = entry.get("chain")
+        if chain is not None and not isinstance(chain, list):
+            issues.append(LintIssue(
+                ERROR, "M002",
+                f"routing[{rk!r}].chain must be a list, got "
+                f"{type(chain).__name__}: {chain!r}",
+            ))
+            continue
+        for up in chain or []:
             if up not in known_upstreams:
                 issues.append(LintIssue(
                     ERROR, "M002",
@@ -158,6 +171,19 @@ def lint_config(config: dict, specs: list[dict]) -> list[LintIssue]:
                 f"{backers} are disabled",
             ))
 
+    # 6b. cache_ttl_key 交叉引用: 指向 cache.ttl 里不存在的档时,
+    # effective_ttl 静默回落"不缓存", 拼写错误不会有任何报错。
+    ttl_tiers = set((config.get("cache", {}) or {}).get("ttl", {}).keys())
+    for spec in specs:
+        ttl_key = spec.get("cache_ttl_key")
+        if isinstance(ttl_key, str) and ttl_key and ttl_key not in ttl_tiers:
+            issues.append(LintIssue(
+                WARNING, "W003",
+                f"Tool {spec.get('name')!r} cache_ttl_key={ttl_key!r} is not "
+                f"defined in cache.ttl (known: {sorted(ttl_tiers)}); responses "
+                f"will silently be uncached",
+            ))
+
     # 7. 孤儿条目: 没有任何 spec 引用的 mapping/chain
     referenced = {
         (spec.get("routing") or spec.get("name"))
@@ -201,4 +227,12 @@ def _lint_params(spec: dict, issues: list[LintIssue]) -> None:
                 WARNING, "W001",
                 f"Tool {name!r} parameter {pname!r} uses unknown type "
                 f"{ptype!r}; registry silently falls back to str",
+            ))
+        normalize = p.get("normalize")
+        if isinstance(normalize, str) and normalize and normalize not in KNOWN_PARAM_NORMALIZERS:
+            issues.append(LintIssue(
+                WARNING, "W002",
+                f"Tool {name!r} parameter {pname!r} normalize={normalize!r} is "
+                f"not implemented (known: {sorted(KNOWN_PARAM_NORMALIZERS)}); "
+                f"the declared normalization silently does not happen",
             ))

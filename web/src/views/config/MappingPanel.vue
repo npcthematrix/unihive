@@ -114,7 +114,7 @@ const emptyText = computed(() => {
 .map-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .chain-list {

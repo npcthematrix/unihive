@@ -121,8 +121,26 @@ def _preflight_console_html(html_path: str | Path) -> None:
         )
 
 
+# console.html 外壳 CSP:
+# - 无内联脚本, script-src 只放同源 (chunk 在 /static/console/assets/);
+# - 构建产物含内联启动 <style>, style-src 需要 'unsafe-inline';
+# - Element Plus 部分图标走 data: URI;
+# - frame-ancestors 'none' + X-Frame-Options DENY 防控制台被嵌套点击劫持。
+_CONSOLE_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
 def _console_index_response(html: bytes) -> Response:
-    """console.html 外壳响应: 必须 no-cache。
+    """console.html 外壳响应: 必须 no-cache, 并带 CSP / 防嵌套头。
 
     vite 构建出的 JS chunk 名带内容 hash, finalize-build 每次整目录替换;
     若浏览器缓存旧 HTML, 其引用的旧 hash chunk 已被删除 → 白屏。
@@ -131,27 +149,33 @@ def _console_index_response(html: bytes) -> Response:
     return Response(
         html,
         media_type="text/html",
-        headers={"Cache-Control": "no-cache"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Content-Security-Policy": _CONSOLE_CSP,
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+        },
     )
 
 
 class ImmutableHashedAssets:
     """给内容指纹静态资源加 immutable 缓存头的 ASGI 包装。
 
-    包在 StaticFiles 外 (Mount 剥前缀后, 内层 scope path 已是 /assets/…):
+    包在 StaticFiles 外 (Mount 剥前缀后, 内层 scope path 已是 /console/assets/…):
     vite 产出的 chunk 名带 hash, 内容不变则名不变 → 一年 immutable 安全;
     指纹外的 login.css / favicon.svg 不放大缓存。
     """
 
     _IMMUTABLE = b"public, max-age=31536000, immutable"
 
-    def __init__(self, app, prefix: str = "/assets/"):
+    def __init__(self, app, prefix: str = "/console/assets/"):
         self.app = app
         self.prefix = prefix
 
     async def __call__(self, scope, receive, send):
         # Mount 不改写 scope["path"], 子 app 经 get_route_path 取剥前缀后
-        # 的相对路径 (此处为 "/assets/…")。
+        # 的相对路径 (此处为 "/console/assets/…")。
         if scope.get("type") != "http" or not get_route_path(scope).startswith(
             self.prefix
         ):
@@ -254,7 +278,8 @@ class HttpServeMixin:
             return p.read_bytes() if p.exists() else None
 
         async def _index_route(req: Request):
-            html = _read_file(_ca.CONSOLE_HTML_PATH)
+            # 下放线程: 文件被杀软/网络盘占用时同步读会阻塞整个事件循环
+            html = await asyncio.to_thread(_read_file, _ca.CONSOLE_HTML_PATH)
             if html is None:
                 # B3 预检已在启动时拦截; 运行期被删走这条防御路径。
                 return JSONResponse({"error": "console.html not found"}, status_code=404)

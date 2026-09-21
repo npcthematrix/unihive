@@ -133,9 +133,13 @@ watch(rawQuery, (value) => {
   }, 300)
 })
 
-function clearSearch(): void {
+/** 清空全部筛选 (搜索词 + 3 个形状 toggle), 纯 toggle 造成的空态也能恢复。 */
+function clearFilters(): void {
   rawQuery.value = ''
   appliedQuery.value = ''
+  toggles.meta = false
+  toggles.outputSchema = false
+  toggles.annotations = false
   searchInputRef.value?.focus()
 }
 
@@ -192,16 +196,12 @@ async function loadUpstreams(): Promise<void> {
   if (resolved) await selectUpstream(resolved)
 }
 
-// ---- 深链 ----
-function syncQuery(upstream: string, tool?: string): void {
+// ---- 深链 (?upstream=; ?tool= 深链已下线) ----
+function syncQuery(upstream: string): void {
   const currentUp = (route.query.upstream as string | undefined) || ''
-  const currentTool = (route.query.tool as string | undefined) || ''
-  const nextTool = tool ?? ''
-  if (currentUp === upstream && currentTool === nextTool) return
-  const { upstream: _u, tool: _t, ...rest } = route.query
-  const next: Record<string, string> = { ...rest, upstream }
-  if (nextTool) next.tool = nextTool
-  void router.replace({ path: '/mcp-browser', query: next })
+  if (currentUp === upstream) return
+  const { upstream: _u, ...rest } = route.query
+  void router.replace({ path: '/mcp-browser', query: { ...rest, upstream } })
 }
 
 watch(
@@ -210,19 +210,6 @@ watch(
     const name = typeof val === 'string' ? val : ''
     if (name && name !== selected.value && upstreamOrder.value.includes(name)) {
       void selectUpstream(name)
-    }
-  },
-)
-
-// 深链 ?tool= 指定要展开的工具; 数据到位后再展开 (需要拿到 row 对象)。
-watch(
-  () => [tools.value, route.query.tool] as const,
-  () => {
-    const wanted = typeof route.query.tool === 'string' ? route.query.tool : ''
-    if (!wanted) return
-    const row = tools.value.find((t) => toolName(t) === wanted)
-    if (row && !expandedNames.value.has(wanted)) {
-      tableRef.value?.toggleRowExpansion(row, true)
     }
   },
 )
@@ -241,13 +228,6 @@ function onExpandChange(row: RawTool, expandedRows: RawTool[] | RawTool): void {
 
 function toggleDetail(row: RawTool): void {
   tableRef.value?.toggleRowExpansion(row)
-}
-
-/** 左侧工具导航点击: 滚动/展开对应行 (与 InterfacesView 的"详情"按钮一致)。 */
-function focusTool(name: string): void {
-  const row = tools.value.find((t) => toolName(t) === name)
-  if (!row) return
-  tableRef.value?.toggleRowExpansion(row, true)
 }
 
 async function copyName(name: string): Promise<void> {
@@ -281,9 +261,9 @@ function onKeydown(event: KeyboardEvent): void {
     return
   }
 
-  if (event.key === 'Escape' && (inField || rawQuery.value)) {
+  if (event.key === 'Escape' && (inField || filtersActive.value)) {
     event.preventDefault()
-    clearSearch()
+    clearFilters()
     ;(target as HTMLInputElement | null)?.blur?.()
   }
 }
@@ -306,7 +286,7 @@ onUnmounted(() => {
       <div class="card-toolbar">
         <h2 class="card-title">
           MCP 浏览器
-          <span v-if="currentUpstream" class="timestamp">
+          <span v-if="currentUpstream">
             {{ UPSTREAM_TITLE[currentUpstream.name] || currentUpstream.name }}
             <el-tag
               size="small"
@@ -337,7 +317,7 @@ onUnmounted(() => {
     </template>
 
     <div class="mcp-layout">
-      <!-- 左侧: 搜索 + 形状开关 + 上游导航 + 工具导航 -->
+      <!-- 左侧: 搜索 + 形状开关 + 上游导航 -->
       <aside class="mcp-sidebar">
         <el-input
           ref="searchInputRef"
@@ -380,19 +360,6 @@ onUnmounted(() => {
             <span class="nav-count">{{ item.count ?? '—' }}</span>
           </button>
         </nav>
-
-        <div v-if="visibleTools.length" class="mcp-tool-nav" aria-label="工具导航">
-          <button
-            v-for="t in visibleTools"
-            :key="rowKeyOf(t)"
-            type="button"
-            class="mcp-tool-item"
-            :title="toolName(t)"
-            @click="focusTool(toolName(t))"
-          >
-            {{ toolName(t) || '(未命名)' }}
-          </button>
-        </div>
       </aside>
 
       <!-- 右侧: 原始工具表 -->
@@ -432,7 +399,7 @@ onUnmounted(() => {
           class="mcp-empty"
         >
           <div class="mcp-empty-title">无匹配工具</div>
-          <el-button size="small" @click="clearSearch">清空搜索</el-button>
+          <el-button size="small" @click="clearFilters">清空全部筛选</el-button>
         </div>
 
         <div v-else-if="!loadError" class="mcp-table-scroll">
@@ -655,40 +622,6 @@ onUnmounted(() => {
 
 .dot-offline {
   background: var(--el-color-danger);
-}
-
-.mcp-tool-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-height: 320px;
-  overflow-y: auto;
-  border-top: 1px solid var(--el-border-color-lighter);
-  padding-top: 8px;
-}
-
-.mcp-tool-item {
-  /* 触达目标 ≥24px (WCAG 2.5.8), 列表最长 87 行靠滚动承载 */
-  display: flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 3px 8px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--el-text-color-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-.mcp-tool-item:hover {
-  background: var(--el-fill-color-light);
-  color: var(--el-color-primary);
 }
 
 .mcp-table-scroll {

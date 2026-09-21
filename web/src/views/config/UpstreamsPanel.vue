@@ -146,21 +146,30 @@
         <span class="cfg-section-title">
           <span class="cfg-section-toggle">▾</span>
           全局开关
-          <span class="cfg-section-sub">— disable_dangerous / strict_registry</span>
+          <span class="cfg-section-sub">— strict_registry / disable_dangerous</span>
         </span>
       </summary>
       <div class="cfg-section-body">
         <div class="cfg-toggles-row">
           <span
             class="cfg-switch"
-            :class="config?.disable_dangerous ? 'on' : 'off'"
-            :title="`启用后跳过所有 dangerous: true 的 tool (只读全局开关, 启动时读取生效, 暂不支持热修改)`"
-          >disable_dangerous</span>
-          <span
-            class="cfg-switch"
             :class="config?.strict_registry ? 'on' : 'off'"
             :title="`启用后启动期校验配置库/YAML 中的工具名都在上游 tools/list 中实际出现 (只读全局开关, 启动时读取生效, 暂不支持热修改)`"
           >strict_registry</span>
+          <span
+            class="cfg-switch interactive"
+            role="button"
+            :class="killSwitchBusy
+              ? 'busy'
+              : (config?.disable_dangerous ? 'on' : 'off')"
+            :aria-pressed="Boolean(config?.disable_dangerous)"
+            :title="config?.disable_dangerous
+              ? '点击解除封禁: 补回当前可发布的 dangerous 工具'
+              : '点击封禁: 立即从对外 /mcp 摘除所有 dangerous: true 的工具 (写操作类)'"
+            @click="onToggleKillSwitch"
+            @keydown.enter.prevent="onToggleKillSwitch"
+            @keydown.space.prevent="onToggleKillSwitch"
+          >disable_dangerous{{ config?.disable_dangerous ? ' (已封禁)' : '' }}</span>
         </div>
       </div>
     </details>
@@ -194,8 +203,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
-import type { GatewayConfig, UpstreamConfig } from '@/api/config'
-import { setUpstreamEnabled } from '@/api/config'
+import type { ConfigRevision, GatewayConfig, UpstreamConfig } from '@/api/config'
+import { setDisableDangerous, setUpstreamEnabled } from '@/api/config'
 import { errorMessage } from '@/api/client'
 import { loggingToRows, retryToString } from './format'
 import {
@@ -221,6 +230,10 @@ const emit = defineEmits<{
     enabled: boolean
     connected: boolean
     changed: boolean
+  }]
+  killSwitchChanged: [payload: {
+    disabled: boolean
+    version: ConfigRevision
   }]
 }>()
 
@@ -418,6 +431,83 @@ async function onToggle(row: UpstreamRow): Promise<void> {
     const pending = new Set(toggling.value)
     pending.delete(row.name)
     toggling.value = pending
+  }
+}
+
+/** kill switch in-flight 状态 (不可变替换触发重渲染/禁用点击)。 */
+const killSwitchBusy = ref(false)
+
+/**
+ * 热切换 disable_dangerous:
+ * - 封禁 (off→on) 会让写操作类 dangerous 接口立即消失, 先弹确认;
+ * - 成功后向 ConfigView 冒泡 patch 顶层 disable_dangerous 与 version;
+ * - 409 / 500 处理与上游热开关同规则 (服务端是唯一真来源)。
+ */
+async function onToggleKillSwitch(): Promise<void> {
+  if (killSwitchBusy.value) return
+  const next = !props.config?.disable_dangerous
+
+  if (next) {
+    try {
+      await ElMessageBox.confirm(
+        '确认封禁所有 dangerous 工具?\n\n封禁后所有 dangerous: true 的 MCP 接口将立即从对外 /mcp 移除 (主要是写操作类), 状态已持久化; 再次点击该开关即可解除封禁并恢复发布。',
+        '封禁危险工具确认',
+        {
+          confirmButtonText: '封禁',
+          cancelButtonText: '取消',
+          type: 'warning',
+          distinguishCancelAndClose: true,
+        },
+      )
+    } catch {
+      return // 用户取消/关闭 — 状态不变
+    }
+  }
+
+  killSwitchBusy.value = true
+  try {
+    const result = await setDisableDangerous(
+      next,
+      props.config?.version ?? '',
+    )
+    emit('killSwitchChanged', {
+      disabled: result.disabled,
+      version: result.version,
+    })
+    if (next) {
+      ElMessage.success(
+        `已封禁 dangerous 工具, ${result.tools_removed.length} 个接口从对外 /mcp 移除`,
+      )
+    } else {
+      ElMessage.success(
+        `已解除封禁, 补回 ${result.tools_added.length} 个可发布的 dangerous 接口`,
+      )
+    }
+  } catch (e: unknown) {
+    const errData = (
+      e as { response?: { data?: { error?: string; version?: unknown } } }
+    )?.response?.data
+    if (errData?.error === 'config_store_unavailable') {
+      ElMessage.error(
+        '配置库不可用 (网关以 YAML 逃生模式启动), 无法热切换; 请移除 UNIHIVE_CONFIG_SOURCE=yaml 后以默认模式重启网关',
+      )
+    } else if (isUsableRevision(errData?.version)) {
+      // 500: 已写实体行并回带新 revision, 必须消费掉避免后续 409。
+      emit('killSwitchChanged', {
+        disabled: next,
+        version: errData!.version as ConfigRevision,
+      })
+      ElMessage.warning('配置已写入配置库, 但运行时热切换未完成, 重启网关后生效')
+    } else {
+      const msg = errorMessage(e, '操作失败')
+      if (msg.includes('version_conflict') || msg.includes('revision 不一致')) {
+        ElMessage.error('配置版本已变更, 请刷新页面后重试')
+      } else {
+        ElMessage.error(msg)
+      }
+    }
+  } finally {
+    killSwitchBusy.value = false
   }
 }
 

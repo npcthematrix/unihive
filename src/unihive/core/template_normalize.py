@@ -5,7 +5,7 @@
 实体形态 (实体行 + JSON 列混合):
 
 - ``sections``: 非实体杂项顶层段 (cache / gateway 调参 / logging / routing /
-  fuyao_cache / disable_dangerous / strict_registry ...), 段名 → 完整 dict/标量。
+  fuyao_cache / strict_registry ...), 段名 → 完整 dict/标量。
 - ``upstreams``: 每个上游一行, 异型连接块原样收进 ``config``。
 - ``tools``: 每个 gateway 工具一行; 为保证往返零损耗, 完整 spec 存 ``spec``,
   另抽 description / cache_ttl_key / requires_env / mapping 供检索与控制台渲染。

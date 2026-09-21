@@ -130,7 +130,15 @@ def apply_tool_patch(
             spec["requires_env"] = env
 
     if "mapping" in patch:
-        out["mapping"] = _validate_mapping(patch["mapping"])
+        new_mapping = _validate_mapping(patch["mapping"])
+        out["mapping"] = new_mapping
+        # 抽取列与 spec 必须一致: DB 里 spec 是装配唯一来源。空 mapping 时
+        # 顶层条目会被 assembler 丢弃, spec 里残留的 stale upstream_tool_mapping
+        # 会让 config_lint has_self_mapping 误判为真, 屏蔽 T001/M003。
+        if new_mapping:
+            spec["upstream_tool_mapping"] = copy.deepcopy(new_mapping)
+        else:
+            spec.pop("upstream_tool_mapping", None)
 
     if "routing" in patch:
         routing = patch["routing"]

@@ -51,8 +51,78 @@ class HotToggleMixin:
 
             cfg["enabled"] = bool(enabled)
             if enabled:
-                return await self._enable_upstream_locked(name, cfg)
+                live_block = self._resolve_live_block_locked(name, cfg)
+                return await self._enable_upstream_locked(name, live_block)
             return await self._disable_upstream_locked(name)
+
+    def _resolve_live_block_locked(self, name: str, cfg: dict) -> dict:
+        """把 live 块的 ${VAR} 占位解析为实际值 (启用上游时)。
+
+        库内事实源永远保留占位; 运行态与启动链一致使用解析值, 因此
+        /api/config 读到的与开机时相同, 后续 reconcile 不会再看到占位。
+        """
+        from ..utils.config_loader import resolve_env_vars
+
+        resolved, missing_env = resolve_env_vars(cfg, strict=False)
+        if missing_env:
+            raise ValueError(
+                f"upstream {name!r} env var(s) not set in the gateway "
+                f"environment: {', '.join(missing_env)}"
+            )
+        self.config.setdefault("upstreams", {})[name] = resolved
+        return resolved
+
+    async def set_disable_dangerous(self, disabled: bool) -> dict:
+        """热切换 dangerous kill switch, 实时批量摘除/补回危险工具。
+
+        - 封禁: 把已发布的 dangerous 工具全部从 provider 摘除 (不断任何
+          client; 非 dangerous 工具不受影响);
+        - 解封: 只补回当前本就可发布 (有启用 backer、非 hidden) 的 dangerous
+          工具, 判定全部经 ``_publishable_specs``, 不会连带放出被其他理由
+          隐藏的工具;
+        - 单工具失败收集后继续, 末尾抛 RuntimeError; 持久化由 console_api
+          先完成, 重启必然收敛到目标态。
+        """
+        if self.mcp is None or not getattr(self, "tool_specs", None):
+            raise RuntimeError("Gateway not initialized")
+
+        async with self._upstream_toggle_lock:
+            current = bool(self.config.get("disable_dangerous", False))
+            if current == bool(disabled):
+                return {
+                    "disabled": current,
+                    "tools_added": [],
+                    "tools_removed": [],
+                    "changed": False,
+                }
+
+            self.config["disable_dangerous"] = bool(disabled)
+            dangerous_names = {
+                s["name"] for s in self.tool_specs if s.get("dangerous")
+            }
+            errors: list[str] = []
+            if disabled:
+                to_remove = dangerous_names & self._published_tools
+                tools_removed = self._unpublish_tools_locked(to_remove, errors)
+                tools_added: list[str] = []
+            else:
+                wanted = {s["name"] for s in self._publishable_specs(self.tool_specs)}
+                to_add = (wanted & dangerous_names) - self._published_tools
+                tools_added = self._publish_tools_locked(to_add, errors)
+                tools_removed = []
+            self._raise_if_toggle_errors("disable-dangerous", errors)
+            logger.info(
+                "disable_dangerous=%s: dangerous tools added=%d removed=%d",
+                disabled,
+                len(tools_added),
+                len(tools_removed),
+            )
+            return {
+                "disabled": bool(disabled),
+                "tools_added": tools_added,
+                "tools_removed": tools_removed,
+                "changed": True,
+            }
 
     # ------------------------------------------------------------------
     # 热开关内部步骤 (调用方须持 _upstream_toggle_lock)
@@ -62,8 +132,10 @@ class HotToggleMixin:
         """当前真正应发布到对外 /mcp 的 spec: env 门控后再过
 
         ``filter_specs_by_enabled`` (多 backer: 至少一个启用才保留) 与
-        ``publish_mode=hidden`` 下架集。启动注册、上游热开关差集、单工具
-        热编辑三处共用同一判定, 保证 hidden 工具不会从任何路径漏回。
+        ``publish_mode=hidden`` 下架集, 最后按 ``disable_dangerous`` 全局
+        kill switch 滤掉 ``dangerous: true`` 工具。启动注册、上游热开关
+        差集、单工具热编辑三处共用同一判定, 保证被隐藏/被封禁的工具不会
+        从任何路径漏回。
         """
         from ..core.tool_loader import filter_specs_by_enabled
 
@@ -71,10 +143,12 @@ class HotToggleMixin:
             return []
         # getattr 兜底: __new__ 旁路 __init__ 的热开关测试不构造该属性。
         hidden = getattr(self, "_db_hidden_tools", None) or set()
+        dangerous_blocked = bool(self.config.get("disable_dangerous", False))
         return [
             spec
             for spec in filter_specs_by_enabled(specs, self.config)
             if spec.get("name") not in hidden
+            and not (dangerous_blocked and spec.get("dangerous"))
         ]
 
     def _toggle_tool_diff_locked(self, name: str) -> tuple[set[str], set[str]]:
@@ -146,8 +220,18 @@ class HotToggleMixin:
 
     async def _attach_upstream_client_locked(self, name: str, cfg: dict):
         """构造+启动 client 并切换 console_api 的 omni 指针。返回 client, connected。"""
-        client = self._construct_upstream_client(name, cfg)
-        connected = await self._start_upstream_client(name, cfg, client)
+        # live 块里可能是未解析的 ${VAR} 占位 (禁用上游按设计只在库内保留
+        # 占位)。不解析就构造 client 会把字面量占位当凭证 → 确定性 401。
+        from ..utils.config_loader import resolve_env_vars
+
+        resolved, missing_env = resolve_env_vars(cfg, strict=False)
+        if missing_env:
+            raise ValueError(
+                f"upstream {name!r} env var(s) not set in the gateway "
+                f"environment: {', '.join(missing_env)}"
+            )
+        client = self._construct_upstream_client(name, resolved)
+        connected = await self._start_upstream_client(name, resolved, client)
         if isinstance(client, OmniClient):
             from ..utils import console_api as _ca
 
@@ -233,7 +317,10 @@ class HotToggleMixin:
 
         if enabled:
             if existing is None:
-                existing, _ = await self._attach_upstream_client_locked(name, cfg)
+                live_block = self._resolve_live_block_locked(name, cfg)
+                existing, _ = await self._attach_upstream_client_locked(
+                    name, live_block
+                )
                 client_attached = True
             connected = bool(existing is not None and existing.is_available)
             tools_added = self._publish_tools_locked(to_add, errors)
