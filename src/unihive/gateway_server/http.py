@@ -302,9 +302,9 @@ class HttpServeMixin:
         # MCP ASGI app — path="/" 让 inner 路由在 root,
         # 由 Mount("/mcp", ...) 接管 URL 前缀。否则 inner 路由在 /mcp/ 会被
         # Mount 剥离前缀后变成 404 (外 /mcp/ → 内 /, 路由在 /mcp/ 不匹配)。
-        # 显式传 allowed_hosts / allowed_origins / host_origin_protection,
-        # 不依赖 FastMCP 4.x 的默认值 (默认开, 但版本升级可能改),
-        # 始终满足 MCP 2025-11-25 spec 对 DNS-rebinding 防护的 MUST 要求。
+        # 2026-09-20: 显式关 host_origin_protection (Host/Origin 白名单):
+        # 网关绑 0.0.0.0 供局域网经任意 IP/主机名访问, 默认白名单只放行回环,
+        # 会把非回环 Host 全部 400。代价是失去 DNS-rebinding 防护, 依赖网络可信。
         # H4 (round 9 audit): 路由装配段 (mcp.http_app / NoSlashStarlette /
         # setup_console_auth) 抛错时旧实现绕过 stop() → 半建 inner_app/mcp
         # 泄漏。装配段纳入 try, 崩溃也 stop()。上面的 handler 定义只声明闭包,
@@ -329,9 +329,7 @@ class HttpServeMixin:
             mcp_app = self.mcp.http_app(
                 path="/",
                 json_response=True,
-                allowed_hosts=["127.0.0.1:*", "localhost:*"],
-                allowed_origins=["http://127.0.0.1:*", "http://localhost:*"],
-                host_origin_protection=True,
+                host_origin_protection=False,
             )
 
             # Mount("/mcp", ...) 对子路径 /mcp/foo 会剥前缀成 /foo,

@@ -1,11 +1,12 @@
 # UniHive Gateway 配置文件
 
 # Gateway 配置
-# host 默认仅回环: console 鉴权默认关闭, 绑 0.0.0.0 等于同网段未认证可写
-# /api/*。确需局域网访问时显式改 0.0.0.0 并同时配置 UNIHIVE_CONSOLE_* 开启鉴权
-# (启动时非回环 + 无鉴权会打 SECURITY WARNING)。
+# host 默认仅回环: console 鉴权默认关闭, 非回环绑定等于同网段未认证可写
+# /api/* (启动时非回环 + 无鉴权会打 SECURITY WARNING); 需要全网卡可改
+# 0.0.0.0 并建议同时配置 UNIHIVE_CONSOLE_* 开启鉴权。
+# 2026-09-20: 绑 0.0.0.0 允许局域网 IP 访问, 127.0.0.1 本机访问同样可用。
 gateway:
-  host: "127.0.0.1"
+  host: "0.0.0.0"
   port: 18080
   mcp_path: "/mcp"
 
