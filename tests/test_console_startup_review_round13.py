@@ -50,14 +50,21 @@ _FRESH_SECRET = "fresh-secret-not-the-factory-default-0123456789abcd"
 
 
 class TestLoopbackDefault:
-    def test_factory_config_binds_loopback(self):
+    def test_factory_config_bind_host_is_explicit(self):
+        """出厂模板 host 必须显式声明。
+
+        历史上出厂默认回环 127.0.0.1; 2026-09 用户显式决定改为 0.0.0.0 以
+        允许局域网访问 (commit 9cd91fb, 同时关闭 Host/Origin 白名单)。
+        补偿控制是启动时非回环 + 无鉴权显著 WARNING
+        (见 test_serve_http_warns_when_open_and_non_loopback),
+        而非把 host 悄悄留空或写成不可识别的值。
+        """
         import yaml
 
         text = (ROOT / "config" / "config.yaml").read_text(encoding="utf-8")
         host = (yaml.safe_load(text) or {})["gateway"]["host"]
-        assert host == "127.0.0.1", (
-            "出厂模板必须默认回环: 鉴权默认关闭时 0.0.0.0 等于同网段未认证"
-            "可写 /api/*; 需要局域网访问应由用户显式改 host"
+        assert host in {"127.0.0.1", "0.0.0.0"}, (
+            f"出厂模板 host 必须显式为回环或全网卡, 得到 {host!r}"
         )
 
     @pytest.mark.parametrize(

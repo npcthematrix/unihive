@@ -16,7 +16,6 @@ class TestAdapterToolMapping:
         "mootdx2_tool,tdx_tool",
         [
             ("get_quote", "get_market_snapshot"),
-            ("get_batch_quote", "get_market_snapshot"),
             ("get_kline", "get_market_data"),
             ("get_index_kline", "get_market_data"),
             ("get_index_all", "get_market_data"),
@@ -24,7 +23,7 @@ class TestAdapterToolMapping:
             ("get_minute_data", "get_market_data"),
         ],
     )
-    def test_tool_map_covers_7_quote_tools(self, mootdx2_tool, tdx_tool):
+    def test_tool_map_covers_6_quote_tools(self, mootdx2_tool, tdx_tool):
         assert self.adapter.TOOL_MAP[mootdx2_tool] == tdx_tool
 
     def test_supports_returns_true_for_mapped_tools(self):
@@ -35,6 +34,8 @@ class TestAdapterToolMapping:
         assert self.adapter.supports("get_trade") is False
         assert self.adapter.supports("get_trade_history") is False
         assert self.adapter.supports("get_finance") is False
+        # get_batch_quote: tqcenter 快照仅单只 stock_code, 不代理批量行情
+        assert self.adapter.supports("get_batch_quote") is False
 
 
 class TestNormalizeStockCode:
@@ -112,13 +113,12 @@ class TestAdaptParams:
         assert tool == "get_market_snapshot"
         assert params == {"stock_code": "600519.SH"}
 
-    def test_adapt_get_batch_quote_splits_codes_to_stock_list(self):
-        """mootdx2 get_batch_quote(codes='600519.SH,000001.SZ') → tdx_quant get_market_snapshot(stock_list=[...])."""
-        tool, params, _normalizer = self.adapter.adapt(
-            "get_batch_quote", {"codes": "600519.SH,000001.SZ"}
-        )
-        assert tool == "get_market_snapshot"
-        assert params == {"stock_list": ["600519.SH", "000001.SZ"]}
+    def test_adapt_get_batch_quote_not_supported(self):
+        """批量行情不走代理: tqcenter.get_market_snapshot 仅接受单只 stock_code。"""
+        with pytest.raises(ProxyAdapterError):
+            self.adapter.adapt(
+                "get_batch_quote", {"codes": "600519.SH,000001.SZ"}
+            )
 
     @pytest.mark.parametrize(
         "mootdx2_period,tdx_period",
@@ -159,14 +159,6 @@ class TestAdaptParams:
         )
         assert params["count"] == 60
 
-    def test_adapt_get_batch_quote_accepts_list_input(self):
-        """codes 既可能是逗号分隔字符串, 也可能是 list (call_tool 入参可能如此)."""
-        tool, params, _normalizer = self.adapter.adapt(
-            "get_batch_quote", {"codes": ["600519.SH", "000001.SZ"]}
-        )
-        assert tool == "get_market_snapshot"
-        assert params == {"stock_list": ["600519.SH", "000001.SZ"]}
-
     def test_adapt_unknown_tool_raises(self):
         with pytest.raises(ProxyAdapterError) as exc:
             self.adapter.adapt("get_trade", {"code": "600519.SH"})
@@ -186,14 +178,6 @@ class TestAdaptParams:
         )
         assert tool == "get_market_data"
         assert params["stock_list"] == ["000001.SZ"]
-
-    def test_adapt_get_batch_quote_mixes_prefix_and_suffix_forms(self):
-        tool, params, _normalizer = self.adapter.adapt(
-            "get_batch_quote", {"codes": "sh600519,000001.SZ"}
-        )
-        assert tool == "get_market_snapshot"
-        assert params == {"stock_list": ["600519.SH", "000001.SZ"]}
-
 
 class TestResponseNormalize:
     def setup_method(self):

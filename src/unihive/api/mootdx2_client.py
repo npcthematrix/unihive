@@ -233,15 +233,23 @@ def _quote_symbol(rec: dict) -> str:
     return f"{prefix}{rec.get('code', '')}"
 
 
-def _quote_pct_chg(rec: dict) -> float:
-    """报文只给 price/last_close, 涨跌幅由网关计算 (%)。"""
+def _quote_pre_close(rec: dict) -> float:
+    """昨收: mootdx2 ≤1.4 报文列名 last_close; 1.6+ 改名 pre_close。"""
     try:
-        price = float(rec.get("price", 0) or 0)
-        last_close = float(rec.get("last_close", 0) or 0)
-        if last_close > 0:
-            return round((price - last_close) / last_close * 100, 2)
+        value = rec.get("last_close")
+        if value is None:
+            value = rec.get("pre_close")
+        return float(value or 0)
     except (TypeError, ValueError):
-        pass
+        return 0.0
+
+
+def _quote_pct_chg(rec: dict) -> float:
+    """报文给 price/昨收, 涨跌幅由网关计算 (%)。"""
+    price = float(rec.get("price", 0) or 0)
+    last_close = _quote_pre_close(rec)
+    if last_close > 0:
+        return round((price - last_close) / last_close * 100, 2)
     return 0.0
 
 
@@ -250,7 +258,7 @@ def _quote_amplitude(rec: dict) -> float:
     try:
         high = float(rec.get("high", 0) or 0)
         low = float(rec.get("low", 0) or 0)
-        last_close = float(rec.get("last_close", 0) or 0)
+        last_close = _quote_pre_close(rec)
         if last_close > 0:
             return round((high - low) / last_close * 100, 2)
     except (TypeError, ValueError):
@@ -265,6 +273,19 @@ def _annotate_quote_records(records: list[dict]) -> None:
         rec["close"] = float(rec.get("price", 0) or 0)
         rec["pct_chg"] = _quote_pct_chg(rec)
         rec["amplitude"] = _quote_amplitude(rec)
+
+
+def _drop_internal_quote_columns(df: "pd.DataFrame") -> "pd.DataFrame":
+    """剔除 tdxpy 行情报文里的内部列。
+
+    tdxpy 新版 get_security_quotes 解析结果带 ``_raw`` 列 (该条报价的
+    原始协议字节, bytes), mootdx2 to_data 原样透传进 DataFrame。bytes
+    进 JSON 序列化会报 "invalid utf-8 sequence", 导致 get_quote /
+    get_batch_quote 整工具失败。所有 ``_`` 前缀列都不属于对外合同, 统一
+    丢弃; 无内部列时返回原 DataFrame (不做无谓拷贝)。
+    """
+    internal = [c for c in df.columns if str(c).startswith("_")]
+    return df.drop(columns=internal) if internal else df
 
 
 def _strip_market_prefix(code: str) -> str:
@@ -849,6 +870,19 @@ class MooTDX2Client:
             "ttl_seconds": ttl,
         }
 
+    def reset_l1_caches(self) -> dict:
+        """手动清空全部 L1 内存缓存 (控制台 /l1-cache 管理端点调用)。
+
+        命中计数保留 (累计指标), 只清条目。
+        """
+        if not self._DAILY_L1_ENABLED:
+            return {"enabled": False, "cleared": []}
+        self._daily_l1.clear()
+        self._top_board_l1.clear()
+        self._unusual_l1.clear()
+        logger.info("All L1 caches manually reset via console")
+        return {"enabled": True, "cleared": ["daily", "top_board", "unusual"]}
+
     async def get_health(self) -> ToolResult:
         """健康检查接口（轻量 ping）"""
         return ToolResult(
@@ -989,7 +1023,7 @@ class MooTDX2Client:
         q = self._get_quotes()
         df = q.quotes(symbol=[token])
         if df is not None and len(df) > 0:
-            rec = df.iloc[-1].to_dict()
+            rec = _drop_internal_quote_columns(df).iloc[-1].to_dict()
             _annotate_quote_records([rec])
             # 兼容合同键: 报文成交量字段是 vol
             rec["volume"] = float(rec.get("vol", 0) or 0)
@@ -1369,7 +1403,7 @@ class MooTDX2Client:
         q = self._get_quotes()
         df = q.quotes(symbol=list(tokens))
         if df is not None and len(df) > 0:
-            rows = df.to_dict(orient="records")
+            rows = _drop_internal_quote_columns(df).to_dict(orient="records")
             _annotate_quote_records(rows)
             return rows
         return None
@@ -2032,7 +2066,7 @@ class MooTDX2Client:
         quotes_by_key: dict[tuple[int, str], dict] = {}
         df = q.quotes(symbol=sh_sz_symbols)
         if df is not None and len(df) > 0:
-            for rec in df.to_dict(orient="records"):
+            for rec in _drop_internal_quote_columns(df).to_dict(orient="records"):
                 try:
                     key = (int(rec.get("market")), str(rec.get("code", "")))
                 except (TypeError, ValueError):
@@ -2043,7 +2077,7 @@ class MooTDX2Client:
         try:
             df_bj = q.quotes(symbol=["889999"])
             if df_bj is not None and len(df_bj) > 0:
-                for rec in df_bj.to_dict(orient="records"):
+                for rec in _drop_internal_quote_columns(df_bj).to_dict(orient="records"):
                     try:
                         market_id = int(rec.get("market"))
                         key = (market_id, str(rec.get("code", "")))
@@ -3073,7 +3107,7 @@ class MooTDX2Client:
             q = self._get_quotes()
             quote_df = q.quotes(symbol=[token])
             if quote_df is not None and len(quote_df) > 0:
-                rec = quote_df.iloc[0].to_dict()
+                rec = _drop_internal_quote_columns(quote_df).iloc[0].to_dict()
                 _annotate_quote_records([rec])
                 quote = rec
 
@@ -3215,7 +3249,9 @@ class MooTDX2Client:
             symbols = [f"{code_to_market[c]}{c}" for c in chunk]
             batch_df = q.quotes(symbol=symbols)
             if batch_df is not None and len(batch_df) > 0:
-                results.extend(batch_df.to_dict(orient="records"))
+                results.extend(
+                    _drop_internal_quote_columns(batch_df).to_dict(orient="records")
+                )
 
         if not results:
             return []
@@ -3318,7 +3354,9 @@ class MooTDX2Client:
                 chunk = prefixed[i:i + MAX_LIMIT_BATCH_QUOTE]
                 batch_df = q.quotes(symbol=chunk)
                 if batch_df is not None and len(batch_df) > 0:
-                    all_quotes.extend(batch_df.to_dict(orient="records"))
+                    all_quotes.extend(
+                        _drop_internal_quote_columns(batch_df).to_dict(orient="records")
+                    )
 
         if not all_quotes:
             return []

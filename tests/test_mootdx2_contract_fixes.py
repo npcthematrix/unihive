@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import sys
 import types
@@ -873,3 +874,66 @@ class TestLowListLimitsAndDispatch:
         unknown = await client.call_tool("does_not_exist", {})
         assert unknown.success is False
         assert "Unknown tool" in str(unknown.error)
+
+
+# ---------------------------------------------------------------------------
+# mootdx2 1.6.x 回归: quotes 报文新增 _raw 内部列 (原始协议字节),
+# 不剔除会让整个工具在 JSON 序列化时炸 "invalid utf-8 sequence"
+# (2026-09-21 真实网关 get_batch_quote 复现)
+# ---------------------------------------------------------------------------
+
+
+def _quote_row_with_raw(market: int, code: str) -> dict:
+    row = _quote_row(market, code, 1700.0, 1690.0)
+    row["_raw"] = b"\x01" + code.encode("ascii") + b"\x86\xa4\x0f-garbage"
+    return row
+
+
+class TestInternalRawColumnDropped:
+    async def test_batch_quote_rows_are_json_serializable(self):
+        client = make_client()
+        client._quotes = FakeQuotes([
+            _quote_row_with_raw(1, "600519"),
+            _quote_row_with_raw(0, "000001"),
+        ])
+        result = await client.get_batch_quote("600519,000001")
+        assert result.success is True
+        assert len(result.data) == 2
+        for rec in result.data:
+            assert "_raw" not in rec
+            json.dumps(rec, ensure_ascii=False)  # 不抛即修复
+
+    async def test_single_quote_record_is_json_serializable(self):
+        client = make_client()
+        client._quotes = FakeQuotes([_quote_row_with_raw(1, "600519")])
+        result = await client.get_quote("600519")
+        assert result.success is True
+        assert "_raw" not in result.data
+        json.dumps(result.data, ensure_ascii=False)
+
+    async def test_pct_chg_reads_renamed_pre_close_column(self):
+        """mootdx2 1.6+ 昨收列 last_close → pre_close, 涨跌幅不得恒为 0。"""
+        row = {
+            "market": 0, "code": "000001", "price": 11.65,
+            "pre_close": 11.70, "open": 11.7, "high": 11.72, "low": 11.60,
+            "vol": 1000, "amount": 12000.0, "_raw": b"\x86\xa4",
+        }
+        client = make_client()
+        client._quotes = FakeQuotes([row])
+        result = await client.get_batch_quote("000001")
+        assert result.success is True
+        rec = result.data[0]
+        assert rec["pct_chg"] == round((11.65 - 11.70) / 11.70 * 100, 2)
+        assert rec["amplitude"] == round((11.72 - 11.60) / 11.70 * 100, 2)
+
+    def test_helper_returns_same_frame_without_internal_columns(self):
+        from src.unihive.api.mootdx2_client import _drop_internal_quote_columns
+
+        clean_df = pd.DataFrame([{"market": 1, "code": "600519"}])
+        assert _drop_internal_quote_columns(clean_df) is clean_df
+
+        dirty_df = pd.DataFrame([{
+            "market": 1, "code": "600519", "_raw": b"x", "_other": 1,
+        }])
+        fixed = _drop_internal_quote_columns(dirty_df)
+        assert list(fixed.columns) == ["market", "code"]

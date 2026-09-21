@@ -20,9 +20,13 @@ Mapping caveat (2026-09-14 audit):
       - single-stock snapshot:  get_market_snapshot(stock_code: str)
       - K-line / minute:        get_market_data(stock_list, period, count)
                                 with period ∈ {1m, 5m, 15m, 30m, 1h, 1d, 1w}
-    Fix: reuse those two methods. If the real installed `tqcenter.py`
-    rejects `get_market_snapshot(stock_list=[...])` (multi-code variant),
-    revisit this mapping or update tqcenter.
+    Fix: reuse those two methods.
+
+2026-09-21 实测 D:/new_tdx_mock/PYPlugins/user/tqcenter.py:
+    get_market_snapshot(stock_code: str, field_list=[]) — 只收单只代码,
+    没有多代码 stock_list 形态。因此 get_batch_quote 从代理映射中移除
+    (旧映射每次调用必抛 TypeError 并刷两条 ERROR 再回退), 批量行情直接
+    走路由链上的 mootdx2。
 """
 from __future__ import annotations
 
@@ -109,7 +113,8 @@ class Mootdx2ToTdxQuantAdapter:
 
     TOOL_MAP: dict[str, str] = {
         "get_quote": "get_market_snapshot",
-        "get_batch_quote": "get_market_snapshot",   # multi-code: stock_list=[...]
+        # get_batch_quote 不代理: tqcenter 快照仅支持单只 stock_code
+        # (2026-09-21 实测), 批量需求直接走 mootdx2。
         "get_kline": "get_market_data",
         "get_index_kline": "get_market_data",
         "get_index_all": "get_market_data",
@@ -152,10 +157,8 @@ class Mootdx2ToTdxQuantAdapter:
         # get_market_snapshot is reused by both get_quote (single) and
         # get_batch_quote (multi-code via stock_list). Disambiguate by
         # source tool name, not just target.
-        if tdx_tool == "get_market_snapshot" and mootdx2_tool == "get_quote":
+        if tdx_tool == "get_market_snapshot":
             tdx_params = self._adapt_get_quote(params)
-        elif tdx_tool == "get_market_snapshot" and mootdx2_tool == "get_batch_quote":
-            tdx_params = self._adapt_get_batch_quote_to_snapshot(params)
         elif tdx_tool == "get_market_data" and mootdx2_tool == "get_minute_data":
             tdx_params = self._adapt_get_minute_data_to_market_data(params)
         elif tdx_tool == "get_market_data":
@@ -176,25 +179,6 @@ class Mootdx2ToTdxQuantAdapter:
         code = params["code"]
         stock_code = _normalize_stock_code_for_tdxquant(code)
         return {"stock_code": stock_code}
-
-    def _adapt_get_batch_quote_to_snapshot(self, params: dict) -> dict:
-        """get_batch_quote(codes='A,B,C') → get_market_snapshot(stock_list=[A,B,C]).
-
-        Caveat: SKILL.md's yaml spec for get_market_snapshot declares only
-        stock_code: str (single). This adapter assumes tqcenter.tq also
-        accepts stock_list for the multi-code form (consistent with how
-        get_market_data uses stock_list). If the real installed tqcenter
-        rejects stock_list here, the proxy will AttributeError on this
-        tool and fall back to mootdx2 (Round 10 audit's safety net).
-        """
-        codes_raw = params.get("codes", "")
-        if isinstance(codes_raw, list):
-            raw_codes = list(codes_raw)
-        else:
-            raw_codes = [c.strip() for c in str(codes_raw).split(",") if c.strip()]
-        # 标准化为 tdx_quant 格式
-        stock_list = [_normalize_stock_code_for_tdxquant(c) for c in raw_codes]
-        return {"stock_list": stock_list}
 
     def _adapt_get_kline(self, mootdx2_tool: str, params: dict) -> dict:
         """get_kline(code, period, limit) → get_market_data(stock_list, period, count).

@@ -71,8 +71,8 @@ class TestGetProxySettings:
         body = json.loads(resp.body)
         assert body["enabled"] is False
         assert body["tdx_quant_status"] == "HEALTHY"
-        # 应返回工具映射覆盖范围 (7 个)
-        assert len(body["coverage"]) == 7
+        # 应返回工具映射覆盖范围 (6 个; get_batch_quote 2026-09-21 移出)
+        assert len(body["coverage"]) == 6
         # 验证 coverage 是只读说明, 不应包含可编辑字段
         for entry in body["coverage"]:
             assert "mootdx2_tool" in entry
