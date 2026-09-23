@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import importlib
+import inspect
 import logging
 import math
 import os
@@ -35,9 +36,100 @@ from ..models.thsdk_config import (
     USERNAME_ENV,
 )
 from .upstream_client import ToolResult, UpstreamStatus
-from ..core.blocking_pool import get_blocking_executor
+from ..core.blocking_pool import get_thsdk_executor
 
 logger = logging.getLogger(__name__)
+
+# 注入给 hq.dll 的原生超时相对 asyncio 超时的余量：DLL 先返回（干净的超时
+# 错误），路由 wait_for 后到期，避免取消后留下僵尸线程。
+_NATIVE_TIMEOUT_MARGIN_SEC = 1.0
+
+# 客户端 asyncio 超时相对路由 per_upstream_timeout 的余量：必须保证
+# "原生超时 < 客户端超时 < 路由超时"，否则路由先取消 call_tool
+# （CancelledError 是 BaseException，客户端 except Exception 捕获不到，
+#  熔断计数会失明）。
+_CLIENT_TIMEOUT_MARGIN_SEC = 1.0
+
+# 熔断：连续超时达到阈值即熔断快速失败；冷却后半开放一个探针调用。
+_CB_FAILURE_THRESHOLD = 3
+_CB_COOLDOWN_SEC = 30.0
+
+# 算作"上游超时"的原生错误码精确集合（不用子串匹配，避免
+# invalid_timeout_param 这类客户端配置错误被误计成熔断）。
+_TIMEOUT_ERROR_CODES = frozenset(
+    {
+        "timeout",
+        "request_timeout",
+        "request_timed_out",
+        "timedout",
+        "deadline",
+        "deadline_exceeded",
+    }
+)
+
+
+def resolve_thsdk_call_timeout(
+    configured_sec: float, router_timeout_sec: float | None
+) -> float:
+    """钳制客户端超时到路由预算内（保证小于路由超时）。
+
+    2026-09-22 事故实证：config.db 里旧值 30s、路由 10s，注入的原生超时
+    变成 29s，板块调用 DLL 不先返回，路由取消后单 worker 僵尸、全线超时。
+    """
+    if router_timeout_sec is None:
+        return float(configured_sec)
+    return min(
+        float(configured_sec),
+        max(1.0, float(router_timeout_sec) - _CLIENT_TIMEOUT_MARGIN_SEC),
+    )
+
+# ---- 原生枚举的网关入参名 → 数值（对照 thsdk.constants，3.0.0）----
+# 网关对外只收字符串名，不泄漏 IntEnum 数字；未知名 fail-fast。
+_ADJUST_MAP = {"none": 0, "forward": 1, "backward": 2}
+_PERIOD_MAP = {
+    "m1": 0x3001, "m5": 0x3005, "m15": 0x300F, "m30": 0x301E,
+    "m60": 0x303C, "m120": 0x3078, "day": 0x4000, "week": 0x5001,
+    "month": 0x6001, "quarter": 0x6003, "year": 0x7001,
+}
+_REALTIME_METRIC_MAP = {
+    "first_limit_up_time": 330323,
+    "final_limit_up_time": 330324,
+    "limit_up_type": 330325,
+    "limit_up_state": 330329,
+}
+_FINANCIAL_FIELD_ALL = ("total_shares", "float_shares", "net_asset_per_share")
+_VALID_FINANCIAL_FIELDS = frozenset(_FINANCIAL_FIELD_ALL)
+_VALID_TIMELINES = frozenset({"historical", "realtime"})
+# 字符串枚举：LLM 客户端常输出大小写变体，统一 strip+归一 + 白名单拒绝。
+_WENCAI_KIND_MAP = {"concept": "concept", "industry": "industry"}
+_SORT_ORDER_MAP = {"d": "D", "a": "A"}
+_NEWS_RANGE_MAP = {"recent": "recent", "historical": "historical"}
+
+
+def _map_enum(value: str, mapping: dict[str, int], label: str) -> int:
+    key = str(value).strip().lower()
+    if key not in mapping:
+        raise ValueError(
+            f"{label} 取值非法：{value}，可选：{', '.join(mapping)}"
+        )
+    return mapping[key]
+
+
+def _map_str_enum(value: Any, mapping: dict[str, str], label: str) -> str:
+    """字符串枚举归一：输入大小写不敏感，输出映射里的规范值。"""
+    key = str(value).strip().lower()
+    if key not in mapping:
+        raise ValueError(
+            f"{label} 取值非法：{value}，可选：{', '.join(mapping)}"
+        )
+    return mapping[key]
+
+
+def _map_enum_list(values: Any, mapping: dict[str, int], label: str) -> list[int]:
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError(f"{label} 必须是非空数组")
+    return [_map_enum(v, mapping, label) for v in values]
+
 
 # 完整 THSCODE：4 位市场前缀 + 6 位以上数字（USHA600519 / USZA300033）
 _THSCODE_RE = re.compile(r"^[A-Z]{2,6}\d{4,12}$")
@@ -70,25 +162,87 @@ def is_full_thscode(code: str) -> bool:
     return bool(_THSCODE_RE.match(str(code).strip()))
 
 
-def collect_thscodes(obj: Any) -> list[str]:
-    """从 complete_ths_code 的任意返回形态（DataFrame/dict/list）中收集完整代码。"""
-    found: list[str] = []
-
-    def walk(o: Any) -> None:
-        if isinstance(o, str):
-            if _THSCODE_RE.match(o.strip()):
-                found.append(o.strip())
-        elif isinstance(o, dict):
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, (list, tuple)):
-            for v in o:
-                walk(v)
-
-    walk(obj)
-    return list(dict.fromkeys(found))
+# resolve_securities 的 codes 只收裸数字码（官方示例 ["300033","600519"]）；
+# sh/sz/bj 前缀、.SH/.SZ/.BJ 后缀、完整 THSCODE 均被服务端静默丢弃返 0 行。
+_BARE_DIGITS_RE = re.compile(r"^\d{4,12}$")
 
 
+def to_bare_code(value: Any) -> str:
+    """剥掉市场前缀/后缀，归一为裸数字码。
+
+    600519 / sh600519 / 600519.SH / USHA600519 → "600519"；
+    无法归一的元素直接 ValueError（不静默丢弃）。
+    """
+    text = str(value).strip()
+    if not text:
+        raise ValueError("codes 元素不能为空")
+    bare = re.sub(r"^[A-Za-z]+", "", text)  # USHA / sh 前缀
+    bare = re.sub(r"\.[A-Za-z]{1,4}$", "", bare)  # .SH 后缀
+    if not _BARE_DIGITS_RE.match(bare):
+        raise ValueError(
+            f"无法识别的证券代码：{value}；请传裸码（如 600519）、"
+            "交易所前缀码（sh600519）或完整 THSCODE（USHA600519）"
+        )
+    return bare
+
+
+def _watchlist_version(obj: Any) -> Any:
+    """从公开层 DataFrame 的 attrs 取自选 version；非 DataFrame 回退 None。"""
+    if pd is not None and isinstance(obj, pd.DataFrame):
+        metadata = obj.attrs.get("thsdk", {}).get("metadata", {})
+        if isinstance(metadata, dict):
+            return metadata.get("version")
+    if isinstance(obj, dict):
+        return obj.get("version")
+    return None
+
+
+def _group_id(group: dict) -> Any:
+    """分组唯一身份：group_key 优先；缺失或显式 null 才回退 id。
+
+    map 键与 group_order 都由本函数导出，避免两处取值口径漂移。
+    """
+    gid = group.get("group_key")
+    return gid if gid is not None else group.get("id")
+
+
+# 裸码数字段 → 市场（与原生按数字段推断市场一致；只列能确定的段）。
+# 注意 000xxx：原生推断为深圳股票，故 sh000001（上证指数）剥成裸码会
+# 静默解析成平安银行，必须靠显式市场标记拦下来。
+def _inferred_market(bare: str) -> str | None:
+    if bare[:2] in {"60", "68", "90"}:
+        return "USHA"
+    if bare[:2] in {"00", "30", "20"} or bare[:3] == "399":
+        return "USZA"
+    return None
+
+
+def explicit_market_of(value: Any) -> str | None:
+    """取证券代码的显式市场标记 → USHA/USZA；无标记返 None。
+
+    sh600519 / 600519.SH / USHA600519 → USHA；
+    北交所标记直接 ValueError（thsdk 3.0.0 仅沪深两市）。
+    """
+    upper = str(value).strip().upper()
+    token: str | None = None
+    suffix = re.search(r"\.([A-Z]{1,4})$", upper)
+    if suffix:
+        token = suffix.group(1)
+    else:
+        prefix = re.match(r"^([A-Z]+)", upper)
+        if prefix:
+            token = prefix.group(1)
+    if token is None:
+        return None
+    if token in {"USHA", "SH"}:
+        return "USHA"
+    if token in {"USZA", "SZ"}:
+        return "USZA"
+    if token in {"BJ", "URBJ"}:
+        raise ValueError(
+            "THSDK 上游仅支持沪深市场（USHA/USZA），不支持北交所代码"
+        )
+    return None
 
 
 def json_safe(obj: Any) -> Any:
@@ -131,10 +285,15 @@ def json_safe(obj: Any) -> Any:
 class _Throttle:
     """串行化所有 thsdk 调用并保证最小调用间隔（规避 50ms 服务端限频）。"""
 
-    def __init__(self, interval_sec: float):
+    def __init__(
+        self,
+        interval_sec: float,
+        executor_factory: Callable[[], Any],
+    ):
         self._interval = max(0.0, interval_sec)
         self._lock = asyncio.Lock()
         self._last = 0.0
+        self._executor_factory = executor_factory
 
     async def run(
         self, loop: asyncio.AbstractEventLoop, fn: Callable[[], Any], timeout: float
@@ -145,7 +304,7 @@ class _Throttle:
                 await asyncio.sleep(wait)
             try:
                 return await asyncio.wait_for(
-                    loop.run_in_executor(get_blocking_executor(), fn), timeout=timeout
+                    loop.run_in_executor(self._executor_factory(), fn), timeout=timeout
                 )
             finally:
                 self._last = time.monotonic()
@@ -161,9 +320,16 @@ class ThsdkClient:
         self._mod: Any = None
         self._authed = False
         self._auth_mode = "guest"  # "credentials" | "guest"
-        self._throttle = _Throttle(config.throttle_ms / 1000.0)
+        self._throttle = _Throttle(
+            config.throttle_ms / 1000.0, get_thsdk_executor
+        )
         self._auth_lock = asyncio.Lock()
-        self._metrics = {"total_requests": 0, "total_errors": 0}
+        # 熔断器状态："closed" | "open" | "half_open"
+        self._cb_state: str = "closed"
+        self._cb_failures = 0
+        self._cb_opened_at = 0.0
+        # half_open 期间是否已有探针在执行（只放行 1 个，其余快速失败）
+        self._cb_probe_inflight = False
 
     @property
     def status(self) -> UpstreamStatus:
@@ -188,7 +354,12 @@ class ThsdkClient:
                 loop, lambda: importlib.import_module("thsdk"), self.config.call_timeout_sec
             )
             await self._authenticate()
+            self._bind_native_timeout()
             self._status = UpstreamStatus.HEALTHY
+            self._cb_state = "closed"
+            self._cb_failures = 0
+            self._cb_opened_at = 0.0
+            self._cb_probe_inflight = False
             logger.info(
                 "[%s] authenticated (mode=%s, watchlist_write=%s)",
                 self.name,
@@ -246,11 +417,119 @@ class ThsdkClient:
             self._authed = True
             self._auth_mode = "credentials" if user and password else "guest"
 
+    def _bind_native_timeout(self) -> None:
+        """在默认 session 的 runtime bridge 上注入默认 timeout_ms。
+
+        thsdk 3.0.0 的 api.py 便捷函数（get_price 等）调用 ``_apis`` 时
+        timeout=None，请求 JSON 不带 timeout_ms，hq.dll 在网络瞬断时可无限
+        阻塞。这里在 bridge.call 外包一层：调用方未显式给 timeout_ms 时
+        注入 (call_timeout - 余量)，使 DLL 在 asyncio/路由超时之前自行返回。
+
+        结构不符（旧版包 / 测试假模块无 session）时 info 级跳过，不阻断 start。
+        """
+        try:
+            session = self._mod.session  # type: ignore[attr-defined]
+            bridge = session._get_client().runtime
+            # 签名预检：未来 thsdk 若改 call 签名（参数顺序/改名），绑定后
+            # 每个业务调用都会 TypeError。这里直接跳过，保留原始 call。
+            sig = inspect.signature(type(bridge).call)
+            if "timeout_ms" not in sig.parameters:
+                raise RuntimeError("runtime bridge.call has no timeout_ms parameter")
+            default_ms = int(
+                max(1.0, self.config.call_timeout_sec - _NATIVE_TIMEOUT_MARGIN_SEC)
+                * 1000
+            )
+            # 取类上的原始 call，先剔除旧包装：保证 stop/start 重绑不嵌套，
+            # 且新配置的超时值即时生效。
+            bridge.__dict__.pop("call", None)
+            original_call = type(bridge).call
+
+            def call_with_default(
+                method: str,
+                params: Any = None,
+                *,
+                timeout_ms: int | None = None,
+            ) -> Any:
+                effective_ms = (
+                    timeout_ms if timeout_ms is not None else default_ms
+                )
+                return original_call(
+                    bridge, method, params, timeout_ms=effective_ms
+                )
+
+            bridge.call = call_with_default
+        except Exception as e:
+            logger.info(
+                "[%s] native timeout binding skipped: %s", self.name, e
+            )
+
+    # ---------- 熔断 ----------
+
+    def _circuit_gate_error(self) -> str | None:
+        """熔断开启时返回快速失败消息；冷却到期则转 half_open 放行唯一探针。"""
+        if self._cb_state == "closed":
+            return None
+        if self._cb_state == "open":
+            elapsed = time.monotonic() - self._cb_opened_at
+            if elapsed < _CB_COOLDOWN_SEC:
+                remaining = int(_CB_COOLDOWN_SEC - elapsed) + 1
+                return (
+                    f"THSDK 熔断中：上游连续 {_CB_FAILURE_THRESHOLD} 次超时，"
+                    f"约 {remaining} 秒后自动探活恢复"
+                )
+            self._cb_state = "half_open"
+            logger.info(
+                "[%s] circuit half-open: next call serves as probe", self.name
+            )
+        # half_open：标准熔断器语义只放 1 个探针，其余调用快速失败，
+        # 防止积压队列在探针出结果前涌进 DLL（flip-flop / 冷却期被推迟）。
+        if self._cb_probe_inflight:
+            return "THSDK 熔断半开探活中：已有探针在执行，请稍后重试"
+        self._cb_probe_inflight = True
+        return None
+
+    def _record_success(self) -> None:
+        """成功调用：熔断复位（仅在曾开启时记日志）。"""
+        was_tripped = self._cb_state != "closed"
+        self._cb_state = "closed"
+        self._cb_failures = 0
+        self._cb_opened_at = 0.0
+        self._cb_probe_inflight = False
+        self._status = UpstreamStatus.HEALTHY
+        if was_tripped:
+            logger.info("[%s] circuit closed: upstream recovered", self.name)
+
+    def _record_timeout_failure(self) -> None:
+        """超时类失败计数：half_open/open 中的失败一律重新熔断。"""
+        if self._cb_state in ("open", "half_open"):
+            self._open_circuit()
+            return
+        self._cb_failures += 1
+        if self._cb_failures >= _CB_FAILURE_THRESHOLD:
+            self._open_circuit()
+
+    def _open_circuit(self) -> None:
+        self._cb_state = "open"
+        self._cb_opened_at = time.monotonic()
+        self._cb_probe_inflight = False
+        self._status = UpstreamStatus.UNAVAILABLE
+        logger.warning(
+            "[%s] circuit OPEN: %d consecutive upstream timeouts",
+            self.name,
+            self._cb_failures or _CB_FAILURE_THRESHOLD,
+        )
+
+    @staticmethod
+    def _is_timeout_like(err: Any) -> bool:
+        """asyncio 超时，或原生错误码在超时精确集合内。"""
+        if err.error_type is ThsdkErrorType.TIMEOUT:
+            return True
+        return str(err.code or "").lower() in _TIMEOUT_ERROR_CODES
+
     # ---------- 调用入口 ----------
 
     async def call_tool(self, tool_name: str, params: dict[str, Any]) -> ToolResult:
         start_time = time.time()
-        self._metrics["total_requests"] += 1
 
         def _result(
             ok: bool,
@@ -289,11 +568,28 @@ class ThsdkClient:
                 detail={"error_type": "not_authenticated"},
             )
 
+        if tool_name != "ths_auth_status":
+            gate_error = self._circuit_gate_error()
+            if gate_error is not None:
+                return _result(
+                    False,
+                    error=gate_error,
+                    detail={"error_type": "circuit_open"},
+                )
+
         try:
             data = await self._invoke_with_reauth(handler, params, tool_name=tool_name)
+            if tool_name != "ths_auth_status":
+                self._record_success()
             return _result(True, data=data)
+        except asyncio.CancelledError:
+            # 路由 wait_for 先到期（或关停）取消调用：CancelledError 是
+            # BaseException，必须在这里单独接住——对客户端边界而言这就是
+            # 一次超时类事件，不记录则熔断器在并发超时下永远打不开。
+            if tool_name != "ths_auth_status":
+                self._record_timeout_failure()
+            raise
         except Exception as e:
-            self._metrics["total_errors"] += 1
             err = classify_exception(e)
             logger.warning(
                 "[%s] call %s failed: %s: %s",
@@ -302,6 +598,13 @@ class ThsdkClient:
                 err.error_type.value,
                 err.message,
             )
+            if tool_name != "ths_auth_status":
+                if self._cb_state == "half_open":
+                    # 探针的任何失败（不只超时类，如 query_failed / 连接重置）
+                    # 都重新熔断；否则 half_open 会永久卡死、快速失败失效。
+                    self._open_circuit()
+                elif self._is_timeout_like(err):
+                    self._record_timeout_failure()
             return _result(False, error=err.message, detail=err.to_dict())
 
     async def _invoke_with_reauth(
@@ -338,13 +641,18 @@ class ThsdkClient:
             self._status = UpstreamStatus.HEALTHY
             return await handler(params)
 
-    async def _call(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
-        """线程池执行同步 thsdk 调用 + 节流 + JSON 转换。"""
+    async def _call_raw(
+        self, fn: Callable, *args: Any, **kwargs: Any
+    ) -> Any:
+        """线程池执行 + 节流，不做 JSON 转换（保留 DataFrame.attrs 元数据）。"""
         loop = asyncio.get_running_loop()
-        raw = await self._throttle.run(
+        return await self._throttle.run(
             loop, lambda: fn(*args, **kwargs), self.config.call_timeout_sec
         )
-        return json_safe(raw)
+
+    async def _call(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+        """线程池执行同步 thsdk 调用 + 节流 + JSON 转换。"""
+        return json_safe(await self._call_raw(fn, *args, **kwargs))
 
     async def _resolve_codes(self, codes: list[str]) -> list[str]:
         """短代码先经 complete_ths_code 补全；返回去重后的完整 THSCODE 列表。"""
@@ -353,12 +661,47 @@ class ThsdkClient:
         complete = [c.strip() for c in codes if is_full_thscode(c)]
         short = [c.strip() for c in codes if not is_full_thscode(c)]
         if short:
+            # complete_ths_code 返回帧，json_safe 后为 records；
+            # _identity_rows 保证每行带 full_code 列（未解析行为空串）。
             raw = await self._call(self._mod.complete_ths_code, short)
-            resolved = collect_thscodes(raw)
+            if not isinstance(raw, list):
+                raise ValueError(f"短代码无法补全为完整 THSCODE：{short}")
+            resolved = [
+                r["full_code"]
+                for r in raw
+                if isinstance(r, dict) and is_full_thscode(str(r.get("full_code") or ""))
+            ]
             if not resolved:
                 raise ValueError(f"短代码无法补全为完整 THSCODE：{short}")
             complete.extend(resolved)
         return list(dict.fromkeys(complete))
+
+    async def _normalize_block(self, value: Any) -> Any:
+        """板块入参归一到 thsdk 3.0.0 原生层接受的形态。
+
+        3.0.0 的 ``_normalize_block`` 只收 int（数字 ID）或 Mapping（Block），
+        传 str 直接 TypeError。约定：数字串→int；名称串→经原生 resolve_block
+        取 Block 映射；int/Mapping 原样透传。
+        """
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        if isinstance(value, dict):
+            return value
+        text = str(value).strip()
+        if not text:
+            raise ValueError("板块 ID 或名称不能为空")
+        if text.isdigit():
+            return int(text)
+        resolved = await self._call(self._mod.resolve_block, name=text)
+        if not isinstance(resolved, dict):
+            raise ValueError(f"无法解析板块名称：{text}")
+        return resolved
+
+    async def _normalize_blocks(self, values: Any) -> list[Any]:
+        """板块数组逐元素归一（list_block_descriptions 原生必填 blocks）。"""
+        if not isinstance(values, (list, tuple)) or not values:
+            raise ValueError("blocks 必须是非空数组")
+        return [await self._normalize_block(v) for v in values]
 
     async def list_tools(self) -> list[dict]:
         return []
@@ -380,41 +723,47 @@ class ThsdkClient:
         return await self._call(self._mod.account_permissions)
 
     async def _tool_ths_get_account_watchlist(self, p: dict) -> Any:
-        return await self._call(self._mod.get_account_watchlist)
+        frame = await self._call_raw(self._mod.get_account_watchlist)
+        # 破坏性返回变更：裸 list → {"version", "securities"}；
+        # version 供 ths_replace_account_watchlist_securities 乐观锁使用。
+        return {
+            "version": _watchlist_version(frame),
+            "securities": json_safe(frame),
+        }
 
     async def _tool_ths_get_account_watchlist_groups(self, p: dict) -> Any:
         return await self._call(self._mod.get_account_watchlist_groups)
 
     async def _tool_ths_get_all_watchlist(self, p: dict) -> Any:
         """合并主自选(group_id=0)与分组(group_id=35+)为一个统一视图。"""
-        # thsdk 2.0.2 返回 list 格式
-        wl = await self._call(self._mod.get_account_watchlist)
+        wl_frame = await self._call_raw(self._mod.get_account_watchlist)
+        wl = json_safe(wl_frame)
+        wl_version = _watchlist_version(wl_frame)
+        # groups 公开层帧经 json_safe reset_index → list，
+        # 每个元素是 {group_key, name, securities, version}
         groups = await self._call(self._mod.get_account_watchlist_groups)
 
-        # 构建 group_id=0 的"默认分组"（主自选）
-        # wl 是 list，元素是 {code, market}
+        # 默认分组统一为 group_key 形状（与命名分组同构）
         default_group = {
-            "id": 0,
+            "group_key": 0,
             "name": "默认分组",
             "securities": wl,
-            "version": None,
+            "version": wl_version,
         }
 
-        # groups 是 list，每个元素是 {group_key, id, name, securities, version}
         all_groups = {"0": default_group}
         if groups:
             for g in groups:
-                gid = str(g.get("id", g.get("group_key", "")))
-                all_groups[gid] = g
+                all_groups[str(_group_id(g))] = g
 
         return {
-            "version": None,
-            "group_order": [0] + [g.get("id") or g.get("group_key") for g in groups],
+            "version": wl_version,
+            "group_order": [0] + [_group_id(g) for g in groups],
             "groups": all_groups,
             "main_watchlist": {
                 "count": len(wl) if wl else 0,
                 "securities": wl,
-                "version": None,
+                "version": wl_version,
             },
         }
 
@@ -448,31 +797,38 @@ class ThsdkClient:
             kwargs["end_time"] = p["end_time"]
         else:
             kwargs["count"] = int(p.get("count", 20))
-        # thsdk 2.0.2 参数名是 ths_code，但 YAML 定义的是 security
-        ths_code = p.get("security") or p.get("ths_code")
+        ths_code = p["security"]
         return await self._call(self._mod.klines, ths_code, **kwargs)
 
     async def _tool_ths_intraday_data(self, p: dict) -> Any:
-        ths_code = p.get("security") or p.get("ths_code")
+        ths_code = p["security"]
         return await self._call(
             self._mod.intraday_data, ths_code, date=p.get("date")
         )
 
     async def _tool_ths_depth(self, p: dict) -> Any:
-        ths_code = p.get("security") or p.get("ths_code")
+        ths_code = p["security"]
         return await self._call(self._mod.depth, ths_code)
 
     async def _tool_ths_tick_level1(self, p: dict) -> Any:
-        kwargs: dict[str, Any] = {"count": int(p.get("count", 100))}
-        if p.get("start_time"):
-            kwargs["start_time"] = p["start_time"]
-        if p.get("end_time"):
-            kwargs["end_time"] = p["end_time"]
-        ths_code = p.get("security") or p.get("ths_code")
+        # 原生硬性互斥：count 不能与 start_time/end_time 同用，且时间端点须成对。
+        start_t = str(p.get("start_time") or "").strip()
+        end_t = str(p.get("end_time") or "").strip()
+        if start_t or end_t:
+            if not (start_t and end_t):
+                raise ValueError("start_time/end_time 必须同时传入")
+            kwargs: dict[str, Any] = {
+                "count": None,
+                "start_time": start_t,
+                "end_time": end_t,
+            }
+        else:
+            kwargs = {"count": int(p.get("count", 100))}
+        ths_code = p["security"]
         return await self._call(self._mod.tick_level1, ths_code, **kwargs)
 
     async def _tool_ths_corporate_action(self, p: dict) -> Any:
-        ths_code = p.get("security") or p.get("ths_code")
+        ths_code = p["security"]
         return await self._call(
             self._mod.corporate_action, ths_code, count=int(p.get("count", 100))
         )
@@ -494,9 +850,19 @@ class ThsdkClient:
         )
 
     async def _tool_ths_block_constituents(self, p: dict) -> Any:
+        raw = p["block"]
+        # 公开层 block_constituents(block: int|str, ...) 是手写函数，不收
+        # Mapping：数字串须先归 int（否则被当名称再 resolve 一次必然落空），
+        # 名称串原样传入，由公开层内部 resolve_block，网关不重复调用。
+        if isinstance(raw, int):
+            block: Any = raw
+        elif isinstance(raw, str) and raw.strip().isdigit():
+            block = int(raw.strip())
+        else:
+            block = raw
         return await self._call(
             self._mod.block_constituents,
-            p["block"],
+            block,
             start=int(p.get("start", 0)),
             count=int(p.get("count", 50)),
         )
@@ -585,25 +951,26 @@ class ThsdkClient:
     # ========== 板块 Blocks ==========
 
     async def _tool_ths_list_block_descriptions(self, p: dict) -> Any:
+        # 原生逐元素只收 int/Mapping：数字 ID 或名称数组先统一归一。
+        blocks = await self._normalize_blocks(p["blocks"])
         return await self._call(
-            self._mod.list_block_descriptions, blocks=p["blocks"]
+            self._mod.list_block_descriptions, blocks=blocks
         )
 
     async def _tool_ths_list_security_block_memberships(self, p: dict) -> Any:
-        # YAML 定义的是 securities (数组)，thsdk 2.0.2 期望 security (单个)
-        sec = p.get("security") or (p.get("securities")[0] if p.get("securities") else None)
+        sec = p["security"]
         return await self._call(
             self._mod.list_security_block_memberships, security=sec
         )
 
     async def _tool_ths_get_security_concept_tags(self, p: dict) -> Any:
-        sec = p.get("security") or (p.get("securities")[0] if p.get("securities") else None)
+        sec = p["security"]
         return await self._call(
             self._mod.get_security_concept_tags, security=sec
         )
 
     async def _tool_ths_get_security_industry(self, p: dict) -> Any:
-        sec = p.get("security") or (p.get("securities")[0] if p.get("securities") else None)
+        sec = p["security"]
         return await self._call(
             self._mod.get_security_industry, security=sec
         )
@@ -615,15 +982,19 @@ class ThsdkClient:
         )
 
     async def _tool_ths_rank_block_securities(self, p: dict) -> Any:
+        # 原生只收 int ID / Block 映射；YAML 入参是 str，统一归一。
+        block = await self._normalize_block(p["block"])
         kwargs: dict[str, Any] = {
-            "block": p["block"],
+            "block": block,
             "sort_begin": int(p.get("start", 0)),
             "sort_count": int(p.get("count", 50)),
         }
         if p.get("sort_id"):
             kwargs["sort_id"] = str(p["sort_id"])
         if p.get("order"):
-            kwargs["sort_order"] = p["order"]
+            kwargs["sort_order"] = _map_str_enum(
+                p["order"], _SORT_ORDER_MAP, "order"
+            )
         return await self._call(self._mod.rank_block_securities, **kwargs)
 
     # ========== 问财 WenCai ==========
@@ -645,9 +1016,10 @@ class ThsdkClient:
         )
 
     async def _tool_ths_list_wencai_hot_blocks(self, p: dict) -> Any:
+        kind = _map_str_enum(p.get("kind", "concept"), _WENCAI_KIND_MAP, "kind")
         return await self._call(
             self._mod.list_wencai_hot_blocks,
-            kind=p.get("kind", "concept"),
+            kind=kind,
         )
 
     # ========== 热度 Popularity ==========
@@ -667,23 +1039,54 @@ class ThsdkClient:
     # ========== 新闻 News ==========
 
     async def _tool_ths_list_hot_event_news(self, p: dict) -> Any:
-        kwargs: dict[str, Any] = {"range": p.get("range", "recent")}
-        if p.get("block"):
-            kwargs["block"] = p["block"]
+        # 原生 list_hot_event_news 必填 block（range 可选）；缺省直接 400 类
+        # 错误，不再发一个必然 TypeError 的请求。
+        block_raw = p.get("block")
+        if not block_raw:
+            raise ValueError(
+                "block 必填：板块数字 ID（如 61322）或名称（如 沪深300）"
+            )
+        block = await self._normalize_block(block_raw)
+        kwargs: dict[str, Any] = {"block": block}
+        if p.get("range"):
+            kwargs["range"] = _map_str_enum(
+                p["range"], _NEWS_RANGE_MAP, "range"
+            )
         return await self._call(self._mod.list_hot_event_news, **kwargs)
 
     async def _tool_ths_list_security_news_events(self, p: dict) -> Any:
+        timeline = str(p.get("timeline", "historical")).strip().lower()
+        if timeline not in _VALID_TIMELINES:
+            raise ValueError(
+                f"timeline 取值非法：{timeline}，可选 historical/realtime"
+            )
+        start = str(p.get("start") or "").strip()
+        end = str(p.get("end") or "").strip()
+        if not start or not end:
+            raise ValueError(
+                "start/end 必填（ISO 时间，如 2026-08-01T00:00:00+08:00）"
+            )
+        window = {"start": start, "end": end}
         return await self._call(
             self._mod.list_security_news_events,
             security=p["security"],
+            timeline=timeline,
+            window=window,
         )
 
     # ========== 实时统计 Realtime ==========
 
     async def _tool_ths_calculate_security_realtime_statistics(self, p: dict) -> Any:
+        # metrics 原生必填；省略时默认下发全部 4 个指标。
+        metrics = _map_enum_list(
+            p.get("metrics") or list(_REALTIME_METRIC_MAP),
+            _REALTIME_METRIC_MAP,
+            "metrics",
+        )
         return await self._call(
             self._mod.calculate_security_realtime_statistics,
             securities=[p["security"]],
+            metrics=metrics,
         )
 
     async def _tool_ths_get_security_short_term_highlights(self, p: dict) -> Any:
@@ -701,16 +1104,35 @@ class ThsdkClient:
     # ========== 公司行为 Corporate ==========
 
     async def _tool_ths_list_security_corporate_actions(self, p: dict) -> Any:
+        # start/end 是相对周期偏移（官方示例 -10..0）；adjust/period 名称映射。
         return await self._call(
             self._mod.list_security_corporate_actions,
             security=p["security"],
+            start=int(p.get("start", -10)),
+            end=int(p.get("end", 0)),
+            adjust=_map_enum(p.get("adjust", "none"), _ADJUST_MAP, "adjust"),
+            period=_map_enum(p.get("period", "day"), _PERIOD_MAP, "period"),
         )
 
     async def _tool_ths_list_security_financial_snapshots(self, p: dict) -> Any:
+        # fields 原生必填；省略时默认全部 3 个字段（兑现旧 spec"省略返回默认集"）。
+        fields_raw = p.get("fields")
+        if fields_raw is None:
+            fields = list(_FINANCIAL_FIELD_ALL)
+        else:
+            if not isinstance(fields_raw, (list, tuple)) or not fields_raw:
+                raise ValueError("fields 必须是非空数组")
+            fields = [str(f).strip() for f in fields_raw]
+            bad = [f for f in fields if f not in _VALID_FINANCIAL_FIELDS]
+            if bad:
+                raise ValueError(
+                    f"fields 含非法字段：{bad}，"
+                    f"可选：{', '.join(_FINANCIAL_FIELD_ALL)}"
+                )
         return await self._call(
             self._mod.list_security_financial_snapshots,
             securities=p["securities"],
-            fields=p.get("fields"),
+            fields=fields,
         )
 
     # ========== 涨跌停 Limit ==========
@@ -759,31 +1181,58 @@ class ThsdkClient:
         )
 
     async def _tool_ths_resolve_securities(self, p: dict) -> Any:
-        return await self._call(
-            self._mod.resolve_securities,
-            codes=p["codes"],
-        )
+        raw_codes = p["codes"]
+        if not isinstance(raw_codes, (list, tuple)) or not raw_codes:
+            raise ValueError("codes 必须是非空数组")
+        # 逐元素剥成裸码（坏元素 ValueError 不静默丢弃）；显式市场标记与
+        # 数字段推断不一致时 fail-closed（如 sh000001 指数裸码会被解析成
+        # 深市股票）；再去重保序。
+        codes: list[str] = []
+        for c in raw_codes:
+            bare = to_bare_code(c)
+            explicit = explicit_market_of(c)
+            inferred = _inferred_market(bare)
+            if explicit and inferred and explicit != inferred:
+                raise ValueError(
+                    f"代码 {c} 的市场标记（{explicit}）与代码段推断市场"
+                    f"（{inferred}）不一致；原生 resolve_securities 只收裸码，"
+                    "无法表达该证券（常见于指数代码，如 sh000001 上证指数）"
+                )
+            codes.append(bare)
+        codes = list(dict.fromkeys(codes))
+        return await self._call(self._mod.resolve_securities, codes=codes)
 
     # ========== 行情增强 Quotes ==========
 
     async def _tool_ths_list_security_ticks(self, p: dict) -> Any:
+        # 原生 window 必填：{"count": N} 或 {"start", "end"}（ISO）。
+        start = p.get("start_time")
+        end = p.get("end_time")
+        if start or end:
+            if not start or not end:
+                raise ValueError("start_time 和 end_time 必须同时提供")
+            window = {"start": start, "end": end}
+        else:
+            window = {"count": int(p.get("count", 100))}
         return await self._call(
             self._mod.list_security_ticks,
             security=p["security"],
+            window=window,
         )
 
     async def _tool_ths_list_security_intraday_bars(self, p: dict) -> Any:
+        # date 原生必填；"0" 是当天记号，网关默认补上，spec 可诚实写"省略查当天"。
         return await self._call(
             self._mod.list_security_intraday_bars,
             security=p["security"],
-            date=p.get("date"),
+            date=str(p.get("date") or "0"),
         )
 
     async def _tool_ths_list_security_order_books(self, p: dict) -> Any:
         return await self._call(
             self._mod.list_security_order_books,
             securities=[p["security"]],
-            depth=p.get("depth", "10"),
+            depth=str(p.get("depth") or "5"),  # 原生 OrderBookDepth 仅 "5"
         )
 
     async def _tool_ths_list_security_daily_capital_flows(self, p: dict) -> Any:

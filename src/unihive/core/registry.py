@@ -29,6 +29,10 @@ _TYPE_MAP: dict[str, type] = {
     # 常把数组误标为 string, 但运行时只收原生 JSON 数组 —— 必须以 list 透传,
     # 回落成 str 会把调用方的数组原样当字符串转发, 上游 REST 层直接 400。
     "array": list,
+    # 对象入参 (如 ths_list_industry_children 的 industry Mapping)：
+    # 不映射则回落 str，inputSchema 会把必填对象标成 string，
+    # 调用方按 spec 传对象反被 pydantic 打回。
+    "object": dict,
 }
 
 # 可选参数默认值：str 用 ""（_validate_and_normalize 视空串为缺失）；

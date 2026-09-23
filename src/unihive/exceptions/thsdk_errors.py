@@ -8,12 +8,9 @@ import thsdk 做 isinstance，而是按异常类的 MRO 类名匹配 ——
 避免 thsdk 未安装时本文件导入失败，也方便测试用同名假异常。
 """
 import asyncio
-import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 
 class ThsdkErrorType(Enum):
@@ -80,13 +77,9 @@ def classify_exception(exc: Exception) -> ThsdkError:
             message=f"thsdk 包加载失败：{type(exc).__name__}: {str(exc)[:200]}",
             recoverable=False,
         )
-    if _is_thsdk_exc(exc, "AuthenticationError"):
-        return ThsdkError(
-            error_type=ThsdkErrorType.AUTH_FAILED,
-            message=f"同花顺登录失败：{str(exc)[:200]}",
-            recoverable=False,
-            code=getattr(exc, "code", None),
-        )
+    # 顺序关键：真实 thsdk 3.0.0 中 NotAuthenticatedError 是 AuthenticationError
+    # 的子类（MRO 类名匹配会同时命中两者）。必须先判具体的会话失效，
+    # 否则会话过期被误判 AUTH_FAILED，_invoke_with_reauth 的自动重登重试失效。
     if _is_thsdk_exc(exc, "NotAuthenticatedError"):
         return ThsdkError(
             error_type=ThsdkErrorType.NOT_AUTHENTICATED,
@@ -94,10 +87,22 @@ def classify_exception(exc: Exception) -> ThsdkError:
             recoverable=True,
             code=getattr(exc, "code", None),
         )
-    if isinstance(exc, ValueError):
+    if _is_thsdk_exc(exc, "AuthenticationError"):
+        return ThsdkError(
+            error_type=ThsdkErrorType.AUTH_FAILED,
+            message=f"同花顺登录失败：{str(exc)[:200]}",
+            recoverable=False,
+            code=getattr(exc, "code", None),
+        )
+    # ValueError/TypeError/KeyError 同源：thsdk 原生 typed 路径 (_apis/_base.py
+    # _call_typed / _runtime.py) 对"缺必填字段、未知字段、字段类型不符"抛的
+    # 就是内建 TypeError/KeyError（实测"缺少必填请求字段: window"）。
+    # 不归类则落入兜底 UNKNOWN/recoverable=false，调用方无法区分"我传错参数"
+    # 与"网关内部错误"。
+    if isinstance(exc, (ValueError, TypeError, KeyError)):
         return ThsdkError(
             error_type=ThsdkErrorType.INVALID_PARAM,
-            message=f"参数错误：{str(exc)[:200]}",
+            message=f"参数错误：{type(exc).__name__}: {str(exc)[:200]}",
             recoverable=False,
         )
     if _is_thsdk_exc(exc, "APIError"):

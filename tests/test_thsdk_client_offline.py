@@ -51,7 +51,11 @@ def fake_mod(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     mod = types.ModuleType("thsdk")
     mod.auth = MagicMock(return_value=True)
     mod.account_permissions = MagicMock(return_value={"level": "guest"})
-    mod.get_account_watchlist = MagicMock(return_value={"version": 3, "securities": []})
+    # 公开层 DataFrame wrapper：version 在 df.attrs['thsdk']['metadata']，
+    # json_safe 会丢 attrs，必须由 _call_raw + _watchlist_version 取回（F3）。
+    wl_frame = pd.DataFrame({"code": ["600519"], "market": ["USHA"]})
+    wl_frame.attrs["thsdk"] = {"metadata": {"version": 3, "count": 1}}
+    mod.get_account_watchlist = MagicMock(return_value=wl_frame)
     mod.get_account_watchlist_groups = MagicMock(return_value=[])
     mod.search_symbols = MagicMock(return_value=[])
     mod.complete_ths_code = MagicMock(return_value=[])
@@ -68,6 +72,15 @@ def fake_mod(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     mod.news = MagicMock(return_value=[])
     mod.block_constituents = MagicMock(return_value=[])
     mod.market_securities = MagicMock(return_value=[])
+    # F1/F2/F5/F6/F7 相关原生入口（公开层函数名）
+    mod.resolve_block = MagicMock(return_value={"id": 61322, "name": "沪深300"})
+    mod.list_industry_children = MagicMock(return_value=[])
+    mod.rank_block_securities = MagicMock(return_value=[])
+    mod.list_wencai_hot_blocks = MagicMock(return_value=[])
+    mod.list_hot_event_news = MagicMock(return_value=[])
+    mod.list_security_news_events = MagicMock(return_value=[])
+    mod.list_security_order_books = MagicMock(return_value=[])
+    mod.resolve_securities = MagicMock(return_value=[])
     for write_name in (
         "add_account_watchlist_securities",
         "remove_account_watchlist_securities",
@@ -291,7 +304,7 @@ async def test_write_auto_completes_short_codes(
 ):
     monkeypatch.setenv("ALLOW_WATCHLIST_WRITE", "true")
     fake_mod.complete_ths_code.return_value = pd.DataFrame(
-        {"ths_code": ["USZA300033"], "name": ["同花顺"]}
+        {"full_code": ["USZA300033"], "name": ["同花顺"]}
     )
     client = await _started(fake_mod)
     result = await client.call_tool(
@@ -308,11 +321,41 @@ async def test_unresolvable_short_code_is_invalid_param(
 ):
     monkeypatch.setenv("ALLOW_WATCHLIST_WRITE", "true")
     fake_mod.complete_ths_code.return_value = pd.DataFrame(
-        {"ths_code": [], "name": []}
+        {"full_code": [], "name": []}
     )
     client = await _started(fake_mod)
     result = await client.call_tool(
         "ths_add_account_watchlist_securities", {"securities": ["999999"]}
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+    fake_mod.add_account_watchlist_securities.assert_not_called()
+
+
+async def test_none_completion_response_is_invalid_param(
+    monkeypatch: pytest.MonkeyPatch, guest_env, fake_mod
+):
+    monkeypatch.setenv("ALLOW_WATCHLIST_WRITE", "true")
+    fake_mod.complete_ths_code.return_value = None
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_add_account_watchlist_securities", {"securities": ["300033"]}
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+    fake_mod.add_account_watchlist_securities.assert_not_called()
+
+
+async def test_malformed_full_code_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, guest_env, fake_mod
+):
+    monkeypatch.setenv("ALLOW_WATCHLIST_WRITE", "true")
+    fake_mod.complete_ths_code.return_value = pd.DataFrame(
+        {"full_code": ["GARBAGE"], "name": ["?"]}
+    )
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_add_account_watchlist_securities", {"securities": ["300033"]}
     )
     assert result.success is False
     assert result.error_detail["error_type"] == "invalid_param"
@@ -376,6 +419,441 @@ async def test_resolve_codes_empty_raises(monkeypatch, guest_env, fake_mod):
         await client._resolve_codes([])
 
 
+# ---------- F1: tick_level1 count 与时间范围互斥 ----------
+
+async def test_tick_level1_default_count(guest_env, fake_mod):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_tick_level1", {"security": "USHA600519"}
+    )
+    assert result.success
+    kwargs = fake_mod.tick_level1.call_args.kwargs
+    assert kwargs == {"count": 100}
+
+
+async def test_tick_level1_explicit_count(guest_env, fake_mod):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_tick_level1", {"security": "USHA600519", "count": 20}
+    )
+    assert result.success
+    assert fake_mod.tick_level1.call_args.kwargs == {"count": 20}
+
+
+async def test_tick_level1_time_range_sends_null_count(guest_env, fake_mod):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_tick_level1",
+        {
+            "security": "USHA600519",
+            "start_time": "2026-09-20",
+            "end_time": "2026-09-21",
+        },
+    )
+    assert result.success
+    kwargs = fake_mod.tick_level1.call_args.kwargs
+    assert kwargs == {
+        "count": None,
+        "start_time": "2026-09-20",
+        "end_time": "2026-09-21",
+    }
+
+
+async def test_tick_level1_single_time_endpoint_is_invalid_param(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_tick_level1",
+        {"security": "USHA600519", "start_time": "2026-09-20"},
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+    assert "同时" in (result.error or "")
+    fake_mod.tick_level1.assert_not_called()
+
+
+# ---------- F2: industry_children 收行业对象（Mapping） ----------
+
+async def test_industry_children_passes_object_through(guest_env, fake_mod):
+    client = await _started(fake_mod)
+    industry = {
+        "security": {"market": "URFI", "code": "881273"},
+        "name": "白酒",
+    }
+    result = await client.call_tool(
+        "ths_list_industry_children", {"industry": industry}
+    )
+    assert result.success
+    fake_mod.list_industry_children.assert_called_once_with(
+        industry=industry
+    )
+
+
+# ---------- F3: 自选 version 透传（list → 对象，破坏性变更） ----------
+
+async def test_get_account_watchlist_returns_version_and_securities(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool("ths_get_account_watchlist", {})
+    assert result.success
+    assert result.data == {
+        "version": 3,
+        "securities": [{"code": "600519", "market": "USHA"}],
+    }
+
+
+async def test_get_all_watchlist_fills_version_everywhere(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool("ths_get_all_watchlist", {})
+    assert result.success
+    data = result.data
+    assert data["version"] == 3
+    default = data["groups"]["0"]
+    assert default["version"] == 3
+    assert default["name"] == "默认分组"
+    # 默认分组与命名分组同构：group_key 是唯一身份字段
+    assert default["group_key"] == 0
+    assert "id" not in default
+    assert data["main_watchlist"] == {
+        "count": 1,
+        "securities": [{"code": "600519", "market": "USHA"}],
+        "version": 3,
+    }
+    assert data["group_order"] == [0]
+
+
+async def test_get_all_watchlist_merges_named_groups(guest_env, fake_mod):
+    client = await _started(fake_mod)
+    fake_mod.get_account_watchlist_groups.return_value = [
+        {
+            "group_key": 35,
+            "name": "科技",
+            "securities": [{"code": "300033", "market": "USZA"}],
+            "version": 9,
+        }
+    ]
+    result = await client.call_tool("ths_get_all_watchlist", {})
+    assert result.success
+    data = result.data
+    assert set(data["groups"]) == {"0", "35"}
+    assert data["groups"]["35"]["name"] == "科技"
+    assert data["group_order"] == [0, 35]
+
+
+# ---------- F4: block_constituents 数字串走 int ID 路径 ----------
+
+async def test_block_constituents_numeric_string_goes_id_path(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_block_constituents", {"block": "61322"}
+    )
+    assert result.success
+    args, kwargs = fake_mod.block_constituents.call_args
+    assert args[0] == 61322
+    assert isinstance(args[0], int)
+    assert kwargs == {"start": 0, "count": 50}
+    # 公开层是手写 int|str 函数，任何路径都不得给它 Mapping
+    assert not isinstance(args[0], dict)
+    fake_mod.resolve_block.assert_not_called()
+
+
+async def test_block_constituents_name_passes_through(guest_env, fake_mod):
+    # 名称由公开层内部 resolve_block：网关原样透传名称串，不预先 resolve，
+    # 也不得把 dict 传给公开层（真实 api.block_constituents 只收 int|str）。
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_block_constituents", {"block": "沪深300"}
+    )
+    assert result.success
+    args, _ = fake_mod.block_constituents.call_args
+    assert args[0] == "沪深300"
+    assert not isinstance(args[0], dict)
+    fake_mod.resolve_block.assert_not_called()
+
+
+# ---------- F5: order_books depth 仅 "5"，默认补 "5" ----------
+
+async def test_order_books_default_depth_is_five(guest_env, fake_mod):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_security_order_books",
+        {"security": "USHA600519"},
+    )
+    assert result.success
+    assert fake_mod.list_security_order_books.call_args.kwargs == {
+        "securities": ["USHA600519"],
+        "depth": "5",
+    }
+
+
+async def test_order_books_empty_depth_falls_back_to_five(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_security_order_books",
+        {"security": "USHA600519", "depth": ""},
+    )
+    assert result.success
+    assert (
+        fake_mod.list_security_order_books.call_args.kwargs["depth"]
+        == "5"
+    )
+
+
+# ---------- F6: resolve_securities 代码格式归一 + fail-closed ----------
+
+async def test_resolve_securities_strips_wrappers_and_dedups(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_resolve_securities",
+        {
+            "codes": [
+                "sh600519",
+                "SH600519",
+                "600519.SH",
+                "USHA600519",
+                "300033",
+            ]
+        },
+    )
+    assert result.success
+    codes = fake_mod.resolve_securities.call_args.kwargs["codes"]
+    assert codes == ["600519", "300033"]  # 剥壳 + 去重保序
+
+
+async def test_resolve_securities_bad_element_is_invalid_param(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_resolve_securities", {"codes": ["600519", "garbage"]}
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+    fake_mod.resolve_securities.assert_not_called()
+
+
+async def test_resolve_securities_empty_codes_is_invalid_param(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_resolve_securities", {"codes": []}
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+
+
+async def test_resolve_securities_non_list_codes_is_invalid_param(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_resolve_securities", {"codes": "600519"}
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+
+
+async def test_resolve_securities_index_code_market_mismatch_rejected(
+    guest_env, fake_mod
+):
+    # sh000001 是上证指数；裸 000001 原生会推断为深市平安银行，必须拒绝
+    client = await _started(fake_mod)
+    for code in ("sh000001", "000001.SH", "USHA000001", "sh000300"):
+        result = await client.call_tool(
+            "ths_resolve_securities", {"codes": [code]}
+        )
+        assert result.success is False, code
+        assert result.error_detail["error_type"] == "invalid_param", code
+        fake_mod.resolve_securities.assert_not_called()
+
+
+async def test_resolve_securities_market_consistent_wrappers_pass(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_resolve_securities",
+        {"codes": ["sh600519", "sz000001", "300033.SZ", "688981.SH"]},
+    )
+    assert result.success
+    assert fake_mod.resolve_securities.call_args.kwargs["codes"] == [
+        "600519", "000001", "300033", "688981",
+    ]
+
+
+async def test_resolve_securities_bj_code_rejected(guest_env, fake_mod):
+    # thsdk 3.0.0 仅沪深两市；显式北交所标记直接参数错误
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_resolve_securities", {"codes": ["bj430047"]}
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+    fake_mod.resolve_securities.assert_not_called()
+
+
+# ---------- F7: 字符串枚举大小写归一 + 白名单拒绝 ----------
+
+async def test_wencai_hot_blocks_kind_case_insensitive(guest_env, fake_mod):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_wencai_hot_blocks", {"kind": "CONCEPT"}
+    )
+    assert result.success
+    assert (
+        fake_mod.list_wencai_hot_blocks.call_args.kwargs["kind"]
+        == "concept"
+    )
+
+
+async def test_wencai_hot_blocks_bad_kind_is_invalid_param(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_wencai_hot_blocks", {"kind": "bad"}
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+
+
+async def test_rank_block_securities_order_case_insensitive(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_rank_block_securities",
+        {"block": "61322", "order": "d"},
+    )
+    assert result.success
+    assert (
+        fake_mod.rank_block_securities.call_args.kwargs["sort_order"]
+        == "D"
+    )
+
+
+async def test_rank_block_securities_bad_order_is_invalid_param(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_rank_block_securities",
+        {"block": "61322", "order": "x"},
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+
+
+async def test_hot_event_news_range_case_insensitive(guest_env, fake_mod):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_hot_event_news",
+        {"block": "61322", "range": "RECENT"},
+    )
+    assert result.success
+    assert (
+        fake_mod.list_hot_event_news.call_args.kwargs["range"]
+        == "recent"
+    )
+
+
+# ---------- F8: news_events start/end 必填，未声明 window 暗门删除 ----------
+
+async def test_news_events_builds_window_from_start_end(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_security_news_events",
+        {
+            "security": "USHA600519",
+            "start": "2026-08-01T00:00:00+08:00",
+            "end": "2026-08-31T00:00:00+08:00",
+        },
+    )
+    assert result.success
+    assert fake_mod.list_security_news_events.call_args.kwargs == {
+        "security": "USHA600519",
+        "timeline": "historical",
+        "window": {
+            "start": "2026-08-01T00:00:00+08:00",
+            "end": "2026-08-31T00:00:00+08:00",
+        },
+    }
+
+
+async def test_news_events_realtime_timeline_accepted_with_window(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_security_news_events",
+        {
+            "security": "USHA600519",
+            "timeline": "Realtime",
+            "start": "2026-08-01T00:00:00+08:00",
+            "end": "2026-08-31T00:00:00+08:00",
+        },
+    )
+    assert result.success
+    assert (
+        fake_mod.list_security_news_events.call_args.kwargs["timeline"]
+        == "realtime"
+    )
+
+
+async def test_news_events_undeclared_window_param_ignored(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_security_news_events",
+        {
+            "security": "USHA600519",
+            "start": "2026-08-01T00:00:00+08:00",
+            "end": "2026-08-31T00:00:00+08:00",
+            "window": {"raw": True},
+        },
+    )
+    assert result.success
+    assert (
+        fake_mod.list_security_news_events.call_args.kwargs["window"]
+        == {
+            "start": "2026-08-01T00:00:00+08:00",
+            "end": "2026-08-31T00:00:00+08:00",
+        }
+    )
+
+
+async def test_news_events_bad_timeline_is_invalid_param(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_security_news_events",
+        {
+            "security": "USHA600519",
+            "timeline": "bad",
+            "start": "2026-08-01T00:00:00+08:00",
+            "end": "2026-08-31T00:00:00+08:00",
+        },
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+    fake_mod.list_security_news_events.assert_not_called()
+
+
 # ---------- YAML 加载期门控 ----------
 
 def _yaml_specs() -> list[dict]:
@@ -410,6 +888,106 @@ def test_yaml_shape():
         "ths_delete_account_watchlist_group",
         "ths_replace_account_watchlist_group_securities",
     }
+
+
+async def test_f2_industry_object_param_live_fastmcp_schema():
+    """F2 端到端：object 类型入参在真实 FastMCP 注册后必须是 type=object。
+
+    回归 resolve_python_type 不认识 "object" → 回落 str，spec 要求传
+    Mapping 反被 pydantic 以字符串校验打回的问题。
+    """
+    from fastmcp import FastMCP
+    from src.unihive.core.registry import register_tool
+
+    probe_mcp = FastMCP("schema-probe")
+
+    class _Server:
+        mcp = probe_mcp  # 本测试只取 schema，runtime 不会被调用
+
+    spec = next(
+        s for s in _yaml_specs() if s["name"] == "ths_list_industry_children"
+    )
+    register_tool(_Server(), spec)
+
+    tool = await probe_mcp.get_tool("ths_list_industry_children")
+    industry_schema = tool.parameters["properties"]["industry"]
+    assert industry_schema["type"] == "object"
+
+
+def test_group_id_helper_null_safe():
+    from src.unihive.api.thsdk_client import _group_id
+
+    assert _group_id({"group_key": 35}) == 35
+    assert _group_id({"group_key": None, "id": 7}) == 7  # 显式 null 才回退
+    assert _group_id({"id": 7}) == 7
+
+
+# ---------- LOW: 纯空白时间参数按缺失处理 ----------
+
+async def test_tick_level1_whitespace_time_falls_back_to_count(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_tick_level1",
+        {"security": "USHA600519", "start_time": "   "},
+    )
+    assert result.success
+    assert fake_mod.tick_level1.call_args.kwargs == {"count": 100}
+
+
+async def test_news_events_whitespace_endpoint_is_invalid_param(
+    guest_env, fake_mod
+):
+    client = await _started(fake_mod)
+    result = await client.call_tool(
+        "ths_list_security_news_events",
+        {
+            "security": "USHA600519",
+            "start": "2026-08-01T00:00:00+08:00",
+            "end": "   ",
+        },
+    )
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+    fake_mod.list_security_news_events.assert_not_called()
+
+
+def test_yaml_f1_f2_f5_f6_f8_contract_shapes():
+    """F1-F8 修复在 YAML 契约层的形状断言（防 DB/YAML 漂移时模板先回退）。"""
+    by_name = {s["name"]: s for s in _yaml_specs()}
+
+    # F2: industry_children 唯一入参 industry 必须是 object（原生收 Mapping）
+    industry_param = by_name["ths_list_industry_children"]["params"][0]
+    assert industry_param["name"] == "industry"
+    assert industry_param["type"] == "object"
+    assert industry_param["required"] is True
+
+    # F5: order_books depth 枚举仅 "5"
+    depth_param = {
+        p["name"]: p
+        for p in by_name["ths_list_security_order_books"]["params"]
+    }["depth"]
+    assert depth_param["enum"] == ["5"]
+
+    # F6: resolve_securities 入参名是 codes
+    resolve_params = [
+        p["name"]
+        for p in by_name["ths_resolve_securities"]["params"]
+    ]
+    assert resolve_params == ["codes"]
+
+    # F8: news_events start/end 必填
+    news_params = {
+        p["name"]: p
+        for p in by_name["ths_list_security_news_events"]["params"]
+    }
+    assert news_params["start"]["required"] is True
+    assert news_params["end"]["required"] is True
+
+    # F3: 两个自选工具的返回说明必须写出 version 字段
+    assert "version" in by_name["ths_get_account_watchlist"]["description"]
+    assert "version" in by_name["ths_get_all_watchlist"]["description"]
 
 
 def test_yaml_write_tools_all_in_WRITE_TOOLS():

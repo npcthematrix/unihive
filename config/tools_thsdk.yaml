@@ -37,8 +37,9 @@ tools:
 
   - name: ths_get_account_watchlist
     description: |-
-      【我的自选】查询当前账号主自选股快照（list 形态，元素含 code/market）。无参数。账号数据不缓存。
-      整体替换自选 ths_replace_account_watchlist_securities 需要版本号 version 作乐观锁。
+      【我的自选】查询当前账号主自选股快照。无参数。账号数据不缓存。
+      【返回】{"version": 自选版本号, "securities": [...]}（2026-09-23 起由裸 list 变更为对象，破坏性变更）。
+      整体替换自选 ths_replace_account_watchlist_securities 时，须把 version 原样回传作乐观锁。
     routing: ths_get_account_watchlist
     upstream_tool_mapping:
       thsdk: ths_get_account_watchlist
@@ -60,7 +61,7 @@ tools:
   - name: ths_get_all_watchlist
     description: |-
       【全部自选（含分组）】网关聚合工具：一次合并"主自选"与"自选分组"。主自选用 group_id=0 的"默认分组"呈现，自定义分组用各自 id 呈现。无参数。
-      【返回】{"group_order": [...], "groups": {id: {...}}, "main_watchlist": {count, securities}}。
+      【返回】{"version": 主自选版本, "group_order": [...], "groups": {id: {...}}, "main_watchlist": {count, securities, version}}。
     routing: ths_get_all_watchlist
     upstream_tool_mapping:
       thsdk: ths_get_all_watchlist
@@ -183,8 +184,8 @@ tools:
       对应 thsdk tick_level1(ths_code, count=100, *, start_time=None, end_time=None)；start_time/end_time 为仅限关键字参数。
       【参数】
       - security (必填): 完整 THSCODE，如 USHA600519
-      - count (可选): 最近条数，默认 100
-      - start_time, end_time (可选): 时间范围（yyyy-MM-dd 或日期/datetime）
+      - count (可选): 最近条数，默认 100；与 start_time/end_time 互斥
+      - start_time, end_time (可选): 时间范围（yyyy-MM-dd 或日期/datetime），必须成对传入；与 count 互斥
     routing: ths_tick_level1
     upstream_tool_mapping:
       thsdk: ths_tick_level1
@@ -278,7 +279,11 @@ tools:
       - count (可选): 条数，默认 100（内部名 sort_count）
     routing: ths_market_securities
     upstream_tool_mapping:
-      thsdk: thsdk.list_market_securities
+      # 映射值是【网关 handler 键】（router 用它调 upstream.call_tool），
+      # 不是原生函数名——handler _tool_ths_market_securities 内部才调原生
+      # list_market_securities。曾误写 thsdk.list_market_securities /
+      # list_market_securities 导致 Unknown tool。
+      thsdk: ths_market_securities
     data_source_type: online
     dangerous: false
     params:
@@ -513,15 +518,15 @@ tools:
 
   - name: ths_list_industry_children
     description: |-
-      【子行业列表】查询某个行业下的子行业。对应 list_industry_children(*, industry)，industry 为行业对象/名称。
-      【参数】industry (必填): 行业名称或 ID，如 电子
+      【子行业列表】查询某个行业对象下的子行业。对应 list_industry_children(*, industry)，industry 必须是行业对象（Mapping），原生不支持行业名称字符串。
+      【参数】industry (必填): 行业对象——先调 ths_get_security_industry(security) 取其返回的 industry 字段原样传入
     routing: ths_list_industry_children
     upstream_tool_mapping:
       thsdk: ths_list_industry_children
     data_source_type: online
     dangerous: false
     params:
-      - {name: industry, type: str, required: true, description: "行业名称或 ID，如 电子"}
+      - {name: industry, type: object, required: true, description: "行业对象（Mapping）：先调 ths_get_security_industry 取其 industry 字段原样传入；不支持名称字符串"}
 
   - name: ths_rank_block_securities
     description: |-
@@ -623,24 +628,29 @@ tools:
 
   - name: ths_list_hot_event_news
     description: |-
-      【热点事件新闻】查询热点事件相关新闻，可限定板块。
-      对应 list_hot_event_news(*, block=None, range=None)。
+      【热点事件新闻】查询热点事件相关新闻，限定在指定板块内。
+      对应 list_hot_event_news(*, block, range=None)；3.0.0 原生 block 必填。
       【参数】
+      - block (必填): 板块数字 ID（如 "61322"）或名称（如 "沪深300"），网关自动归一
       - range (可选): 时间范围，"recent"=近期(默认) / "historical"=历史
-      - block (可选): 板块 ID 或名称，省略查全部热点
     routing: ths_list_hot_event_news
     upstream_tool_mapping:
       thsdk: ths_list_hot_event_news
     data_source_type: online
     dangerous: false
     params:
+      - {name: block, type: str, required: true, description: "板块数字 ID（如 61322）或名称（如 沪深300），网关自动归一"}
       - {name: range, type: str, required: false, enum: ["recent", "historical"], description: "时间范围：recent=近期(默认) / historical=历史"}
-      - {name: block, type: str, required: false, description: "板块 ID 或名称，省略查全部热点"}
 
   - name: ths_list_security_news_events
     description: |-
-      【个股新闻事件】查询指定证券的新闻事件。对应 list_security_news_events(*, security, timeline=None, window=None)；网关仅透传 security。
-      【参数】security (必填): 完整 THSCODE，如 USHA600519
+      【个股新闻事件】查询指定证券在时间窗口内的新闻事件。
+      对应原生 list_security_news_events(*, security, timeline, window)；timeline/window 原生必填，网关按 start/end 构造 window。
+      【参数】
+      - security (必填): 完整 THSCODE，如 USHA600519
+      - timeline (可选): historical=历史(默认) / realtime=实时
+      - start (必填): 窗口起点 ISO 时间，如 2026-08-01T00:00:00+08:00；与 end 必须同时提供
+      - end (必填): 窗口终点 ISO 时间
     routing: ths_list_security_news_events
     upstream_tool_mapping:
       thsdk: ths_list_security_news_events
@@ -648,14 +658,19 @@ tools:
     dangerous: false
     params:
       - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
+      - {name: timeline, type: str, required: false, enum: [historical, realtime], description: "historical=历史(默认) / realtime=实时"}
+      - {name: start, type: str, required: true, description: "窗口起点 ISO 时间，如 2026-08-01T00:00:00+08:00；与 end 同时提供"}
+      - {name: end, type: str, required: true, description: "窗口终点 ISO 时间"}
 
   # ========== 实时统计 Realtime ==========
 
   - name: ths_calculate_security_realtime_statistics
     description: |-
-      【实时统计】计算单只证券的实时统计指标（涨停时间/类型等）。
-      对应 calculate_security_realtime_statistics(*, securities, metrics=None)；网关把单个 security 包成 securities 数组。
-      【参数】security (必填): 完整 THSCODE，如 USHA600519
+      【实时统计】计算证券的实时统计指标（涨停时间/类型/状态）。
+      对应原生 calculate_security_realtime_statistics(*, securities, metrics)；metrics 原生必填，网关默认下发全部 4 个指标。
+      【参数】
+      - security (必填): 完整 THSCODE，如 USHA600519（内部包成 securities 数组）
+      - metrics (可选): 指标名数组，可选 first_limit_up_time / final_limit_up_time / limit_up_type / limit_up_state；省略=全部
     routing: ths_calculate_security_realtime_statistics
     upstream_tool_mapping:
       thsdk: ths_calculate_security_realtime_statistics
@@ -663,6 +678,7 @@ tools:
     dangerous: false
     params:
       - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519（内部包成 securities 数组）"}
+      - {name: metrics, type: "List[str]", required: false, description: "指标数组：first_limit_up_time / final_limit_up_time / limit_up_type / limit_up_state；省略=全部"}
 
   - name: ths_get_security_short_term_highlights
     description: |-
@@ -693,8 +709,13 @@ tools:
   - name: ths_list_security_corporate_actions
     description: |-
       【公司行为(结构化)】查询证券分红、送转、配股历史（结构化列表）。
-      对应 list_security_corporate_actions(*, security, start, end, adjust, period)；网关仅透传 security（其余过滤项未开放）。
-      【参数】security (必填): 完整 THSCODE，如 USHA600519
+      对应原生 list_security_corporate_actions(*, security, start, end, adjust, period)，均原生必填，网关补默认（近 10 个日周期、不复权）。
+      【参数】
+      - security (必填): 完整 THSCODE，如 USHA600519
+      - start (可选): 相对周期偏移，默认 -10
+      - end (可选): 相对周期偏移，默认 0
+      - adjust (可选): none=不复权(默认) / forward=前复权 / backward=后复权
+      - period (可选): 周期，day=日(默认) / week / month / quarter / year / m1 / m5 / m15 / m30 / m60 / m120
     routing: ths_list_security_corporate_actions
     upstream_tool_mapping:
       thsdk: ths_list_security_corporate_actions
@@ -702,6 +723,10 @@ tools:
     dangerous: false
     params:
       - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
+      - {name: start, type: int, required: false, description: "相对周期偏移，默认 -10"}
+      - {name: end, type: int, required: false, description: "相对周期偏移，默认 0"}
+      - {name: adjust, type: str, required: false, enum: [none, forward, backward], description: "none=不复权(默认) / forward / backward"}
+      - {name: period, type: str, required: false, enum: [m1, m5, m15, m30, m60, m120, day, week, month, quarter, year], description: "周期，默认 day"}
 
   - name: ths_list_security_financial_snapshots
     description: |-
@@ -709,7 +734,7 @@ tools:
       对应 list_security_financial_snapshots(*, securities, fields=None)。
       【参数】
       - securities (必填): 完整 THSCODE 数组
-      - fields (可选): 字段名数组，如 ["total_shares","float_shares","net_asset_per_share"]；省略返回默认字段集
+      - fields (可选): 字段名数组，可选 total_shares / float_shares / net_asset_per_share；原生必填，省略时网关默认下发全部 3 个
     routing: ths_list_security_financial_snapshots
     upstream_tool_mapping:
       thsdk: ths_list_security_financial_snapshots
@@ -717,7 +742,7 @@ tools:
     dangerous: false
     params:
       - {name: securities, type: "List[str]", required: true, description: "完整 THSCODE 数组"}
-      - {name: fields, type: "List[str]", required: false, description: "字段名数组，如 total_shares / float_shares / net_asset_per_share"}
+      - {name: fields, type: "List[str]", required: false, description: "字段数组：total_shares / float_shares / net_asset_per_share；省略=全部"}
 
   # ========== 涨跌停 Limit ==========
 
@@ -810,22 +835,27 @@ tools:
 
   - name: ths_resolve_securities
     description: |-
-      【证券解析】把多种格式代码解析为标准 THSCODE。对应 resolve_securities(*, codes)。
-      【参数】codes (必填): 代码数组，支持 600519 / sh600519 / USHA600519 等多种格式
+      【证券解析】把代码解析为标准证券身份。对应 resolve_securities(*, codes)，原生 codes 只收裸数字码。
+      【参数】codes (必填): 代码数组，元素支持 600519 / sh600519 / 600519.SH / USHA600519（网关统一剥成裸码后下发，自动去重）；无法识别的元素直接报参数错误，不静默丢弃。
+      指数代码（如 sh000001 上证指数）裸码会与深市股票冲突，市场标记与代码段不一致时直接报参数错误；不支持北交所代码。
     routing: ths_resolve_securities
     upstream_tool_mapping:
       thsdk: ths_resolve_securities
     data_source_type: online
     dangerous: false
     params:
-      - {name: codes, type: "List[str]", required: true, description: "证券代码数组，支持 600519 / sh600519 / USHA600519"}
+      - {name: codes, type: "List[str]", required: true, description: "代码数组，支持 600519 / sh600519 / 600519.SH / USHA600519；坏元素报错不静默丢弃"}
 
   # ========== 行情增强 Quotes ==========
 
   - name: ths_list_security_ticks
     description: |-
-      【逐笔成交】查询证券逐笔成交记录（结构化）。对应 list_security_ticks(*, security, window=None)；网关仅透传 security。
-      【参数】security (必填): 完整 THSCODE，如 USHA600519
+      【逐笔成交】查询证券逐笔成交记录。对应原生 list_security_ticks(*, security, window)；window 原生必填，网关按 count 或时间范围构造。
+      【参数】
+      - security (必填): 完整 THSCODE，如 USHA600519
+      - count (可选): 最近成交条数，默认 100；与 start_time/end_time 二选一
+      - start_time (可选): 时间范围起点 ISO，与 end_time 同时提供
+      - end_time (可选): 时间范围终点 ISO
     routing: ths_list_security_ticks
     upstream_tool_mapping:
       thsdk: ths_list_security_ticks
@@ -833,13 +863,16 @@ tools:
     dangerous: false
     params:
       - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
+      - {name: count, type: int, required: false, description: "最近成交条数，默认 100"}
+      - {name: start_time, type: str, required: false, description: "时间范围起点 ISO，与 end_time 同时提供"}
+      - {name: end_time, type: str, required: false, description: "时间范围终点 ISO"}
 
   - name: ths_list_security_intraday_bars
     description: |-
-      【分时Bar】查询证券分时 Bar（结构化）。对应 list_security_intraday_bars(*, security, date=None)。
+      【分时Bar】查询证券分时 Bar。对应原生 list_security_intraday_bars(*, security, date)；date 原生必填，网关默认补 "0"（当天）。
       【参数】
       - security (必填): 完整 THSCODE，如 USHA600519
-      - date (可选): 交易日 yyyy-MM-dd，省略查当天
+      - date (可选): 交易日 yyyy-MM-dd 或 "0"（当天，默认）
     routing: ths_list_security_intraday_bars
     upstream_tool_mapping:
       thsdk: ths_list_security_intraday_bars
@@ -847,14 +880,14 @@ tools:
     dangerous: false
     params:
       - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519"}
-      - {name: date, type: str, required: false, description: "交易日 yyyy-MM-dd，省略查当天"}
+      - {name: date, type: str, required: false, description: "交易日 yyyy-MM-dd 或 \"0\"（当天，默认）"}
 
   - name: ths_list_security_order_books
     description: |-
-      【订单簿】查询证券多档盘口。对应 list_security_order_books(*, securities, depth=None)；网关把单个 security 包成 securities 数组。
+      【订单簿】查询证券多档盘口。对应 list_security_order_books(*, securities, depth)；网关把单个 security 包成 securities 数组。
       【参数】
       - security (必填): 完整 THSCODE，如 USHA600519
-      - depth (可选): 档位代码（字符串），库内置档为 "5"（五档）；省略用默认档位
+      - depth (可选): 档位代码，库内置仅 "5"（五档，默认）
     routing: ths_list_security_order_books
     upstream_tool_mapping:
       thsdk: ths_list_security_order_books
@@ -862,7 +895,7 @@ tools:
     dangerous: false
     params:
       - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519（内部包成 securities 数组）"}
-      - {name: depth, type: str, required: false, description: "档位代码，库内置 5=五档；省略用默认"}
+      - {name: depth, type: str, required: false, enum: ["5"], description: "档位代码，仅支持 5=五档（默认）"}
 
   - name: ths_list_security_daily_capital_flows
     description: |-

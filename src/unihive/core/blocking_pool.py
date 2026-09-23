@@ -75,6 +75,7 @@ class DaemonBlockingExecutor(ThreadPoolExecutor):
 
 
 _executor: ThreadPoolExecutor | None = None
+_thsdk_executor: ThreadPoolExecutor | None = None
 
 
 def get_blocking_executor() -> ThreadPoolExecutor:
@@ -86,6 +87,32 @@ def get_blocking_executor() -> ThreadPoolExecutor:
             thread_name_prefix="unihive-upstream",
         )
     return _executor
+
+
+def get_thsdk_executor() -> ThreadPoolExecutor:
+    """返回 thsdk 专用的单 worker 线程池（惰性创建）。
+
+    为何独立且只给 1 个 worker：thsdk 原生组件（hq.dll）内部本就以 RLock
+    串行调用，并发提交无收益；关键是 asyncio.wait_for 超时只取消 await、
+    杀不掉已在 DLL 内阻塞的线程。单 worker 把"僵尸 DLL 调用"上限钉死为 1,
+    其余任务在队列里排队且可随超时取消（未开跑的 Future.cancel 成功）,
+    不会像共享 16 worker 池那样每次超时都新增一个僵尸线程。
+    """
+    global _thsdk_executor
+    if _thsdk_executor is None:
+        _thsdk_executor = DaemonBlockingExecutor(
+            max_workers=1,
+            thread_name_prefix="unihive-thsdk",
+        )
+    return _thsdk_executor
+
+
+def shutdown_thsdk_executor() -> None:
+    """关停 thsdk 专用池（与 shutdown_blocking_executor 同样的语义）。"""
+    global _thsdk_executor
+    if _thsdk_executor is not None:
+        _thsdk_executor.shutdown(wait=False, cancel_futures=False)
+        _thsdk_executor = None
 
 
 def shutdown_blocking_executor() -> None:
