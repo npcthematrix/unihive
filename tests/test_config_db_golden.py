@@ -2,7 +2,7 @@
 
 这是 P2 的硬关卡: 实体形态不能丢失/改变任何运行时配置 ——
 装配结果 (合回 bootstrap 后) 必须与现行加载链产出的合并 dict 逐字段相等,
-工具 spec 全字段相等 (实测 292 个, 含 requires_env 门控)。
+工具 spec 全字段相等 (实测 294 个, 含 requires_env 门控)。
 """
 from __future__ import annotations
 
@@ -37,19 +37,20 @@ def bundle():
     return merged, specs, provenance, path, template
 
 
-def test_real_config_loads_292_tools(bundle):
+def test_real_config_loads_294_tools(bundle):
     merged, specs, _provenance, _path, template = bundle
-    assert len(specs) == 292
-    assert len(template.tools) == 292
+    assert len(specs) == 294
+    assert len(template.tools) == 294
     # 9 个上游块 (4 个 fuyao 端点各自独立 + mootdx2/tdx_quant/omni/thsdk/THS-LOCAL)
     assert len(template.upstreams) == 9
-    # 内联在 upstreams.yaml 的只有 53 个 fuyao/fqgate spec, 其余 240 来自 5 个 tools_*.yaml
+    # 内联在 upstreams.yaml 的只有 53 个 fuyao/fqgate spec, 其余 241 来自 5 个 tools_*.yaml
     assert len(merged["tools"]) == 53
     by_source: dict[str, int] = {}
     for tool in template.tools:
         by_source[tool.source_file] = by_source.get(tool.source_file, 0) + 1
     assert by_source["upstreams.yaml"] == 53
-    assert sum(by_source.values()) == 292
+    assert by_source["tools_omni.yaml"] == 6
+    assert sum(by_source.values()) == 294
 
 
 def test_sections_exclude_entity_and_bootstrap_keys(bundle):
@@ -107,7 +108,7 @@ def test_golden_assemble_plus_bootstrap_equals_merged_raw(bundle):
     config_yaml_raw = load_raw_config(path.parent / "config.yaml")
     merge_bootstrap(assembled, config_yaml_raw)
     # tools 语义差异 (v2 故意为之): 现行加载链 config['tools'] 只放内联 53 条,
-    # 全量靠运行时再读 5 个 tools_*.yaml; db 模式装配结果直接持全量 292,
+    # 全量靠运行时再读 5 个 tools_*.yaml; db 模式装配结果直接持全量 294,
     # 运行时不再回读 YAML。其余顶层段必须逐字段相等。
     assert assembled["tools"] == specs
     assert {k: v for k, v in assembled.items() if k != "tools"} == {

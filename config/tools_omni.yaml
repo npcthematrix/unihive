@@ -52,6 +52,83 @@ tools:
         required: false
         description: 模糊搜索关键词（匹配板块名称或代码）
 
+  - name: omni_list_tdx_sectors
+    description: |-
+      【板块列表·通达信】查询通达信(TDX)板块清单（行业/概念/地域/风格板块）。
+
+      【与 omni_list_sectors 的区别】本工具来源已固定为通达信，无需也不接受 source 参数；
+      想查同花顺板块请用 omni_list_ths_sectors，想两家一起看请用 omni_list_sectors(source="all")。
+
+      【使用场景】
+      - 用户明确要"通达信的行业/概念/地域/风格板块有哪些"时调用
+      - 需要地域、风格板块（仅通达信提供）
+
+      【参数说明】
+      - board_type (可选): industry(行业) / concept(概念) / region(地域) / style(风格)；省略表示全部
+      - keyword (可选): 模糊搜索关键词，同时匹配板块名称和代码
+
+      【代码格式】通达信板块代码带 .SH 后缀（880xxx.SH 概念/地域/风格、881xxx.SH 行业）。
+
+      【返回字段】data 为数组，每项: id, source(恒为 TDX), board_type, code, name, stock_count(成分股数量)
+
+      【返回示例】
+      成功: {"success": true, "data": [{"id": 1, "source": "TDX", "board_type": "concept", "code": "880569.SH", "name": "储能", "stock_count": 915}], "error": null, "source": "omni", "hops": []}
+      空数据: {"success": true, "data": [], ...}
+    routing: omni_list_tdx_sectors
+    upstream_tool_mapping:
+      omni: omni_list_tdx_sectors
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: board_type
+        type: str
+        required: false
+        enum: ["industry", "concept", "region", "style", "all"]
+        description: 板块类型 industry/concept/region/style/all(缺省)
+      - name: keyword
+        type: str
+        required: false
+        description: 模糊搜索关键词（匹配板块名称或代码）
+
+  - name: omni_list_ths_sectors
+    description: |-
+      【板块列表·同花顺】查询同花顺(THS)板块清单（仅行业/概念板块）。
+
+      【与 omni_list_sectors 的区别】本工具来源已固定为同花顺，无需也不接受 source 参数；
+      想查通达信板块（含地域/风格）请用 omni_list_tdx_sectors，想两家一起看请用 omni_list_sectors(source="all")。
+
+      【使用场景】
+      - 用户明确要"同花顺的行业/概念板块有哪些"时调用
+
+      【参数说明】
+      - board_type (可选): industry(行业) / concept(概念)；省略表示全部。同花顺不提供地域/风格板块
+      - keyword (可选): 模糊搜索关键词，同时匹配板块名称和代码
+
+      【代码格式】同花顺板块代码为 6 位裸码（881xxx 行业、885xxx 概念）。
+
+      【返回字段】data 为数组，每项: id, source(恒为 THS), board_type, code, name, stock_count(成分股数量)
+
+      【返回示例】
+      成功: {"success": true, "data": [{"id": 1, "source": "THS", "board_type": "concept", "code": "885756", "name": "芯片概念", "stock_count": 923}], "error": null, "source": "omni", "hops": []}
+      空数据: {"success": true, "data": [], ...}
+    routing: omni_list_ths_sectors
+    upstream_tool_mapping:
+      omni: omni_list_ths_sectors
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: board_type
+        type: str
+        required: false
+        enum: ["industry", "concept", "all"]
+        description: 板块类型 industry/concept/all(缺省)；同花顺无地域/风格板块
+      - name: keyword
+        type: str
+        required: false
+        description: 模糊搜索关键词（匹配板块名称或代码）
+
   - name: omni_get_sector_stocks
     description: |-
       【板块成分股】查询指定板块包含的所有成分股（按 rank 升序）。

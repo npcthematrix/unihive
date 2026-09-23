@@ -344,7 +344,7 @@ def setup_console_auth(app: Starlette, console_cfg: dict, mcp_path: str = "/mcp"
 
         Generate a hash with::
 
-            from src.unihive.console_auth import hash_password
+            from unihive.console_auth import hash_password
             print(hash_password("your-password"))
     """
     secret_key = console_cfg.get("session_secret")

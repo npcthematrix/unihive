@@ -1322,7 +1322,8 @@ def get_omni_stats() -> dict[str, Any]:
     if omni is None:
         return {"status": "failed", "message": "OMNI 客户端未初始化", "stats": [], "recent_logs": []}
     return {
-        "status": "ok",
+        # 与 sync 接口词表统一（success/failed）；前端类型按此声明。
+        "status": "success",
         "stats": omni.get_stats(),
         "recent_logs": omni.get_recent_logs(limit=10),
     }
@@ -1480,10 +1481,13 @@ def build_omni_routes() -> list:
 
     async def omni_sector_stocks_api(req: Request):
         params = req.query_params
-        return JSONResponse(get_omni_sector_stocks(
-            sector_id=params.get("sector_id", ""),
-            code=params.get("code", ""),
-            source=params.get("source", ""),
+        # 同步 SQLite 查询必须丢线程池：board.db 默认 delete 模式下读会等
+        # 同步写锁，在事件循环线程直跑会冻结整个 loop（弹窗长时间转圈）。
+        return JSONResponse(await asyncio.to_thread(
+            get_omni_sector_stocks,
+            params.get("sector_id", ""),
+            params.get("code", ""),
+            params.get("source", ""),
         ))
 
     return [

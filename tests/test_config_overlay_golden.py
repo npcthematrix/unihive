@@ -1,7 +1,7 @@
 """P1 golden 等价性: 空 overlay 时 effective config/specs 与纯 YAML 路径完全一致。
 
 设计文档 §9 P1 验收: "空 overlay 时 effective dict/specs 与现状 YAML 路径
-golden 全量一致 (292 工具、mapping、TTL), 不一致不许合并"。
+golden 全量一致 (294 工具、mapping、TTL), 不一致不许合并"。
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def test_empty_overlay_does_not_mutate_baseline():
     assert baseline["cache"]["ttl"]["historical"] != 999999
 
 
-def test_empty_overlay_specs_golden_292():
+def test_empty_overlay_specs_golden_294():
     baseline = _baseline_config()
 
     specs_yaml = load_all_tools(UPSTREAMS_YAML, copy.deepcopy(baseline))
@@ -49,7 +49,7 @@ def test_empty_overlay_specs_golden_292():
         UPSTREAMS_YAML, apply_config_overlays(baseline, [])
     )
 
-    assert len(specs_yaml) == 292
+    assert len(specs_yaml) == 294
     assert [s["name"] for s in specs_overlay] == [s["name"] for s in specs_yaml]
     # 全字段 (含 routing/params/mapping/ttl key) 一致, 不只是名字
     assert specs_overlay == specs_yaml

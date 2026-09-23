@@ -238,6 +238,8 @@ class OmniClient:
                 "CREATE INDEX IF NOT EXISTS idx_sector_stocks_code ON sector_stocks(stock_code)"
             )
 
+            # WAL 模式：读成分股与 board_sync 同步写库不再互斥（持久属性，幂等）。
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.commit()
         finally:
             conn.close()
@@ -271,10 +273,30 @@ class OmniClient:
         """)
         return [dict(row) for row in cursor.fetchall()]
 
+    # running 超过该分钟数即视为进程被杀/请求崩溃的残留（正常同步上限 5 分钟）。
+    STALE_RUNNING_MINUTES = 10
+
+    def _reconcile_stale_running(self, conn: sqlite3.Connection) -> None:
+        """把历史遗留 running（进程被强杀/异常穿透未写收尾日志）收敛为 failed。"""
+        conn.execute(
+            """
+            UPDATE sector_sync_log
+            SET status = 'failed',
+                message = '同步中断（网关进程退出或未正常收尾）',
+                end_time = datetime('now')
+            WHERE status = 'running'
+              AND start_time < datetime('now', ?)
+            """,
+            (f"-{self.STALE_RUNNING_MINUTES} minutes",),
+        )
+        conn.commit()
+
     def get_recent_logs(self, limit: int = 10) -> list[dict]:
         """Get recent sync logs."""
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
+        # 读前先收敛残留 running，前端拿到的列表不会再有"永久进行中"。
+        self._reconcile_stale_running(conn)
         cursor = conn.execute("""
             SELECT * FROM sector_sync_log ORDER BY start_time DESC LIMIT ?
         """, (limit,))
@@ -358,36 +380,75 @@ class OmniClient:
         log_id = self._insert_running_log(source, board_type)
 
         try:
-            result = await asyncio.wait_for(
-                self._dispatch_sync(source, board_type),
-                timeout=SYNC_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            result = {"status": "failed", "message": "同步超时 (5分钟)", "record_count": 0, "stocks": 0}
+            # 超时按源在 _dispatch_sync 内分别施加（all 时两源各自独立预算）。
+            result = await self._dispatch_sync(source, board_type)
         except Exception as e:
             result = {"status": "failed", "message": str(e)[:200], "record_count": 0, "stocks": 0}
 
-        # Update log with result
+        # Update log with result。防御归一：任何同步实现漏发 status/message
+        # 都按 failed 处理，不再因 KeyError 击穿 500 并留下永久 running 日志。
+        status = result.get("status") if result.get("status") in ("success", "failed") else "failed"
+        message = result.get("message") or result.get("error", "") or ""
         record_count = result.get("stocks", 0)
-        self._update_log(log_id, result["status"], result.get("message", ""), record_count)
+        self._update_log(log_id, status, message, record_count)
 
         return {
-            "status": result["status"],
-            "message": result.get("message", ""),
+            "status": status,
+            "message": message,
             "record_count": record_count,
             "log_id": log_id,
         }
 
+    async def _run_source_sync(
+        self, label: str, coro_factory: "Callable[[], Awaitable[dict]]"
+    ) -> tuple[dict, str | None]:
+        """单个源同步，独立超时预算。返回 (归一结果, 错误简述)。
+
+        all 模式下旧实现两源共享一个 5 分钟 wait_for，fuyao 全量可能耗尽
+        预算连累 tqquant；这里每个源各自计时。
+        """
+        try:
+            raw = await asyncio.wait_for(coro_factory(), timeout=SYNC_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            return {"status": "failed", "message": "同步超时 (5分钟)", "stocks": 0}, f"{label}: 超时"
+        except Exception as e:  # 单源异常不应拖垮另一源
+            return {"status": "failed", "message": str(e)[:200], "stocks": 0}, f"{label}: {str(e)[:100]}"
+
+        status = raw.get("status") if raw.get("status") in ("success", "failed") else "failed"
+        result = {
+            "status": status,
+            "message": raw.get("message") or raw.get("error", "") or "",
+            "stocks": raw.get("stocks", 0),
+        }
+        err = None if status == "success" else f"{label}: {result['message'] or '失败'}"
+        return result, err
+
+    async def _sync_all_sources(self, board_type: str) -> dict:
+        """all：两源独立超时并发执行，任一失败在 message 中体现。"""
+        from ..sync.board_sync import sync_fuyao_index, sync_tqquant
+
+        (fuyao_result, fuyao_err), (tdx_result, tdx_err) = await asyncio.gather(
+            self._run_source_sync("同花顺", lambda: sync_fuyao_index(board_type)),
+            self._run_source_sync("TDX-QUANT", lambda: sync_tqquant(board_type)),
+        )
+        errors = [e for e in (fuyao_err, tdx_err) if e]
+        stocks = fuyao_result["stocks"] + tdx_result["stocks"]
+        if not errors:
+            return {"status": "success", "message": f"两源均成功，共 {stocks} 条", "stocks": stocks}
+        # 至少一源成功 → failed 但 message 完整列出，不再静默吞掉 fuyao 失败。
+        return {"status": "failed", "message": "; ".join(errors), "stocks": stocks}
+
     async def _dispatch_sync(self, source: str, board_type: str) -> dict:
         """Dispatch sync to appropriate source."""
-        from src.unihive.sync.board_sync import sync_fuyao_index, sync_tqquant
+        from ..sync.board_sync import sync_fuyao_index, sync_tqquant
 
-        if source in ("all", "fuyao"):
-            result = await sync_fuyao_index(board_type)
-            if source == "fuyao":
-                return result
-        if source in ("all", "TDX", "tdxquant", "tqquant"):
-            result = await sync_tqquant(board_type)
+        if source == "all":
+            return await self._sync_all_sources(board_type)
+        if source == "fuyao":
+            result, _ = await self._run_source_sync("同花顺", lambda: sync_fuyao_index(board_type))
+            return result
+        if source in ("TDX", "tdxquant", "tqquant"):
+            result, _ = await self._run_source_sync("TDX-QUANT", lambda: sync_tqquant(board_type))
             return result
         return {"status": "failed", "message": f"Unknown source: {source}", "stocks": 0}
 
@@ -474,6 +535,8 @@ class OmniClient:
         """列出可用工具"""
         return [
             {"name": "omni_list_sectors", "description": "获取板块列表"},
+            {"name": "omni_list_tdx_sectors", "description": "获取通达信板块列表"},
+            {"name": "omni_list_ths_sectors", "description": "获取同花顺板块列表"},
             {"name": "omni_get_sector_stocks", "description": "获取板块成分股"},
             {"name": "omni_get_stock_sectors", "description": "获取股票所属板块"},
             {"name": "omni_search_board", "description": "搜索板块"},
@@ -507,6 +570,51 @@ class OmniClient:
             self._query_sectors_sync, source, board_type, keyword
         )
         return ToolResult(success=True, data=data, source=self.name)
+
+    async def _list_sectors_fixed_source(
+        self,
+        params: dict[str, Any],
+        source: str,
+        allowed_board_types: tuple[str, ...],
+    ) -> ToolResult:
+        """来源焊死的板块列表共用体（omni_list_tdx/ths_sectors 的薄别名）。
+
+        - 来源不在参数里：调用方硬传 source 一律 400（比静默忽略更防误用）；
+        - board_type 仅接受该来源支持的类型（THS 在 schema/实现两侧都没有
+          region/style）。查询本身复用 _query_sectors_sync，不复制 SQL。
+        """
+        if "source" in params:
+            raise ValueError(
+                f"本工具来源已固定为 {source}，不接受 source 参数；"
+                f"如需切换来源请用 omni_list_sectors"
+            )
+        board_type = (params.get("board_type", "all") or "all").strip()
+        if board_type not in ("all",) + allowed_board_types:
+            raise ValueError(
+                f"{source} 板块仅支持 {' / '.join(allowed_board_types)} / all，"
+                f"收到: {board_type!r}"
+            )
+        keyword = params.get("keyword", "")
+        data = await asyncio.to_thread(
+            self._query_sectors_sync, source, board_type, keyword
+        )
+        return ToolResult(success=True, data=data, source=self.name)
+
+    async def _tool_omni_list_tdx_sectors(
+        self, params: dict[str, Any]
+    ) -> ToolResult:
+        """获取通达信板块列表（来源固定 TDX，四类齐全）。"""
+        return await self._list_sectors_fixed_source(
+            params, "TDX", MCP_VALID_BOARD_TYPES
+        )
+
+    async def _tool_omni_list_ths_sectors(
+        self, params: dict[str, Any]
+    ) -> ToolResult:
+        """获取同花顺板块列表（来源固定 THS，仅行业/概念）。"""
+        return await self._list_sectors_fixed_source(
+            params, "THS", ("industry", "concept")
+        )
 
     def _query_sectors_sync(
         self, source: str | None, board_type: str, keyword: str

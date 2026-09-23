@@ -13,19 +13,18 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
 import yaml
 from datetime import datetime
 from pathlib import Path
-
-# 添加项目根目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from typing import Any
 
 from dotenv import load_dotenv
-from src.unihive.api.fuyao_client import FuyaoConfig, FuyaoClient
-from src.unihive.api.omni_client import OmniConfig, OmniClient
+from ..api.fuyao_client import FuyaoConfig, FuyaoClient
+from ..api.omni_client import OmniConfig, OmniClient
 
 # 加载 .env 文件
 load_dotenv()
@@ -39,20 +38,26 @@ def get_fuyao_api_key() -> str:
 DB_PATH = "./data/board.db"
 
 
-def get_board_type(code: str) -> str:
-    """根据 TDX 板块代码返回 board_type"""
-    if code.startswith("8800"):
-        return "style"
-    elif code.startswith("8802"):
-        return "region"
-    elif code.startswith("8803"):
-        return "industry"
-    elif code.startswith("8805") or code.startswith("8808") or code.startswith("8809"):
-        return "concept"
-    elif code.startswith("881"):
-        return "industry"
-    else:
-        return "industry"
+# 每日快照/条件情绪池：名称带时间指代（昨日/昨曾/近期/最近/近端/即将解禁/
+# 近已解禁），语义只相对于"今天"成立，同步后立刻开始过时，不属于静态板块。
+# 涨跌停等实时情绪池由 fuyao special_data 工具（涨停池/跌停池）提供，不入板块库。
+SNAPSHOT_NAME_RE = re.compile(r"昨|近期|最近|近端|即将解禁|近已解禁")
+
+
+def is_snapshot_sector(name: str) -> bool:
+    """判断是否为每日快照类条件板块（同步时排除，不入库）。"""
+    return bool(SNAPSHOT_NAME_RE.search(str(name or "")))
+
+
+# tqcenter get_stock_list 官方板块分类码 —— 板块类型直接取自接口本身,
+# 不再按板块代码前缀猜测:
+#   '11' 缺省行业板块 / '12' 概念板块 / '13' 风格板块 / '14' 地区板块
+TQ_SECTOR_CATEGORY_CODES: tuple[tuple[str, str], ...] = (
+    ("industry", "11"),
+    ("concept", "12"),
+    ("style", "13"),
+    ("region", "14"),
+)
 
 
 def is_a_share_code(code: str) -> bool:
@@ -159,6 +164,9 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_sector_stocks_code ON sector_stocks(stock_code)"
         )
 
+        # WAL 模式：读成分股与同步写库不再互斥（delete 模式下读会等写锁，
+        # 曾导致弹窗长时间转圈）。journal_mode 是数据库级持久属性，幂等设置。
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.commit()
     finally:
         conn.close()
@@ -274,7 +282,10 @@ async def sync_fuyao_index(board_type: str = "all") -> dict:
                                     (sector_id,)
                                 )
 
-                                # 批量插入成分股
+                                # 批量插入成分股；只统计实际入库的合法条目,
+                                # 被跳过的脏数据不计入 stock_count（旧实现用
+                                # len(stocks) 会虚高）。
+                                inserted = 0
                                 for rank, stock in enumerate(stocks, 1):
                                     stock_code = (
                                         stock.get("thscode", "")
@@ -294,18 +305,19 @@ async def sync_fuyao_index(board_type: str = "all") -> dict:
                                                     rank,
                                                 ),
                                             )
+                                            inserted += 1
                                         except sqlite3.IntegrityError:
                                             pass
 
                                 # 更新 stock_count
                                 conn.execute(
                                     "UPDATE sectors SET stock_count = ? WHERE id = ?",
-                                    (len(stocks), sector_id),
+                                    (inserted, sector_id),
                                 )
 
-                                total_stocks += len(stocks)
+                                total_stocks += inserted
                                 print(
-                                    f"    [{i+1}/{len(boards)}] {name}: {len(stocks)} 只股票"
+                                    f"    [{i+1}/{len(boards)}] {name}: {inserted} 只股票"
                                 )
 
                         except Exception as e:
@@ -331,13 +343,76 @@ async def sync_fuyao_index(board_type: str = "all") -> dict:
 
 
 
+async def _sync_one_tq_sector(
+    conn: sqlite3.Connection,
+    client: Any,
+    code: str,
+    name: str,
+    board_type: str,
+) -> int:
+    """同步单个板块：取成分股 → UPSERT 板块（类型来自官方分类）→ 重建成分股。
+
+    返回成分股条数。板块按 (source='TDX', code) 唯一匹配，已存在时 UPDATE
+    会连带校正 board_type（修复旧版按代码前缀误判的归类）。
+    """
+    stocks_result = await client.call_tool(
+        "get_stock_list_in_sector", {"block_code": code, "list_type": 1}
+    )
+    stocks = (
+        stocks_result.data
+        if stocks_result and stocks_result.success and stocks_result.data
+        else []
+    )
+    stock_count = len(stocks) if stocks else 0
+
+    existing = conn.execute(
+        "SELECT id FROM sectors WHERE source = 'TDX' AND code = ?",
+        (code,),
+    ).fetchone()
+
+    if existing:
+        sector_id = existing["id"]
+        conn.execute(
+            "UPDATE sectors SET name = ?, board_type = ?, stock_count = ?, "
+            "update_time = datetime('now') WHERE id = ?",
+            (name, board_type, stock_count, sector_id),
+        )
+    else:
+        cursor = conn.execute(
+            "INSERT INTO sectors (source, board_type, code, name, stock_count) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("TDX", board_type, code, name, stock_count),
+        )
+        sector_id = cursor.lastrowid
+
+    # 先清空该板块旧成分股，再写入本次清单
+    conn.execute(
+        "DELETE FROM sector_stocks WHERE sector_id = ?",
+        (sector_id,),
+    )
+    for rank, stock in enumerate(stocks, 1):
+        stock_code_6, stock_name = normalize_stock_entry(stock)
+        if not is_a_share_code(stock_code_6):
+            continue
+        try:
+            conn.execute(
+                "INSERT INTO sector_stocks (sector_id, stock_code, stock_name, rank) "
+                "VALUES (?, ?, ?, ?)",
+                (sector_id, stock_code_6, stock_name, rank),
+            )
+        except sqlite3.IntegrityError:
+            pass
+    return stock_count
+
+
 async def sync_tqquant(board_type: str = "all") -> dict:
     """从 TQ-Quant (通达信客户端) 同步板块数据
 
-    使用 tdx_quant 上游客户端获取板块数据
+    板块清单按官方分类接口 tq.get_stock_list('11'/'12'/'13'/'14') 逐类型
+    获取，板块类型即接口给定的分类，不按代码前缀判断。
 
     Args:
-        board_type: industry / concept / all
+        board_type: industry / concept / style / region / all
 
     Returns:
         sync result dict
@@ -354,16 +429,17 @@ async def sync_tqquant(board_type: str = "all") -> dict:
         tdx_cfg = config.get("upstreams", {}).get("tdx_quant", {})
         if not tdx_cfg:
             return {
+                "status": "failed",
+                "message": "tdx_quant 未在 upstreams.yaml 中配置",
                 "source": "TDX",
                 "board_type": board_type,
                 "sectors": 0,
                 "stocks": 0,
-                "error": "tdx_quant 未在 upstreams.yaml 中配置",
             }
 
         # 初始化 TDX 客户端
-        from src.unihive.api.tdx_quant_client import TdxQuantClient
-        from src.unihive.models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
+        from ..api.tdx_quant_client import TdxQuantClient
+        from ..models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
         settings = TdxQuantSettings(
             tdx_root=tdx_cfg.get("tdx_root", "D:/new_tdx_mock"),
             strategy_id=tdx_cfg.get("strategy_id", "unihive_gateway"),
@@ -378,212 +454,92 @@ async def sync_tqquant(board_type: str = "all") -> dict:
 
     except Exception as e:
         return {
+            "status": "failed",
+            "message": f"创建 tdx_quant 客户端失败: {e}",
             "source": "TDX",
             "board_type": board_type,
             "sectors": 0,
             "stocks": 0,
-            "error": f"创建 tdx_quant 客户端失败: {e}",
         }
 
+    # 本次要同步的板块类型：board_type=all → 全部 4 类，否则只同步指定类型
+    categories = [
+        (bt, tq_code)
+        for bt, tq_code in TQ_SECTOR_CATEGORY_CODES
+        if board_type == "all" or board_type == bt
+    ]
+    if not categories:
+        await client.stop()
+        return {
+            "status": "failed",
+            "message": f"不支持的板块类型: {board_type}",
+            "stocks": 0,
+        }
+
+    conn = get_db_connection()
     try:
-        # 调用 get_sector_list 获取板块列表
-        result = await client.call_tool("get_sector_list", {"list_type": 1})
+        # 清理历史已入库的每日快照板块（及其成分股）。直接扫库按名称识别,
+        # 不依赖 get_sector_list 清单；分两步显式删除, 不依赖默认关闭的
+        # 外键级联。无论本次同步哪一类型都全量清理。
+        rows = conn.execute(
+            "SELECT id, name FROM sectors WHERE source = 'TDX'"
+        ).fetchall()
+        snapshot_ids = [
+            row["id"] for row in rows if is_snapshot_sector(row["name"])
+        ]
+        if snapshot_ids:
+            placeholders = ",".join("?" * len(snapshot_ids))
+            conn.execute(
+                f"DELETE FROM sector_stocks WHERE sector_id IN ({placeholders})",
+                snapshot_ids,
+            )
+            conn.execute(
+                f"DELETE FROM sectors WHERE id IN ({placeholders})",
+                snapshot_ids,
+            )
+            conn.commit()
 
-        if result is None:
-            return {
-                "source": "TDX",
-                "board_type": board_type,
-                "sectors": 0,
-                "stocks": 0,
-                "error": "获取板块列表返回为空，请检查通达信客户端是否开启",
-            }
+        # 逐类型调官方分类接口：板块类型即接口分类，不看代码前缀
+        for bt, tq_code in categories:
+            result = await client.call_tool(
+                "get_stock_list", {"market": tq_code, "list_type": 1}
+            )
 
-        if not result.success or not result.data:
-            err_msg = result.error if result and hasattr(result, 'error') else 'Unknown error'
-            return {
-                "source": "TDX",
-                "board_type": board_type,
-                "sectors": 0,
-                "stocks": 0,
-                "error": f"获取板块列表失败: {err_msg}",
-            }
-
-        all_sectors = result.data if isinstance(result.data, list) else []
-
-        if not all_sectors:
-            return {
-                "source": "TDX",
-                "board_type": board_type,
-                "sectors": 0,
-                "stocks": 0,
-                "error": "获取板块列表为空，请确保通达信客户端已打开",
-            }
-
-        # 分类板块
-        industry_sectors = []
-        concept_sectors = []
-
-        for item in all_sectors:
-            code = item.get("Code", "") or item.get("code", "")
-            name = item.get("Name", "") or item.get("name", "")
-
-            if not code or not name:
+            if not result or not result.success or not result.data:
+                err_msg = result.error if result else "无返回"
+                print(f"  获取 {bt} 板块列表失败: {err_msg}")
                 continue
 
-            # 根据代码前缀分类
-            bt = get_board_type(code)
-            if bt == "industry":
-                industry_sectors.append({"code": code, "name": name})
-            else:
-                # style, region, concept 都归为 concept_sectors
-                concept_sectors.append({"code": code, "name": name})
+            sector_items = result.data if isinstance(result.data, list) else []
+            print(f"  {bt}: {len(sector_items)} 个板块")
 
-        print(f"    找到 {len(industry_sectors)} 个行业板块, {len(concept_sectors)} 个概念板块")
+            for item in sector_items:
+                code = item.get("Code", "") or item.get("code", "")
+                name = item.get("Name", "") or item.get("name", "")
 
-        conn = get_db_connection()
-        try:
-            # 同步行业板块 (如果指定)
-            if board_type in ("all", "industry") and industry_sectors:
+                if not code or not name:
+                    continue
+                # 双保险：官方分类清单若混入快照情绪池，也不入库
+                if is_snapshot_sector(name):
+                    continue
+
                 try:
-                    for sector in industry_sectors:
-                        code = sector["code"]
-                        name = sector["name"]
-
-                        # 获取成分股
-                        try:
-                            stocks_result = await client.call_tool("get_stock_list_in_sector", {"block_code": code, "list_type": 1})
-                            stocks = stocks_result.data if stocks_result and stocks_result.success and stocks_result.data else []
-                            stock_count = len(stocks) if stocks else 0
-
-                            # UPSERT 板块：检查存在则更新，不存在则插入
-                            cursor_check = conn.execute(
-                                "SELECT id FROM sectors WHERE source = 'TDX' AND code = ?",
-                                (code,)
-                            )
-                            existing = cursor_check.fetchone()
-
-                            if existing:
-                                sector_id = existing["id"]
-                                conn.execute(
-                                    "UPDATE sectors SET name = ?, stock_count = ?, update_time = datetime('now') WHERE id = ?",
-                                    (name, stock_count, sector_id)
-                                )
-                            else:
-                                bt = get_board_type(code)
-                                cursor = conn.execute(
-                                    "INSERT INTO sectors (source, board_type, code, name, stock_count) VALUES (?, ?, ?, ?, ?)",
-                                    ("TDX", bt, code, name, stock_count),
-                                )
-                                sector_id = cursor.lastrowid
-
-                            # 先删除该板块的所有旧成分股
-                            conn.execute(
-                                "DELETE FROM sector_stocks WHERE sector_id = ?",
-                                (sector_id,)
-                            )
-
-                            if stocks:
-                                for rank, stock in enumerate(stocks, 1):
-                                    stock_code_6, stock_name = normalize_stock_entry(stock)
-                                    if not is_a_share_code(stock_code_6):
-                                        continue
-                                    try:
-                                        conn.execute(
-                                            "INSERT INTO sector_stocks (sector_id, stock_code, stock_name, rank) VALUES (?, ?, ?, ?)",
-                                            (sector_id, stock_code_6, stock_name, rank),
-                                        )
-                                    except sqlite3.IntegrityError:
-                                        pass
-
-                            total_sectors += 1
-                            total_stocks += stock_count
-                            print(f"    {name}: {stock_count} 只股票")
-
-                        except Exception as e:
-                            print(f"      拉取 {name} 成分股失败: {e}")
-                            continue
-
-                    conn.commit()
-
+                    stock_count = await _sync_one_tq_sector(
+                        conn, client, code, name, bt
+                    )
                 except Exception as e:
-                    print(f"  同步行业板块失败: {e}")
+                    print(f"      同步 {name} 失败: {e}")
+                    continue
 
-            # 同步概念板块 (如果指定)
-            if board_type in ("all", "concept") and concept_sectors:
-                try:
-                    for sector in concept_sectors:
-                        code = sector["code"]
-                        name = sector["name"]
+                total_sectors += 1
+                total_stocks += stock_count
+                print(f"    [{bt}] {name}: {stock_count} 只股票")
 
-                        # 获取成分股
-                        try:
-                            stocks_result = await client.call_tool("get_stock_list_in_sector", {"block_code": code, "list_type": 1})
-                            stocks = stocks_result.data if stocks_result and stocks_result.success and stocks_result.data else []
-                            stock_count = len(stocks) if stocks else 0
+            conn.commit()
 
-                            # UPSERT 板块
-                            cursor_check = conn.execute(
-                                "SELECT id FROM sectors WHERE source = 'TDX' AND code = ?",
-                                (code,)
-                            )
-                            existing = cursor_check.fetchone()
-
-                            if existing:
-                                sector_id = existing["id"]
-                                conn.execute(
-                                    "UPDATE sectors SET name = ?, stock_count = ?, update_time = datetime('now') WHERE id = ?",
-                                    (name, stock_count, sector_id)
-                                )
-                            else:
-                                bt = get_board_type(code)
-                                cursor = conn.execute(
-                                    "INSERT INTO sectors (source, board_type, code, name, stock_count) VALUES (?, ?, ?, ?, ?)",
-                                    ("TDX", bt, code, name, stock_count),
-                                )
-                                sector_id = cursor.lastrowid
-
-                            # 先删除该板块的所有旧成分股
-                            conn.execute(
-                                "DELETE FROM sector_stocks WHERE sector_id = ?",
-                                (sector_id,)
-                            )
-
-                            if stocks:
-                                for rank, stock in enumerate(stocks, 1):
-                                    stock_code_6, stock_name = normalize_stock_entry(stock)
-                                    if not is_a_share_code(stock_code_6):
-                                        continue
-                                    try:
-                                        conn.execute(
-                                            "INSERT INTO sector_stocks (sector_id, stock_code, stock_name, rank) VALUES (?, ?, ?, ?)",
-                                            (sector_id, stock_code_6, stock_name, rank),
-                                        )
-                                    except sqlite3.IntegrityError:
-                                        pass
-
-                            total_sectors += 1
-                            total_stocks += stock_count
-                            print(f"    {name}: {stock_count} 只股票")
-
-                        except Exception as e:
-                            print(f"      拉取 {name} 成分股失败: {e}")
-                            continue
-
-                    conn.commit()
-
-                except Exception as e:
-                    print(f"  同步概念板块失败: {e}")
-
-        finally:
-            conn.close()
-            await client.stop()
-
-    except Exception as e:
-        try:
-            await client.stop()
-        except Exception:
-            pass  # Ignore errors during cleanup
-        return {"status": "failed", "message": str(e), "stocks": 0}
+    finally:
+        conn.close()
+        await client.stop()
 
     if total_sectors > 0 or total_stocks > 0:
         return {"status": "success", "message": f"Synced {total_sectors} sectors, {total_stocks} stocks", "stocks": total_stocks}
@@ -605,7 +561,7 @@ async def main():
         "--type",
         type=str,
         default="all",
-        choices=["all", "industry", "concept"],
+        choices=["all", "industry", "concept", "style", "region"],
         help="板块类型",
     )
     parser.add_argument(
