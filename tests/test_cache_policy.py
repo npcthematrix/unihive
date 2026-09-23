@@ -1111,7 +1111,9 @@ def _factory_ttl_config() -> dict:
 class TestEffectiveTtl:
     """effective_ttl 三档解析。"""
 
-    TODAY = date(2026, 9, 21)
+    # 与 _IN_SESSION_NOW 同日（周一 2026-09-14 10:00）：effective_ttl 的
+    # 冻结判定与时段判定都以 now 为准，TODAY 必须就是冻结时钟的日历日。
+    TODAY = date(2026, 9, 14)
 
     def test_past_special_data_promoted_to_immutable(self):
         cfg = _factory_ttl_config()

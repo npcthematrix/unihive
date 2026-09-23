@@ -336,7 +336,10 @@ def effective_ttl(
     override = fuyao_ttl_for(config, tool_name)
     if override is not None:
         return override
-    if ttl_key in _FREEZABLE_TTL_KEYS and is_frozen_snapshot(params):
+    # now 显式给定时（测试冻结时钟），"今天"也以其为准；否则冻结判定走
+    # 真实日历、时段判定走冻结时钟，两套口径会让用例随时钟腐烂。
+    frozen_today = shanghai_today(now) if now is not None else None
+    if ttl_key in _FREEZABLE_TTL_KEYS and is_frozen_snapshot(params, today=frozen_today):
         frozen = ttl_for(config, HISTORICAL_IMMUTABLE_KEY)
         if frozen is not None:
             return frozen
