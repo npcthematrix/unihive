@@ -169,7 +169,9 @@ upstreams:
     enabled: true
     description: "同花顺 thsdk (社区 panghu11033/thsdk 包): 游客/账号登录, 16 只读工具常驻；自选写工具仅 ALLOW_WATCHLIST_WRITE=true 时注册"
     type: "thsdk"
-    call_timeout_sec: 30
+    # 必须 ≤ routing.per_upstream_timeout（10s）：网关据此给 hq.dll 注入原生
+    # timeout_ms（留 1s 余量），网络瞬断时 DLL 先自返回，不靠路由取消留僵尸。
+    call_timeout_sec: 10
     throttle_ms: 60
     capabilities:
       - market_data

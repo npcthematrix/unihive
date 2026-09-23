@@ -34,6 +34,7 @@ from ..models.thsdk_config import (
     PASSWORD_ENV,
     ThsdkConfig,
     USERNAME_ENV,
+    resolve_thsdk_call_timeout,  # re-export; 测试与 facade 历史路径依赖
 )
 from .upstream_client import ToolResult, UpstreamStatus
 from ..core.blocking_pool import get_thsdk_executor
@@ -43,12 +44,6 @@ logger = logging.getLogger(__name__)
 # 注入给 hq.dll 的原生超时相对 asyncio 超时的余量：DLL 先返回（干净的超时
 # 错误），路由 wait_for 后到期，避免取消后留下僵尸线程。
 _NATIVE_TIMEOUT_MARGIN_SEC = 1.0
-
-# 客户端 asyncio 超时相对路由 per_upstream_timeout 的余量：必须保证
-# "原生超时 < 客户端超时 < 路由超时"，否则路由先取消 call_tool
-# （CancelledError 是 BaseException，客户端 except Exception 捕获不到，
-#  熔断计数会失明）。
-_CLIENT_TIMEOUT_MARGIN_SEC = 1.0
 
 # 熔断：连续超时达到阈值即熔断快速失败；冷却后半开放一个探针调用。
 _CB_FAILURE_THRESHOLD = 3
@@ -67,21 +62,6 @@ _TIMEOUT_ERROR_CODES = frozenset(
     }
 )
 
-
-def resolve_thsdk_call_timeout(
-    configured_sec: float, router_timeout_sec: float | None
-) -> float:
-    """钳制客户端超时到路由预算内（保证小于路由超时）。
-
-    2026-09-22 事故实证：config.db 里旧值 30s、路由 10s，注入的原生超时
-    变成 29s，板块调用 DLL 不先返回，路由取消后单 worker 僵尸、全线超时。
-    """
-    if router_timeout_sec is None:
-        return float(configured_sec)
-    return min(
-        float(configured_sec),
-        max(1.0, float(router_timeout_sec) - _CLIENT_TIMEOUT_MARGIN_SEC),
-    )
 
 # ---- 原生枚举的网关入参名 → 数值（对照 thsdk.constants，3.0.0）----
 # 网关对外只收字符串名，不泄漏 IntEnum 数字；未知名 fail-fast。

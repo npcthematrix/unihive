@@ -305,6 +305,14 @@ class LifecycleMixin:
             # upstreams dict; 与 stop() 末尾对齐, 这里一并复位。
             from ..utils.proxy_api import reset_proxy_api
             reset_proxy_api()
+            # 初始化失败路径同样关停阻塞执行器：thsdk 可能已启动，专用池
+            # 的 daemon 线程虽不阻塞进程退出，但同进程重试会复用旧池残留状态。
+            from ..core.blocking_pool import (
+                shutdown_blocking_executor,
+                shutdown_thsdk_executor,
+            )
+            shutdown_blocking_executor()
+            shutdown_thsdk_executor()
             # M1 (2026-09-07 audit): 半构造的 router / mcp 也归零, 否则后续
             # get_server_status / 路由调用拿到指向未完全初始化对象的引用。
             self.router = None
@@ -422,8 +430,12 @@ class LifecycleMixin:
             # 关闭阻塞上游调用专用线程池 (2026-09-15 MCP 二次审视 M2):
             # 在 upstream 客户端之后关闭, 避免它们还在 await run_in_executor 时被强杀。
             # shutdown_blocking_executor 是模块级单例, 显式调用避免 atexit 依赖 (stdio 下不可靠)。
-            from ..core.blocking_pool import shutdown_blocking_executor
+            from ..core.blocking_pool import (
+                shutdown_blocking_executor,
+                shutdown_thsdk_executor,
+            )
             shutdown_blocking_executor()
+            shutdown_thsdk_executor()
 
             # 关闭缓存
             if self.cache:

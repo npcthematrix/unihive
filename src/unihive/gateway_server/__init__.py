@@ -127,9 +127,7 @@ class GatewayServer(
             # L3 (round 10 audit): 必须用锚定后的 self.config_path 而非原始
             # config_path 参数 — 后者锚定 CWD, yaml 逃生模式 FileNotFoundError,
             # db 预检基线落空则空库首启拿不到出厂模板。
-            self.config = load_config(
-                str(self.config_path), strict_env=strict_env
-            )
+            self.config = load_config(str(self.config_path), strict_env=strict_env)
 
             # Load config.yaml and merge (config.yaml takes precedence for
             # overlapping keys). M1/L1 语义见 load_config_yaml_overlay:
@@ -328,7 +326,9 @@ class GatewayServer(
             return OmniClient(omni_cfg)
         if cfg.get("type") == "thsdk":
             # THSDK（社区 thsdk 包）客户端；凭证只从环境变量读
-            thsdk_cfg = ThsdkConfig.from_dict(name, cfg)
+            # call_timeout 在 from_dict 内钳制进路由预算，防 config.db 旧 30s 值
+            # 反超路由 10s 致路由先取消、单 worker 僵尸。
+            thsdk_cfg = ThsdkConfig.from_dict(name, cfg, self._per_upstream_timeout)
             return ThsdkClient(thsdk_cfg)
         if cfg.get("type") == "ths_local_gateway":
             # THS-LOCAL-GATEWAY HTTP JSON-RPC MCP 客户端
