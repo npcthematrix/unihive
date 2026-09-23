@@ -12,7 +12,7 @@ from ..api.omni_client import OmniClient
 from ..core import registry
 from ..storage.config_store import ConfigStore
 
-from ._helpers import RESERVED_TOOL_NAMES
+from ._helpers import RESERVED_TOOL_NAMES, switch_runtime_locked
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,6 @@ class ConfigEditsMixin:
             apply_tool_patch,
             contract_fields_in_patch,
         )
-        from ..core.tool_loader import filter_specs_by_env
         from ..utils import console_api as _ca
 
         store = self.config_store
@@ -123,16 +122,9 @@ class ConfigEditsMixin:
             previously_published = old_name in self._published_tools
 
             # 1) 切运行态: live config / env 门控 spec / hidden 集 / router。
-            self.config = candidate
-            _ca.set_config(candidate)
-            self.tool_specs = candidate_specs
-            self._db_hidden_tools = candidate_hidden
-            if self.router is not None:
-                self.router.routing_config = candidate.get("routing", {})
-                self.router.upstream_tool_mapping = candidate.get(
-                    "upstream_tool_mapping", {}
-                )
-                self.router.replace_tool_specs(candidate_specs)
+            switch_runtime_locked(
+                self, candidate, candidate_specs, candidate_hidden
+            )
 
             # 2) provider 换工具: 先摘旧名 (KeyError 幂等), 再注册候选。
             if previously_published:
@@ -222,14 +214,7 @@ class ConfigEditsMixin:
         不做 IO 写; bootstrap 仅在正常启动路径 (有 config_path) 时合并,
         __new__ 旁路 __init__ 的测试场景自动跳过。
         """
-        from ..core.db_assembler import (
-            assemble_config,
-            entities_from_json,
-            merge_bootstrap,
-        )
-        from ..core.template_normalize import load_raw_config
-        from ..core.tool_loader import filter_specs_by_env
-        from ..utils.config_loader import resolve_env_vars
+        from ..core.config_db import assemble_runtime_candidate
 
         row_keys = (
             "name",
@@ -251,21 +236,13 @@ class ConfigEditsMixin:
                 }
                 break
 
-        template = entities_from_json(cand_bundle)
-        candidate = assemble_config(template)
-        config_path = getattr(self, "config_path", None)
-        if config_path is not None:
-            merge_bootstrap(
-                candidate, load_raw_config(config_path.parent / "config.yaml")
-            )
-        candidate, _missing = resolve_env_vars(
-            candidate, strict=bool(getattr(self, "_strict_env", False))
+        # 装配链 (entities → assemble → bootstrap → env 解析 → env 门控 →
+        # hidden 集) 与启动/升级共用同一实现, 避免两处漂移。
+        return assemble_runtime_candidate(
+            cand_bundle,
+            config_path=getattr(self, "config_path", None),
+            strict_env=bool(getattr(self, "_strict_env", False)),
         )
-        candidate_specs = filter_specs_by_env(list(candidate.get("tools") or []))
-        hidden = {
-            tool.name for tool in template.tools if tool.publish_mode == "hidden"
-        }
-        return candidate, candidate_specs, hidden
 
     def _rollback_tool_edit_locked(
         self,
@@ -292,16 +269,7 @@ class ConfigEditsMixin:
                 pass
             self._published_tools.discard(new_name)
 
-        self.config = old_config
-        _ca.set_config(old_config)
-        self.tool_specs = old_specs
-        self._db_hidden_tools = old_hidden
-        if self.router is not None:
-            self.router.routing_config = old_config.get("routing", {})
-            self.router.upstream_tool_mapping = old_config.get(
-                "upstream_tool_mapping", {}
-            )
-            self.router.replace_tool_specs(old_specs)
+        switch_runtime_locked(self, old_config, old_specs, old_hidden)
 
         if previously_published:
             old_spec = next(

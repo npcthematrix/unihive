@@ -524,16 +524,3 @@ class Cache:
             self._engine = None
             self._session_factory = None
             logger.info("Cache closed")
-
-    @staticmethod
-    def _create_cache_table_sql() -> str:
-        """创建缓存表的 SQL"""
-        return """
-            CREATE TABLE IF NOT EXISTS cache (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                expires_at INTEGER,
-                created_at INTEGER NOT NULL,
-                INDEX idx_expires_at (expires_at)
-            )
-        """

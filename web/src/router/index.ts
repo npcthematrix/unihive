@@ -25,7 +25,7 @@ const routes: RouteRecordRaw[] = [
         path: 'l1-cache',
         name: 'l1-cache',
         component: () => import('@/views/L1CacheView.vue'),
-        meta: { title: '网关缓存监控' },
+        meta: { title: '网关运行监控' },
       },
       {
         path: 'interfaces',

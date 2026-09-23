@@ -66,14 +66,10 @@ class McpToolsMixin:
             on_constructed=_on_constructed,
         )
 
-    def _register_tools(self, specs: list[dict] | None = None):
+    def _register_tools(self, specs: list[dict]):
         # 特殊工具：手写（带特殊逻辑或网关内部）
         self._register_status_tools()
 
-        # 通用工具：合并手工 tools 与生成的 tools_tdx_quant.yaml
-        if specs is None:
-            specs = self._load_all_tools()
-            self.tool_specs = specs
         if specs:
             # validate 对全量 spec 生效 —— 配置写错与上游是否启用无关,
             # 禁用上游不能把 routing/mapping 配置错误静默藏起来。

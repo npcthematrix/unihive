@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  *
  * vi.mock factory 会 hoisted 到顶, 顶层 const 不能直接引用;
  * 我们把"测试句柄"放回 factory 内的 vi.hoisted 闭包中。
+ *
+ * Vitest 5: 模块求值阶段 (import 时 axios.create / response.use) 产生的
+ * mock.calls 不体现在测试侧句柄上 (模块图与测试 worker 分 realm)。
+ * 因此根 beforeEach 先 resetModules(), 再在测试上下文内动态 import
+ * '@/api/client', 模块加载期的调用即被正常记录; 所有 axios mock fn
+ * 必须放在 h 里跨 factory 重跑共享, 顶层 stale 的 `axios` 句柄才仍有效。
  */
 
 const h = vi.hoisted(() => {
@@ -19,9 +25,10 @@ const h = vi.hoisted(() => {
       request: { use: vi.fn() },
       response: { use: mockUseResponse },
     },
-    isAxiosError: vi.fn(),
   }
   const mockIsCancel = vi.fn(() => false)
+  const mockCreate = vi.fn(() => mockAxiosInstance)
+  const mockIsAxiosError = vi.fn()
   return {
     mockAuthClear,
     mockRouterReplace,
@@ -29,6 +36,8 @@ const h = vi.hoisted(() => {
     mockUseResponse,
     mockAxiosInstance,
     mockIsCancel,
+    mockCreate,
+    mockIsAxiosError,
   }
 })
 
@@ -47,20 +56,32 @@ vi.mock('@/router', () => ({
 
 vi.mock('axios', () => ({
   default: {
-    create: vi.fn(() => h.mockAxiosInstance),
-    isAxiosError: vi.fn(),
+    create: h.mockCreate,
+    isAxiosError: h.mockIsAxiosError,
     isCancel: h.mockIsCancel,
   },
 }))
 
 import axios from 'axios'
-import {
-  _shouldRetry,
-  errorMessage,
-  gatewayUnavailableMessage,
-  http,
-  isCanceledError,
-} from '@/api/client'
+
+type ClientExports = typeof import('@/api/client')
+let http: ClientExports['http']
+let _shouldRetry: ClientExports['_shouldRetry']
+let errorMessage: ClientExports['errorMessage']
+let gatewayUnavailableMessage: ClientExports['gatewayUnavailableMessage']
+let isCanceledError: ClientExports['isCanceledError']
+
+// 每个用例重新加载 client 模块 (见文件头 Vitest 5 realm 说明)
+beforeEach(async () => {
+  vi.clearAllMocks()
+  vi.resetModules()
+  const mod = await import('@/api/client')
+  http = mod.http
+  _shouldRetry = mod._shouldRetry
+  errorMessage = mod.errorMessage
+  gatewayUnavailableMessage = mod.gatewayUnavailableMessage
+  isCanceledError = mod.isCanceledError
+})
 
 describe('http 实例 + 401 拦截器', () => {
   beforeEach(() => {

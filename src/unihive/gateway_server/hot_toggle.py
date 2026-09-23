@@ -219,19 +219,14 @@ class HotToggleMixin:
             raise RuntimeError(f"runtime toggle {name!r} partial failure: {detail}")
 
     async def _attach_upstream_client_locked(self, name: str, cfg: dict):
-        """构造+启动 client 并切换 console_api 的 omni 指针。返回 client, connected。"""
-        # live 块里可能是未解析的 ${VAR} 占位 (禁用上游按设计只在库内保留
-        # 占位)。不解析就构造 client 会把字面量占位当凭证 → 确定性 401。
-        from ..utils.config_loader import resolve_env_vars
+        """用已解析 live 块构造+启动 client 并切换 console_api omni 指针。
 
-        resolved, missing_env = resolve_env_vars(cfg, strict=False)
-        if missing_env:
-            raise ValueError(
-                f"upstream {name!r} env var(s) not set in the gateway "
-                f"environment: {', '.join(missing_env)}"
-            )
-        client = self._construct_upstream_client(name, resolved)
-        connected = await self._start_upstream_client(name, resolved, client)
+        返回 client, connected。调用方负责先解析 ``${VAR}`` —— 热开关路径经
+        ``_resolve_live_block_locked``、升级路径经 ``assemble_runtime_candidate``
+        (其内部跑 resolve_env_vars); 这里不再重复解析。
+        """
+        client = self._construct_upstream_client(name, cfg)
+        connected = await self._start_upstream_client(name, cfg, client)
         if isinstance(client, OmniClient):
             from ..utils import console_api as _ca
 
@@ -284,10 +279,9 @@ class HotToggleMixin:
         errors: list[str] = []
         _, to_remove = self._toggle_tool_diff_locked(name)
         tools_removed = self._unpublish_tools_locked(to_remove, errors)
-        if errors:
-            # 有工具没摘下来: 保留 client, 让残存发布的工具仍可服务;
-            # 下次同态点击 (reconcile) 重试摘除, 避免半残废状态。
-            self._raise_if_toggle_errors(name, errors)
+        # 有工具没摘下来: raise 先于 detach, 保留 client 让残存发布的工具仍可
+        # 服务; 下次同态点击 (reconcile) 重试摘除, 避免半残废状态。
+        self._raise_if_toggle_errors(name, errors)
         await self._detach_upstream_client_locked(name)
         logger.info(
             "Upstream %s disabled: tools_removed=%d", name, len(tools_removed)
@@ -310,10 +304,11 @@ class HotToggleMixin:
         (HTTP 500/yaml 已落盘), 这里补做漂移: 缺发布的工具补发、应消失的
         工具补摘、缺失/残留的 client 补连/补断, 让前端的同态重试真正自愈。
         """
-        errors: list[str] = []
+        add_errors: list[str] = []
+        remove_errors: list[str] = []
         to_add, to_remove = self._toggle_tool_diff_locked(name)
         existing = self.upstreams.get(name)
-        client_attached = False
+        client_changed = False
 
         if enabled:
             if existing is None:
@@ -321,27 +316,31 @@ class HotToggleMixin:
                 existing, _ = await self._attach_upstream_client_locked(
                     name, live_block
                 )
-                client_attached = True
+                client_changed = True
             connected = bool(existing is not None and existing.is_available)
-            tools_added = self._publish_tools_locked(to_add, errors)
-            tools_removed = self._unpublish_tools_locked(to_remove, errors)
+            tools_added = self._publish_tools_locked(to_add, add_errors)
+            tools_removed = self._unpublish_tools_locked(to_remove, remove_errors)
         else:
-            tools_added = self._publish_tools_locked(to_add, errors)
-            tools_removed = self._unpublish_tools_locked(to_remove, errors)
-            if existing is not None and not errors:
+            # to_add: 多 backer 工具失去本上游后仍可经其他启用 backer 发布,
+            # 属合法补发; to_remove: 失去全部 backer 的工具补摘。
+            tools_added = self._publish_tools_locked(to_add, add_errors)
+            tools_removed = self._unpublish_tools_locked(to_remove, remove_errors)
+            # detach 只由 unpublish 失败门控: 不相关的补发失败不得永久卡住
+            # 禁用 client 的摘除 (旧实现共用一个 errors 列表会误挡)。
+            if existing is not None and not remove_errors:
                 await self._detach_upstream_client_locked(name)
-                client_attached = True
+                client_changed = True
             connected = False
 
-        self._raise_if_toggle_errors(name, errors)
-        healed = bool(tools_added or tools_removed or client_attached)
+        self._raise_if_toggle_errors(name, add_errors + remove_errors)
+        healed = bool(tools_added or tools_removed or client_changed)
         if healed:
             logger.info(
-                "Upstream %s reconcile: added=%d removed=%d client_attached=%s",
+                "Upstream %s reconcile: added=%d removed=%d client_changed=%s",
                 name,
                 len(tools_added),
                 len(tools_removed),
-                client_attached,
+                client_changed,
             )
         return {
             "name": name,

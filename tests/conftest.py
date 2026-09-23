@@ -4,6 +4,7 @@
 import asyncio
 import os
 import sys
+from collections import deque
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,9 @@ def gateway_server_minimal():
     server._health_task = None
     server._running = False
     server._initialized = False
+    # /api/runtime 运行态字段 (见 gateway_server __init__)
+    server._started_monotonic = None
+    server._call_timestamps = deque()
     return server
 
 

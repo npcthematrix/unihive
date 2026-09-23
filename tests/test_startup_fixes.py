@@ -6,6 +6,7 @@ Covers:
 - #2 console_server.load_config delegates to config_loader + masks secrets
 """
 import asyncio
+from collections import deque
 from unittest.mock import patch
 
 import pytest
@@ -519,6 +520,8 @@ class TestStopResetsStateForRestart:
         server._shutdown_event = asyncio.Event()
         server._requests_lock = asyncio.Lock()
         server._active_requests = 0
+        server._started_monotonic = None
+        server._call_timestamps = deque()
         server._running = True
 
         stopped_clients = []
@@ -550,6 +553,8 @@ class TestStopResetsStateForRestart:
         server._shutdown_event = asyncio.Event()
         server._requests_lock = asyncio.Lock()
         server._active_requests = 0
+        server._started_monotonic = None
+        server._call_timestamps = deque()
         server._running = True
         server.router = object()
         server.mcp = object()
@@ -571,6 +576,8 @@ class TestStopResetsStateForRestart:
         server._shutdown_event = asyncio.Event()
         server._requests_lock = asyncio.Lock()
         server._active_requests = 0
+        server._started_monotonic = None
+        server._call_timestamps = deque()
         server._running = True
         server._initialized = True
 

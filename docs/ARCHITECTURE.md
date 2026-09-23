@@ -361,7 +361,7 @@ UniHive 网关在 MCP 初始化时必须声明 capabilities：
     },
     "resources": {
       "description": "管理控制台 Web UI",
-      "endpoints": ["/", "/api/status", "/api/interfaces", "/api/config", "/api/mcp-tools-list"]
+      "endpoints": ["/", "/api/status", "/api/interfaces", "/api/config", "/api/mcp-browser/tools"]
     }
   }
 }
@@ -381,7 +381,7 @@ UniHive 网关在 MCP 初始化时必须声明 capabilities：
 
 #### 工具版本兼容性
 - 调用方应使用 `server.capabilities.tools` 中的信息做能力发现
-- 不应硬编码工具列表，应动态从 `/api/mcp-tools-list` 获取
+- 不应硬编码工具列表，应动态从 MCP `tools/list`（控制台浏览经 `/api/mcp-browser/*`）获取
 - major version 变更前至少 2 个 minor version 提前标记 `deprecated: true`
 
 #### 响应格式兼容性

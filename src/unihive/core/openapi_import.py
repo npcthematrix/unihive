@@ -143,10 +143,6 @@ class ImportPlan:
     def unchanged(self) -> tuple[ImportToolChange, ...]:
         return tuple(c for c in self.changes if c.action == ACTION_UNCHANGED)
 
-    @property
-    def has_changes(self) -> bool:
-        return bool(self.added or self.changed)
-
     def change_entities(
         self, selected_names: set[str] | None = None
     ) -> list[dict[str, Any]]:
@@ -171,14 +167,6 @@ class ImportPlan:
             "unchanged": len(self.unchanged),
             "removed": len(self.removed),
             "unmapped": len(self.unmapped),
-        }
-
-    def to_json(self) -> dict[str, Any]:
-        return {
-            "summary": self.summary(),
-            "changes": [c.to_json() for c in self.changes],
-            "unmapped": [u.to_json() for u in self.unmapped],
-            "removed": list(self.removed),
         }
 
 

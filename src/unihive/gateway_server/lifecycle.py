@@ -320,6 +320,8 @@ class LifecycleMixin:
             raise
 
         self._initialized = True
+        # /api/runtime 运行时长锚点: initialize 成功 = 网关就绪
+        self._started_monotonic = time.monotonic()
         logger.info(f"Gateway initialized with {len(self.upstreams)} upstreams")
 
     async def start(self):
@@ -378,6 +380,9 @@ class LifecycleMixin:
         """优雅关闭：等待在途请求完成后关闭连接池"""
         self._running = False
         self._shutdown_event.set()  # 唤醒 stdio signal watcher
+        # /api/runtime 计数复位, 同实例重启后重新累计
+        self._started_monotonic = None
+        self._call_timestamps.clear()
 
         # Reset console_api state
         # _ca 在 stop() 局部 import, 与 _do_initialize / serve_http 各 import

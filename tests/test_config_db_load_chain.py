@@ -53,10 +53,9 @@ async def test_empty_db_auto_seeds_and_assembles(db_mode):
         assert "tools" not in snap
         assert "upstreams" in snap
 
-        # interfaces/source_map 直接吃 live 装配 config, 数量与运行时门控一致
+        # interfaces 直接吃 live 装配 config, 数量与运行时门控一致
         iface_tools = ca.get_interfaces()["tools"]
         assert len(iface_tools) == len(server._load_all_tools())
-        assert len(ca._build_source_map()) == 294
 
         # 空库自动 seed 已落盘: 第二次启动不再 seed
         await server.config_store.close()

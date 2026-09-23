@@ -6,8 +6,13 @@
 """
 import asyncio
 import logging
+import os
+import time
 
 from ..core.normalizer import Normalizer
+
+# /api/runtime 调用时间戳环的回溯窗口
+CALL_LOOKBACK_SEC = 300.0
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +26,6 @@ class CachedExecutionMixin:
         params: dict,
         route_key: str,
         ttl_key: str | None = None,
-        data_source_type: str = "online",
     ) -> dict:
         """路由 + 缓存包装。
 
@@ -42,11 +46,13 @@ class CachedExecutionMixin:
         """
         async with self._requests_lock:
             self._active_requests += 1
+            self._record_tool_call()
         try:
             # 缓存策略判定下沉到 src.core.cache_strategy 纯函数, 见 plan
             # warm-imagining-quilt.md (Refactor 1)。本地 import 避免模块
             # 顶层循环依赖。
             from ..core import cache_strategy
+            from ..core.tool_loader import backing_upstreams
 
             # TTL 解析顺序 (见 cache_strategy.effective_ttl): fuyao_cache 工具
             # 级 override → special_data 传过去日期提升 historical_immutable
@@ -72,17 +78,9 @@ class CachedExecutionMixin:
                 )
                 ttl = None
             cache_enabled = self.cache is not None and self.cache.enabled
-            # 候选路由链（与 Router.route 解析顺序一致）：显式 routing.chain
-            # 优先，否则从 upstream_tool_mapping 推导。
-            routing_cfg = (self.config.get("routing") or {}).get(route_key)
-            if isinstance(routing_cfg, dict) and "chain" in routing_cfg:
-                chain = list(routing_cfg.get("chain") or [])
-            else:
-                chain = list(
-                    (self.config.get("upstream_tool_mapping") or {})
-                    .get(route_key, {})
-                    .keys()
-                )
+            # 候选路由链与 Router.route 同规则 (显式 chain 优先, 空 chain 回落
+            # mapping, 标量 chain 守卫), 单一事实源在 tool_loader.backing_upstreams。
+            chain = backing_upstreams(route_key, self.config)
             # 是否走缓存读/单飞：有 TTL、非实时、链上存在远程 fuyao 源，
             # 且不是「免缓存上游」(纯 tdx_quant/thsdk 链一律不缓存)。
             cache_exempt = cache_strategy.chain_is_cache_exempt(chain)
@@ -93,11 +91,9 @@ class CachedExecutionMixin:
                 and not cache_strategy.is_realtime_ttl(ttl_key)
                 and cache_strategy.chain_has_remote_http(chain)
             )
-            # 向后兼容：原变量名在下方逻辑中代表"本次走缓存路径"。
-            can_cache = can_read_cache
 
             key: str | None = None
-            if can_cache:
+            if can_read_cache:
                 key = cache_strategy.cache_key(name, params)
                 cached = await self.cache.get(key)
                 if cached is not None:
@@ -159,7 +155,7 @@ class CachedExecutionMixin:
                 # 仅当本次实际命中远程 fuyao 源才写缓存：若链上本地源优先并成功，
                 # 不能把本地结果按 fuyao 的 key 缓存，否则后续 fuyao 直查会误命中。
                 if (
-                    can_cache
+                    can_read_cache
                     and key is not None
                     and result.success
                     and result.data is not None
@@ -177,16 +173,13 @@ class CachedExecutionMixin:
             # 直接路径, 这一段没有 in-flight 保护, 必须在 gateway 层补。
             # waiter 复用 leader 的 future, leader 失败则 waiter 升级为
             # 新 leader 自己再试一次 (fallback 行为).
-            if can_cache and key is not None:
+            if can_read_cache and key is not None:
                 existing = self._in_flight_requests.get(key)
                 if existing is not None and not existing.done():
                     try:
                         cached_resp = await existing
-                        return {
-                            **cached_resp,
-                            "hops": cached_resp.get("hops", []),
-                            "cache_hit": False,
-                        }
+                        # leader 的 resp 已含真实 hops; waiter 只标记自身未命中缓存。
+                        return {**cached_resp, "cache_hit": False}
                     except asyncio.CancelledError:
                         # waiter 自身被取消 (客户端断连/关停): 必须重新抛出,
                         # 否则会继续升级为僵尸 leader, 空跑整条路由并拖慢关停
@@ -215,3 +208,44 @@ class CachedExecutionMixin:
         finally:
             async with self._requests_lock:
                 self._active_requests -= 1
+
+    # ------------------------------------------------------------------
+    # /api/runtime 运行态统计
+    # ------------------------------------------------------------------
+
+    def _record_tool_call(self) -> None:
+        """记一次工具调用并修剪回溯窗口外的时间戳。
+
+        调用方须持 _requests_lock (与 _active_requests 同锁, 口径一致)。
+        """
+        now_mono = time.monotonic()
+        self._call_timestamps.append(now_mono)
+        cutoff = now_mono - CALL_LOOKBACK_SEC
+        while self._call_timestamps and self._call_timestamps[0] < cutoff:
+            self._call_timestamps.popleft()
+
+    def get_runtime_snapshot(self) -> dict:
+        """运行态快照 (供 console_api GET /api/runtime)。
+
+        active_requests 无锁读 int (GIL 下一致), 近似值足够展示。
+        """
+        now_mono = time.monotonic()
+        calls_1m = 0
+        calls_5m = 0
+        for ts in self._call_timestamps:
+            if ts >= now_mono - 60.0:
+                calls_1m += 1
+            if ts >= now_mono - CALL_LOOKBACK_SEC:
+                calls_5m += 1
+        started = self._started_monotonic
+        uptime = now_mono - started if started is not None else None
+        return {
+            "pid": os.getpid(),
+            "uptime_seconds": round(uptime, 1) if uptime is not None else None,
+            "active_requests": self._active_requests,
+            "tool_count": len(self.tool_specs) if self.tool_specs else 0,
+            "calls_last_1m": calls_1m,
+            "calls_last_5m": calls_5m,
+            # 显式速率字段: 当前 1 分钟窗口即速率, 留键便于后续换滑窗
+            "calls_per_min": calls_1m,
+        }

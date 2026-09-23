@@ -1,0 +1,352 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import type { UpstreamMetricsResponse } from '@/api/upstream-metrics'
+import type { GatewayStatus } from '@/api/status'
+import type { RuntimeStats } from '@/api/runtime'
+import type {
+  CacheBreakdownResponse,
+  CacheCleanupResponse,
+  CacheClearResponse,
+  CacheVacuumResponse,
+  UpstreamL1ResetResponse,
+} from '@/api/cache'
+
+// 四个 API 模块整体 mock: 用例自行控制 fulfilled/rejected 与调用计数。
+vi.mock('@/api/upstream-metrics', () => ({
+  getUpstreamMetrics: vi.fn(),
+}))
+vi.mock('@/api/status', () => ({
+  getStatus: vi.fn(),
+}))
+vi.mock('@/api/runtime', () => ({
+  getRuntimeStats: vi.fn(),
+}))
+vi.mock('@/api/cache', () => ({
+  getCacheToolBreakdown: vi.fn(),
+  cleanupCache: vi.fn(),
+  clearCache: vi.fn(),
+  vacuumCache: vi.fn(),
+  resetUpstreamL1: vi.fn(),
+}))
+
+import { getUpstreamMetrics } from '@/api/upstream-metrics'
+import { getStatus } from '@/api/status'
+import { getRuntimeStats } from '@/api/runtime'
+import {
+  cleanupCache,
+  clearCache,
+  getCacheToolBreakdown,
+  resetUpstreamL1,
+  vacuumCache,
+} from '@/api/cache'
+import {
+  useGatewayRuntime,
+  type RuntimeNotifier,
+} from '@/composables/useGatewayRuntime'
+
+const metricsResponse: UpstreamMetricsResponse = {
+  upstream: 'mootdx2',
+  timestamp: 1,
+  metrics: {
+    daily_l1: {
+      enabled: true,
+      hits: 5,
+      misses: 5,
+      hit_rate: 0.5,
+      size: 3,
+      maxsize: 128,
+      ttl_seconds: 600,
+      reader_semaphore_limit: 4,
+    },
+  },
+}
+
+const statusResponse = (pid = 111, statsPid: number | null = 111): GatewayStatus => ({
+  timestamp: 1,
+  pid,
+  summary: { total: 0, online: 0, degraded: 0, offline: 0, configured: 0, disabled: 0 },
+  upstreams: {},
+  cache: {
+    enabled: true,
+    entries: 10,
+    live_entries: 9,
+    expired_entries: 1,
+    null_expiry_entries: 0,
+    nearest_expiry: 2000,
+    oldest_created: 1000,
+    db_size_mb: 0.5,
+    wal_size_bytes: 0,
+    freelist_count: 0,
+    page_count: 10,
+    page_size: 4096,
+    hits: 8,
+    misses: 2,
+    hit_rate: 0.8,
+    stats_updated_at: 1,
+    stats_pid: statsPid,
+    timestamp: 1,
+  },
+})
+
+const runtimeResponse: RuntimeStats = {
+  pid: 111,
+  uptime_seconds: 42,
+  active_requests: 0,
+  tool_count: 207,
+  calls_last_1m: 0,
+  calls_last_5m: 0,
+  calls_per_min: 0,
+  timestamp: 1,
+}
+
+const breakdownResponse: CacheBreakdownResponse = {
+  tools: [{ tool: 'tool_a', entries: 4, live: 3 }],
+  total_tools: 1,
+  timestamp: 1,
+}
+
+function makeNotifier(confirmResult = true): RuntimeNotifier & {
+  success: ReturnType<typeof vi.fn>
+  error: ReturnType<typeof vi.fn>
+  confirm: ReturnType<typeof vi.fn>
+} {
+  return {
+    success: vi.fn(),
+    error: vi.fn(),
+    confirm: vi.fn().mockResolvedValue(confirmResult),
+  }
+}
+
+beforeEach(() => {
+  vi.mocked(getUpstreamMetrics).mockResolvedValue(metricsResponse)
+  vi.mocked(getStatus).mockResolvedValue(statusResponse())
+  vi.mocked(getRuntimeStats).mockResolvedValue(runtimeResponse)
+  vi.mocked(getCacheToolBreakdown).mockResolvedValue(breakdownResponse)
+  vi.mocked(cleanupCache).mockResolvedValue({
+    deleted: 3,
+    timestamp: 1,
+  } satisfies CacheCleanupResponse)
+  vi.mocked(clearCache).mockResolvedValue({
+    cleared: true,
+    timestamp: 1,
+  } satisfies CacheClearResponse)
+  vi.mocked(vacuumCache).mockResolvedValue({
+    db_size_mb: 0.4,
+    wal_size_bytes: 0,
+    timestamp: 1,
+  } satisfies CacheVacuumResponse)
+  vi.mocked(resetUpstreamL1).mockResolvedValue({
+    upstream: 'mootdx2',
+    result: { enabled: true, cleared: ['daily', 'top_board', 'unusual'] },
+    timestamp: 1,
+  } satisfies UpstreamL1ResetResponse)
+})
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('useGatewayRuntime — 三源独立结算', () => {
+  test('metrics 源失败不影响状态/运行态, 错误落到 l1LoadError', async () => {
+    vi.mocked(getUpstreamMetrics).mockRejectedValueOnce(new Error('boom'))
+    const rt = useGatewayRuntime({ lifecycle: false })
+
+    await rt.load()
+
+    expect(rt.l1LoadError.value).toContain('boom')
+    expect(rt.metrics.value).toBeNull()
+    expect(rt.respCache.value?.live_entries).toBe(9)
+    expect(rt.runtime.value?.tool_count).toBe(207)
+    expect(rt.l1RateSeries.value.at(-1)).toBeNull()
+    expect(rt.respRateSeries.value.at(-1)).toBe(0.8)
+  })
+
+  test('status 源失败: loadError + 时间戳复位, metrics/runtime 仍更新', async () => {
+    vi.mocked(getStatus).mockRejectedValueOnce(new Error('down'))
+    const rt = useGatewayRuntime({ lifecycle: false })
+
+    await rt.load()
+
+    expect(rt.respLoadError.value).toContain('down')
+    expect(rt.loadError.value).toContain('down')
+    expect(rt.respCache.value).toBeNull()
+    expect(rt.metrics.value?.daily_l1?.size).toBe(3)
+    expect(rt.runtime.value?.pid).toBe(111)
+    expect(rt.refreshLabel.value).toContain('失败')
+  })
+
+  test('runtime 源失败静默保留旧值, 不产生错误态', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    await rt.load()
+    vi.mocked(getRuntimeStats).mockRejectedValueOnce(new Error('x'))
+
+    await rt.load()
+
+    expect(rt.runtime.value?.tool_count).toBe(207)
+    expect(rt.loadError.value).toBe('')
+  })
+})
+
+describe('useGatewayRuntime — 异进程 stats 抑制', () => {
+  test('stats_pid 与网关 pid 不同: 命中率不进序列, foreign 标记为 true', async () => {
+    vi.mocked(getStatus).mockResolvedValueOnce(statusResponse(111, 999))
+    const rt = useGatewayRuntime({ lifecycle: false })
+
+    await rt.load()
+
+    expect(rt.statsFromForeignProcess.value).toBe(true)
+    expect(rt.respCache.value?.hit_rate).toBe(0.8) // 原始值仍在, 由卡片抑制展示
+    expect(rt.respRateSeries.value.at(-1)).toBeNull()
+    // live_entries 直读 cache.db, 与进程无关, 不抑制
+    expect(rt.liveEntriesSeries.value.at(-1)).toBe(9)
+  })
+
+  test('同进程: foreign 为 false, 命中率正常入序列', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+
+    await rt.load()
+
+    expect(rt.statsFromForeignProcess.value).toBe(false)
+    expect(rt.respRateSeries.value.at(-1)).toBe(0.8)
+  })
+})
+
+describe('useGatewayRuntime — 趋势采样环', () => {
+  test('超过 60 点后截断, 始终保留最近 60 点', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+
+    for (let i = 0; i < 65; i += 1) {
+      await rt.load()
+    }
+
+    expect(rt.l1RateSeries.value).toHaveLength(60)
+    expect(rt.respRateSeries.value).toHaveLength(60)
+    expect(rt.liveEntriesSeries.value).toHaveLength(60)
+    // 每点都是当前 mock 的值, 截断不改变内容
+    expect(rt.l1RateSeries.value[0]).toBe(0.5)
+  })
+})
+
+describe('useGatewayRuntime — breakdown 降频与静默', () => {
+  test('首屏必刷; 第 2-5 轮不刷; 第 6 轮再刷', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+
+    await rt.load() // 第 1 轮: firstLoad
+    expect(getCacheToolBreakdown).toHaveBeenCalledTimes(1)
+    expect(rt.breakdownRows.value[0]?.tool).toBe('tool_a')
+    expect(rt.breakdownTotalTools.value).toBe(1)
+
+    for (let i = 0; i < 4; i += 1) {
+      await rt.load() // 第 2-5 轮
+    }
+    expect(getCacheToolBreakdown).toHaveBeenCalledTimes(1)
+
+    await rt.load() // 第 6 轮
+    expect(getCacheToolBreakdown).toHaveBeenCalledTimes(2)
+  })
+
+  test('首屏后 breakdown 后台刷新不再触发表格遮罩', async () => {
+    let resolveBreakdown: (value: CacheBreakdownResponse) => void = () => {}
+    vi.mocked(getCacheToolBreakdown)
+      .mockResolvedValueOnce(breakdownResponse) // 首屏
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveBreakdown = resolve
+        }),
+      )
+
+    const rt = useGatewayRuntime({ lifecycle: false })
+    await rt.load() // 第 1 轮 (load 会 await breakdown 完成)
+    expect(rt.breakdownTableLoading.value).toBe(false)
+
+    // 第 2-5 轮: 不刷 breakdown, 正常返回
+    for (let i = 0; i < 4; i += 1) {
+      await rt.load()
+    }
+    // 第 6 轮: load 会一直挂到 breakdown resolve, 故不 await
+    const pendingLoad = rt.load()
+    await vi.waitFor(() =>
+      expect(getCacheToolBreakdown).toHaveBeenCalledTimes(2),
+    )
+    // breakdown 挂起期间也不应显示遮罩
+    expect(rt.breakdownTableLoading.value).toBe(false)
+
+    resolveBreakdown(breakdownResponse)
+    await pendingLoad
+    expect(rt.breakdownRows.value[0]?.tool).toBe('tool_a')
+  })
+
+  test('breakdown 请求失败保留旧行不空表', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    await rt.load()
+    vi.mocked(getCacheToolBreakdown)
+      .mockRejectedValueOnce(new Error('no route'))
+
+    await rt.load(true) // 手动 = 必刷
+    expect(rt.breakdownRows.value[0]?.tool).toBe('tool_a')
+  })
+})
+
+describe('useGatewayRuntime — 管理动作', () => {
+  test('onCleanup 成功后强制 breakdown 刷新', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    await rt.load()
+    expect(getCacheToolBreakdown).toHaveBeenCalledTimes(1)
+
+    await rt.onCleanup()
+
+    expect(cleanupCache).toHaveBeenCalledTimes(1)
+    expect(getCacheToolBreakdown).toHaveBeenCalledTimes(2)
+  })
+
+  test('onResetL1: 确认后调重置接口并刷新; 取消则不调', async () => {
+    const notifier = makeNotifier(true)
+    const rt = useGatewayRuntime({ lifecycle: false, notifier })
+
+    await rt.onResetL1()
+
+    expect(notifier.confirm).toHaveBeenCalledTimes(1)
+    expect(resetUpstreamL1).toHaveBeenCalledWith('mootdx2')
+    expect(notifier.success).toHaveBeenCalled()
+
+    const cancelNotifier = makeNotifier(false)
+    const cancelled = useGatewayRuntime({ lifecycle: false, notifier: cancelNotifier })
+    await cancelled.onResetL1()
+    expect(resetUpstreamL1).toHaveBeenCalledTimes(1) // 没有第二次
+  })
+
+  test('onVacuum 成功提示数据库大小', async () => {
+    const notifier = makeNotifier(true)
+    const rt = useGatewayRuntime({ lifecycle: false, notifier })
+
+    await rt.onVacuum()
+
+    expect(vacuumCache).toHaveBeenCalledTimes(1)
+    expect(notifier.success).toHaveBeenCalledWith(expect.stringContaining('0.4'))
+  })
+
+  test('onClear 后清空采样环并强制 breakdown 刷新', async () => {
+    const notifier = makeNotifier(true)
+    const rt = useGatewayRuntime({ lifecycle: false, notifier })
+    await rt.load()
+    await rt.load()
+    expect(rt.respRateSeries.value).toHaveLength(2)
+
+    await rt.onClear()
+
+    expect(clearCache).toHaveBeenCalledTimes(1)
+    // 环被清空, 只剩 onClear 内部那次 reload 的新点
+    expect(rt.respRateSeries.value).toHaveLength(1)
+    expect(getCacheToolBreakdown).toHaveBeenCalledTimes(2)
+  })
+
+  test('重置接口失败时走 notifier.error 且 loading 复位', async () => {
+    const notifier = makeNotifier(true)
+    vi.mocked(resetUpstreamL1).mockRejectedValueOnce(new Error('reset fail'))
+    const rt = useGatewayRuntime({ lifecycle: false, notifier })
+
+    await rt.onResetL1()
+
+    expect(notifier.error).toHaveBeenCalledWith(expect.stringContaining('reset fail'))
+    expect(rt.resetL1Loading.value).toBe(false)
+  })
+})

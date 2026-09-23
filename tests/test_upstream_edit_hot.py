@@ -47,7 +47,6 @@ async def _isolate_console_api_globals():
     ca._GW_CFG = saved["_GW_CFG"]
     ca._INJECTED = saved["_INJECTED"]
     ca._interfaces_cache.clear()
-    ca._mcp_tools_cache.clear()
 
 
 @pytest.fixture

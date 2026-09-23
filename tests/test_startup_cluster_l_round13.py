@@ -197,5 +197,3 @@ class TestBlockingHandlersOffloaded:
         assert "_preflight_console_html(" in src
         assert "_console_index_response(" in src
         assert "ImmutableHashedAssets(" in src
-        # source_map 构建含 YAML 读盘, 同样不得占 loop
-        assert "asyncio.to_thread(_ca._build_source_map)" in src

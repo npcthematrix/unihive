@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import logging
 import os
+from collections import deque
 import socket  # noqa: F401  (审计测试读 gs_mod.socket; 用法在 http.py)
 import sqlite3
 import sys
@@ -40,7 +41,7 @@ from ..utils.log_config import configure_logging
 logger = logging.getLogger(__name__)
 
 
-# 模块级函数/常量 (脱敏/版本号/servers 解析/console 鉴权配置) 已拆到 ._helpers,
+# 模块级函数/常量 (版本号/servers 解析/console 鉴权配置) 已拆到 ._helpers,
 # 这里 re-export 保持历史导入路径不变 (测试与外部脚本依赖)。
 from ._helpers import (  # noqa: F401
     GATEWAY_VERSION,
@@ -50,7 +51,6 @@ from ._helpers import (  # noqa: F401
     _get_console_auth_config,
     _parse_mootdx2_servers,
     load_config_yaml_overlay,
-    _sanitize_sync_message,
     coerce_float_field,
     coerce_int_field,
 )
@@ -185,24 +185,24 @@ class GatewayServer(
         # disable / stop / init 失败清理时按名取消, 不复活已停 client。
         self._late_start_tasks: dict[str, set[asyncio.Task]] = {}
         self._running = False
-        # initialize() 幂等位 + stop() 取消 health loop 的事件。
-        # initialize 旧实现会在 start/serve_http 各调一次, 部分 client 重入
-        # (stdio UpstreamClient 有保护, Fuyao 没) 状态混乱; health loop 的
-        # asyncio.sleep(30) 不响应 stop, 要等下个 tick, 期间可能再跑清理。
+        # initialize() 幂等位 (旧实现在 start/serve_http 各调一次, 部分 client
+        # 重入状态混乱) + stop() 取消 health loop 的事件。
         self._initialized = False
         self._shutdown_event = asyncio.Event()
         # 在途请求计数 + 优雅关闭
         self._active_requests = 0
         self._requests_lock = asyncio.Lock()
-        # _execute_cached 的 per-key 单飞 dict: HIGH 1 (2026-09-07
-        # 4th-round audit), 同 key 并发 miss 只触发一次 router.route().
+        # /api/runtime: initialize 就绪时刻 (单调钟) + 近 5 分钟调用时间戳环; stop() 复位。
+        self._started_monotonic: float | None = None
+        self._call_timestamps: deque[float] = deque()
+        # _execute_cached 的 per-key 单飞 dict (HIGH 1, 2026-09-07):
+        # 同 key 并发 miss 只触发一次 router.route()。
         self._in_flight_requests: dict[str, asyncio.Future] = {}
         # initialize() 并发保护: 两次 await initialize() 必须串行化,
         # 否则 cache / upstream 会被重复初始化 (HIGH #1)。
         self._init_lock = asyncio.Lock()
-        # 周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4):
-        # cleanup_expired() 函数已存在但从未调度, 过期条目只能等 max_entries
-        # 命中 LRU 才清。stop() 时取消。
+        # 周期 cache 清理任务 (MCP 二次审视 M4): cleanup_expired() 从不调度,
+        # 过期条目只能等 LRU; stop() 时取消。
         self._cache_cleanup_task: asyncio.Task | None = None
         # 单个 upstream 启动超时, 防止某个卡死的 upstream 让整个 init 跟着挂 (MED #4)。
         self._upstream_start_timeout = (

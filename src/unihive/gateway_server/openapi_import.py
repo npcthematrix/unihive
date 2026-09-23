@@ -7,6 +7,8 @@ import asyncio
 import logging
 from pathlib import Path
 
+from ._helpers import switch_runtime_locked
+
 logger = logging.getLogger(__name__)
 
 
@@ -220,16 +222,9 @@ class OpenApiImportMixin:
             old_hidden = set(self._db_hidden_tools)
 
             # 1) 运行态引用切换 (独立新 dict, 回滚只是换回引用)。
-            self.config = candidate
-            _ca.set_config(candidate)
-            self.tool_specs = candidate_specs
-            self._db_hidden_tools = candidate_hidden
-            if self.router is not None:
-                self.router.routing_config = candidate.get("routing", {})
-                self.router.upstream_tool_mapping = candidate.get(
-                    "upstream_tool_mapping", {}
-                )
-                self.router.replace_tool_specs(candidate_specs)
+            switch_runtime_locked(
+                self, candidate, candidate_specs, candidate_hidden
+            )
 
             # 2) provider: 契约变化的先摘, 新增/重注的后发; 无删除语义。
             errors: list[str] = []

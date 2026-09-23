@@ -297,7 +297,6 @@ async def test_m4b_do_initialize_failure_cleans_v2_resources(
         ca._GW_CFG = saved["_GW_CFG"]
         ca._INJECTED = saved["_INJECTED"]
         ca._interfaces_cache.clear()
-        ca._mcp_tools_cache.clear()
 
 
 # ---------------------------------------------------------------------------

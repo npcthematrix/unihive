@@ -190,7 +190,6 @@ def invalidate_config_caches() -> None:
     避免新写路径漏清导致控制台/浏览器看到旧工具集。
     """
     _interfaces_cache.clear()
-    _mcp_tools_cache.clear()
 
 
 async def _refresh_overlay_snapshot() -> None:
@@ -485,7 +484,6 @@ async def save_upstream_enabled(
             ) from e
         _db_revision = int(revision)
         _interfaces_cache.clear()
-        _mcp_tools_cache.clear()
         return {"version": revision}
 
     upstreams = _read_yaml_config().get("upstreams") or {}
@@ -512,7 +510,6 @@ async def save_upstream_enabled(
 
     await _refresh_overlay_snapshot()
     _interfaces_cache.clear()
-    _mcp_tools_cache.clear()
     return {"version": revision}
 
 
@@ -550,7 +547,6 @@ async def save_disable_dangerous(
         ) from e
     _db_revision = int(revision)
     _interfaces_cache.clear()
-    _mcp_tools_cache.clear()
     return {"version": revision}
 
 
@@ -561,7 +557,6 @@ async def _after_overlay_write() -> None:
     effective_tools = (effective.get("fuyao_cache") or {}).get("tools") or {}
     _sync_runtime_fuyao_tools(effective_tools)
     _interfaces_cache.clear()
-    _mcp_tools_cache.clear()
 
 
 async def _reconcile_enabled_overlays(paths: list[str]) -> list[str]:
@@ -1177,105 +1172,6 @@ def get_interfaces() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# MCP tools/list (raw from gateway)
-# ---------------------------------------------------------------------------
-
-_mcp_tools_cache: TTLCache = TTLCache(maxsize=1, ttl=30.0)
-_MCP_TOOLS_TIMEOUT = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)
-
-
-def _build_source_map() -> dict[str, str]:
-    """构建 routing_key → upstream 的映射。
-
-    v2 实体模式: mapping 已在装配 config 中按工具行重建, 直接读 live config;
-    yaml/P1 模式: load_all_tools 会把 tools_*.yaml 中的 mapping 合并进 config。
-    """
-    runtime = _effective_runtime_config()
-    if runtime is not None:
-        mapping = runtime.get("upstream_tool_mapping") or {}
-    else:
-        config = load_config()
-        from pathlib import Path
-
-        from ..core.tool_loader import load_all_tools
-
-        load_all_tools(Path(GATEWAY_CONFIG_PATH), config)
-        mapping = config.get("upstream_tool_mapping") or {}
-    source_map = {}
-    for routing_key, upstream_dict in mapping.items():
-        if isinstance(upstream_dict, dict):
-            for upstream_name in upstream_dict.keys():
-                source_map[routing_key] = upstream_name
-                break
-    return source_map
-
-
-def get_mcp_tools_list() -> dict:
-    """调用网关的 MCP /mcp 端点，执行 JSON-RPC tools/list，返回原始工具清单。"""
-    cached = _mcp_tools_cache.get("tools")
-    if cached is not None:
-        return cached  # type: ignore[return-value]
-
-    # Use 127.0.0.1 directly to avoid DNS/port resolution issues when
-    # console_api is imported by the gateway process itself (self-call).
-    _mcp_url = f"http://127.0.0.1:{gateway_http_port()}/mcp"
-    try:
-        resp = httpx.post(
-            _mcp_url,
-            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-            timeout=_MCP_TOOLS_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data: dict = resp.json()
-    except Exception as e:
-        _mcp_tools_cache["tools"] = {"error": str(e), "timestamp": int(time.time())}
-        return {"error": str(e), "timestamp": int(time.time())}
-
-    result: dict = data.get("result", {})
-    raw_tools: list = result.get("tools", [])
-
-    # 从 upstream_tool_mapping 查真实来源，查不到返回 unknown（配置必须完整）
-    source_map = _build_source_map()
-
-    tools_out = []
-    for t in raw_tools:
-        name = t.get("name") or ""
-        input_schema = t.get("inputSchema") or {}
-        # FastMCP/Pydantic schema 里的 properties 就是参数定义
-        props: dict = input_schema.get("properties", {})
-        required: list = input_schema.get("required", [])
-
-        params = []
-        for pname, pinfo in props.items():
-            desc = pinfo.get("description", "")
-            ptype = pinfo.get("type", "any")
-            enum_vals = pinfo.get("enum")
-            p = {
-                "name": pname,
-                "type": ptype,
-                "required": pname in required,
-                "description": desc,
-            }
-            if enum_vals:
-                p["enum"] = enum_vals
-            params.append(p)
-
-        # SOURCE 100% 来自 upstream_tool_mapping；查不到时标 unknown
-        source = source_map.get(name, "unknown")
-
-        tools_out.append({
-            "name": name,
-            "description": t.get("description", "") or "",
-            "source": source,
-            "params": params,
-        })
-
-    out = {"timestamp": int(time.time()), "tools": tools_out}
-    _mcp_tools_cache["tools"] = out
-    return out
-
-
-# ---------------------------------------------------------------------------
 # Health check (for /health)
 # ---------------------------------------------------------------------------
 
@@ -1580,12 +1476,32 @@ async def upstream_l1_reset_api(req: "Request") -> "JSONResponse":
     })
 
 
+async def runtime_stats_api(req: "Request") -> "JSONResponse":
+    """GET /api/runtime — 网关进程运行态。
+
+    返回 pid / uptime_seconds / active_requests / tool_count /
+    calls_last_1m / calls_last_5m; 计数在 gateway_server._execute_cached
+    入口累计。503 = 网关活实例未注入 (控制台进程与网关分离的极端情形)。
+    """
+    from starlette.responses import JSONResponse
+
+    server = _gateway_server
+    if server is None:
+        return JSONResponse({"error": "gateway unavailable"}, status_code=503)
+    try:
+        snapshot = server.get_runtime_snapshot()
+    except Exception:
+        logger.exception("runtime_stats_api raised")
+        return JSONResponse({"error": "runtime_read_failed"}, status_code=500)
+    return JSONResponse({**snapshot, "timestamp": int(time.time())})
+
+
 # ---------------------------------------------------------------------------
 # MCP 浏览器 —— 原样展示 "本身即 MCP server" 的上游的 tools/list
 # ---------------------------------------------------------------------------
 # 这里刻意不做任何归一化: 不重命名、不平铺 params、不套 model_dump()。
-# 对照 gateway_server._mcp_tools_api (它会把工具压成 {name, description,
-# source, params}), 那套东西是给 "网关聚合视图" 用的, 不是给这里用的。
+# 旧链路曾有 gateway_server._mcp_tools_api (把工具压成 {name, description,
+# source, params}) 供 "网关聚合视图" 使用, 已随 MCP 浏览器专题删除。
 # 控制台 MCP 浏览器要展示的就是上游到底发了什么。
 
 
@@ -2488,6 +2404,8 @@ def build_upstream_routes() -> list:
     from starlette.routing import Route
 
     return [
+        # 网关进程运行态 (PID/运行时长/在途/工具数/近期调用)
+        Route("/api/runtime", runtime_stats_api),
         Route(
             "/api/config/upstreams/{name}/enabled",
             upstream_enabled_api,
@@ -2635,7 +2553,7 @@ async def cache_vacuum_api(req: "Request") -> "JSONResponse":
 
 
 def build_cache_routes() -> list:
-    """缓存监控 + 管理路由 (挂载进 gateway_server http app)。"""
+    """响应缓存监控 + 管理路由 (挂载进 gateway_server http app)。"""
     from starlette.routing import Route
 
     return [

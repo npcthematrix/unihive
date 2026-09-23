@@ -120,7 +120,7 @@ function toggleCollapsed(): void {
 const MENU = [
   { path: '/guides', title: '接入指南', icon: Document },
   { path: '/status', title: '上游数据PROVIDERs', icon: Monitor },
-  { path: '/l1-cache', title: '网关缓存监控', icon: DataLine },
+  { path: '/l1-cache', title: '网关运行监控', icon: DataLine },
   { path: '/interfaces', title: 'MCP APIs', icon: Connection },
   { path: '/config', title: '配置信息', icon: Setting },
   { path: '/omni', title: 'OMNI板块管理', icon: Grid },

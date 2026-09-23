@@ -1,12 +1,11 @@
 """gateway_server 包的模块级工具函数与常量。
 
 2026-09-19 god-module 拆分时从 gateway_server.py 原样迁入 (行为保持):
-- 同步日志脱敏 (路径/token)
 - pyproject 版本号读取
 - mootdx2 servers 配置解析
 - console 鉴权配置 (config.yaml / upstreams.yaml / env 三源)
 
-facade ``__init__.py`` re-export 这里的全部公开名字, 历史导入路径
+facade ``__init__.py`` re-export 这里的公开名字, 历史导入路径
 (``from unihive.gateway_server import _parse_mootdx2_servers`` 等) 不变。
 """
 import logging
@@ -23,24 +22,6 @@ from ..core.config_db import resolve_layout_root
 from ..core.registry import RESERVED_TOOL_NAMES  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-
-# 同步日志里可能带回栈/路径/token, 写库前脱敏.
-# 规则: Windows 绝对路径 → [PATH], 长 token (eyJ/sk-/hex32+) → [TOKEN], 单行超 500 字符截断.
-
-# 非 raw 字符串: \\ 在 regex 里就是字面反斜杠
-_PATH_RE = re.compile("[A-Za-z]:[\\\\/](?:[^\\s\\/:|*?\"<>]+[\\\\/])+[^\\s\\/:|*?\"<>]+")
-_TOKEN_RE = re.compile(r"\b(?:eyJ[A-Za-z0-9_.-]{20,}|sk-[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b")
-
-
-def _sanitize_sync_message(msg: str) -> str:
-    if not msg:
-        return ""
-    s = _PATH_RE.sub("[PATH]", msg)
-    s = _TOKEN_RE.sub("[TOKEN]", s)
-    if len(s) > 500:
-        s = s[:497] + "..."
-    return s
 
 
 _PROJECT_TABLE_RE = re.compile(r"(?ms)^\[project\]\s*$.*?(?=^\[|\Z)")
@@ -484,13 +465,38 @@ def load_config_yaml_overlay(
 # ---------------------------------------------------------------------------
 
 
+def switch_runtime_locked(
+    server,
+    config: dict,
+    specs: list[dict],
+    hidden: set[str],
+) -> None:
+    """toggle 锁内把 live 运行态整体切到给定快照 (升级/热编辑/回滚共用)。
+
+    顺序固定: server 的 config / tool_specs / hidden 集 → console_api 共享
+    config → router 三件套。调用方必须已持 ``_upstream_toggle_lock``。
+    不含 ``_apply_gateway_tuning()`` —— 那是工厂升级专有动作。
+    """
+    from ..utils import console_api
+
+    server.config = config
+    console_api.set_config(config)
+    server.tool_specs = specs
+    server._db_hidden_tools = hidden
+    if server.router is not None:
+        server.router.routing_config = config.get("routing", {})
+        server.router.upstream_tool_mapping = config.get(
+            "upstream_tool_mapping", {}
+        )
+        server.router.replace_tool_specs(specs)
+
+
 def coerce_int_field(
     raw: object,
     field: str,
     *,
     default: int | None = None,
     minimum: int | None = None,
-    maximum: int | None = None,
 ) -> int | None:
     """把配置值强转为 int。None → default; bool/字符串/浮点/其他 → ValueError。
 
@@ -505,8 +511,6 @@ def coerce_int_field(
         )
     if minimum is not None and raw < minimum:
         raise ValueError(f"{field} 必须 >= {minimum}, got {raw!r}")
-    if maximum is not None and raw > maximum:
-        raise ValueError(f"{field} 必须 <= {maximum}, got {raw!r}")
     return raw
 
 
@@ -516,13 +520,11 @@ def coerce_float_field(
     *,
     default: float | None = None,
     minimum: float | None = None,
-    maximum: float | None = None,
     exclusive_min: bool = False,
-    exclusive_max: bool = False,
 ) -> float | None:
     """把配置值强转为 float。None → default; bool/非数值 → ValueError。
 
-    exclusive_min/Max 控制边界是否开区间 (rate/timeout 必须严格 > 0)。
+    exclusive_min 控制下边界是否开区间 (rate/timeout 必须严格 > 0)。
     """
     if raw is None:
         return default
@@ -535,7 +537,4 @@ def coerce_float_field(
         if value < minimum or (exclusive_min and value == minimum):
             op = ">" if exclusive_min else ">="
             raise ValueError(f"{field} 必须 {op} {minimum}, got {raw!r}")
-    if maximum is not None:
-        if value > maximum or (exclusive_max and value == maximum):
-            raise ValueError(f"{field} 必须 <= {maximum}, got {raw!r}")
     return value

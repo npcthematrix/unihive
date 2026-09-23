@@ -151,7 +151,6 @@ def test_historical_facade_symbols_importable():
         _console_auth_config_from_env,
         _get_console_auth_config,
         _parse_mootdx2_servers,
-        _sanitize_sync_message,
         async_main,
         main,
     )

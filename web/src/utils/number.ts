@@ -13,3 +13,14 @@ export function formatTtl(seconds: number): string {
   if (seconds >= 60) return `${Math.floor(seconds / 60)}min`
   return `${seconds}s`
 }
+
+/** 运行时长: 天/时/分/秒两级组合, 如 "2天 3小时"、"15分 42秒"、"8秒"。 */
+export function formatUptime(seconds: number): string {
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (days > 0) return `${days}天 ${hours}小时`
+  if (hours > 0) return `${hours}小时 ${minutes}分`
+  if (minutes > 0) return `${minutes}分 ${Math.floor(seconds % 60)}秒`
+  return `${Math.floor(seconds)}秒`
+}

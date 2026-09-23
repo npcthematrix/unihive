@@ -5,12 +5,10 @@
 """
 import asyncio
 import ipaddress
-import json
 import logging
 import re
 import socket
 import sys
-import time
 from pathlib import Path
 
 import uvicorn
@@ -206,16 +204,16 @@ class ImmutableHashedAssets:
     """
 
     _IMMUTABLE = b"public, max-age=31536000, immutable"
+    _ASSET_PREFIX = "/console/assets/"
 
-    def __init__(self, app, prefix: str = "/console/assets/"):
+    def __init__(self, app):
         self.app = app
-        self.prefix = prefix
 
     async def __call__(self, scope, receive, send):
         # Mount 不改写 scope["path"], 子 app 经 get_route_path 取剥前缀后
         # 的相对路径 (此处为 "/console/assets/…")。
         if scope.get("type") != "http" or not get_route_path(scope).startswith(
-            self.prefix
+            self._ASSET_PREFIX
         ):
             return await self.app(scope, receive, send)
 
@@ -269,47 +267,11 @@ class HttpServeMixin:
         from ..utils import console_api as _ca
         from ..utils.proxy_api import build_proxy_routes
 
-        def _proxy_routes():
-            return build_proxy_routes()
-
         # M2 (round-13): 同步阻塞读全部下放 worker 线程, 不占事件循环。
         _status_api = _blocking_json_api(_ca.get_upstream_status)
         _interfaces_api = _blocking_json_api(_ca.get_interfaces)
         _config_api = _blocking_json_api(_ca.load_config)
         _health_api = _blocking_json_api(_ca.get_health)
-
-        async def _mcp_tools_api(req: Request):
-            # L3 (2026-09-07 5th-round audit): mcp 未初始化时返回 503,
-            # 避免 AttributeError。实际不可达 (serve_http 必先 await init),
-            # 但加 guard 让 handler 更鲁棒。
-            if self.mcp is None:
-                return JSONResponse(
-                    {"error": "gateway not initialized"}, status_code=503
-                )
-            raw = await self.mcp.list_tools()
-            # 构建 routing_key → source 映射（从 upstream_tool_mapping 查，查不到返回 unknown）
-            # M2 (round-13): 映射构建读 YAML/配置, 同步阻塞, 下放 worker 线程。
-            source_map = await asyncio.to_thread(_ca._build_source_map)
-            tools_out = []
-            for ft in raw:
-                d = ft.model_dump()
-                name = d.get("name") or ""
-                params_schema = d.get("parameters") or {}
-                props = params_schema.get("properties", {})
-                required = params_schema.get("required", [])
-                params = []
-                for pname, pinfo in props.items():
-                    desc = pinfo.get("description", "")
-                    ptype = pinfo.get("type", "any")
-                    enum_vals = pinfo.get("enum")
-                    p = {"name": pname, "type": ptype, "required": pname in required, "description": desc}
-                    if enum_vals:
-                        p["enum"] = enum_vals
-                    params.append(p)
-                source = source_map.get(name, "unknown")
-                tools_out.append({"name": name, "description": d.get("description") or "", "source": source, "params": params})
-            body = json.dumps({"timestamp": int(time.time()), "tools": tools_out}, indent=2, ensure_ascii=False)
-            return Response(body, media_type="application/json")
 
         def _read_file(path: str):
             p = Path(path)
@@ -388,13 +350,12 @@ class HttpServeMixin:
                     *_ca.build_mcp_browser_routes(),
                     Route("/api/upstreams/{name}/metrics", _ca.upstream_metrics_api),
                     *_ca.build_cache_routes(),
-                    *_proxy_routes(),
+                    *build_proxy_routes(),
                     Route("/api/interfaces", _interfaces_api),
                     Route("/api/config", _config_api),
                     # 2026-09-18: 上游启用/禁用热开关 (鉴权随 /api/* 中间件继承)
                     *_ca.build_upstream_routes(),
                     Route("/health", _health_api),
-                    Route("/api/mcp-tools-list", _mcp_tools_api),
                 ]
             )
 

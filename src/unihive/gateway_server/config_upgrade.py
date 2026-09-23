@@ -9,6 +9,8 @@ from pathlib import Path
 
 from ..core import registry
 
+from ._helpers import switch_runtime_locked
+
 logger = logging.getLogger(__name__)
 
 
@@ -272,16 +274,9 @@ class ConfigUpgradeMixin:
             )
 
             # 1) 运行态引用切换 (独立新 dict, 回滚只是换回引用)。
-            self.config = candidate
-            _ca.set_config(candidate)
-            self.tool_specs = candidate_specs
-            self._db_hidden_tools = candidate_hidden
-            if self.router is not None:
-                self.router.routing_config = candidate.get("routing", {})
-                self.router.upstream_tool_mapping = candidate.get(
-                    "upstream_tool_mapping", {}
-                )
-                self.router.replace_tool_specs(candidate_specs)
+            switch_runtime_locked(
+                self, candidate, candidate_specs, candidate_hidden
+            )
             # gateway 调参 (per_upstream_timeout / rate_limit) 也要热生效:
             # 旧链路换了 config 却不重跑 _apply_gateway_tuning, 改超时/限流
             # 要重启才生效, 与其 docstring 矛盾。回滚路径同样重跑一次复原。
@@ -312,7 +307,23 @@ class ConfigUpgradeMixin:
             # 3) 上游 client 差集收敛 (先断后连; 失败只警告, 不阻断升级)。
             for name in sorted(set(detach_names) | set(reconnect_names)):
                 if name in self.upstreams:
-                    await self._detach_upstream_client_locked(name)
+                    try:
+                        await self._detach_upstream_client_locked(name)
+                    except asyncio.CancelledError:
+                        # 与 attach 侧同守卫 (Round-9 M3): detach 被 cancel 时
+                        # live config/specs 已换, 任由 BaseException 逃出锁 =
+                        # 长期半迁移。先把本笔记入切换清单, 回滚后重抛。
+                        (detached if name in detach_names else reconnected).append(name)
+                        await self._rollback_config_upgrade_locked(
+                            old_config=old_config,
+                            old_specs=old_specs,
+                            old_hidden=old_hidden,
+                            to_add=to_add,
+                            to_remove=to_remove,
+                            switched_upstreams=attached + reconnected + detached,
+                            old_blocks=old_blocks,
+                        )
+                        raise
                     if name in detach_names:
                         detached.append(name)
             for name in sorted(set(attach_names) | set(reconnect_names)):
@@ -492,15 +503,6 @@ class ConfigUpgradeMixin:
                 logger.exception("upgrade rollback: re-register %r failed", name)
                 self._published_tools.discard(name)
 
-        self.config = old_config
-        _ca.set_config(old_config)
-        self.tool_specs = old_specs
-        self._db_hidden_tools = old_hidden
-        if self.router is not None:
-            self.router.routing_config = old_config.get("routing", {})
-            self.router.upstream_tool_mapping = old_config.get(
-                "upstream_tool_mapping", {}
-            )
-            self.router.replace_tool_specs(old_specs)
+        switch_runtime_locked(self, old_config, old_specs, old_hidden)
         # 复原 gateway 调参 (per_upstream_timeout / rate_limit)。
         self._apply_gateway_tuning()
