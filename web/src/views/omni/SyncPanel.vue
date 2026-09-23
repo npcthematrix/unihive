@@ -50,7 +50,7 @@
         <el-select v-model="boardType" :disabled="syncing" style="width: 160px">
           <el-option label="全部" value="all" />
           <el-option
-            v-for="key in BOARD_TYPE_KEYS"
+            v-for="key in availableBoardTypes"
             :key="key"
             :label="displayBoardType(key)"
             :value="key"
@@ -82,10 +82,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { OmniSource, OmniSyncLog } from '@/api/omni'
-import { runOmniSync } from '@/api/omni'
+import { getOmniStats, runOmniSync } from '@/api/omni'
 import { errorMessage, isCanceledError } from '@/api/client'
 import {
   BOARD_TYPE_KEYS,
@@ -106,6 +106,7 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'synced'): void
+  (e: 'poll'): void
 }>()
 
 const SYNC_TIMEOUT_MIN = 5 // 与后端 SYNC_TIMEOUT_SECONDS 一致
@@ -114,6 +115,88 @@ const source = ref<'all' | OmniSource>('all')
 const boardType = ref<'all' | (typeof BOARD_TYPE_KEYS)[number]>('all')
 const syncing = ref(false)
 let activeAbort: AbortController | null = null
+
+// 同花顺仅支持行业/概念；不提供的类型直接不下发，避免长等后只得到
+// "No sectors synced" 这种含义不清的失败。
+const availableBoardTypes = computed(() =>
+  source.value === 'fuyao'
+    ? BOARD_TYPE_KEYS.filter((k) => k === 'industry' || k === 'concept')
+    : BOARD_TYPE_KEYS,
+)
+watch(availableBoardTypes, (types) => {
+  if (boardType.value !== 'all' && !(types as readonly string[]).includes(boardType.value)) {
+    boardType.value = 'all'
+  }
+})
+
+/** running 是否在 10 分钟内（与后端 STALE_RUNNING_MINUTES 同阈值）。 */
+function isRecentRunning(log: OmniSyncLog | null | undefined): boolean {
+  if (!log || log.status !== 'running' || !log.start_time) return false
+  const started = new Date(log.start_time.replace(' ', 'T') + 'Z').getTime()
+  return Number.isFinite(started) && Date.now() - started < 10 * 60 * 1000
+}
+
+// ===== 状态对齐轮询 =====
+// 两种用途：(1) 用户点"中止"只是断 HTTP，后端持锁继续跑，靠轮询收敛 UI；
+// (2) 回到页面时后端已有同步在跑（本面板没发过 POST），接管其进度。
+const POLL_INTERVAL_MS = 4000
+let pollTimer: ReturnType<typeof setInterval> | null = null
+/** true = 当前 syncing 态由"接管既有 running"而来，没有在飞 POST。 */
+let externalRun = false
+/** 路由卸载导致的中止：静默，不 toast、不 emit。 */
+const unmounting = ref(false)
+
+async function pollOnce() {
+  try {
+    const d = await getOmniStats()
+    emit('poll')
+    const latest = d.recent_logs[0]
+    if (!syncing.value) return
+    if (latest && latest.status !== 'running') {
+      finishExternal(latest.status === 'success', latest.message || '')
+    }
+  } catch {
+    // 轮询失败静默（可能是网关重启中），下一轮再试
+  }
+}
+
+function finishExternal(ok: boolean, message: string) {
+  if (!externalRun) return // 有在飞 POST，收尾以 POST 响应为准
+  stopPolling()
+  syncing.value = false
+  externalRun = false
+  if (ok) ElMessage.success(`同步成功: ${message}`)
+  else ElMessage.error(`同步失败: ${(message || '').substring(0, 200)}`)
+}
+
+function startPolling() {
+  if (pollTimer !== null) return
+  pollTimer = setInterval(() => void pollOnce(), POLL_INTERVAL_MS)
+}
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+watch(syncing, (v) => (v ? startPolling() : stopPolling()))
+
+onMounted(async () => {
+  // 进入面板时若后端已有近期 running（如从其他页面切回/网关重启后），接管
+  try {
+    const d = await getOmniStats()
+    if (isRecentRunning(d.recent_logs[0])) {
+      externalRun = true
+      syncing.value = true
+    }
+  } catch {
+    // 忽略：面板不因此阻塞用户操作
+  }
+})
+
+onBeforeUnmount(stopPolling)
 
 const lastLog = computed(() => props.recentLogs[0] || null)
 
@@ -135,6 +218,7 @@ async function onSync() {
     return
   }
   syncing.value = true
+  externalRun = false
   activeAbort = new AbortController()
   try {
     const d = await runOmniSync(
@@ -148,6 +232,7 @@ async function onSync() {
       ElMessage.error(`同步失败: ${msg}`)
     }
   } catch (e) {
+    if (unmounting.value) return
     if (isCanceledError(e)) {
       ElMessage.warning('已中止同步')
     } else {
@@ -156,7 +241,8 @@ async function onSync() {
   } finally {
     syncing.value = false
     activeAbort = null
-    emit('synced')
+    // 卸载路径不触发 synced（父组件已在离场，emit 只会多发一次 stats 请求）
+    if (!unmounting.value) emit('synced')
   }
 }
 
@@ -165,8 +251,20 @@ function onCancel() {
 }
 
 defineExpose({
-  /** 由 OmniView 在卸载/切换时调用, 避免泄露 in-flight 请求。 */
-  cancelInFlight: () => activeAbort?.abort(),
+  /**
+   * 由 OmniView 在卸载/切换时调用。silent=true（路由离开）：不 toast、
+   * 不 emit synced；后端任务照跑，回来时由 onMounted 轮询接管。
+   */
+  cancelInFlight: (silent = false) => {
+    if (silent) {
+      unmounting.value = true
+      stopPolling()
+      activeAbort?.abort()
+      activeAbort = null
+      return
+    }
+    activeAbort?.abort()
+  },
 })
 </script>
 

@@ -112,10 +112,11 @@ export interface OmniSyncResponse {
 
 /**
  * POST /api/omni/sync — 触发同步; 调用方负责 AbortController 取消。
- * 全量同步服务端最长约 300s, 必须覆盖全局 15s timeout (否则客户端超时
- * 断连而服务端仍在跑); POST 不参与拦截器自动重试, 不会双发。
+ * 服务端 wait_for 在 300s 取消任务，之后还要写收尾日志，故客户端给到
+ * 310s 余量（两者相等会在临界点先超时、toast 与后端实际状态不符）;
+ * 必须覆盖全局 15s timeout。POST 不参与拦截器自动重试, 不会双发。
  */
-const SYNC_TIMEOUT_MS = 300_000
+const SYNC_TIMEOUT_MS = 310_000
 
 export async function runOmniSync(
   body: OmniSyncRequest,

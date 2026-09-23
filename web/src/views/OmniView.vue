@@ -76,6 +76,7 @@
           :recent-logs="recentLogs"
           :loading="loading"
           @synced="onSyncCompleted"
+          @poll="onPoll"
         />
       </section>
     </div>
@@ -167,9 +168,10 @@ async function loadStats(force = false) {
 }
 
 async function refreshAll() {
+  // 刷新保留当前查询页；写死第 1 页会把翻到后半的用户静默拉回。
   await Promise.all([
     loadStats(true),
-    hasSearched.value ? runQuery(1, 'refresh') : Promise.resolve(),
+    hasSearched.value ? runQuery(queryPage.value, 'refresh') : Promise.resolve(),
   ])
 }
 
@@ -205,6 +207,12 @@ async function runQuery(page: number, trigger: QueryTrigger) {
     if (trigger === 'user') hasSearched.value = true
     const d = await queryOmniSectors(params, ac.signal)
     if (ac.signal.aborted) return
+    // 后端业务失败是 HTTP 200 + {status:'failed',message}，需显式提示而非空表。
+    if (d?.status === 'failed') {
+      queryError.value = d.message || '查询失败'
+      sectors.value = []
+      return
+    }
     // 后端偶发返回 null (历史缩进 bug 修复前已有, 留兜底避免 .sectors 读取崩溃)。
     sectors.value = d?.sectors || []
     const tc = d?.total_count
@@ -240,6 +248,11 @@ function onPageChange(page: number) {
 async function onSyncCompleted() {
   // 同步完成后立即拉一次最新 stats (sync tab + stats tab 都拿到新数据)
   await loadStats(true)
+}
+
+function onPoll() {
+  // 轮询刷新：非 force，不触发顶栏按钮 loading
+  void loadStats(false)
 }
 
 const queryPanelRef = ref<InstanceType<typeof QueryPanel> | null>(null)
@@ -289,7 +302,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   // 卸载时取消所有 in-flight 请求, 避免响应写回已卸载组件
   queryAbort?.abort()
-  syncPanelRef.value?.cancelInFlight()
+  syncPanelRef.value?.cancelInFlight(true)
   queryPanelRef.value?.closeModal()
 })
 </script>

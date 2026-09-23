@@ -140,7 +140,9 @@
               (板块宣称 {{ modalSector.stock_count }} 只)
             </span>
           </div>
-          <el-table :data="modalStocks" stripe class="stocks-table">
+          <!-- max-height: 大板块（最大约 1500 行）表内滚动、表头吸顶;
+               否则弹窗超出视口、锁页时底部不可达 -->
+          <el-table :data="modalStocks" stripe class="stocks-table" max-height="55vh">
             <el-table-column label="#" width="70" align="right" header-align="right">
               <template #default="{ row }">{{ row.rank ?? '-' }}</template>
             </el-table-column>
@@ -160,7 +162,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { OmniSector, OmniSectorStock } from '@/api/omni'
 import {
   getOmniSectorStocks,
@@ -245,7 +247,9 @@ const modalStocks = ref<OmniSectorStock[]>([])
 const modalMeta = ref('')
 const modalTitle = ref('板块成分股')
 
-const modalRequest = ref<{ cancel: () => void } | null>(null)
+// 必须 shallowRef：ref 会把句柄对象包成 reactive 代理，.value 与原对象
+// 不再 ===，导致每次响应都被误判"已被新请求取代"，弹窗永久 loading。
+const modalRequest = shallowRef<{ cancel: () => void } | null>(null)
 
 function openSectorModal(row: OmniSector) {
   modalTitle.value = row.name
@@ -280,6 +284,12 @@ async function fetchStocks() {
     const res = await getOmniSectorStocks({ sector_id: sector.id, code: sector.code, source: sector.source }, ac.signal)
     // 弹窗已关/已被新请求取代 → 不回写, 避免关闭后错误被 watch 清空又复活
     if (ac.signal.aborted || modalRequest.value !== reqHandle) return
+    // 后端业务失败是 HTTP 200 + {status:'failed'}，axios 不会抛错；
+    // 不检查就会把真实原因显示成"暂无成分股数据"。
+    if (res.status === 'failed') {
+      modalError.value = res.message || '加载失败'
+      return
+    }
     modalSector.value = res.sector
     modalStocks.value = res.stocks || []
   } catch (e) {
