@@ -1,19 +1,16 @@
 <template>
-  <el-card shadow="never" class="panel-card">
-    <template #header>
-      <div class="card-toolbar">
-        <h2 class="card-title">
-          MCP APIs
-          <span class="timestamp">{{ timestampText }}</span>
-        </h2>
-        <div class="toolbar-actions">
-          <span class="ifs-meta">{{ metaText }}</span>
-          <el-button size="small" @click="copyAll">复制全部 tool 名</el-button>
-        </div>
+  <div class="view-page">
+    <header class="view-header">
+      <h1 class="view-h1">MCP APIs</h1>
+      <div class="view-actions">
+        <span class="ifs-meta">{{ metaText }}</span>
+        <span v-if="timestampText" class="view-time">{{ timestampText }}</span>
+        <el-button size="small" @click="copyAll">复制全部 tool 名</el-button>
       </div>
-    </template>
+    </header>
 
-    <div class="ifs-layout">
+    <el-card shadow="never" class="panel-card">
+      <div class="ifs-layout">
       <!-- 左侧: 搜索 + 过滤器 + 分组导航 -->
       <aside class="ifs-sidebar">
         <el-input
@@ -176,8 +173,9 @@
           </el-table-column>
         </el-table>
       </section>
-    </div>
-  </el-card>
+      </div>
+    </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -372,7 +370,7 @@ watch(tools, (all) => {
 }, { flush: 'post' })
 
 watch(
-  () => route.query.tools,
+  () => route.query.tab,
   (val) => {
     const key = typeof val === 'string' ? val : ''
     if (!key) {
@@ -387,11 +385,11 @@ watch(
 
 function syncQuery(key: string): void {
   const wanted = key === ALL_KEY ? '' : key
-  const current = (route.query.tools as string | undefined) || ''
+  const current = (route.query.tab as string | undefined) || ''
   if (current === wanted) return
-  // 仅改 tools slot, 保留其他 query (如 phase 4+ 加的过滤参数)
-  const { tools: _drop, ...rest } = route.query
-  const next = wanted ? { ...rest, tools: wanted } : rest
+  // 仅改 tab slot, 保留其他 query (如过滤参数)
+  const { tab: _drop, ...rest } = route.query
+  const next = wanted ? { ...rest, tab: wanted } : rest
   void router.replace({ path: '/interfaces', query: next })
 }
 
@@ -467,7 +465,7 @@ async function load(): Promise<void> {
   // 同步清空 name 集, 避免按钮文案残留为"收起"。
   expandedNames.value = new Set()
   timestamp.value = ifsRes.value.timestamp
-  const wanted = typeof route.query.tools === 'string' ? route.query.tools : ''
+  const wanted = typeof route.query.tab === 'string' ? route.query.tab : ''
   activeGroup.value = wanted === ALL_KEY || groupOrder.value.includes(wanted) ? wanted : ALL_KEY
   loading.value = false
 }
@@ -521,35 +519,16 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.panel-card {
-  border-radius: 8px;
-}
+/* 统一页面外壳: 标题行 + 卡片 */
+/* view-* 类已抽到 web/src/styles/view-header.css (全局) */
 
-.card-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.card-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.timestamp {
-  margin-left: 8px;
+.view-time {
   font-size: 12px;
-  font-weight: 400;
   color: var(--el-text-color-secondary);
 }
 
-.toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.panel-card {
+  border-radius: 8px;
 }
 
 .ifs-meta {

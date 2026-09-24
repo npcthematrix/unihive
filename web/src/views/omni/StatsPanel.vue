@@ -15,7 +15,7 @@
       :title="loadError"
     >
       <template #default>
-        <el-button size="small" @click="emit('reload')">重试</el-button>
+        <el-button size="small" @click="$emit('reload')">重试</el-button>
       </template>
     </el-alert>
 
@@ -52,7 +52,7 @@ interface Props {
 }
 
 defineProps<Props>()
-const emit = defineEmits<{
+defineEmits<{
   (e: 'reload'): void
 }>()
 </script>

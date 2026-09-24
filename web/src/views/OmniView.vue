@@ -1,19 +1,19 @@
 <template>
-  <el-card shadow="never" class="panel-card">
-    <template #header>
-      <div class="card-toolbar">
-        <h2 class="card-title">OMNI板块管理</h2>
-        <div class="toolbar-actions">
-          <span
-            class="last-refresh"
-            :class="{ failed: loadError }"
-          >{{ refreshLabel }}</span>
-          <el-button :icon="Refresh" @click="refreshAll" :loading="manualLoading">
-            立即刷新
-          </el-button>
-        </div>
+  <div class="view-page">
+    <header class="view-header">
+      <h1 class="view-h1">OMNI板块管理</h1>
+      <div class="view-actions">
+        <span
+          class="last-refresh"
+          :class="{ failed: loadError }"
+        >{{ refreshLabel }}</span>
+        <el-button :icon="Refresh" @click="refreshAll" :loading="manualLoading">
+          立即刷新
+        </el-button>
       </div>
-    </template>
+    </header>
+
+    <el-card shadow="never" class="panel-card">
 
     <!-- 子标签导航 -->
     <nav class="cfg-subtabs" role="tablist" aria-label="OMNI 子标签">
@@ -80,7 +80,8 @@
         />
       </section>
     </div>
-  </el-card>
+    </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -99,7 +100,7 @@ import {
   type OmniQueryParams,
 } from '@/api/omni'
 import { errorMessage, isCanceledError } from '@/api/client'
-import { formatHMS } from '@/utils/time'
+import { formatLastRefreshLabel } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type OmniTabKey } from './omni/format'
 import { parseHashTab } from './_shared/hashTab'
 import StatsPanel from './omni/StatsPanel.vue'
@@ -288,11 +289,9 @@ async function selectTab(tab: OmniTabKey): Promise<void> {
   }
 }
 
-const refreshLabel = computed(() => {
-  if (loadError.value) return '加载失败'
-  if (!lastRefresh.value) return '尚未加载'
-  return `更新于 ${formatHMS(lastRefresh.value)}`
-})
+const refreshLabel = computed(() =>
+  formatLastRefreshLabel(loadError.value, lastRefresh.value),
+)
 
 onMounted(() => {
   // 首屏只加载 stats (query 等待用户操作)

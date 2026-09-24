@@ -13,8 +13,6 @@ export interface RuntimeStats {
   calls_last_1m: number
   /** 近 5 分钟窗口内的调用数。 */
   calls_last_5m: number
-  /** 调用速率 (次/分); 当前等同 calls_last_1m, 留字段便于后续换滑窗。 */
-  calls_per_min: number
   timestamp: number
 }
 

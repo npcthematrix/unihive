@@ -1,9 +1,9 @@
-import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { errorMessage } from '@/api/client'
 import { getUpstreamMetrics } from '@/api/upstream-metrics'
-import type { UpstreamMetrics } from '@/api/upstream-metrics'
-import { getStatus, type CacheStats } from '@/api/status'
+import type { UpstreamMetrics, ThsdkMetrics } from '@/api/upstream-metrics'
+import { getStatus, type CacheStats, type GatewayStatus } from '@/api/status'
 import { getRuntimeStats, type RuntimeStats } from '@/api/runtime'
 import {
   type CacheToolBreakdownRow,
@@ -13,7 +13,7 @@ import {
   resetUpstreamL1,
   vacuumCache,
 } from '@/api/cache'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { POLL_INTERVAL_MS, STALE_THRESHOLD_SEC } from '@/constants/time'
 import { formatRefreshLabel } from '@/utils/time'
 
 /** breakdown 降频: 每 6 轮 10s 轮询刷一次 (≈60s)。 */
@@ -77,28 +77,41 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   const withLifecycle = options.lifecycle ?? true
 
   const metrics = ref<UpstreamMetrics | null>(null)
+  const gatewayStatus = ref<GatewayStatus | null>(null)
   const respCache = ref<CacheStats | null>(null)
   const runtime = ref<RuntimeStats | null>(null)
+  const thsdkMetrics = ref<ThsdkMetrics | null>(null)
   const initialLoading = ref(false)
   const manualLoading = ref(false)
   const loadError = ref('')
   const l1LoadError = ref('')
   const respLoadError = ref('')
+  const thsdkLoadError = ref('')
 
-  // 时间戳/时钟: 默认由 useAutoRefresh 提供; 无生命周期环境用本地兜底。
-  let autoRefresh: Ref<boolean> = ref(false)
-  let nowSec: Ref<number> = ref(Math.floor(Date.now() / 1000))
-  let lastFetchSec: Ref<number> = ref(0)
-  let ageSec: ComputedRef<number>
-  let markFetched: () => void = () => {
-    lastFetchSec.value = nowSec.value
+  // 时间戳/时钟: 默认挂生命周期 (1s 时钟 + 轮询 + visibility 重拉); 单测可走本地兜底。
+  const autoRefresh = ref(true)
+  const nowSec = ref(Math.floor(Date.now() / 1000))
+  const lastFetchSec = ref(0)
+  const ageSec = computed(() =>
+    lastFetchSec.value ? Math.max(0, nowSec.value - lastFetchSec.value) : 0,
+  )
+  function markFetched(timestampSec?: number): void {
+    lastFetchSec.value = timestampSec ?? Math.floor(Date.now() / 1000)
   }
-  let resetFetched: () => void = () => {
+  function resetFetched(): void {
     lastFetchSec.value = 0
   }
 
   let inFlight = false
   let pollCount = 0
+  /** 手动刷新撞在途轮询时排队: 本轮结束后补一次真正的手动刷新。 */
+  let pendingManual = false
+  /** 任一主源成功过即锁存: 之前 firstLoad 只看两源是否为 null, 两源持续
+   * 失败时每轮都算首屏 → 遮罩反复闪。 */
+  let everLoaded = false
+  /** breakdown 首次成功 (含空结果) 后锁存: 此前每轮重试, 成功后降频。
+   * 否则主源持续失败时 breakdown 会跟着每轮空跑。 */
+  let breakdownFirstSucceeded = false
 
   // 趋势采样环: 源失败对应字段为 null, Sparkline 留缺口。
   interface TrendSample {
@@ -153,23 +166,35 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     }),
   )
 
+  /** 管线标签的 2.5s 快采是否在跑: 是 → 全局 10s 轮询跳过 mootdx/thsdk
+   *  metrics (快采已在更频繁地更新它们), 消除重复请求。 */
+  const fastPollActive = ref(false)
+
   async function load(manual = false, refreshBreakdown = false): Promise<void> {
     if (inFlight) {
-      if (manual) manualLoading.value = true
+      if (manual) {
+        // 不丢点击: 排队, 本轮结束后补刷; loading 持续到补刷完成。
+        pendingManual = true
+        manualLoading.value = true
+      }
       return
     }
     inFlight = true
     pollCount += 1
-    const firstLoad = metrics.value === null && respCache.value === null
+    const firstLoad = !everLoaded
     if (firstLoad) initialLoading.value = true
     if (manual) manualLoading.value = true
     loadError.value = ''
 
-    // 三源独立结算: 单源失败不拖垮其余卡片
-    const [metricsResult, statusResult, runtimeResult] = await Promise.allSettled([
-      getUpstreamMetrics('mootdx2'),
+    // 四源独立结算: 单源失败不拖垮其余卡片
+    // 管线快采在跑时, 两个组件 metrics 跳过 (返回哨兵, 下方 handler 识别后不更新)。
+    const skip = Promise.resolve({ skipped: true })
+    const fetchComponents = !fastPollActive.value
+    const [metricsResult, statusResult, runtimeResult, thsdkResult] = await Promise.allSettled([
+      fetchComponents ? getUpstreamMetrics('mootdx2') : skip,
       getStatus(),
       getRuntimeStats(),
+      fetchComponents ? getUpstreamMetrics('thsdk') : skip,
     ])
 
     const sample: TrendSample = {
@@ -179,18 +204,27 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       liveEntries: null,
     }
 
-    if (metricsResult.status === 'fulfilled') {
+    if (metricsResult.status === 'fulfilled' && !('skipped' in metricsResult.value)) {
       const m = metricsResult.value.metrics
       metrics.value = m
       l1LoadError.value = ''
       sample.l1Rate = m.daily_l1?.hit_rate ?? null
       sample.l1Size = m.daily_l1?.size ?? null
-    } else {
+    } else if (metricsResult.status === 'rejected') {
       l1LoadError.value = errorMessage(metricsResult.reason, '无法加载 MooTDX2 指标')
+    }
+
+    if (thsdkResult.status === 'fulfilled' && !('skipped' in thsdkResult.value)) {
+      thsdkMetrics.value = thsdkResult.value.metrics as unknown as ThsdkMetrics
+      thsdkLoadError.value = ''
+    } else if (thsdkResult.status === 'rejected') {
+      thsdkMetrics.value = null
+      thsdkLoadError.value = errorMessage(thsdkResult.reason, 'THSDK 状态不可用')
     }
 
     if (statusResult.status === 'fulfilled') {
       const status = statusResult.value
+      gatewayStatus.value = status
       respCache.value = status.cache
       gatewayPid.value = status.pid ?? 0
       respLoadError.value = ''
@@ -213,14 +247,33 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       runtime.value = runtimeResult.value
     }
 
+    // 任一主源成功 = 页面已拿到过真实数据, 锁存首屏
+    if (
+      metricsResult.status === 'fulfilled'
+      || statusResult.status === 'fulfilled'
+      || thsdkResult.status === 'fulfilled'
+    ) {
+      everLoaded = true
+    }
+
     samples.value = [...samples.value, sample].slice(-MAX_SAMPLES)
     initialLoading.value = false
-    manualLoading.value = false
 
-    // breakdown 降频: 首屏/手动/管理动作后必刷, 否则每 6 轮一次。
-    // inFlight 覆盖 breakdown 全程, 防重叠。
+    // 本轮收尾: 有排队的手动点击则补刷 (loading 不复位), 否则结束。
+    const finishCycle = (): void => {
+      inFlight = false
+      if (pendingManual) {
+        pendingManual = false
+        void load(true)
+      } else {
+        manualLoading.value = false
+      }
+    }
+
+    // breakdown 降频: 首次成功前每轮重试 / 手动 / 管理动作后必刷,
+    // 成功后每 6 轮一次。inFlight 覆盖全程, 防重叠。
     const shouldFetchBreakdown =
-      firstLoad || manual || refreshBreakdown
+      !breakdownFirstSucceeded || manual || refreshBreakdown
       || pollCount % BREAKDOWN_REFRESH_CYCLES === 0
     if (shouldFetchBreakdown) {
       breakdownLoading.value = true
@@ -228,33 +281,88 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
         const resp = await getCacheToolBreakdown()
         breakdownRows.value = resp.tools
         breakdownTotalTools.value = resp.total_tools
+        breakdownFirstSucceeded = true
       } catch {
         // 旧网关无此路由/瞬时失败: 保留旧行不空表 (首屏时本就为空)
       } finally {
         breakdownLoading.value = false
         breakdownEverLoaded.value = true
-        inFlight = false
+        finishCycle()
       }
     } else {
-      inFlight = false
+      finishCycle()
     }
   }
 
   // 生命周期绑定必须在 load 定义之后 (onPoll 闭包), 但早于任何实际触发。
+  // 走原 useAutoRefresh: 1s 时钟 + 轮询 + tab 可见时陈旧重拉; 单测时 lifecycle=false 不挂。
+  let clockTimer: ReturnType<typeof setInterval> | null = null
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+  function tickClock(): void {
+    if (typeof document !== 'undefined' && document.hidden) return
+    nowSec.value = Math.floor(Date.now() / 1000)
+  }
+  function onVisibility(): void {
+    if (document.hidden) return
+    nowSec.value = Math.floor(Date.now() / 1000)
+    if (lastFetchSec.value && nowSec.value - lastFetchSec.value > STALE_THRESHOLD_SEC) {
+      void load(false)
+    }
+  }
+  watch(autoRefresh, (on) => {
+    if (!on) {
+      if (pollTimer) {
+        clearInterval(pollTimer)
+        pollTimer = null
+      }
+      return
+    }
+    pollTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      void load(false)
+    }, POLL_INTERVAL_MS)
+  })
+
   if (withLifecycle) {
-    const ar = useAutoRefresh({ onPoll: () => { void load(false) } })
-    autoRefresh = ar.autoRefresh
-    nowSec = ar.nowSec
-    lastFetchSec = ar.lastFetchSec
-    ageSec = ar.ageSec
-    markFetched = ar.markFetched
-    resetFetched = ar.resetFetched
-  } else {
-    ageSec = computed(() =>
-      lastFetchSec.value
-        ? Math.max(0, nowSec.value - lastFetchSec.value)
-        : 0,
-    )
+    onMounted(() => {
+      void load(false)
+      clockTimer = setInterval(tickClock, 1000)
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', onVisibility)
+      }
+    })
+
+    onBeforeUnmount(() => {
+      if (clockTimer) {
+        clearInterval(clockTimer)
+        clockTimer = null
+      }
+      if (pollTimer) {
+        clearInterval(pollTimer)
+        pollTimer = null
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility)
+      }
+    })
+  }
+
+  /** 只刷新两个组件 metrics (管线标签快速采样用, 不拉 status/cache)。 */
+  async function loadComponentMetrics(): Promise<void> {
+    const [mootdxResult, thsdkResult] = await Promise.allSettled([
+      getUpstreamMetrics('mootdx2'),
+      getUpstreamMetrics('thsdk'),
+    ])
+    if (mootdxResult.status === 'fulfilled') {
+      metrics.value = mootdxResult.value.metrics
+    } else {
+      metrics.value = null
+    }
+    if (thsdkResult.status === 'fulfilled') {
+      thsdkMetrics.value = thsdkResult.value.metrics as unknown as ThsdkMetrics
+    } else {
+      thsdkMetrics.value = null
+    }
   }
 
   async function onResetL1(): Promise<void> {
@@ -335,11 +443,14 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   return {
     // 状态
     metrics,
+    gatewayStatus,
     respCache,
     runtime,
+    thsdkMetrics,
     loadError,
     l1LoadError,
     respLoadError,
+    thsdkLoadError,
     initialLoading,
     manualLoading,
     statsFromForeignProcess,
@@ -364,6 +475,8 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     clearLoading,
     // 动作
     load,
+    loadComponentMetrics,
+    fastPollActive,
     onResetL1,
     onCleanup,
     onVacuum,

@@ -24,3 +24,22 @@ export function formatUptime(seconds: number): string {
   if (minutes > 0) return `${minutes}分 ${Math.floor(seconds % 60)}秒`
   return `${Math.floor(seconds)}秒`
 }
+
+/** 过滤掉采样点中的 null/undefined, 返回纯数字序列 (用于 sparkline 渲染)。 */
+export function definedPoints(pts: (number | null)[]): number[] {
+  return pts.filter((v): v is number => v != null)
+}
+
+/** sparkline 的"比率"型 aria-label: 起点% → 终点%, 含采样点计数。不足 2 点返回 "采样不足"。 */
+export function rateAria(label: string, pts: (number | null)[]): string {
+  const defined = definedPoints(pts)
+  if (defined.length < 2) return `${label}: 采样不足`
+  return `${label}: ${formatPercent(defined[0])} → ${formatPercent(defined[defined.length - 1])}, 共 ${defined.length} 个采样点`
+}
+
+/** sparkline 的"计数"型 aria-label: 起点 → 终点, 含采样点计数。不足 2 点返回 "采样不足"。 */
+export function countAria(label: string, pts: (number | null)[]): string {
+  const defined = definedPoints(pts)
+  if (defined.length < 2) return `${label}: 采样不足`
+  return `${label}: ${defined[0]} → ${defined[defined.length - 1]}, 共 ${defined.length} 个采样点`
+}

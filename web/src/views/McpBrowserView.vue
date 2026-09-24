@@ -191,21 +191,21 @@ async function loadUpstreams(): Promise<void> {
     return
   }
   // 深链里的上游名解析不到就回落到第一个 —— 不要 404。
-  const wanted = typeof route.query.upstream === 'string' ? route.query.upstream : ''
+  const wanted = typeof route.query.tab === 'string' ? route.query.tab : ''
   const resolved = upstreamOrder.value.includes(wanted) ? wanted : upstreamOrder.value[0] || ''
   if (resolved) await selectUpstream(resolved)
 }
 
-// ---- 深链 (?upstream=; ?tool= 深链已下线) ----
+// ---- 深链 (?tab=<upstream name>) ----
 function syncQuery(upstream: string): void {
-  const currentUp = (route.query.upstream as string | undefined) || ''
+  const currentUp = (route.query.tab as string | undefined) || ''
   if (currentUp === upstream) return
-  const { upstream: _u, ...rest } = route.query
-  void router.replace({ path: '/mcp-browser', query: { ...rest, upstream } })
+  const { tab: _u, ...rest } = route.query
+  void router.replace({ path: '/mcp-browser', query: { ...rest, tab: upstream } })
 }
 
 watch(
-  () => route.query.upstream,
+  () => route.query.tab,
   (val) => {
     const name = typeof val === 'string' ? val : ''
     if (name && name !== selected.value && upstreamOrder.value.includes(name)) {
@@ -281,42 +281,41 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <el-card shadow="never" class="panel-card">
-    <template #header>
-      <div class="card-toolbar">
-        <h2 class="card-title">
-          MCP 浏览器
-          <span v-if="currentUpstream">
-            {{ UPSTREAM_TITLE[currentUpstream.name] || currentUpstream.name }}
-            <el-tag
-              size="small"
-              effect="plain"
-              :type="currentUpstream.available ? 'success' : 'danger'"
-            >
-              {{ currentUpstream.available ? currentUpstream.status : '不可用' }}
-            </el-tag>
-          </span>
-        </h2>
-        <div class="toolbar-actions">
-          <span v-if="metaText" class="mcp-meta">{{ metaText }}</span>
-          <el-button
-            v-if="importSupported"
+  <div class="view-page">
+    <header class="view-header">
+      <h1 class="view-h1">
+        MCP 浏览器
+        <span v-if="currentUpstream" class="view-h1-sub">
+          {{ UPSTREAM_TITLE[currentUpstream.name] || currentUpstream.name }}
+          <el-tag
             size="small"
-            type="warning"
-            plain
-            @click="openImport"
+            effect="plain"
+            :type="currentUpstream.available ? 'success' : 'danger'"
           >
-            OpenAPI 导入
-          </el-button>
-          <el-button size="small" @click="copyAll">复制全部 tool 名</el-button>
-          <el-button size="small" :icon="Refresh" :loading="loading" @click="refresh">
-            刷新
-          </el-button>
-        </div>
+            {{ currentUpstream.available ? currentUpstream.status : '不可用' }}
+          </el-tag>
+        </span>
+      </h1>
+      <div class="view-actions">
+        <span v-if="metaText" class="mcp-meta">{{ metaText }}</span>
+        <el-button
+          v-if="importSupported"
+          size="small"
+          type="warning"
+          plain
+          @click="openImport"
+        >
+          OpenAPI 导入
+        </el-button>
+        <el-button size="small" @click="copyAll">复制全部 tool 名</el-button>
+        <el-button size="small" :icon="Refresh" :loading="loading" @click="refresh">
+          刷新
+        </el-button>
       </div>
-    </template>
+    </header>
 
-    <div class="mcp-layout">
+    <el-card shadow="never" class="panel-card">
+      <div class="mcp-layout">
       <!-- 左侧: 搜索 + 形状开关 + 上游导航 -->
       <aside class="mcp-sidebar">
         <el-input
@@ -499,15 +498,19 @@ onUnmounted(() => {
       </section>
     </div>
 
-    <OpenapiImportDialog
-      v-model="importVisible"
-      :upstream="selected"
-      @applied="onImportApplied"
-    />
-  </el-card>
+      <OpenapiImportDialog
+        v-model="importVisible"
+        :upstream="selected"
+        @applied="onImportApplied"
+      />
+    </el-card>
+  </div>
 </template>
 
 <style scoped>
+/* 统一页面外壳: 标题行 + 卡片 */
+/* view-* 类已抽到 web/src/styles/view-header.css (全局) */
+
 .mcp-layout {
   display: flex;
   gap: 16px;

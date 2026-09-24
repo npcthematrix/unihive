@@ -43,11 +43,11 @@
       <MiniStat
         label="当前 size"
         :value="sizeText"
-        :hint="`/ ${dailyL1?.maxsize ?? 2048} 上限`"
+        :hint="sizeHint"
       />
       <MiniStat
         label="并发上限"
-        :value="dailyL1?.reader_semaphore_limit ?? 4"
+        :value="semaphoreText"
         hint="Reader 并发控制"
       />
       <MiniStat label="TTL" :value="ttlText" hint="到次日 9:00" />
@@ -83,14 +83,6 @@
       />
     </div>
 
-    <div v-if="poolRows.length" class="pool-row">
-      <span class="pool-title">连接池</span>
-      <span v-for="row in poolRows" :key="row.label" class="pool-item">
-        <span class="pool-label">{{ row.label }}</span>
-        <strong>{{ row.value }}</strong>
-      </span>
-    </div>
-
     <details class="constants-details">
       <summary>配置常量 · get_daily_local L1</summary>
       <div class="kv-grid">
@@ -112,7 +104,7 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue'
 import type { UpstreamMetrics, L1CacheStats } from '@/api/upstream-metrics'
-import { formatPercent, formatTtl } from '@/utils/number'
+import { formatTtl, rateAria, countAria } from '@/utils/number'
 import { useHitRate } from '@/composables/useHitRate'
 import HitRateCard from '@/components/HitRateCard.vue'
 import MiniStat from '@/components/MiniStat.vue'
@@ -143,13 +135,25 @@ const hitRateHint = computed(() => {
   if (!l1?.enabled) return l1 ? '缓存已停用' : '尚未拉到指标'
   const total = (l1.hits ?? 0) + (l1.misses ?? 0)
   return total > 0
-    ? `共 ${total} 次请求 · 并发未命中已折叠`
+    ? `共 ${total} 次请求 · 同 key 并发只计一次`
     : '网关启动后累计 (尚未请求)'
 })
 
 const sizeText = computed(() => {
+  // 指标未加载/失败时不展示数字, 也不拿 2048 编造上限
   const size = dailyL1.value?.size
   return size == null ? '—' : String(size)
+})
+
+const sizeHint = computed(() => {
+  const maxsize = dailyL1.value?.maxsize
+  return maxsize != null ? `/ ${maxsize} 上限` : undefined
+})
+
+const semaphoreText = computed(() => {
+  const l1 = dailyL1.value
+  if (!l1) return '—'
+  return l1.reader_semaphore_limit ?? '—'
 })
 
 const ttlText = computed(() => {
@@ -168,42 +172,6 @@ function blockSub(prefix: string, stats?: L1CacheStats): string {
   return `${prefix} · ${ttl != null ? formatTtl(ttl) : '固定档'}`
 }
 
-function definedPoints(pts: (number | null)[]): number[] {
-  return pts.filter((v): v is number => v != null)
-}
-
-function rateAria(label: string, pts: (number | null)[]): string {
-  const defined = definedPoints(pts)
-  if (defined.length < 2) return `${label}: 采样不足`
-  return `${label}: ${formatPercent(defined[0])} → ${formatPercent(defined[defined.length - 1])}, 共 ${defined.length} 个采样点`
-}
-
-function countAria(label: string, pts: (number | null)[]): string {
-  const defined = definedPoints(pts)
-  if (defined.length < 2) return `${label}: 采样不足`
-  return `${label}: ${defined[0]} → ${defined[defined.length - 1]}, 共 ${defined.length} 个采样点`
-}
-
-// mootdx2 连接池摘要 (pool_stats 为空对象时整行隐藏)
-const poolRows = computed(() => {
-  const pool = props.metrics?.pool_stats
-  if (!pool || typeof pool !== 'object' || !Object.keys(pool).length) return []
-  const rows: { label: string; value: string }[] = []
-  // 0ms 只在确实发过请求时才有意义; 无流量时 avg_latency=0 是"无数据"。
-  const totalRequests = typeof pool.total_requests === 'number' ? pool.total_requests : 0
-  const latency = pool.avg_latency_ms
-  if (totalRequests > 0 && typeof latency === 'number') {
-    rows.push({ label: '平均延迟', value: `${latency} ms` })
-  }
-  if (typeof pool.total_errors === 'number') {
-    rows.push({ label: '池错误', value: String(pool.total_errors) })
-  }
-  const health = pool.server_health
-  if (health && typeof health === 'object') {
-    rows.push({ label: '已登记服务器', value: String(Object.keys(health).length) })
-  }
-  return rows
-})
 </script>
 
 <style scoped>
@@ -273,35 +241,9 @@ const poolRows = computed(() => {
   background: var(--el-text-color-placeholder);
 }
 
-.mini-value .on { color: var(--el-color-success); }
-.mini-value .off { color: var(--el-text-color-secondary); }
-
-/* 连接池: 窄屏可换行, 不溢出 */
-.pool-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  margin-top: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--el-fill-color-light);
-  font-size: 12px;
-}
-
-.pool-title {
-  font-weight: 600;
-}
-
-.pool-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.pool-label {
-  color: var(--el-text-color-secondary);
-}
+/* .on/.off 着色必须用 :slotted: 父 scope 的 .mini-value 在 MiniStat 内部, 跨组件 scope 隔离让普通后代选择器失效 */
+:slotted(.on) { color: var(--el-color-success); }
+:slotted(.off) { color: var(--el-text-color-secondary); }
 
 /* 折叠的配置常量 */
 .constants-details {
@@ -340,12 +282,7 @@ const poolRows = computed(() => {
   font-size: 13px;
 }
 
-@media (max-width: 1200px) {
-  .stat-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
+/* 不设 3 列断点 (同响应卡: 8 单位在 3 列下末尾缺格)。 */
 @media (max-width: 860px) {
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

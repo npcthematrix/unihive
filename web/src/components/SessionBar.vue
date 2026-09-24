@@ -15,10 +15,6 @@
         {{ formatCountdown(session.secondsToBoundary) }}
       </span>
     </div>
-    <!-- 通用模型装不下的两个特例, 常驻一行小字, 避免误读 -->
-    <p class="session-note">
-      特例：集合竞价快照 9:15–9:25 走 60s 档、9:25 定格；龙虎榜盘后发布，18:00 前缓存的是前一交易日数据。特殊工具以工具说明为准。
-    </p>
   </div>
 </template>
 
@@ -105,13 +101,6 @@ defineProps<{
 .phase-weekend .session-dot {
   background: var(--el-color-info);
   box-shadow: 0 0 0 3px var(--el-color-info-light-9);
-}
-
-.session-note {
-  margin: 4px 2px 0;
-  font-size: 11px;
-  color: var(--el-text-color-secondary);
-  line-height: 1.6;
 }
 
 @media (max-width: 700px) {

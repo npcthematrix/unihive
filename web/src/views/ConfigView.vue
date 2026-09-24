@@ -1,23 +1,23 @@
 <template>
-  <el-card shadow="never" class="panel-card">
-    <template #header>
-      <div class="card-toolbar">
-        <h2 class="card-title">配置信息</h2>
-        <div class="toolbar-actions">
-          <span
-            class="last-refresh"
-            :class="{ failed: loadError }"
-          >{{ refreshLabel }}<template v-if="proxyRefreshSuffix"> · {{ proxyRefreshSuffix }}</template></span>
-          <el-button :icon="DocumentCopy" @click="copyJson" :disabled="!config || copyInFlight" :loading="copyInFlight">复制 JSON</el-button>
-          <el-button
-            :icon="Refresh"
-            :loading="manualLoading"
-            @click="load(true)"
-          >立即刷新</el-button>
-        </div>
+  <div class="view-page">
+    <header class="view-header">
+      <h1 class="view-h1">配置信息</h1>
+      <div class="view-actions">
+        <span
+          class="last-refresh"
+          :class="{ failed: loadError }"
+        >{{ refreshLabel }}<template v-if="proxyRefreshSuffix"> · {{ proxyRefreshSuffix }}</template></span>
+        <el-button size="small" :icon="DocumentCopy" @click="copyJson" :disabled="!config || copyInFlight" :loading="copyInFlight">复制 JSON</el-button>
+        <el-button
+          size="small"
+          :icon="Refresh"
+          :loading="manualLoading"
+          @click="load(true)"
+        >立即刷新</el-button>
       </div>
-    </template>
+    </header>
 
+    <el-card shadow="never" class="panel-card">
     <div class="alert-stack">
       <el-alert
         v-if="loadError"
@@ -124,7 +124,8 @@
         <UpdateCenterPanel :entities="entities" @applied="onFactoryUpgradeApplied" />
       </section>
     </div>
-  </el-card>
+    </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -136,7 +137,7 @@ import { getConfig, getConfigEntities, getProxySettings } from '@/api/config'
 import type { ConfigRevision, GatewayConfig, ProxySettings } from '@/api/config'
 import { getInterfaces } from '@/api/interfaces'
 import { copyText } from '@/utils/clipboard'
-import { formatHMS } from '@/utils/time'
+import { formatHMS, formatLastRefreshLabel } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type TabKey } from './config/format'
 import type { UpstreamEnabledChanged } from './config/upstreams'
 import { userModifiedCount } from './config/entities'
@@ -324,11 +325,9 @@ function onFactoryUpgradeApplied(payload: { revision: number }) {
   void load(false)
 }
 
-const refreshLabel = computed(() => {
-  if (loadError.value) return '加载失败'
-  if (!lastRefresh.value) return '尚未加载'
-  return `更新于 ${formatHMS(lastRefresh.value)}`
-})
+const refreshLabel = computed(() =>
+  formatLastRefreshLabel(loadError.value, lastRefresh.value),
+)
 
 /** 代理独立的时间后缀; proxy 加载失败时不展示, 避免误导。 */
 const proxyRefreshSuffix = computed(() => {

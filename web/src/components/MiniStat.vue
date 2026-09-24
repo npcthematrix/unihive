@@ -22,6 +22,10 @@ withDefaults(
 
 <style scoped>
 .mini-stat {
+  /* 网格项默认 stretch: 填满行高, 与较高的 HitRateCard 底部对齐 */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   padding: 14px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
@@ -35,6 +39,8 @@ withDefaults(
 }
 
 .mini-value {
+  /* 占据 label 以下的剩余空间并垂直居中, 留白在上下均匀分布而非堆在底部 */
+  flex: 1;
   font-size: 18px;
   font-weight: 600;
   display: flex;
@@ -47,6 +53,6 @@ withDefaults(
   font-size: 11px;
   /* placeholder(#a8abb2) 在 11px 下对比度仅 2.4:1, 提到 regular */
   color: var(--el-text-color-regular);
-  margin-top: 2px;
+  margin-top: 6px;
 }
 </style>

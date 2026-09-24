@@ -18,7 +18,7 @@ export interface RefreshLabelOptions {
   ageSec: number
 }
 
-/** "上次刷新"相对时间标签 — StatusView / L1CacheView 共用。 */
+/** "上次刷新"相对时间标签 — 监控类页面共用。 */
 export function formatRefreshLabel({ loadError, lastFetchSec, ageSec }: RefreshLabelOptions): string {
   if (loadError && lastFetchSec === 0) return `刷新失败 (${loadError})`
   if (!lastFetchSec) return '从未刷新'
@@ -26,4 +26,20 @@ export function formatRefreshLabel({ loadError, lastFetchSec, ageSec }: RefreshL
   if (ageSec < 60) return `${ageSec} 秒前刷新`
   if (ageSec < 3600) return `${Math.floor(ageSec / 60)} 分钟前刷新`
   return `${Math.floor(ageSec / 3600)} 小时前刷新`
+}
+
+/**
+ * "更新于 HH:MM:SS" / "加载失败" / "尚未加载" 三态标签。监控/管理页共用。
+ *
+ * - loadError 非空 → "加载失败"
+ * - lastRefresh 为 0/null/undefined → "尚未加载"
+ * - 否则 → "更新于 HH:MM:SS"
+ */
+export function formatLastRefreshLabel(
+  loadError: string | null | undefined,
+  lastRefresh: number | null | undefined,
+): string {
+  if (loadError) return '加载失败'
+  if (!lastRefresh) return '尚未加载'
+  return `更新于 ${formatHMS(lastRefresh)}`
 }

@@ -100,7 +100,7 @@
 import { computed, toRef } from 'vue'
 import type { CacheStats } from '@/api/status'
 import type { CacheToolBreakdownRow } from '@/api/cache'
-import { formatPercent } from '@/utils/number'
+import { rateAria, countAria } from '@/utils/number'
 import { useHitRate } from '@/composables/useHitRate'
 import HitRateCard from '@/components/HitRateCard.vue'
 import MiniStat from '@/components/MiniStat.vue'
@@ -147,7 +147,7 @@ const hitRateHint = computed(() => {
   if (props.foreign) return '命中统计来自上一网关进程, 不代表当前进程'
   const total = (c.hits ?? 0) + (c.misses ?? 0)
   return total > 0
-    ? `共 ${total} 次请求 · 并发未命中已折叠`
+    ? `共 ${total} 次请求 · 同 key 并发只计一次`
     : '网关启动后累计 (尚未请求)'
 })
 
@@ -188,21 +188,6 @@ const breakdownNote = computed(() => {
   return `共 ${props.breakdownTotalTools} 个工具有缓存条目`
 })
 
-function definedPoints(pts: (number | null)[]): number[] {
-  return pts.filter((v): v is number => v != null)
-}
-
-function rateAria(label: string, pts: (number | null)[]): string {
-  const defined = definedPoints(pts)
-  if (defined.length < 2) return `${label}: 采样不足`
-  return `${label}: ${formatPercent(defined[0])} → ${formatPercent(defined[defined.length - 1])}, 共 ${defined.length} 个采样点`
-}
-
-function countAria(label: string, pts: (number | null)[]): string {
-  const defined = definedPoints(pts)
-  if (defined.length < 2) return `${label}: 采样不足`
-  return `${label}: ${defined[0]} → ${defined[defined.length - 1]}, 共 ${defined.length} 个采样点`
-}
 </script>
 
 <style scoped>
@@ -277,8 +262,9 @@ function countAria(label: string, pts: (number | null)[]): string {
   background: var(--el-text-color-placeholder);
 }
 
-.mini-value .on { color: var(--el-color-success); }
-.mini-value .off { color: var(--el-text-color-secondary); }
+/* .on/.off 着色必须用 :slotted: 父 scope 的 .mini-value 在 MiniStat 内部, 跨组件 scope 隔离让普通后代选择器失效 */
+:slotted(.on) { color: var(--el-color-success); }
+:slotted(.off) { color: var(--el-text-color-secondary); }
 
 .trunc-note {
   margin: 8px 2px 0;
@@ -292,12 +278,8 @@ function countAria(label: string, pts: (number | null)[]): string {
   color: var(--el-text-color-secondary);
 }
 
-@media (max-width: 1200px) {
-  .stat-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
+/* 不设 3 列断点: 8 个网格单位在 3 列下末尾必缺一格;
+   4 列保持到 860px 直接降 2 列。 */
 @media (max-width: 860px) {
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
