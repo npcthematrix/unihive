@@ -26,7 +26,6 @@ EXPECTED_METHODS = [
     # facade 保留
     "__init__",
     "_apply_gateway_tuning",
-    "_construct_upstream_client",
     # lifecycle
     "initialize",
     "_load_db_config",
@@ -37,11 +36,12 @@ EXPECTED_METHODS = [
     "_cache_cleanup_loop",
     # http
     "serve_http",
-    # upstreams (late start)
+    # upstreams (late start + construct)
     "_start_upstream_client",
     "_spawn_late_start",
     "_late_start_once",
     "_cancel_late_starts",
+    "_construct_upstream_client",
     # hot toggle
     "set_upstream_enabled",
     "_publishable_specs",
@@ -132,8 +132,8 @@ def test_defining_modules_are_submodules():
             f"{method} should be defined in gateway_server.{sub}, got "
             f"{getattr(mod, '__name__', None)}"
         )
-    # facade 必须保留的
-    for method in ("__init__", "_construct_upstream_client"):
+    # facade 必须保留的 (其它方法走子模块, 见 EXPECTED_SUBMODULE)
+    for method in ("__init__",):
         mod = inspect.getmodule(getattr(GatewayServer, method))
         assert mod is gs_mod, f"{method} must stay in facade module"
 

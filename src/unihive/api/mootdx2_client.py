@@ -4,6 +4,7 @@ import datetime
 import contextlib
 import functools
 import logging
+import os
 import re
 import threading
 import time
@@ -462,7 +463,22 @@ class MooTDX2Client:
 
             # 2026-09-16: Reader 并发控制 - 限制同时执行的 Reader 数量
             # 防止过多并发 Reader 导致 TDX 库性能下降或超时
-            self._READER_SEMAPHORE_LIMIT = 4  # 最多 4 个并发 Reader
+            # 容量优先级: settings.reader_limit (config_db / yaml 直传) >
+            #             env UNIHIVE_MOOTDX2_READER_LIMIT > 默认 4
+            # getattr 兜底: 历史 mock 用 SimpleNamespace 装配 settings, 没有
+            # reader_limit 字段; 真生产 config 走 MooTDX2Settings 有 reader_limit。
+            _reader_limit = 4
+            cfg_reader_limit = getattr(config.settings, "reader_limit", None) if config.settings is not None else None
+            if cfg_reader_limit is not None and cfg_reader_limit > 0:
+                _reader_limit = int(cfg_reader_limit)
+            else:
+                _env = os.environ.get("UNIHIVE_MOOTDX2_READER_LIMIT")
+                if _env:
+                    try:
+                        _reader_limit = max(1, int(_env))
+                    except (TypeError, ValueError):
+                        pass  # 非法 env 值回落默认
+            self._READER_SEMAPHORE_LIMIT = _reader_limit
             self._reader_semaphore = asyncio.Semaphore(self._READER_SEMAPHORE_LIMIT)
             # 闸门累计/实时计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
             # waiters_now 由 _reader_gate 自持, 不读 CPython Semaphore 私有字段

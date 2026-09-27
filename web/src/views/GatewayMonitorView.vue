@@ -31,6 +31,14 @@
         <template #label>
           <span class="tab-label">上游总览</span>
         </template>
+        <el-alert
+          v-if="overviewEverLoaded"
+          type="info"
+          :title="`本页数据已冻结 · 快照时间 ${refreshLabel} · 需要新数据请点「刷新」`"
+          show-icon
+          :closable="false"
+          class="overview-stale-alert"
+        />
         <UpstreamOverviewPanel
           :rows="upstreamRows"
           :summary="upstreamSummary"
@@ -273,10 +281,10 @@ const gatewaySummary = computed<SummaryItem[]>(() => {
   const upstreams = gatewayStatus.value?.upstreams ?? {}
   const entries = Object.values(upstreams)
   const online = entries.filter((u) => u.status === 'online').length
-  const problem = entries.filter(
-    (u) => u.status === 'offline' || u.status === 'unknown',
-  ).length
+  const problem = entries.filter((u) => u.status === 'offline').length
   const degraded = entries.filter((u) => u.status === 'degraded').length
+  // unknown = 启动早期未探测; 不计入异常, 但要显式告知用户网关正在收敛
+  const unknown = entries.filter((u) => u.status === 'unknown').length
 
   let overallTone: 'good' | 'warn' | 'bad' = 'good'
   let overallText = '整体健康'
@@ -286,6 +294,9 @@ const gatewaySummary = computed<SummaryItem[]>(() => {
   } else if (degraded > 0) {
     overallTone = 'warn'
     overallText = `${degraded} 个上游降级`
+  } else if (unknown > 0) {
+    overallTone = 'good'
+    overallText = `${unknown} 个未知 (启动中)`
   }
 
   return [
@@ -430,16 +441,25 @@ const totalQueued = computed(() => {
   margin-bottom: 12px;
 }
 
-/* 缓存标签内的特例说明 */
+/* 缓存标签内的特例说明 (左色条 + 浅背景, 与核心 cache-layers-hint 区分) */
 .cache-note {
   margin: 0 2px 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border-left: 3px solid var(--el-color-warning-light-5);
+  background: var(--el-fill-color-light);
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--el-text-color-regular);
   line-height: 1.6;
 }
 
 /* 缓存标签内两张卡的间距 */
 .tab-card-gap {
   margin-top: 12px;
+}
+
+/* 上游总览陈旧提示条 */
+.overview-stale-alert {
+  margin-bottom: 12px;
 }
 </style>

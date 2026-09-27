@@ -17,18 +17,14 @@ import yaml
 import uvicorn  # noqa: F401  (审计测试读 gs_mod.uvicorn; 用法在 http.py)
 from fastmcp import FastMCP
 
-from ..api.fuyao_client import FuyaoClient, FuyaoConfig
-from ..api.mootdx2_client import MooTDX2Client, MooTDX2Config
-from ..api.omni_client import OmniClient, OmniConfig
-from ..api.tdx_quant_client import TdxQuantClient
-from ..api.thsdk_client import ThsdkClient
-from ..api.upstream_client import UpstreamClient, UpstreamConfig
+from ..api.fuyao_client import FuyaoClient  # noqa: F401 — 测试 monkeypatch gs.FuyaoClient
+from ..api.mootdx2_client import MooTDX2Client  # noqa: F401 — type hint (server.upstreams: dict[...])
+from ..api.tdx_quant_client import TdxQuantClient  # noqa: F401 — type hint
+from ..api.upstream_client import UpstreamClient  # noqa: F401 — type hint
 from ..core.config_db import resolve_project_path
 # register_tool: 历史 facade 入口 (测试依赖), 子模块内部走 registry.register_tool。
 from ..core.registry import register_tool  # noqa: F401
 from ..core.router import Router
-from ..models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
-from ..models.thsdk_config import ThsdkConfig
 from ..storage.cache import Cache
 from ..storage.config_store import ConfigStore
 from ..utils.config_loader import (
@@ -215,14 +211,13 @@ class GatewayServer(
         self._apply_gateway_tuning()
 
     def _apply_gateway_tuning(self) -> None:
-        """从当前 self.config 应用 gateway 段调参 (per_upstream_timeout + QPS)。
+        """从 self.config 应用 gateway 调参 (per_upstream_timeout + QPS)。
 
         __init__ 按 YAML 基线跑一次; db 模式下库内实体装配完成后再跑一次,
         让控制台对 gateway 调参段的修改无需重启即可被 router/limiter 读到。
         """
         gateway_cfg = self.config.get("gateway", {})
-        # Round-12 簇E: 裸强转坏值 (字符串/bool/负数) 以前抛无名错误;
-        # 统一过 coerce_* 助手, ValueError 带点路径字段名。
+        # Round-12 簇E: 裸强转坏值以前抛无名错误, coerce_* 助手带点路径
         self._per_upstream_timeout = coerce_float_field(
             gateway_cfg.get("per_upstream_timeout", self.DEFAULT_REQUEST_TIMEOUT),
             "gateway.per_upstream_timeout",
@@ -230,11 +225,9 @@ class GatewayServer(
             minimum=0.0,
             exclusive_min=True,
         )
-        # 初始化限流器：从配置读取每个上游的 QPS 限制
         from ..core.rate_limiter import get_default_limiter
         self.limiter = get_default_limiter()
-        # 清掉旧 per-key 配置: 本次未列出的条目应回到默认兜底,
-        # 而不是沿用上一份 config 的限流 (热升级/热编辑重跑时关键)。
+        # 清掉旧 per-key: 本次未列出的条目回到默认兜底 (热升级/热编辑重跑关键)
         self.limiter.reset_configurations()
         rate_cfg = gateway_cfg.get("rate_limit", {})
         for upstream_name, params in rate_cfg.items():
@@ -260,119 +253,19 @@ class GatewayServer(
                     f"got {params!r} ({type(params).__name__})"
                 )
 
-    def _construct_upstream_client(self, name: str, cfg: dict):
-        """按 cfg.type 构造 (但不启动) 一个上游 client。
+        # per-source 池容量 + Reader 闸门 (cfg > env > default, 启动期一次性)
+        self._apply_pool_config()
 
-        启动循环与热启用共用, 避免两处 client 构造参数漂移。
-        """
-        if cfg.get("type") == "http":
-            # HTTP MCP 客户端
-            fuyao_cfg = FuyaoConfig(
-                name=name,
-                base_url=cfg["base_url"],
-                api_key=cfg.get("api_key", ""),
-                timeout_seconds=cfg.get("timeout_seconds", 30),
-                max_retry=cfg.get("retry", {}).get("max_attempts", 3),
-            )
-            return FuyaoClient(fuyao_cfg)
-        if cfg.get("type") == "tdx_quant":
-            # TdxQuant 进程内客户端
-            tdx_quant_settings = TdxQuantSettings(
-                tdx_root=cfg.get("tdx_root", ""),
-                strategy_id=cfg.get("strategy_id", ""),
-                health_check_interval_sec=cfg.get("health_check_interval_sec", 60),
-                call_timeout_sec=cfg.get("call_timeout_sec", 10),
-                reconnect_threshold=cfg.get("reconnect_threshold", 3),
-                unavailable_threshold=cfg.get("unavailable_threshold", 10),
-                # L3 (round 9 audit): 透传 tdx_remote_port, 否则 YAML 里配的非
-                # 默认端口被静默丢弃, 运行时永远连默认 17709。
-                tdx_remote_port=int(cfg.get("tdx_remote_port", 17709)),
-            )
-            tdx_quant_cfg = TdxQuantConfig(
-                name=name,
-                market=cfg.get("market", "std"),
-                settings=tdx_quant_settings,
-            )
-            return TdxQuantClient(tdx_quant_cfg)
-        if cfg.get("type") == "mootdx2":
-            # MooTDX2 客户端
-            from ..models.mootdx2_config import MooTDX2Settings
-
-            # tdxdir 为空时让 mootdx2 自动探测 C:/new_tdx
-            pinned_servers = _parse_mootdx2_servers(cfg.get("servers") or [])
-            mootdx2_settings = MooTDX2Settings(
-                market=cfg.get("market", "std"),
-                tdxdir=cfg.get("tdxdir", ""),
-                servers=pinned_servers,
-                # 指定了服务器就关闭 bestip 全网测速, 固定连配置的 IP
-                auto_select_fastest_server=not pinned_servers,
-                connect_timeout_seconds=cfg.get("connect_timeout_seconds", 3),
-                read_timeout_seconds=cfg.get("read_timeout_seconds", 5),
-            )
-            mootdx2_cfg = MooTDX2Config(
-                name=name,
-                market=cfg.get("market", "std"),
-                settings=mootdx2_settings,
-            )
-            return MooTDX2Client(mootdx2_cfg)
-        if cfg.get("type") == "omni":
-            # OMNIDATA 板块数据客户端
-            omni_cfg = OmniConfig(
-                name=name,
-                db_path=str(resolve_project_path(
-                    cfg.get("db_path"), "./data/board.db"
-                )),
-            )
-            return OmniClient(omni_cfg)
-        if cfg.get("type") == "thsdk":
-            # THSDK（社区 thsdk 包）客户端；凭证只从环境变量读
-            # call_timeout 在 from_dict 内钳制进路由预算，防 config.db 旧 30s 值
-            # 反超路由 10s 致路由先取消、单 worker 僵尸。
-            thsdk_cfg = ThsdkConfig.from_dict(name, cfg, self._per_upstream_timeout)
-            return ThsdkClient(thsdk_cfg)
-        if cfg.get("type") == "ths_local_gateway":
-            # THS-LOCAL-GATEWAY HTTP JSON-RPC MCP 客户端
-            from ..api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
-
-            return ThsLocalClient(
-                ThsLocalConfig(
-                    name=name,
-                    base_url=cfg.get("base_url", ""),
-                    timeout_seconds=cfg.get("timeout_seconds", 30),
-                    connect_timeout_seconds=cfg.get("connect_timeout_seconds", 5.0),
-                )
-            )
-        upstream_type = cfg.get("type")
-        if upstream_type is None:
-            # 历史契约: 缺 type 键 = 通用 stdio MCP 扩展点 (UpstreamClient)。
-            # validate_config 在 strict 模式仍会报 "missing 'type'";
-            # 这里给非 strict / 旧配置保留默认, 也让启动失败的 client 能被
-            # 登记进 upstreams 走 stop() 清理 (见 test_startup_init_failure)。
-            upstream_type = "stdio"
-        if upstream_type != "stdio":
-            # Round-12 簇E: 显式未知 type 以前静默落到 stdio 分支,
-            # 用空 command 构造出一个永远启动不了的客户端, 延迟到调用期
-            # 才以费解错误爆炸。构造期 fail-fast 并列出合法值。
-            valid_types = (
-                "http", "mootdx2", "tdx_quant", "omni",
-                "thsdk", "ths_local_gateway", "stdio",
-            )
-            raise ValueError(
-                f"upstream {name!r}: 未知 type={cfg.get('type')!r}; "
-                f"合法值: {', '.join(valid_types)}"
-            )
-        # 通用 stdio MCP 客户端 (自定义 MCP server 扩展点)
-        upstream_cfg = UpstreamConfig(
-            name=name,
-            enabled=True,
-            package=cfg.get("package", ""),
-            command=cfg.get("command", []),
-            env=cfg.get("env", {}),
-            timeout_seconds=cfg.get("timeout_seconds", 30),
-            max_retry=cfg.get("retry", {}).get("max_attempts", 3),
-            backoff_base=cfg.get("retry", {}).get("backoff_base", 2),
+    def _apply_pool_config(self) -> None:
+        """解析 cfg → 注入 blocking_pool 单例 (启动期一次性, 运行时改需重启)。"""
+        from ..core.pool_config import apply_pool_config
+        from ..core.blocking_pool import _mootdx2, _tdx_quant  # type: ignore
+        self._pool_config = apply_pool_config(
+            self.config,
+            mootdx2_bundle=_mootdx2,
+            tdx_quant_bundle=_tdx_quant,
+            logger=logger,
         )
-        return UpstreamClient(upstream_cfg)
 
 
 async def async_main(transport: str = "stdio", host: str | None = None, port: int | None = None, config_path: str | None = None):

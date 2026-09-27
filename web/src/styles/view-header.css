@@ -1,0 +1,47 @@
+/* ============================================================================
+   页面标题 — 所有 view 共享 (.view-page / .view-header / .view-h1 / .view-actions)
+   原散落在各 view 的 page-header/page-title (GatewayMonitorView) 与
+   view-header/view-h1 (InterfacesView / McpBrowserView) 收敛到此处, 也修掉
+   ConfigView 漏拷样式导致 <h1> 走浏览器默认 (≈32px) 的视觉炸点, 以及
+   OmniView / GuidesView 把页面标题塞进 el-card header 走 EP 主题色的小字重。
+   ============================================================================ */
+
+.view-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  /* 间距由 .view-page gap 统一管, 不再 margin-bottom 重复 */
+}
+
+.view-h1 {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.view-h1-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+  color: var(--el-text-color-regular);
+}
+
+.view-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}

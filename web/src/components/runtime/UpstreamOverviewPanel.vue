@@ -162,7 +162,9 @@ const UPSTREAM_DISPLAY_NAME: Record<string, string> = {
 }
 
 const filter = ref<'all' | 'healthy' | 'unhealthy'>('all')
-const sortKey = ref<'name' | 'status' | 'latency' | null>(null)
+const ALLOWED_SORT_KEYS = ['name', 'status', 'latency'] as const
+type SortKey = (typeof ALLOWED_SORT_KEYS)[number]
+const sortKey = ref<SortKey | null>(null)
 const sortAsc = ref(true)
 
 const summaryCards = [
@@ -256,7 +258,12 @@ function onSortChange(payload: { prop: string | null; order: 'ascending' | 'desc
     sortKey.value = null
     return
   }
-  sortKey.value = payload.prop as 'name' | 'status' | 'latency'
+  // 守卫: 只允许已知列触发排序, 否则静默忽略 (避免排序键越界)
+  if (!(ALLOWED_SORT_KEYS as readonly string[]).includes(payload.prop)) {
+    sortKey.value = null
+    return
+  }
+  sortKey.value = payload.prop as SortKey
   sortAsc.value = payload.order === 'ascending'
 }
 </script>

@@ -72,6 +72,10 @@ class MooTDX2Settings:
     # 通达信本地路径（用于离线接口）
     tdxdir: str = ""
 
+    # Reader 闸门 (asyncio.Semaphore) 容量: 限制同时持有的 Reader 并发数。
+    # 启动期由 MooTDX2Client.__init__ 读此处; None 表示走 env / default 兜底。
+    reader_limit: int | None = None
+
     # 版本
     version: str = "1.0.0"
 
@@ -84,6 +88,15 @@ class MooTDX2Settings:
                 host=s.get("host", "127.0.0.1"),
                 port=s.get("port", 7709),
             ))
+
+        # reader_limit: None / 整数; 非法值回落 None (交由 client 走 env/default 兜底)
+        raw_reader_limit = data.get("reader_limit")
+        reader_limit: int | None = None
+        if raw_reader_limit is not None:
+            try:
+                reader_limit = max(1, int(raw_reader_limit))
+            except (TypeError, ValueError):
+                reader_limit = None
 
         return cls(
             servers=servers,
@@ -98,6 +111,7 @@ class MooTDX2Settings:
             log_level=data.get("log_level", "INFO"),
             log_path=data.get("log_path", "./logs/mootdx2.log"),
             tdxdir=data.get("tdxdir", ""),
+            reader_limit=reader_limit,
             version=data.get("version", "1.0.0"),
         )
 
@@ -116,6 +130,7 @@ class MooTDX2Settings:
             "log_level": self.log_level,
             "log_path": self.log_path,
             "tdxdir": self.tdxdir,
+            "reader_limit": self.reader_limit,
             "version": self.version,
         }
 

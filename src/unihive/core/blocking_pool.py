@@ -117,33 +117,68 @@ class _PoolBundle:
     公共 API 通过下面 9 个 module-level 包装函数暴露, 保持向后兼容的导入面。
     """
 
-    __slots__ = ("_env_var", "_default_size", "_prefix", "_executor")
+    __slots__ = ("_env_var", "_default_size", "_prefix", "_executor", "_size_override")
 
     def __init__(self, env_var: Optional[str], default_size: int, prefix: str) -> None:
         self._env_var = env_var
         self._default_size = default_size
         self._prefix = prefix
         self._executor: Optional[ThreadPoolExecutor] = None
+        # 启动期 cfg 注入 (priority 高于 env); 未设置则走 env / default 回退。
+        self._size_override: Optional[int] = None
+
+    def set_size_override(self, n: int) -> None:
+        """启动期由 GatewayServer._apply_pool_config() 调用, 让池容量走 cfg 值。
+
+        仅在 executor 未创建前生效 (set 后再调 get 才会用); 已创建则忽略并
+        记录 warning, 避免误导用户以为热改生效 (asyncio.Semaphore 不能 resize
+        同样适用于 worker 数: 池扩缩需重启)。"""
+        try:
+            n_int = max(1, int(n))
+        except (TypeError, ValueError):
+            return
+        if self._executor is not None:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[blocking_pool] %s pool already created (size=%d); "
+                "set_size_override(%d) ignored, restart required to apply",
+                self._prefix, self._executor._max_workers, n_int,
+            )
+            return
+        self._size_override = n_int
 
     def get(self) -> ThreadPoolExecutor:
-        """惰性创建并返回专用池 (进程内单例)。"""
+        """惰性创建并返回专用池 (进程内单例)。
+
+        容量优先级: set_size_override() (cfg) > env > code default。"""
         if self._executor is None:
+            if self._size_override is not None:
+                size = self._size_override
+            else:
+                size = _pool_size(self._env_var, self._default_size)
             self._executor = DaemonBlockingExecutor(
-                max_workers=_pool_size(self._env_var, self._default_size),
+                max_workers=size,
                 thread_name_prefix=self._prefix,
             )
         return self._executor
 
     def snapshot(self) -> dict:
-        """池快照。未创建时按容量事实返空池状态。"""
+        """池快照。未创建时按容量事实返空池状态 (含 override 反馈给前端)。"""
+        capacity = (
+            self._size_override
+            if self._size_override is not None
+            else _pool_size(self._env_var, self._default_size)
+        )
         if self._executor is None:
             return {
-                "capacity": _pool_size(self._env_var, self._default_size),
+                "capacity": capacity,
                 "workers": 0,
                 "active": 0,
                 "queued": 0,
             }
-        return _executor_snapshot(self._executor)
+        snap = _executor_snapshot(self._executor)
+        snap["capacity"] = capacity
+        return snap
 
     def shutdown(self) -> None:
         """关停并清空单例。

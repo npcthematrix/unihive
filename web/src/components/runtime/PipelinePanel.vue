@@ -14,7 +14,7 @@
     </template>
 
     <div class="pipeline-list">
-      <div v-for="p in pipelines" :key="p.component" class="pipeline-block">
+      <div v-for="p in pipelines" :key="p.component" class="pipeline-block" :class="{ 'is-primary': p.isPrimary }">
         <div class="pipeline-head">
           <span class="pipeline-name">{{ p.component }}</span>
           <span class="pipeline-summary">{{ p.summary }}</span>
@@ -100,6 +100,7 @@ function poolLayer(label: string, pool?: ExecutorSnapshot | null): Layer | null 
 const pipelines = computed(() => {
   const result: {
     component: string
+    isPrimary?: boolean
     layers: Layer[]
     summary: string
     note?: string
@@ -122,13 +123,17 @@ const pipelines = computed(() => {
       activePct: activePctOf(gate.acquired, gate.capacity),
     })
   }
-  const mBusy = mootdxLayers.reduce(
-    (sum, l) => sum + l.active + l.queued + l.waiters, 0,
-  )
+  const mActive = mootdxLayers.reduce((sum, l) => sum + l.active, 0)
+  const mQueued = mootdxLayers.reduce((sum, l) => sum + l.queued, 0)
+  const mWaiters = mootdxLayers.reduce((sum, l) => sum + l.waiters, 0)
+  const mBusy = mActive + mQueued + mWaiters
+  const mParts = [`${mActive} 执行`, `${mQueued} 排队`]
+  if (mWaiters > 0) mParts.push(`${mWaiters} 等待`)
   result.push({
     component: 'MooTDX2',
+    isPrimary: true,
     layers: mootdxLayers,
-    summary: mBusy > 0 ? `${mBusy} 个并发进行/等待中` : '空闲',
+    summary: mBusy > 0 ? mParts.join(' · ') : '空闲',
     note: mootdxLayers.length ? undefined : '指标未加载',
   })
 
@@ -163,7 +168,7 @@ const pipelines = computed(() => {
     component: 'THSDK',
     layers: tLayers,
     summary: busy > 0 ? `${thsdkPool?.active} 执行 · ${thsdkPool?.queued ?? 0} 排队` : '空闲',
-    note: note ?? (tLayers.length ? undefined : '状态未加载'),
+    note: note ?? (tLayers.length ? undefined : '指标未加载'),
   })
 
   return result
@@ -199,7 +204,7 @@ const pipelines = computed(() => {
 .pipeline-legend {
   display: inline-flex;
   gap: 14px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
@@ -212,7 +217,7 @@ const pipelines = computed(() => {
 .dot {
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: 50%;
   background: var(--el-fill-color) ;
   border: 1px solid var(--el-border-color);
 }
@@ -241,12 +246,19 @@ const pipelines = computed(() => {
 }
 
 .pipeline-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+}
+
+.pipeline-name.is-primary {
   font-size: 14px;
   font-weight: 600;
+  color: var(--el-text-color-primary);
 }
 
 .pipeline-summary {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
@@ -277,15 +289,15 @@ const pipelines = computed(() => {
 
 .bar-track {
   flex: 1;
-  height: 8px;
-  border-radius: 4px;
+  height: 10px;
+  border-radius: 5px;
   background: var(--el-fill-color-light);
   overflow: hidden;
 }
 
 .bar-active {
   height: 100%;
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--el-color-primary);
   transition: width 0.3s ease;
 }
@@ -313,8 +325,6 @@ const pipelines = computed(() => {
 }
 
 .layer-cumul {
-  display: block;
-  margin-top: 2px;
   font-size: 10px;
   font-weight: 400;
   color: var(--el-text-color-placeholder);
@@ -328,12 +338,14 @@ const pipelines = computed(() => {
 
 @media (max-width: 700px) {
   .layer-row {
-    grid-template-columns: 84px 1fr;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
   }
 
   .layer-num {
-    grid-column: 2;
-    text-align: left;
+    text-align: right;
   }
 }
 </style>

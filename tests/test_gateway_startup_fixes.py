@@ -92,18 +92,15 @@ class TestNullUpstreams:
 
 # ========== HIGH1 (review): per-upstream timeout isolation ==========
 
-class TestUpstreamTimeoutIsolation:
-    """HIGH1: 单个 upstream 的 start() 超时不应让整个 initialize() 失败.
+class TestUpstreamBackgroundStart:
+    """boot 期上游 fire-and-forget: initialize() 不 await 任何上游 start()。
 
-    旧行为: asyncio.wait_for 超时 → raise RuntimeError → 外层 except BaseException
-    清空所有已启动 upstream + cache, 网关起不来。
-    新行为: 超时 → log + 标记 UNAVAILABLE + 继续下一个 upstream。
+    新行为: client 构造后立即登记 (启动中态), start() 丢后台 task;
+    initialize() 很快返回, 慢上游在后台慢慢启动, 不阻塞网关对外服务。
     """
 
-    async def test_single_upstream_timeout_does_not_break_init(self, tmp_path):
-        """场景: good 立刻成功, bad 卡死超过 timeout. 期望: init 不抛, 两者都被跟踪."""
+    def _build_server(self, tmp_path):
         from src.unihive.gateway_server import GatewayServer
-        import src.unihive.gateway_server as gs
 
         server = GatewayServer.__new__(GatewayServer)
         server.config = {
@@ -123,13 +120,21 @@ class TestUpstreamTimeoutIsolation:
         server._running = False
         server._init_lock = asyncio.Lock()
         server._upstream_start_timeout = 0.2
+        server._late_start_tasks = {}
+        return server
+
+    async def test_init_does_not_wait_for_upstreams(self, tmp_path):
+        """good 立刻成功, bad 卡死; initialize() 不等, 两者都立即登记。"""
+        import src.unihive.gateway_server as gs
+
+        server = self._build_server(tmp_path)
 
         class FakeClient:
             def __init__(self, name: str):
                 self.name = name
-                self.is_available = (name == "good")
+                self.is_available = name == "good"
                 self.status = type(
-                    "S", (), {"value": "connected" if name == "good" else "unavailable"}
+                    "S", (), {"value": "connected" if name == "good" else "unknown"}
                 )()
 
             async def start(self):
@@ -139,70 +144,64 @@ class TestUpstreamTimeoutIsolation:
             async def stop(self):
                 pass
 
-        original_fuyao = gs.FuyaoClient
-        gs.FuyaoClient = lambda cfg: FakeClient(cfg.name)  # type: ignore[assignment]
+        import src.unihive.gateway_server.upstreams as gs_upstreams
+        original_fuyao = gs_upstreams.FuyaoClient
+        gs_upstreams.FuyaoClient = lambda cfg: FakeClient(cfg.name)  # type: ignore[assignment]
 
         try:
-            # 不应抛 RuntimeError
             await server.initialize()
         finally:
-            gs.FuyaoClient = original_fuyao  # type: ignore[assignment]
+            gs_upstreams.FuyaoClient = original_fuyao  # type: ignore[assignment]
 
-        # init 成功, 两个 upstream 都被收录 (bad 状态为 unavailable 但仍被跟踪)
+        # init 完成且两个 upstream 都已登记; bad 的后台 start 仍在跑 (未 ready)。
         assert server._initialized is True
         assert "good" in server.upstreams
         assert "bad" in server.upstreams
         assert server.upstreams["good"].is_available is True
         assert server.upstreams["bad"].is_available is False
+        # bad 对应一个在途后台启动任务
+        assert server._late_start_tasks.get("bad")
 
-    async def test_timed_out_upstream_logs_error_not_raises(self, tmp_path, caplog):
-        """超时的 upstream 必须打 ERROR 日志, 不能悄无声息."""
-        import logging
-        from src.unihive.gateway_server import GatewayServer
+    async def test_background_start_failure_marks_unavailable(self, tmp_path):
+        """后台 start() 抛错 → client 落 UNAVAILABLE, 不留 UNKNOWN。"""
         import src.unihive.gateway_server as gs
+        from src.unihive.api.upstream_client import UpstreamStatus
 
-        server = GatewayServer.__new__(GatewayServer)
-        server.config = {
-            "cache": {"enabled": False, "db_path": str(tmp_path / "c.db")},
-            "upstreams": {
-                "bad": {"enabled": True, "type": "http", "base_url": "http://x", "api_key": "k"},
-            },
-            "routing": {},
-            "upstream_tool_mapping": {},
-        }
-        server.config_path = tmp_path / "upstreams.yaml"
-        server.config_path.write_text("upstreams: {}\n", encoding="utf-8")
-        server.upstreams = {}
-        server._initialized = False
-        server._shutdown_event = asyncio.Event()
-        server._running = False
-        server._init_lock = asyncio.Lock()
-        server._upstream_start_timeout = 0.2
+        server = self._build_server(tmp_path)
 
-        class StuckClient:
+        class FailClient:
+            """模拟真实 client: status 是读 self._status 的 property。"""
+
             name = "bad"
-            is_available = False
-            status = type("S", (), {"value": "unavailable"})()
+
+            def __init__(self):
+                self.is_available = False
+                self._status = UpstreamStatus.UNKNOWN
+
+            @property
+            def status(self):
+                return self._status
 
             async def start(self):
-                await asyncio.sleep(10)
+                raise RuntimeError("boom")
 
             async def stop(self):
                 pass
 
-        original_fuyao = gs.FuyaoClient
-        gs.FuyaoClient = lambda cfg: StuckClient()  # type: ignore[assignment]
+        import src.unihive.gateway_server.upstreams as gs_upstreams
+        original_fuyao = gs_upstreams.FuyaoClient
+        gs_upstreams.FuyaoClient = lambda cfg: FailClient()  # type: ignore[assignment]
 
         try:
-            with caplog.at_level(logging.ERROR):
-                await server.initialize()
-
-            error_msgs = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
-            assert any("timed out" in m and "bad" in m for m in error_msgs), (
-                f"应记录 bad upstream 超时 ERROR 日志, 实际: {error_msgs}"
-            )
+            await server.initialize()
+            # 让已 schedule 的后台 start 任务跑一轮 (start() 立即抛错, 任务
+            # 完成后会自行从跟踪集移除, 故不对集合做断言)。
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
         finally:
-            gs.FuyaoClient = original_fuyao  # type: ignore[assignment]
+            gs_upstreams.FuyaoClient = original_fuyao  # type: ignore[assignment]
+
+        assert server.upstreams["bad"].status is UpstreamStatus.UNAVAILABLE
 
 
 # ========== LOW #8 (review): get_health() aggregates upstream status ==========

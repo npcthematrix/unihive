@@ -6,7 +6,18 @@
 import asyncio
 import logging
 
-from ..api.upstream_client import UpstreamStatus
+from ..api.fuyao_client import FuyaoClient, FuyaoConfig
+from ..api.mootdx2_client import MooTDX2Client, MooTDX2Config
+from ..api.omni_client import OmniClient, OmniConfig
+from ..api.tdx_quant_client import TdxQuantClient
+from ..api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
+from ..api.thsdk_client import ThsdkClient
+from ..api.upstream_client import UpstreamClient, UpstreamConfig, UpstreamStatus
+from ..core.config_db import resolve_project_path
+from ..models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
+from ..models.thsdk_config import ThsdkConfig
+
+from ._helpers import _parse_mootdx2_servers
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +99,49 @@ class UpstreamControlMixin:
         logger.info(f"[{name}] {'Connected' if connected else 'Failed'}")
         return connected
 
+    def _spawn_background_start(self, name: str, cfg: dict, client) -> None:
+        """boot 期 fire-and-forget: 后台跑 client.start(), 不阻塞网关启动。
+
+        client 已由调用方登记进 self.upstreams (启动中态)。start() 内部自带
+        call_timeout, 故这里不再套 wait_for 启动预算; 完成/失败由 client 自行
+        标记状态。任务异常必须可见 (done_callback 记录), 不得静默丢失。
+        """
+        task = asyncio.create_task(
+            self._background_start_once(name, client),
+            name=f"unihive-bg-start-{name}",
+        )
+        self._late_start_tasks.setdefault(name, set()).add(task)
+        task.add_done_callback(
+            lambda t, n=name: self._late_start_tasks.get(n, set()).discard(t)
+        )
+
+    async def _background_start_once(self, name: str, client) -> None:
+        try:
+            connected = await client.start()
+            logger.info(
+                "[%s] background start finished: connected=%s",
+                name,
+                bool(connected),
+            )
+        except asyncio.CancelledError:
+            logger.debug("[%s] background start cancelled", name)
+            raise
+        except Exception as e:  # noqa: BLE001 - 后台失败只告警, 不炸网关
+            logger.warning(
+                "[%s] background start failed: %s: %s",
+                name,
+                type(e).__name__,
+                e,
+            )
+            # start() 抛异常时诚实落 UNAVAILABLE, 不留 UNKNOWN 让健康结论虚高。
+            # 真实 client 的 status 是读 self._status 的 property; 裸测试 double
+            # 可能只有 status 普通属性, 故两种写法都兼容。
+            if getattr(client, "status", None) is UpstreamStatus.UNKNOWN:
+                try:
+                    client._status = UpstreamStatus.UNAVAILABLE
+                except Exception:  # noqa: BLE001 - property 只读时退回直接写
+                    client.status = UpstreamStatus.UNAVAILABLE
+
     @staticmethod
     def _settle_unavailable_if_unknown(client, *, include_hooked: bool = False) -> None:
         """start() 超时或异常已让本次 boot 等不起时, 把仍停在初始 UNKNOWN 的
@@ -162,3 +216,115 @@ class UpstreamControlMixin:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*selected, return_exceptions=True)
+
+    # ------------------------------------------------------------------
+    # 按 cfg.type 构造上游 client (不启动)。启动循环与热启用共用。
+    # ------------------------------------------------------------------
+
+    def _construct_upstream_client(self, name: str, cfg: dict):
+        """按 cfg.type 构造 (但不启动) 一个上游 client。
+
+        启动循环与热启用共用, 避免两处 client 构造参数漂移。
+        """
+        if cfg.get("type") == "http":
+            fuyao_cfg = FuyaoConfig(
+                name=name,
+                base_url=cfg["base_url"],
+                api_key=cfg.get("api_key", ""),
+                timeout_seconds=cfg.get("timeout_seconds", 30),
+                max_retry=cfg.get("retry", {}).get("max_attempts", 3),
+            )
+            return FuyaoClient(fuyao_cfg)
+        if cfg.get("type") == "tdx_quant":
+            tdx_quant_settings = TdxQuantSettings(
+                tdx_root=cfg.get("tdx_root", ""),
+                strategy_id=cfg.get("strategy_id", ""),
+                health_check_interval_sec=cfg.get("health_check_interval_sec", 60),
+                call_timeout_sec=cfg.get("call_timeout_sec", 10),
+                reconnect_threshold=cfg.get("reconnect_threshold", 3),
+                unavailable_threshold=cfg.get("unavailable_threshold", 10),
+                # L3 (round 9 audit): 透传 tdx_remote_port, 否则 YAML 里配的非
+                # 默认端口被静默丢弃, 运行时永远连默认 17709。
+                tdx_remote_port=int(cfg.get("tdx_remote_port", 17709)),
+            )
+            tdx_quant_cfg = TdxQuantConfig(
+                name=name,
+                market=cfg.get("market", "std"),
+                settings=tdx_quant_settings,
+            )
+            return TdxQuantClient(tdx_quant_cfg)
+        if cfg.get("type") == "mootdx2":
+            from ..models.mootdx2_config import MooTDX2Settings
+
+            # tdxdir 为空时让 mootdx2 自动探测 C:/new_tdx
+            pinned_servers = _parse_mootdx2_servers(cfg.get("servers") or [])
+            mootdx2_settings = MooTDX2Settings(
+                market=cfg.get("market", "std"),
+                tdxdir=cfg.get("tdxdir", ""),
+                servers=pinned_servers,
+                # 指定了服务器就关闭 bestip 全网测速, 固定连配置的 IP
+                auto_select_fastest_server=not pinned_servers,
+                connect_timeout_seconds=cfg.get("connect_timeout_seconds", 3),
+                read_timeout_seconds=cfg.get("read_timeout_seconds", 5),
+                # Reader 闸门容量: cfg 直传, 走 from_dict 内部钳到 ≥1
+                reader_limit=cfg.get("reader_limit"),
+            )
+            mootdx2_cfg = MooTDX2Config(
+                name=name,
+                market=cfg.get("market", "std"),
+                settings=mootdx2_settings,
+            )
+            return MooTDX2Client(mootdx2_cfg)
+        if cfg.get("type") == "omni":
+            omni_cfg = OmniConfig(
+                name=name,
+                db_path=str(resolve_project_path(
+                    cfg.get("db_path"), "./data/board.db"
+                )),
+            )
+            return OmniClient(omni_cfg)
+        if cfg.get("type") == "thsdk":
+            # 凭证只从环境变量读; call_timeout 在 from_dict 内钳制进路由预算,
+            # 防 config.db 旧 30s 值反超路由 10s 致单 worker 僵尸。
+            thsdk_cfg = ThsdkConfig.from_dict(name, cfg, self._per_upstream_timeout)
+            return ThsdkClient(thsdk_cfg)
+        if cfg.get("type") == "ths_local_gateway":
+            return ThsLocalClient(
+                ThsLocalConfig(
+                    name=name,
+                    base_url=cfg.get("base_url", ""),
+                    timeout_seconds=cfg.get("timeout_seconds", 30),
+                    connect_timeout_seconds=cfg.get("connect_timeout_seconds", 5.0),
+                )
+            )
+        upstream_type = cfg.get("type")
+        if upstream_type is None:
+            # 历史契约: 缺 type 键 = 通用 stdio MCP 扩展点 (UpstreamClient)。
+            # validate_config 在 strict 模式仍会报 "missing 'type'";
+            # 这里给非 strict / 旧配置保留默认, 也让启动失败的 client 能被
+            # 登记进 upstreams 走 stop() 清理 (见 test_startup_init_failure)。
+            upstream_type = "stdio"
+        if upstream_type != "stdio":
+            # Round-12 簇E: 显式未知 type 以前静默落到 stdio 分支, 构造出
+            # 永远启动不了的客户端, 延迟到调用期才以费解错误爆炸。构造期
+            # fail-fast 并列出合法值。
+            valid_types = (
+                "http", "mootdx2", "tdx_quant", "omni",
+                "thsdk", "ths_local_gateway", "stdio",
+            )
+            raise ValueError(
+                f"upstream {name!r}: 未知 type={cfg.get('type')!r}; "
+                f"合法值: {', '.join(valid_types)}"
+            )
+        # 通用 stdio MCP 客户端 (自定义 MCP server 扩展点)
+        upstream_cfg = UpstreamConfig(
+            name=name,
+            enabled=True,
+            package=cfg.get("package", ""),
+            command=cfg.get("command", []),
+            env=cfg.get("env", {}),
+            timeout_seconds=cfg.get("timeout_seconds", 30),
+            max_retry=cfg.get("retry", {}).get("max_attempts", 3),
+            backoff_base=cfg.get("retry", {}).get("backoff_base", 2),
+        )
+        return UpstreamClient(upstream_cfg)
