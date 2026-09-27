@@ -39,7 +39,7 @@ def configure_logging(
     transport: str,
     *,
     log_path: str | Path = "logs/gateway.log",
-    level: int = logging.INFO,
+    level: int = logging.WARNING,
 ) -> None:
     """按 transport 配置 root logger。
 
