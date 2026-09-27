@@ -81,12 +81,14 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   const respCache = ref<CacheStats | null>(null)
   const runtime = ref<RuntimeStats | null>(null)
   const thsdkMetrics = ref<ThsdkMetrics | null>(null)
+  const tdxQuantMetrics = ref<UpstreamMetrics | null>(null)
   const initialLoading = ref(false)
   const manualLoading = ref(false)
   const loadError = ref('')
   const l1LoadError = ref('')
   const respLoadError = ref('')
   const thsdkLoadError = ref('')
+  const tdxQuantLoadError = ref('')
 
   // 时间戳/时钟: 默认挂生命周期 (1s 时钟 + 轮询 + visibility 重拉); 单测可走本地兜底。
   const autoRefresh = ref(true)
@@ -186,15 +188,16 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     if (manual) manualLoading.value = true
     loadError.value = ''
 
-    // 四源独立结算: 单源失败不拖垮其余卡片
-    // 管线快采在跑时, 两个组件 metrics 跳过 (返回哨兵, 下方 handler 识别后不更新)。
+    // 五源独立结算: 单源失败不拖垮其余卡片
+    // 管线快采在跑时, 三个组件 metrics 跳过 (返回哨兵, 下方 handler 识别后不更新)。
     const skip = Promise.resolve({ skipped: true })
     const fetchComponents = !fastPollActive.value
-    const [metricsResult, statusResult, runtimeResult, thsdkResult] = await Promise.allSettled([
+    const [metricsResult, statusResult, runtimeResult, thsdkResult, tdxQuantResult] = await Promise.allSettled([
       fetchComponents ? getUpstreamMetrics('mootdx2') : skip,
       getStatus(),
       getRuntimeStats(),
       fetchComponents ? getUpstreamMetrics('thsdk') : skip,
+      fetchComponents ? getUpstreamMetrics('tdx_quant') : skip,
     ])
 
     const sample: TrendSample = {
@@ -220,6 +223,16 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     } else if (thsdkResult.status === 'rejected') {
       thsdkMetrics.value = null
       thsdkLoadError.value = errorMessage(thsdkResult.reason, 'THSDK 状态不可用')
+    }
+
+    // tdx_quant 指标: 阻塞线程池快照 (Route A: 与 mootdx2 拆开独立显示)。
+    // 失败保留旧值不挂告警 —— 池快照非首屏关键源, 不拖垮卡片。
+    if (tdxQuantResult.status === 'fulfilled' && !('skipped' in tdxQuantResult.value)) {
+      tdxQuantMetrics.value = tdxQuantResult.value.metrics
+      tdxQuantLoadError.value = ''
+    } else if (tdxQuantResult.status === 'rejected') {
+      tdxQuantMetrics.value = null
+      tdxQuantLoadError.value = errorMessage(tdxQuantResult.reason, 'TDX 量化状态不可用')
     }
 
     if (statusResult.status === 'fulfilled') {
@@ -252,6 +265,7 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       metricsResult.status === 'fulfilled'
       || statusResult.status === 'fulfilled'
       || thsdkResult.status === 'fulfilled'
+      || tdxQuantResult.status === 'fulfilled'
     ) {
       everLoaded = true
     }
@@ -347,11 +361,13 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     })
   }
 
-  /** 只刷新两个组件 metrics (管线标签快速采样用, 不拉 status/cache)。 */
+  /** 只刷新组件 metrics (管线标签快速采样用, 不拉 status/cache)。
+   * mootdx2 / tdx_quant / thsdk 三源线程池快照都在这里高频更新。 */
   async function loadComponentMetrics(): Promise<void> {
-    const [mootdxResult, thsdkResult] = await Promise.allSettled([
+    const [mootdxResult, thsdkResult, tdxQuantResult] = await Promise.allSettled([
       getUpstreamMetrics('mootdx2'),
       getUpstreamMetrics('thsdk'),
+      getUpstreamMetrics('tdx_quant'),
     ])
     if (mootdxResult.status === 'fulfilled') {
       metrics.value = mootdxResult.value.metrics
@@ -362,6 +378,11 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       thsdkMetrics.value = thsdkResult.value.metrics as unknown as ThsdkMetrics
     } else {
       thsdkMetrics.value = null
+    }
+    if (tdxQuantResult.status === 'fulfilled') {
+      tdxQuantMetrics.value = tdxQuantResult.value.metrics
+    } else {
+      tdxQuantMetrics.value = null
     }
   }
 
@@ -447,10 +468,12 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     respCache,
     runtime,
     thsdkMetrics,
+    tdxQuantMetrics,
     loadError,
     l1LoadError,
     respLoadError,
     thsdkLoadError,
+    tdxQuantLoadError,
     initialLoading,
     manualLoading,
     statsFromForeignProcess,

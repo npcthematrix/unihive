@@ -1,6 +1,7 @@
 """MooTDX2 MCP Client 基于 mootdx2 库"""
 import asyncio
 import datetime
+import contextlib
 import functools
 import logging
 import re
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .upstream_client import ToolResult, UpstreamStatus
-from ..core.blocking_pool import get_blocking_executor
+from ..core.blocking_pool import get_mootdx2_executor
 from ..core.config_db import resolve_project_path
 from ..models.mootdx2_errors import MooTDXErrorType, error_to_result
 from .index_registry import INDEX_KIND, STOCK_KIND, parse_symbol, to_reader_symbol
@@ -463,6 +464,10 @@ class MooTDX2Client:
             # 防止过多并发 Reader 导致 TDX 库性能下降或超时
             self._READER_SEMAPHORE_LIMIT = 4  # 最多 4 个并发 Reader
             self._reader_semaphore = asyncio.Semaphore(self._READER_SEMAPHORE_LIMIT)
+            # 闸门累计计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
+            self._gate_counters = {
+                "total": 0, "current": 0, "peak": 0, "waiters_total": 0,
+            }
 
             # 2026-09-15 P0 (MOOTDX2 性能审视 H2-a):
             # stock_top_board / stock_unusual 全市场扫描 N 个 50-batch roundtrip
@@ -479,10 +484,14 @@ class MooTDX2Client:
             self._unusual_l1_misses = 0
         except ImportError:
             self._DAILY_L1_ENABLED = False
+            self._gate_counters = {"total": 0, "current": 0, "peak": 0, "waiters_total": 0}
             logger.warning("cachetools not installed, get_daily L1 cache disabled")
 
+        # 线程池入口累计计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
+        self._pool_counters = {"total": 0, "current": 0, "peak": 0}
+
     async def _run_blocking(self, func, *args, **kwargs):
-        """把同步阻塞调用丢到 unihive-upstream 共享线程池 (非默认 executor)。
+        """把同步阻塞调用丢到 mootdx2 专用线程池 (非默认 executor)。
 
         替代原本重复 30+ 处的 ``loop = asyncio.get_event_loop()`` + ``loop.run_in_executor``
         模板。``asyncio.get_event_loop`` 在 Python 3.10+ deprecated, 3.12+ 在没
@@ -490,14 +499,44 @@ class MooTDX2Client:
         推荐写法, 仅在 event loop 上下文里可用 (本类的所有 tool 都是 gateway
         server 调进来的, 必然在 loop 里)。
 
-        仍走项目自定义 `` get_blocking_executor()`` 线程池, 而不是
+        走 mootdx2 专用 ``get_mootdx2_executor()`` 线程池 (8 worker), 而不是
         ``asyncio.to_thread`` 的默认 executor — 后者会让金融阻塞调用与其它默认
-        池任务互相挤占 (见 core/blocking_pool.py 注释)。
+        池任务互相挤占, 且会与 tdx_quant 的阻塞调用混进同一快照, 监控行不诚实
+        (见 core/blocking_pool.py 注释)。
         """
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            get_blocking_executor(), functools.partial(func, *args, **kwargs)
-        )
+        # getattr: __new__ 旁路 __init__ 的测试双实例可能没有计数字段
+        counters = getattr(self, "_pool_counters", None)
+        if counters is not None:
+            counters["total"] += 1
+            counters["current"] += 1
+            counters["peak"] = max(counters["peak"], counters["current"])
+        try:
+            return await loop.run_in_executor(
+                get_mootdx2_executor(), functools.partial(func, *args, **kwargs)
+            )
+        finally:
+            if counters is not None:
+                counters["current"] -= 1
+
+    @contextlib.asynccontextmanager
+    async def _reader_gate(self):
+        """Reader 信号量 + 累计/峰值计数。闸门满时记一次等待。"""
+        semaphore = getattr(self, "_reader_semaphore", None)
+        counters = getattr(self, "_gate_counters", None)
+        if semaphore is None or counters is None:
+            yield
+            return
+        if semaphore.locked():
+            counters["waiters_total"] += 1
+        async with semaphore:
+            counters["total"] += 1
+            counters["current"] += 1
+            counters["peak"] = max(counters["peak"], counters["current"])
+            try:
+                yield
+            finally:
+                counters["current"] -= 1
 
     def _new_request_id(self) -> str:
         """生成请求 ID"""
@@ -820,6 +859,21 @@ class MooTDX2Client:
             tomorrow_9am += datetime.timedelta(days=1)
         return (tomorrow_9am - now).total_seconds()
 
+    def _current_server(self) -> dict | None:
+        """当前实际连接的行情服务器 (ServerManager.current 优先, 退回 StdQuotes)。"""
+        quotes = self._quotes
+        if quotes is None:
+            return None
+        current = None
+        manager = getattr(quotes, "manager", None)
+        if manager is not None and getattr(manager, "current", None):
+            current = manager.current
+        elif getattr(quotes, "server", None):
+            current = quotes.server
+        if not current:
+            return None
+        return {"host": current[0], "port": int(current[1])}
+
     def get_metrics(self) -> dict:
         """获取客户端指标 — 含 L1 缓存运行时统计 (2026-09-15)."""
         daily_l1_block: dict
@@ -841,8 +895,35 @@ class MooTDX2Client:
         else:
             daily_l1_block = {"enabled": False}
         # 2026-09-15 P0 (H2-a): stock_top_board / stock_unusual L1 metrics
+        # 阻塞线程池 + Reader 闸门: 实时快照 + 累计/峰值计数
+        # (历史K线突发 <1s, 10s 轮询抓不到瞬时值, 靠累计/峰值留存事实)。
+        from ..core.blocking_pool import mootdx2_executor_snapshot
+        instant_pool = mootdx2_executor_snapshot()
+        pc = self._pool_counters
+        pool_snapshot = {
+            **instant_pool,
+            "total": pc["total"],
+            "peak": pc["peak"],
+        }
+        semaphore = getattr(self, "_reader_semaphore", None)
+        counters = getattr(self, "_gate_counters", None)
+        if semaphore is not None and counters is not None:
+            reader_gate = {
+                "capacity": self._READER_SEMAPHORE_LIMIT,
+                # 信号量无已占用计数: 容量 - 剩余许可
+                "acquired": self._READER_SEMAPHORE_LIMIT - semaphore._value,
+                "waiters": len(semaphore._waiters or []),
+                "total": counters["total"],
+                "peak": counters["peak"],
+                "waiters_total": counters["waiters_total"],
+            }
+        else:
+            reader_gate = None
         return {
             **self._metrics,
+            "current_server": self._current_server(),
+            "thread_pool": pool_snapshot,
+            "reader_gate": reader_gate,
             "daily_l1": daily_l1_block,
             "top_board_l1": self._l1_metrics_block(
                 self._top_board_l1, self._top_board_l1_hits,
@@ -895,19 +976,7 @@ class MooTDX2Client:
         """获取服务状态（供 MCP 网关管理台直接读取）"""
         pool_stats = self.config.pool.get_stats() if self.config.pool else {}
 
-        # 当前实际连接的服务器: 优先读 mootdx2 ServerManager 的 current,
-        # 退回 StdQuotes.server; quotes 未初始化时为 None。
-        current_server = None
-        quotes = self._quotes
-        if quotes is not None:
-            current = None
-            manager = getattr(quotes, "manager", None)
-            if manager is not None and getattr(manager, "current", None):
-                current = manager.current
-            elif getattr(quotes, "server", None):
-                current = quotes.server
-            if current:
-                current_server = {"host": current[0], "port": int(current[1])}
+        current_server = self._current_server()
 
         configured_servers = (
             [{"host": s.host, "port": s.port} for s in self.config.settings.servers]
@@ -2345,7 +2414,7 @@ class MooTDX2Client:
 
             # 缓存 miss 或 adjust != none：需要执行 Reader
             # 2026-09-16: 用信号量限制并发 Reader 数量，防止雪崩
-            async with self._reader_semaphore:
+            async with self._reader_gate():
                 try:
                     records, meta = await self._run_blocking(self._get_daily_sync,
                         code,
@@ -3486,7 +3555,7 @@ class MooTDX2Client:
             return self._with_warn(cached, warn)
 
         self._top_board_l1_misses += 1
-        async with self._reader_semaphore:
+        async with self._reader_gate():
             try:
                 data = await self._run_blocking(
                     self._stock_top_board_sync, sort_by, direction, limit, market
@@ -3519,7 +3588,7 @@ class MooTDX2Client:
             return cached
 
         self._unusual_l1_misses += 1
-        async with self._reader_semaphore:
+        async with self._reader_gate():
             try:
                 data = await self._run_blocking(self._stock_unusual_sync, event_type)
                 result = ToolResult(success=True, data=data, source="mootdx2")

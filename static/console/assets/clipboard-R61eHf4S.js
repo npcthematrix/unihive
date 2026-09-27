@@ -1,1 +1,0 @@
-import{c as t}from"./element-plus-CGe9KhpW.js";async function c(a,r="已复制到剪贴板"){try{return await navigator.clipboard.writeText(a),r&&t.success(r),!0}catch{return t.error("复制失败, 请手动选择文本复制"),!1}}export{c};

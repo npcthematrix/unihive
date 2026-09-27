@@ -175,45 +175,35 @@ class LifecycleMixin:
                 name="unihive-cache-cleanup",
             )
 
-            # 初始化上游客户端 (并发 gather)
-            # 用 `or {}` 归一化, 防 YAML `upstreams: null` 让 .items() 抛 AttributeError (HIGH #2)
-            # 构造/启动拆成 _construct_upstream_client / _start_upstream_client,
-            # 供上游启用/禁用热开关复用 (2026-09-18)。
-            # Round-14: 旧链路顺序 await, 单源 start() 挂起时启动总预算 = Σ 各源
-            # 超时 (实测最坏 70-80s), 期间 HTTP 端口无应答、纯本地工具被远端源
-            # 连坐; 改为并发后总预算塌缩为最慢单源 (~30s)。
+            # 上游客户端: 同步构造 + 立即登记, start() 全部后台执行、不 await。
+            # 用 `or {}` 归一化, 防 YAML `upstreams: null` 让 .items() 抛 AttributeError。
+            # 语义: 网关进程不等任何上游就绪即可对外服务; client 先以「启动中」
+            # (UNKNOWN) 登记, 后台 start() 完成后自行翻 connected/failed。
+            # 慢/挂死的上游不再阻塞网关启动 (旧实现即使并发 gather, 启动耗时仍
+            # = 最慢单源, 可达 30s+, HTTP 在此之前无应答)。
             enabled_upstreams = [
                 (name, cfg)
                 for name, cfg in (self.config.get("upstreams") or {}).items()
                 if cfg.get("enabled", False)
             ]
 
-            async def _construct_and_start(name: str, cfg: dict) -> None:
-                # H2 (round 9 audit): 单个上游构造/启动抛错 (如 mootdx2 非法
-                # servers、tdx_quant 缺 DLL) 不得让整个网关拒启 —— 该源跳过 +
-                # log, 其余源并发继续。CancelledError (BaseException) 仍传播
-                # (外层取消会经 gather 取消全部在途子任务)。
+            for name, cfg in enabled_upstreams:
+                # 构造失败 (如非法配置) 不得拒启网关: 跳过该源, 其余继续。
                 try:
                     client = self._construct_upstream_client(name, cfg)
-                    await self._start_upstream_client(name, cfg, client)
-                except asyncio.CancelledError:
-                    raise
                 except Exception as e:
                     logger.error(
-                        "Failed to construct/start upstream %r (skipping, "
-                        "other upstreams continue): %s",
+                        "Failed to construct upstream %r (skipping, other "
+                        "upstreams continue): %s",
                         name,
                         e,
                     )
+                    continue
+                # 先登记 (未连接态), Router/registry 立即可见, 再后台启动。
+                self.upstreams[name] = client
+                self._spawn_background_start(name, cfg, client)
 
-            if enabled_upstreams:
-                await asyncio.gather(
-                    *(_construct_and_start(n, c) for n, c in enabled_upstreams)
-                )
-
-            # 2026-09-15: 让 console_api 能查到已注册的 upstream client,
-            # 服务 /api/upstreams/<name>/metrics 端点。必须在装配循环结束、
-            # HTTP server 启动前注入 (HTTP server 启动前不会有请求, 安全)。
+            # console_api 在 HTTP 启动前即可查到全部已登记 client (含启动中)。
             _ca.set_upstream_registry(self.upstreams)
             # 2026-09-18: 注入 server 自身, 供 /api/config/upstreams/<name>/enabled
             # 热开关调用 set_upstream_enabled()。stdio 模式下 console_api 无路由,
@@ -307,11 +297,14 @@ class LifecycleMixin:
             reset_proxy_api()
             # 初始化失败路径同样关停阻塞执行器：thsdk 可能已启动，专用池
             # 的 daemon 线程虽不阻塞进程退出，但同进程重试会复用旧池残留状态。
+            # Route A: 共享池已拆为 mootdx2 + tdx_quant 两个专用池, 各自关停。
             from ..core.blocking_pool import (
-                shutdown_blocking_executor,
+                shutdown_mootdx2_executor,
+                shutdown_tdx_quant_executor,
                 shutdown_thsdk_executor,
             )
-            shutdown_blocking_executor()
+            shutdown_mootdx2_executor()
+            shutdown_tdx_quant_executor()
             shutdown_thsdk_executor()
             # M1 (2026-09-07 audit): 半构造的 router / mcp 也归零, 否则后续
             # get_server_status / 路由调用拿到指向未完全初始化对象的引用。
@@ -434,12 +427,15 @@ class LifecycleMixin:
 
             # 关闭阻塞上游调用专用线程池 (2026-09-15 MCP 二次审视 M2):
             # 在 upstream 客户端之后关闭, 避免它们还在 await run_in_executor 时被强杀。
-            # shutdown_blocking_executor 是模块级单例, 显式调用避免 atexit 依赖 (stdio 下不可靠)。
+            # Route A: 共享池已拆为 mootdx2 + tdx_quant 两个专用池, 各自模块级单例,
+            # 显式调用避免 atexit 依赖 (stdio 下不可靠)。
             from ..core.blocking_pool import (
-                shutdown_blocking_executor,
+                shutdown_mootdx2_executor,
+                shutdown_tdx_quant_executor,
                 shutdown_thsdk_executor,
             )
-            shutdown_blocking_executor()
+            shutdown_mootdx2_executor()
+            shutdown_tdx_quant_executor()
             shutdown_thsdk_executor()
 
             # 关闭缓存

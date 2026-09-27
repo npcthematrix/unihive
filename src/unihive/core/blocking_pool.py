@@ -1,12 +1,22 @@
-"""阻塞上游调用专用的有界线程池。
+"""阻塞上游调用专用的有界线程池（按上游拆分，各自独立定容）。
 
 mootdx2（通达信本地 TCP 库）、tdx_quant（tqcenter DLL）、thsdk（本地组件）
 都是同步阻塞 API，靠 run_in_executor 丢到线程执行。若用默认 executor
 (ThreadPoolExecutor, max_workers=min(32, cpu+4))，这些金融阻塞调用会与其它
-默认池任务互相挤占，且 3 个上游共享同一上限，行情高并发时排队。
+默认池任务互相挤占。
 
-这里提供一个独立的、有界的共享线程池把"上游阻塞调用"与 asyncio 默认池隔离，
-容量可按并发需求配置。进程内单例，随事件循环生命周期复用。
+历史上三者共享一个 16 worker 池 —— 行情高并发时互相排队，且监控快照把
+mootdx2 的占用与 tdx_quant 的混在一起，监控行不诚实。现按上游各拆一个
+DaemonBlockingExecutor，容量按各上游的并发上限独立设定：
+
+- mootdx2: 8 worker（Reader 闸门 `_READER_SEMAPHORE_LIMIT=4` 已把并发 Reader
+  钉死为 4，池容量给到 8 留余量给 probe/close 等非 Reader 阻塞调用）。
+- tdx_quant: 10 worker（get 调用可并发，init/close 由 `_dll_lock` 串行）。
+- thsdk: 1 worker（hq.dll 内部 RLock 串行；单 worker 把"僵尸 DLL 调用"
+  上限钉死为 1）。
+
+fuyao（httpx async）与 omni（aiosqlite async）是异步客户端，无需线程池。
+每个池进程内单例，随事件循环生命周期复用；容量可用各上游的 env 覆盖。
 """
 from __future__ import annotations
 
@@ -16,17 +26,18 @@ import weakref
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import thread as _cf_thread
 
-# 默认工作线程数：金融行情并发读取为主，阻塞点在本地库/网络 I/O，
-# 线程可适当多于 CPU。可用 UNIHIVE_WORKER_THREADS 覆盖。
-_DEFAULT_SIZE = 16
+# 各上游默认 worker 数：阻塞点在本地库/网络 I/O，线程可适当多于 CPU。
+# 可用对应的 env 覆盖。
+_MOOTDX2_DEFAULT_SIZE = 8
+_TDX_QUANT_DEFAULT_SIZE = 10
 
 
-def _pool_size() -> int:
+def _pool_size(env_var: str, default: int) -> int:
     try:
-        n = int(os.environ.get("UNIHIVE_WORKER_THREADS", str(_DEFAULT_SIZE)))
+        n = int(os.environ.get(env_var, str(default)))
         return max(1, n)
     except (TypeError, ValueError):
-        return _DEFAULT_SIZE
+        return default
 
 
 class DaemonBlockingExecutor(ThreadPoolExecutor):
@@ -74,19 +85,124 @@ class DaemonBlockingExecutor(ThreadPoolExecutor):
             # _python_exit 仍会无超时 join 这个可能永久挂死的线程。
 
 
-_executor: ThreadPoolExecutor | None = None
-_thsdk_executor: ThreadPoolExecutor | None = None
+def _executor_snapshot(executor: ThreadPoolExecutor) -> dict:
+    """线程池实时快照: 容量 / 活动线程 / 排队任务。
+
+    _work_queue.qsize() 在 CPython 的 SimpleQueue 上可用; 已创建 worker 数 =
+    len(_threads), 但"已创建"不等于"在忙", 故活动数用 _idle_semaphore 推算:
+    idle permit 数即空闲 worker, active = 总 worker - idle。
+    """
+    total_workers = len(executor._threads)
+    # 不阻塞地取空闲许可数: drain 后立刻归还
+    idle = 0
+    while executor._idle_semaphore.acquire(timeout=0):
+        idle += 1
+    for _ in range(idle):
+        executor._idle_semaphore.release()
+    return {
+        "capacity": executor._max_workers,
+        "workers": total_workers,
+        "active": max(0, total_workers - idle),
+        "queued": executor._work_queue.qsize(),
+    }
 
 
-def get_blocking_executor() -> ThreadPoolExecutor:
-    """返回进程内共享的阻塞调用线程池（惰性创建）。"""
-    global _executor
-    if _executor is None:
-        _executor = DaemonBlockingExecutor(
-            max_workers=_pool_size(),
-            thread_name_prefix="unihive-upstream",
+# ---------------------------------------------------------------------------
+# mootdx2 专用池
+# ---------------------------------------------------------------------------
+
+_mootdx2_executor: ThreadPoolExecutor | None = None
+
+
+def get_mootdx2_executor() -> ThreadPoolExecutor:
+    """返回 mootdx2 专用的阻塞调用线程池（惰性创建，默认 8 worker）。"""
+    global _mootdx2_executor
+    if _mootdx2_executor is None:
+        _mootdx2_executor = DaemonBlockingExecutor(
+            max_workers=_pool_size("UNIHIVE_MOOTDX2_WORKER_THREADS", _MOOTDX2_DEFAULT_SIZE),
+            thread_name_prefix="unihive-mootdx2",
         )
-    return _executor
+    return _mootdx2_executor
+
+
+def mootdx2_executor_snapshot() -> dict:
+    """mootdx2 专用池快照 (未创建则返回空池事实)。"""
+    if _mootdx2_executor is None:
+        return {
+            "capacity": _pool_size("UNIHIVE_MOOTDX2_WORKER_THREADS", _MOOTDX2_DEFAULT_SIZE),
+            "workers": 0,
+            "active": 0,
+            "queued": 0,
+        }
+    return _executor_snapshot(_mootdx2_executor)
+
+
+def shutdown_mootdx2_executor() -> None:
+    """关停 mootdx2 专用池。
+
+    Round-12 簇H: cancel_futures 刻意为 False —— stop() 摘关 Quotes 的 close
+    job 可能排在一个卡死的 factory 后面 (唯一 worker 被占住, mootdx2 stop 注释
+    承诺 "最终必执行")。旧实现 cancel_futures=True 会把这个排队中的 close 直接
+    取消, 晚赋值的活 TDX 连接无人释放。daemon worker 会继续排空队列且不注册
+    atexit join, 不拖进程退出; wait=False 让调用立即返回, 不影响关停时延。
+    """
+    global _mootdx2_executor
+    if _mootdx2_executor is not None:
+        _mootdx2_executor.shutdown(wait=False, cancel_futures=False)
+        _mootdx2_executor = None
+
+
+# ---------------------------------------------------------------------------
+# tdx_quant 专用池
+# ---------------------------------------------------------------------------
+
+_tdx_quant_executor: ThreadPoolExecutor | None = None
+
+
+def get_tdx_quant_executor() -> ThreadPoolExecutor:
+    """返回 tdx_quant 专用的阻塞调用线程池（惰性创建，默认 10 worker）。
+
+    与 mootdx2 拆开: get 调用可并发, init/close 由 ``_dll_lock`` 串行; 共享池
+    会把两者占用混进同一快照, 监控行不诚实。
+    """
+    global _tdx_quant_executor
+    if _tdx_quant_executor is None:
+        _tdx_quant_executor = DaemonBlockingExecutor(
+            max_workers=_pool_size("UNIHIVE_TDX_QUANT_WORKER_THREADS", _TDX_QUANT_DEFAULT_SIZE),
+            thread_name_prefix="unihive-tdx-quant",
+        )
+    return _tdx_quant_executor
+
+
+def tdx_quant_executor_snapshot() -> dict:
+    """tdx_quant 专用池快照 (未创建则返回空池事实)。"""
+    if _tdx_quant_executor is None:
+        return {
+            "capacity": _pool_size("UNIHIVE_TDX_QUANT_WORKER_THREADS", _TDX_QUANT_DEFAULT_SIZE),
+            "workers": 0,
+            "active": 0,
+            "queued": 0,
+        }
+    return _executor_snapshot(_tdx_quant_executor)
+
+
+def shutdown_tdx_quant_executor() -> None:
+    """关停 tdx_quant 专用池（与 shutdown_mootdx2_executor 同样的 cancel_futures=False 语义）。
+
+    stop() 摘关 tq 的 close job 可能排在一个卡死的 initialize (DLL 加载) 后面;
+    取消它会让晚赋值的 DLL 句柄无人释放。
+    """
+    global _tdx_quant_executor
+    if _tdx_quant_executor is not None:
+        _tdx_quant_executor.shutdown(wait=False, cancel_futures=False)
+        _tdx_quant_executor = None
+
+
+# ---------------------------------------------------------------------------
+# thsdk 专用池
+# ---------------------------------------------------------------------------
+
+_thsdk_executor: ThreadPoolExecutor | None = None
 
 
 def get_thsdk_executor() -> ThreadPoolExecutor:
@@ -96,7 +212,7 @@ def get_thsdk_executor() -> ThreadPoolExecutor:
     串行调用，并发提交无收益；关键是 asyncio.wait_for 超时只取消 await、
     杀不掉已在 DLL 内阻塞的线程。单 worker 把"僵尸 DLL 调用"上限钉死为 1,
     其余任务在队列里排队且可随超时取消（未开跑的 Future.cancel 成功）,
-    不会像共享 16 worker 池那样每次超时都新增一个僵尸线程。
+    不会像多 worker 池那样每次超时都新增一个僵尸线程。
     """
     global _thsdk_executor
     if _thsdk_executor is None:
@@ -107,25 +223,16 @@ def get_thsdk_executor() -> ThreadPoolExecutor:
     return _thsdk_executor
 
 
+def thsdk_executor_snapshot() -> dict:
+    """thsdk 单 worker 池快照。"""
+    if _thsdk_executor is None:
+        return {"capacity": 1, "workers": 0, "active": 0, "queued": 0}
+    return _executor_snapshot(_thsdk_executor)
+
+
 def shutdown_thsdk_executor() -> None:
-    """关停 thsdk 专用池（与 shutdown_blocking_executor 同样的语义）。"""
+    """关停 thsdk 专用池（与其它上游池同样的 cancel_futures=False 语义）。"""
     global _thsdk_executor
     if _thsdk_executor is not None:
         _thsdk_executor.shutdown(wait=False, cancel_futures=False)
         _thsdk_executor = None
-
-
-def shutdown_blocking_executor() -> None:
-    """进程退出时调用（可选）：关闭线程池。
-
-    Round-12 簇H: cancel_futures 刻意为 False —— stop() 摘关 Quotes/tq 的
-    close job 可能排在一个卡死的 factory/initialize 后面 (唯一 worker 被
-    占住, mootdx2 stop 注释承诺 "最终必执行")。旧实现 cancel_futures=True
-    会把这个排队中的 close 直接取消, 晚赋值的活 TDX 连接/DLL 句柄无人释放。
-    daemon worker 会继续排空队列且不注册 atexit join, 不拖进程退出;
-    wait=False 让调用立即返回, 不影响关停时延。
-    """
-    global _executor
-    if _executor is not None:
-        _executor.shutdown(wait=False, cancel_futures=False)
-        _executor = None

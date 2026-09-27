@@ -61,6 +61,7 @@ import type {
 /** 并发管线面板: 每个组件按 线程池/闸门 层展示容量、占用、排队。 */
 const props = defineProps<{
   mootdx: UpstreamMetrics | null
+  tdxQuant: UpstreamMetrics | null
   thsdk: ThsdkMetrics | null
 }>()
 
@@ -129,6 +130,20 @@ const pipelines = computed(() => {
     layers: mootdxLayers,
     summary: mBusy > 0 ? `${mBusy} 个并发进行/等待中` : '空闲',
     note: mootdxLayers.length ? undefined : '指标未加载',
+  })
+
+  // ---- TDX 量化终端 ----
+  // Route A: 与 mootdx2 拆开, 用独立阻塞线程池。tdx_quant 不在 client 层维护提交计数,
+  // 故无累计/峰值层 (只报实时容量/占用/排队)。
+  const tdq = props.tdxQuant
+  const tdqPool = poolLayer('阻塞线程池', tdq?.thread_pool)
+  const tdqLayers: Layer[] = tdqPool ? [tdqPool] : []
+  const tdqBusy = (tdqPool?.active ?? 0) + (tdqPool?.queued ?? 0)
+  result.push({
+    component: 'TDX 量化终端',
+    layers: tdqLayers,
+    summary: tdqBusy > 0 ? `${tdqPool?.active} 执行 · ${tdqPool?.queued ?? 0} 排队` : '空闲',
+    note: tdqLayers.length ? undefined : '指标未加载',
   })
 
   // ---- THSDK ----

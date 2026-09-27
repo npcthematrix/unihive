@@ -129,7 +129,7 @@ async def test_stock_unusual_metrics_block(client):
 
 @pytest.mark.asyncio
 async def test_run_blocking_uses_running_loop(client):
-    """_run_blocking 走 get_running_loop + 自定义 blocking_executor。"""
+    """_run_blocking 走 get_running_loop + mootdx2 专用阻塞池 (Route A 后与 tdx_quant 拆分)。"""
     sync_fn = MagicMock(return_value="ok")
     result = await client._run_blocking(sync_fn, "arg1", key="kw")
     assert result == "ok"

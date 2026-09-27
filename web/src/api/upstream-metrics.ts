@@ -15,7 +15,11 @@ export interface L1CacheStats {
   reader_semaphore_limit?: number
 }
 
-/** 线程池实时快照 + 累计计数。 */
+/** 线程池实时快照 + 累计计数。
+
+ * `total`/`peak` 为累计值, 仅当上游 client 自身维护提交计数时才有
+ * (mootdx2 在 client 层 merge `_pool_counters`); 不维护的上游
+ * (如 tdx_quant) 只报实时容量/占用/排队, 累计/峰视为 0 (见 poolLayer)。 */
 export interface ExecutorSnapshot {
   capacity: number
   /** 已创建 worker 数。 */
@@ -24,10 +28,10 @@ export interface ExecutorSnapshot {
   active: number
   /** 队列中等待的任务数 (瞬时)。 */
   queued: number
-  /** 累计提交执行的任务数。 */
-  total: number
-  /** 历史峰值并发。 */
-  peak: number
+  /** 累计提交执行的任务数 (仅 client 层追踪时存在)。 */
+  total?: number
+  /** 历史峰值并发 (仅 client 层追踪时存在)。 */
+  peak?: number
 }
 
 /** Reader 并发闸门 (信号量)。 */

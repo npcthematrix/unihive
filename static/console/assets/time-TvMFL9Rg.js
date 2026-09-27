@@ -1,1 +1,0 @@
-function o(n){const r=new Date(n),t=f=>String(f).padStart(2,"0");return`${t(r.getHours())}:${t(r.getMinutes())}:${t(r.getSeconds())}`}function u({loadError:n,lastFetchSec:r,ageSec:t}){return n&&r===0?`刷新失败 (${n})`:r?t<5?"刚刚刷新":t<60?`${t} 秒前刷新`:t<3600?`${Math.floor(t/60)} 分钟前刷新`:`${Math.floor(t/3600)} 小时前刷新`:"从未刷新"}export{o as a,u as f};

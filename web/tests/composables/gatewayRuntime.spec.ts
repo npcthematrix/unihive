@@ -94,7 +94,6 @@ const runtimeResponse: RuntimeStats = {
   tool_count: 207,
   calls_last_1m: 0,
   calls_last_5m: 0,
-  calls_per_min: 0,
   timestamp: 1,
 }
 
@@ -348,5 +347,41 @@ describe('useGatewayRuntime — 管理动作', () => {
 
     expect(notifier.error).toHaveBeenCalledWith(expect.stringContaining('reset fail'))
     expect(rt.resetL1Loading.value).toBe(false)
+  })
+})
+
+describe('useGatewayRuntime — 手动刷新排队/首屏锁存', () => {
+  test('轮询在途时点击手动刷新: 不丢弃, 本轮结束后补一次真手动刷新', async () => {
+    let resolveBreakdown: (value: CacheBreakdownResponse) => void = () => {}
+    vi.mocked(getCacheToolBreakdown).mockReturnValueOnce(
+      new Promise((resolve) => { resolveBreakdown = resolve }),
+    )
+    const rt = useGatewayRuntime({ lifecycle: false })
+
+    const firstLoad = rt.load() // 首轮挂在 breakdown 上
+    await vi.waitFor(() => expect(getCacheToolBreakdown).toHaveBeenCalledTimes(1))
+
+    rt.load(true) // 在途时手动点击 → 排队
+    expect(rt.manualLoading.value).toBe(true)
+
+    resolveBreakdown(breakdownResponse)
+    await firstLoad
+    // 补刷已发起并完成 (第二次 breakdown), loading 复位
+    await vi.waitFor(() => {
+      expect(getCacheToolBreakdown).toHaveBeenCalledTimes(2)
+      expect(rt.manualLoading.value).toBe(false)
+    })
+  })
+
+  test('breakdown 首次成功后, 主源持续失败也不再每轮重拉', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    await rt.load() // 首轮: 主源成功 + breakdown 成功
+    expect(getCacheToolBreakdown).toHaveBeenCalledTimes(1)
+
+    vi.mocked(getStatus).mockRejectedValue(new Error('down'))
+    vi.mocked(getUpstreamMetrics).mockRejectedValue(new Error('boom'))
+    await rt.load() // 主源全败, 但 breakdown 已锁存 → 不重拉
+    await rt.load()
+    expect(getCacheToolBreakdown).toHaveBeenCalledTimes(1)
   })
 })

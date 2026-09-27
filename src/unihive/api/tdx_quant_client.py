@@ -26,7 +26,7 @@ from ..exceptions.tdx_quant_errors import (
     translate_errorid,
 )
 from .upstream_client import ToolResult, UpstreamStatus
-from ..core.blocking_pool import get_blocking_executor
+from ..core.blocking_pool import get_tdx_quant_executor
 from ..core.config_db import resolve_project_path
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ class TdxQuantClient:
         port = self.config.settings.tdx_remote_port
         try:
             fut = asyncio.get_event_loop().run_in_executor(
-                get_blocking_executor(),
+                get_tdx_quant_executor(),
                 lambda: socket.create_connection((host, port), timeout=2.0),
             )
             sock = await asyncio.wait_for(fut, timeout=3.0)
@@ -259,7 +259,7 @@ class TdxQuantClient:
             return False
         try:
             await asyncio.get_event_loop().run_in_executor(
-                get_blocking_executor(),
+                get_tdx_quant_executor(),
                 lambda: self._tq.get_user_sector(),
             )
             # 调通即视为 OK: 返回 [] 表示 DLL 通但无数据(可能是用户没建
@@ -286,7 +286,7 @@ class TdxQuantClient:
             # 一体包进 worker thread 并持 _dll_lock; 旧实现把 import 留在事件
             # 循环线程, import 期 DLL 加载仍会冻结 boot 且 wait_for 无法打断。
             await asyncio.get_event_loop().run_in_executor(
-                get_blocking_executor(),
+                get_tdx_quant_executor(),
                 lambda: self._dll_import_and_initialize(tdx_root, tqcenter_dir),
             )
             logger.info(f"[{self.name}] TQ strategy_id={self._strategy_id} (记录用, 未传给 DLL)")
@@ -343,7 +343,7 @@ class TdxQuantClient:
                 # (HIGH2). executor 跑让其他 in-flight 请求继续调度。
                 # M2 (round 11): 持 _dll_lock 与在途/晚到 initialize 互斥。
                 await asyncio.get_event_loop().run_in_executor(
-                    get_blocking_executor(), self._dll_close
+                    get_tdx_quant_executor(), self._dll_close
                 )
             except Exception as e:
                 logger.warning(f"[{self.name}] close warning: {e}")
@@ -376,7 +376,7 @@ class TdxQuantClient:
         try:
             result = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
-                    get_blocking_executor(),
+                    get_tdx_quant_executor(),
                     lambda: getattr(self._tq, tool_name)(**arguments),
                 ),
                 timeout=self.config.settings.call_timeout_sec,
@@ -428,6 +428,47 @@ class TdxQuantClient:
         """对外暴露的同步探活（用于上游状态查询）。"""
         return self._status == UpstreamStatus.HEALTHY
 
+    def _probe_port_sync(self) -> bool:
+        """17709 端口实时探测 (同步, 短超时)。
+
+        与 async 版 _probe_tdx_remote_port 同源, 供 get_metrics 调用,
+        避免依赖可能滞后 (health 间隔 60s) 的缓存 _status。
+        """
+        port = self.config.settings.tdx_remote_port
+        sock: Optional[socket.socket] = None
+        try:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=0.5)
+            return True
+        except OSError:
+            return False
+        finally:
+            if sock is not None:
+                sock.close()
+
+    def get_metrics(self) -> dict:
+        """TQ 状态快照 (供 /api/upstreams/tdx_quant/metrics 与上游总览)。
+
+        两个真实信号实时组合:
+        - port_reachable: 终端侧 TQ 服务 (17709) 是否在监听
+        - tq_active:     Python↔DLL 链路 (initialize 成功且接口可用)
+
+        thread_pool: 专用阻塞线程池快照 (Route A: 与 mootdx2 拆开, 各自独立快照)。
+        tdx_quant 不在 client 层维护提交计数, 故 total/peak 由快照默认 0。
+        """
+        from ..core.blocking_pool import tdx_quant_executor_snapshot
+        port_reachable = self._probe_port_sync()
+        tq_active = self._status == UpstreamStatus.HEALTHY
+        return {
+            "status": self._status.value,
+            "available": self.is_available,
+            "port_reachable": port_reachable,
+            "tq_active": tq_active,
+            "strategy_id": self._strategy_id,
+            "tdx_root": str(self.config.tdx_root_path),
+            "port": self.config.settings.tdx_remote_port,
+            "thread_pool": tdx_quant_executor_snapshot(),
+        }
+
     async def _health_loop(self):
         """后台探活：周期性调 tq.get_user_sector()。"""
         interval = self.config.settings.health_check_interval_sec
@@ -436,7 +477,7 @@ class TdxQuantClient:
             try:
                 result = await asyncio.wait_for(
                     asyncio.get_event_loop().run_in_executor(
-                        get_blocking_executor(), lambda: self._tq.get_user_sector()
+                        get_tdx_quant_executor(), lambda: self._tq.get_user_sector()
                     ),
                     timeout=5.0,
                 )
@@ -474,7 +515,7 @@ class TdxQuantClient:
                     # HIGH2: tq.close() 同步 DLL, 必须 run_in_executor;
                     # M2 (round 11): 走 _dll_lock 与 initialize 互斥。
                     await loop.run_in_executor(
-                        get_blocking_executor(), self._dll_close
+                        get_tdx_quant_executor(), self._dll_close
                     )
             except Exception as e:
                 logger.warning(f"[{self.name}] close during reconnect: {e}")
@@ -485,7 +526,7 @@ class TdxQuantClient:
                 # 事件循环上跑会冻结 loop; 改 executor + _dll_lock 串行。
                 tdx_root = str(self.config.tdx_root_path)
                 await loop.run_in_executor(
-                    get_blocking_executor(),
+                    get_tdx_quant_executor(),
                     lambda: self._dll_initialize(tdx_root),
                 )
                 self._fail_count = 0

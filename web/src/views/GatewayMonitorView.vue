@@ -64,7 +64,7 @@
             <span v-if="totalQueued > 0" class="tab-badge">{{ totalQueued }}</span>
           </span>
         </template>
-        <PipelinePanel :mootdx="metrics" :thsdk="thsdkMetrics" />
+        <PipelinePanel :mootdx="metrics" :tdx-quant="tdxQuantMetrics" :thsdk="thsdkMetrics" />
       </el-tab-pane>
 
       <!-- ===== 缓存与存储 ===== -->
@@ -142,6 +142,7 @@ const {
   respCache,
   runtime,
   thsdkMetrics,
+  tdxQuantMetrics,
   loadError,
   l1LoadError,
   respLoadError,
@@ -300,8 +301,9 @@ const totalQueued = computed(() => {
   const mootdxQueued =
     (metrics.value?.thread_pool?.queued ?? 0)
     + (metrics.value?.reader_gate?.waiters ?? 0)
+  const tdxQuantQueued = tdxQuantMetrics.value?.thread_pool?.queued ?? 0
   const thsdkQueued = thsdkMetrics.value?.worker_pool?.queued ?? 0
-  return mootdxQueued + thsdkQueued
+  return mootdxQueued + tdxQuantQueued + thsdkQueued
 })
 </script>
 

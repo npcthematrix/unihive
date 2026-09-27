@@ -1,7 +1,7 @@
 """Round-10 启动审视 · 批 2 (L1 + L2 + L3 + L4), LOW 收尾。
 
 - L1: mootdx2 启动 factory / probe / close 的同步阻塞调用统一走专用阻塞池
-  (_run_blocking → get_blocking_executor), 不落 asyncio.to_thread 默认池。
+  (_run_blocking → get_mootdx2_executor), 不落 asyncio.to_thread 默认池。
 - L2: OmniClient stop() 后 _get_conn/health_check 不重开泄漏连接 (stopped 闸)。
 - L3: GatewayServer 相对 config_path 锚定项目根, 与 CWD 无关 (空库首启不再 seed 空模板)。
 - L4: 阻塞池 worker 为 daemon 且不注册进 concurrent.futures atexit join 表,
@@ -33,7 +33,7 @@ def test_l1_mootdx2_start_uses_dedicated_blocking_pool():
     start_src = inspect.getsource(MooTDX2Client.start)
     assert "_run_blocking(self._ensure_quotes_initialized)" in start_src, (
         "Quotes.factory() is a heavy blocking call; it must run on the dedicated "
-        "unihive-upstream pool, not asyncio.to_thread's default executor"
+        "unihive-mootdx2 pool, not asyncio.to_thread's default executor"
     )
     # 禁的是实际调用, 不是解释性注释里的名字 (assert call-form, not bare name)
     assert "asyncio.to_thread(" not in start_src
@@ -155,14 +155,14 @@ def test_l3_gateway_uses_resolve_project_path_for_config():
 
 
 def test_l4_blocking_pool_workers_are_daemon_and_unregistered():
-    from src.unihive.core.blocking_pool import get_blocking_executor
+    from src.unihive.core.blocking_pool import get_mootdx2_executor
 
-    pool = get_blocking_executor()
+    pool = get_mootdx2_executor()
     pool.submit(lambda: None).result(timeout=5)  # 触发 worker 创建
 
     workers = [
         t for t in threading.enumerate()
-        if t.name.startswith("unihive-upstream")
+        if t.name.startswith("unihive-mootdx2")
     ]
     assert workers, "dedicated pool must have spawned at least one worker"
     assert all(t.daemon for t in workers), (

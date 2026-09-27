@@ -6,7 +6,7 @@
 2. tdx_quant: sys.path 注入 + import tqcenter 以前跑在事件循环线程上
    (import 触发 DLL 加载, 可能冻结 boot), 整体移入阻塞池并持 _dll_lock;
    _dll_initialize 在 stop 后拒绝再打 DLL。
-3. shutdown_blocking_executor 不取消排队任务 —— stop() 排在僵尸 factory
+3. shutdown_mootdx2_executor 不取消排队任务 —— stop() 排在僵尸 factory
    后面的 close job (mootdx2 注释承诺 "最终必执行") 以前被 cancel_futures
    取消, 晚赋值的活 TDX 连接无人关。daemon 池排空排队任务不拖退出。
 4. lifecycle.stop(): config_store.close() 异常不截断后续复位;
@@ -32,8 +32,9 @@ from src.unihive.api.omni_client import OmniClient, OmniConfig
 from src.unihive.api.tdx_quant_client import TdxQuantClient
 from src.unihive.api.upstream_client import UpstreamStatus
 from src.unihive.core.blocking_pool import (
-    get_blocking_executor,
-    shutdown_blocking_executor,
+    get_mootdx2_executor,
+    get_tdx_quant_executor,
+    shutdown_mootdx2_executor,
 )
 from src.unihive.core.rate_limiter import reset_default_limiter
 from src.unihive.gateway_server import GatewayServer
@@ -240,7 +241,7 @@ class TestTdxQuantDllGuards:
             try:
                 loop.run_until_complete(
                     loop.run_in_executor(
-                        get_blocking_executor(),
+                        get_tdx_quant_executor(),
                         lambda: c._dll_import_and_initialize(
                             str(tmp_path), str(tq_dir)
                         ),
@@ -340,11 +341,12 @@ class TestTdxQuantDllGuards:
 
 class TestBlockingPoolQueuedJobs:
     def test_shutdown_keeps_queued_close_jobs(self, monkeypatch):
-        import src.unihive.core.blocking_pool as bp
-
-        monkeypatch.setenv("UNIHIVE_WORKER_THREADS", "1")
-        shutdown_blocking_executor()
-        pool = get_blocking_executor()
+        # Route A 后共享池已拆分: 这里验 mootdx2 专用池 (prefix unihive-mootdx2)。
+        # 用单 worker 池复现 "唯一 worker 被僵尸 factory 占住, close job 只能排队"
+        # 的场景, 断言 shutdown(cancel_futures=False) 不取消排队的 close。
+        monkeypatch.setenv("UNIHIVE_MOOTDX2_WORKER_THREADS", "1")
+        shutdown_mootdx2_executor()
+        pool = get_mootdx2_executor()
         try:
             started = threading.Event()
             release = threading.Event()
@@ -363,17 +365,17 @@ class TestBlockingPoolQueuedJobs:
             f2 = pool.submit(_queued_close)
             # stop() 在唯一 worker 被僵尸 factory 占住时关闭池:
             # 排队的 close 必须不被取消 (daemon worker 随后排空)。
-            shutdown_blocking_executor()
+            shutdown_mootdx2_executor()
             assert f2.cancelled() is False
             release.set()
             assert f2.result(10.0) is None
             assert marker["ran"] is True
             f1.result(5.0)
             # 单例已复位, stop/start 重启拿到新池
-            assert get_blocking_executor() is not pool
+            assert get_mootdx2_executor() is not pool
         finally:
             release.set()
-            shutdown_blocking_executor()
+            shutdown_mootdx2_executor()
 
 
 # ---------------------------------------------------------------------------
