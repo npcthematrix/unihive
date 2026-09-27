@@ -150,72 +150,6 @@ class TestMooTDX2CallToolExceptionSafety:
             )
 
 
-class TestMooTDX2HealthLoopRecovery:
-    """回归测试: health_loop DEGRADED → HEALTHY 自动恢复."""
-
-    @pytest.mark.asyncio
-    async def test_health_loop_recovers_degraded_to_healthy(self, monkeypatch):
-        """DEGRADED 状态在 TDX 恢复后应被 health_loop 推回 HEALTHY.
-
-        简化策略: 把 health_loop 内的 `await asyncio.sleep(30.0)` 替换为
-        `await asyncio.sleep(0.05)`, 直接 monkeypatch 该方法 (而不是全局
-        asyncio.sleep — 后者会自递归)。
-        """
-        config = MooTDX2Config(name="test_mootdx2", market="std")
-        client = MooTDX2Client(config)
-
-        # mock quotes 让 probe 成功
-        class MockQuotes:
-            def quotes(self, symbol):
-                import pandas as pd
-                return pd.DataFrame([{"symbol": "000001", "close": 10.0}])
-
-            def close(self):
-                pass
-
-        client._quotes = MockQuotes()
-        client._status = UpstreamStatus.DEGRADED
-
-        # 替换 client 实例的 health_loop: 不改源码, 而是用 faster 副本
-        # 通过 patch.object 直接覆盖该方法, 内部跑简化版的 while + probe
-        async def fast_health_loop():
-            """简化版 health_loop: sleep 0.05s 而非 30s, 逻辑与原版一致."""
-            try:
-                while True:
-                    await asyncio.sleep(0.05)
-                    if client._quotes is None:
-                        continue
-                    try:
-                        ok = await asyncio.wait_for(
-                            client._probe_with_existing_quotes(),
-                            timeout=2.5,
-                        )
-                        if ok and client._status != UpstreamStatus.HEALTHY:
-                            client._status = UpstreamStatus.HEALTHY
-                        elif not ok and client._status == UpstreamStatus.HEALTHY:
-                            client._status = UpstreamStatus.DEGRADED
-                    except asyncio.TimeoutError:
-                        if client._status == UpstreamStatus.HEALTHY:
-                            client._status = UpstreamStatus.DEGRADED
-            except asyncio.CancelledError:
-                pass
-
-        monkeypatch.setattr(client, "_health_loop", fast_health_loop)
-
-        # 启动 health_loop, 等 0.2s 看是否恢复到 HEALTHY
-        task = asyncio.create_task(client._health_loop())
-        await asyncio.sleep(0.2)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-        assert client._status == UpstreamStatus.HEALTHY, (
-            f"health_loop 应把 DEGRADED 推回 HEALTHY, 实际 {client._status}"
-        )
-
-
 class TestMooTDX2MetricsThreadSafety:
     """回归测试: 并发 _record_error 不能丢更新."""
 
@@ -407,13 +341,8 @@ class TestMooTDX2StartEdgeCases:
     """回归测试: start() 在 quotes init 失败 / probe 路径上的边角行为."""
 
     @pytest.mark.asyncio
-    async def test_start_does_not_launch_health_loop_when_quotes_init_fails(self, monkeypatch):
-        """HIGH-1: factory 失败时不应启动 health_loop (会纯空转 30s/tick).
-
-        之前实现: init 失败也调 _start_health_loop(), health_loop 每次
-        sleep 30s 后看到 self._quotes is None 就 continue — 纯空转,浪费
-        CPU + 日志。改为: init 失败时不启动, 等下次 start() 重新尝试。
-        """
+    async def test_start_sets_degraded_when_quotes_init_fails(self, monkeypatch):
+        """验证: factory 失败时 status 设为 DEGRADED (不再启动健康循环)."""
         config = MooTDX2Config(name="test_mootdx2", market="std")
         client = MooTDX2Client(config)
 
@@ -426,10 +355,6 @@ class TestMooTDX2StartEdgeCases:
         await client.start()
 
         assert client._status == UpstreamStatus.DEGRADED
-        # 关键断言: health_loop 不应被启动
-        assert client._health_task is None, (
-            f"init 失败时不应启动 health_loop, 但 _health_task={client._health_task}"
-        )
 
     @pytest.mark.asyncio
     async def test_probe_returns_false_when_quotes_is_none(self):

@@ -421,11 +421,8 @@ class MooTDX2Client:
         self._reader_lock = threading.Lock()  # Reader 缓存锁（高并发保护）
         self._quotes_lock = threading.Lock()  # Quotes 缓存锁（高并发保护）
 
-        # H1 (round 8 audit): 后台周期探活任务, 让 DEGRADED 状态有机会
-        # 在 TDX 恢复后自动回到 HEALTHY。
-        self._health_task: asyncio.Task | None = None
         # M2 (round 11): 生命周期代次标记。start() 超时被网关取消后在途
-        # factory 线程仍可能完成; 用于防止已停 client 被晚到的健康循环复活,
+        # factory 线程仍可能完成; 用于防止已停 client 被误调用复活,
         # 并让 late recovery 入口拒绝已停实例。
         self._stopped = False
 
@@ -1149,7 +1146,7 @@ class MooTDX2Client:
         Quotes.factory() 重新测速所有服务器, 启动延迟叠加。
         """
         # M2 (round 11): 同实例 stop/start 循环与 late recovery 都经此入口,
-        # 先复位停止标记, 否则 _start_health_loop 会把新健康循环挡在门外。
+        # 先复位停止标记。
         self._stopped = False
         # C1: 提前创建一次 Quotes 实例 (factory 内部测速一次, 后续 probe 复用)
         # 2026-09-14 round 11 audit: tdxdir 探测 (best-effort, 不抛) —
@@ -1193,7 +1190,6 @@ class MooTDX2Client:
                     logger.info(
                         f"{self.name}: startup probe OK (attempt {attempt + 1}/3)"
                     )
-                    self._start_health_loop()
                     return
                 logger.warning(
                     f"{self.name}: startup probe empty (attempt {attempt + 1}/3)"
@@ -1210,7 +1206,7 @@ class MooTDX2Client:
             if attempt < 2:
                 await asyncio.sleep(1.0)
 
-        # 3 次都失败 → DEGRADED (留余地让 health loop 重试)
+        # 3 次都失败 → DEGRADED
         self._status = UpstreamStatus.DEGRADED
         tdxdir = (
             self.config.settings.tdxdir
@@ -1221,7 +1217,6 @@ class MooTDX2Client:
             f"status=DEGRADED. Check TDX server reachable at "
             f"tdxdir={tdxdir}."
         )
-        self._start_health_loop()
 
     def _ensure_quotes_initialized(self) -> None:
         """C1 (round 8 audit): 提前初始化 Quotes 实例 (factory 测速一次),
@@ -1266,74 +1261,17 @@ class MooTDX2Client:
         # L1 (round 10): probe 同样是 TDX 同步阻塞调用, 走专用阻塞池。
         return await self._run_blocking(_do_probe)
 
-    def _start_health_loop(self) -> asyncio.Task | None:
-        """H1 (round 8 audit): 启动后台周期探活, 让 DEGRADED 状态有机会
-        在 TDX 恢复后回到 HEALTHY。每 30s probe 一次 (复用 quotes)。
-
-        M2 (round 11): stop 之后 / 尚未 start 的晚到调用不再复活健康循环;
-        返回 task 引用供调用方/测试判重, 已在跑时返回同一个 task。
-        """
-        if self._stopped:
-            return None
-        if self._health_task and not self._health_task.done():
-            return self._health_task
-        self._health_task = asyncio.create_task(self._health_loop())
-        return self._health_task
-
     async def start_after_timeout(self) -> None:
         """M2 (round 11): 网关启动 ``wait_for`` 超时后的后台自愈入口。
 
         被取消的 start() 可能留下在途 factory 线程 (线程池不可中断);
         ``_get_quotes()`` 的锁+双重检查使重复进入不会二次 factory, 故这里
         重跑一遍 start() 即可: factory 秒回 (复用在途/已建实例), probe
-        重测并启动健康循环, 让 UNKNOWN 孤儿 client 无需重启网关即恢复。
+        重测并更新状态, 让 UNKNOWN 孤儿 client 无需重启网关即恢复。
         """
         if self._stopped:
             return
         await self.start()
-
-    async def _health_loop(self) -> None:
-        """后台周期探活: DEGRADED → HEALTHY 自动恢复, HEALTHY → DEGRADED 失败检测。
-
-        C2 (round 9 audit): 检测 self._quotes is None, stop() 后或 start()
-        Quotes.init 失败时不进入 probe 循环, 避免 AttributeError。
-        """
-        try:
-            while True:
-                await asyncio.sleep(30.0)
-                # C2: stop() 已清理 self._quotes, 不再 probe
-                if self._quotes is None:
-                    logger.debug(
-                        f"{self.name}: health_loop skipped (quotes unavailable)"
-                    )
-                    continue
-                try:
-                    ok = await asyncio.wait_for(
-                        self._probe_with_existing_quotes(),
-                        timeout=2.5,
-                    )
-                    if ok and self._status != UpstreamStatus.HEALTHY:
-                        self._status = UpstreamStatus.HEALTHY
-                        logger.info(
-                            f"{self.name}: health_loop recovered → HEALTHY"
-                        )
-                    elif not ok and self._status == UpstreamStatus.HEALTHY:
-                        self._status = UpstreamStatus.DEGRADED
-                        logger.warning(
-                            f"{self.name}: health_loop probe empty → DEGRADED"
-                        )
-                except asyncio.TimeoutError:
-                    if self._status == UpstreamStatus.HEALTHY:
-                        self._status = UpstreamStatus.DEGRADED
-                        logger.warning(
-                            f"{self.name}: health_loop timeout → DEGRADED"
-                        )
-                except Exception as e:
-                    logger.debug(
-                        f"{self.name}: health_loop probe error: {e}"
-                    )
-        except asyncio.CancelledError:
-            pass
 
     async def stop(self):
         # M2 (round 11): 先置停止位, 挡住 late recovery 重入与晚到的健康
@@ -1348,14 +1286,6 @@ class MooTDX2Client:
             if hasattr(self, '_unusual_l1'):
                 self._unusual_l1.clear()
 
-        # H1: 取消后台探活任务
-        if self._health_task and not self._health_task.done():
-            self._health_task.cancel()
-            try:
-                await self._health_task
-            except asyncio.CancelledError:
-                pass
-            self._health_task = None
         # M4 (round 8 audit): 关闭 Quotes 实例防止连接泄漏。
         # L1 (round 11): start() 超时后在途 factory 线程 (预算可达 90s) 可能
         # 在 stop() 读到 None 跳过关闭之后才晚赋值, 留下无人关的活 TDX 连接。
