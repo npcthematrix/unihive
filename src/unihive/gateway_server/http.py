@@ -407,7 +407,7 @@ class HttpServeMixin:
                     )
 
             app = make_mcp_path_canonicalizer(inner_app, mcp_path)
-            log_level = self.config.get("logging", {}).get("level", "info").lower()
+            log_level = self.config.get("logging", {}).get("level", "warning").lower()
             # L12 (round 9 audit): uvicorn 默认 timeout_graceful_shutdown=None
             # (无硬上限), 长闲连接会拖住 SIGTERM 远超 stop() 的 max_wait=10s。
             # 与 stop() 的 max_wait 对齐, 让 uvicorn 在同一预算内强收连接。
