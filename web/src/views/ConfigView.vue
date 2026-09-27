@@ -374,13 +374,4 @@ defineExpose({ load })
 .cfg-panel-stack {
   min-height: 240px;
 }
-
-/* 顶栏三个控件在窄屏(< 640px) 拥挤 — 允许换行 + 显式 gap */
-:global(.toolbar-actions),
-.toolbar-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
 </style>

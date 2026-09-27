@@ -10,11 +10,3 @@ export function isUsableRevision(v: unknown): v is ConfigRevision {
   if (typeof v === 'number') return Number.isFinite(v)
   return typeof v === 'string' && v !== ''
 }
-
-/**
- * 提交写请求时取 revision: 可用则原样回带 (含 0), 否则回落空串
- * (后端语义: 空串 = 不校验乐观锁)。
- */
-export function revisionOrSkip(v: unknown): ConfigRevision | '' {
-  return isUsableRevision(v) ? v : ''
-}
