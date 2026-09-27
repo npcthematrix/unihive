@@ -71,6 +71,7 @@
           @changed="onUpstreamEnabled"
           @connection-saved="onUpstreamConnectionSaved"
           @kill-switch-changed="onKillSwitchChanged"
+          @pool-config-saved="onPoolConfigSaved"
         />
       </section>
 
@@ -323,6 +324,22 @@ function onFactoryUpgradeApplied(payload: { revision: number }) {
     config.value = { ...config.value, version: payload.revision }
   }
   void load(false)
+}
+
+/**
+ * 全局池参数 PUT 成功: revision bump, 跑一次实体摘要刷新让变更被记录。
+ * running 值未变 (Semaphore/ThreadPool 不可运行时扩缩, 等用户重启);
+ * 不需要重拉 /api/config 因为 schema 字段没变。
+ */
+function onPoolConfigSaved(payload: {
+  revision: ConfigRevision
+  pending_restart: Record<string, boolean>
+}) {
+  if (config.value) {
+    config.value = { ...config.value, version: payload.revision }
+  }
+  void loadEntities()
+  void loadInterfaceTools()
 }
 
 const refreshLabel = computed(() =>

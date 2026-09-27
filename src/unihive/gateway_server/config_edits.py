@@ -569,3 +569,130 @@ class ConfigEditsMixin:
     def _canonical_config(value: object) -> str:
         """连接块/spec 等价比较的规范 JSON (env 已解析, 纯本地比较用)。"""
         return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+
+    # ------------------------------------------------------------------
+    # P5: 全局池参数编辑 (写 config.db, 需重启生效; 不触 Semaphore/ThreadPool)
+    # ------------------------------------------------------------------
+
+    # 池字段 → 对应上游 + cfg 子键
+    _POOL_FIELD_TO_UPSTREAM_KEY: dict[str, tuple[str, str]] = {
+        "mootdx2_reader_limit": ("mootdx2", "reader_limit"),
+        "mootdx2_worker_threads": ("mootdx2", "worker_threads"),
+        "tdx_quant_worker_threads": ("tdx_quant", "worker_threads"),
+    }
+
+    async def apply_pool_config_edit(
+        self,
+        fields: dict,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict:
+        """写池容量/Reader 闸门到 config.db (mootdx2 + tdx_quant 两个上游实体行)。
+
+        三个字段 (mootdx2_reader_limit / mootdx2_worker_threads /
+        tdx_quant_worker_threads) 必须全部为 int ≥ 1, 否则 ``ValueError``
+        → handler 400; 任一上游缺失 → ``KeyError`` → 404; revision 过期
+        → ``RevisionConflict`` → 409。
+
+        落库后**不**重排 Semaphore/ThreadPool (运行时不支持扩缩), 用户
+        主动重启 gateway 才生效。返回 ``persisted / running / pending_restart``
+        三段, 客户端无需再发 GET 即可渲染"需重启" badge。
+
+        partial success: write #1 (mootdx2) 落库后 write #2 (tdx_quant) 撞
+        409 → 整请求 409, write #1 已落库; 与 apply_upstream_edit 同语义。
+        """
+        from ..utils import console_api as _ca
+
+        # 1. gate: yaml 模式不可写
+        store = getattr(self, "config_store", None)
+        if store is None:
+            raise RuntimeError(
+                "config.db entity source required for pool config edit"
+            )
+
+        # 2. 形态/范围校验
+        validated: dict[str, int] = {}
+        for k in self._POOL_FIELD_TO_UPSTREAM_KEY:
+            if k not in fields:
+                raise ValueError(f"missing pool field: {k!r}")
+            v = fields[k]
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise ValueError(
+                    f"pool field {k!r} must be int (got {type(v).__name__}: {v!r})"
+                )
+            if v < 1:
+                raise ValueError(f"pool field {k!r} must be ≥ 1 (got {v})")
+            validated[k] = v
+
+        # 3. 读 bundle 一次性拿 plan_revision + 两个 upstream 实体行
+        bundle = await store.read_bundle()
+        current_rev = int(bundle.get("revision") or 0)
+        if expected_revision is not None and expected_revision != current_rev:
+            from ..storage.config_store import RevisionConflict
+            raise RevisionConflict(expected_revision, current_rev)
+
+        ups_by_name: dict[str, dict] = {}
+        for u in bundle.get("upstreams", []) or []:
+            ups_by_name[u.get("name")] = u
+        # 缺失检查
+        for fk, (upstream_name, _key) in self._POOL_FIELD_TO_UPSTREAM_KEY.items():
+            if upstream_name not in ups_by_name:
+                raise KeyError(upstream_name)
+
+        # 4. shallow-merge: 保留现有 keys, 仅覆盖池字段
+        merged_by_name: dict[str, dict] = {}
+        for upstream_name in {n for n, _ in self._POOL_FIELD_TO_UPSTREAM_KEY.values()}:
+            existing_cfg = dict(ups_by_name[upstream_name].get("config") or {})
+            for fk, (uname, key) in self._POOL_FIELD_TO_UPSTREAM_KEY.items():
+                if uname == upstream_name:
+                    existing_cfg[key] = validated[fk]
+            merged_by_name[upstream_name] = existing_cfg
+
+        # 5. 顺序写两个 upstream 实体行 (共享 expected_revision)
+        # update_upstream_config 自身有 no-op 短路 (new==current → return current)
+        final_rev = current_rev
+        for upstream_name, new_cfg in merged_by_name.items():
+            new_rev = await store.update_upstream_config(
+                upstream_name, new_cfg,
+                type=None, expected_revision=current_rev,
+            )
+            final_rev = new_rev
+            current_rev = new_rev  # 下一轮基于已 bump 的 rev
+
+        # 6. 缓存失效 + console_api db revision 同步
+        _ca.set_config_db(store, final_rev)
+        _ca.invalidate_config_caches()
+
+        # 7. diff persisted vs running, 构造 pending_restart
+        running_snap = self.get_pool_config_snapshot() or {}
+        running_vals = {
+            "mootdx2_reader_limit": running_snap.get("mootdx2_reader_limit"),
+            "mootdx2_worker_threads": running_snap.get("mootdx2_worker_threads"),
+            "tdx_quant_worker_threads": running_snap.get("tdx_quant_worker_threads"),
+        }
+        pending_restart = {
+            fk: (validated[fk] != running_vals[fk])
+            for fk in self._POOL_FIELD_TO_UPSTREAM_KEY
+        }
+        changed = any(pending_restart.values())
+
+        logger.info(
+            "Pool config edited (rev=%d, changed=%s, pending_restart=%s)",
+            final_rev, changed, pending_restart,
+        )
+        return {
+            "changed": changed,
+            "revision": final_rev,
+            "persisted": {
+                "mootdx2_reader_limit": validated["mootdx2_reader_limit"],
+                "mootdx2_worker_threads": validated["mootdx2_worker_threads"],
+                "tdx_quant_worker_threads": validated["tdx_quant_worker_threads"],
+            },
+            "running": {
+                "mootdx2_reader_limit": running_vals["mootdx2_reader_limit"],
+                "mootdx2_worker_threads": running_vals["mootdx2_worker_threads"],
+                "tdx_quant_worker_threads": running_vals["tdx_quant_worker_threads"],
+                "sources": dict(running_snap.get("sources") or {}),
+            },
+            "pending_restart": pending_restart,
+        }

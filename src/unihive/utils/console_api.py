@@ -1540,6 +1540,60 @@ async def pool_config_api(req: "Request") -> "JSONResponse":
     return JSONResponse({**snapshot, "timestamp": int(time.time())})
 
 
+async def config_pool_update_api(req: "Request") -> "JSONResponse":
+    """PUT /api/config/pool — 写池容量/Reader 闸门到 config.db (需重启生效)。
+
+    body: ``{"fields": {"mootdx2_reader_limit": int,
+                        "mootdx2_worker_threads": int,
+                        "tdx_quant_worker_threads": int},
+            "revision"?: int}``
+
+    状态码:
+      200: 落库成功 (changed=false 为 no-op, body 含 persisted/running/pending_restart)
+      400: fields 形态/范围错 (缺键 / 非 int / <1)
+      404: mootdx2 或 tdx_quant 上游缺失
+      409: revision 过期 (与并发编辑冲突)
+      503: yaml 模式 / GatewayServer 未注入
+    """
+    from starlette.responses import JSONResponse
+
+    # yaml 逃生模式拒写
+    if not _db_mode or _config_store is None:
+        return JSONResponse(
+            {"error": "config_store_unavailable",
+             "message": "UNIHIVE_CONFIG_SOURCE=yaml, pool config is read-only"},
+            status_code=503,
+        )
+    server = _gateway_server
+    if server is None:
+        return JSONResponse({"error": "gateway unavailable"}, status_code=503)
+
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    fields = body.get("fields")
+    if not isinstance(fields, dict):
+        return JSONResponse({"error": "fields must be an object"}, status_code=400)
+
+    revision, rev_err = _parse_revision(body)
+    if rev_err is not None:
+        return rev_err
+
+    try:
+        result = await server.apply_pool_config_edit(
+            fields, expected_revision=revision,
+        )
+    except Exception as e:
+        # _entity_edit_error_response 映射 KeyError→404, ValueError→400,
+        # RevisionConflict→409, "config.db" in RuntimeError→503; 其余 500
+        return _entity_edit_error_response(e)
+
+    return JSONResponse(result)
+
+
 # ---------------------------------------------------------------------------
 # MCP 浏览器 —— 原样展示 "本身即 MCP server" 的上游的 tools/list
 # ---------------------------------------------------------------------------
@@ -2452,6 +2506,8 @@ def build_upstream_routes() -> list:
         Route("/api/runtime", runtime_stats_api),
         # 启动期 per-source 池容量 + Reader 闸门 (cfg > env > default 来源标注)
         Route("/api/runtime/pool-config", pool_config_api),
+        # 全局池参数 PUT (落 config.db, 需重启生效)
+        Route("/api/config/pool", config_pool_update_api, methods=["PUT"]),
         Route(
             "/api/config/upstreams/{name}/enabled",
             upstream_enabled_api,

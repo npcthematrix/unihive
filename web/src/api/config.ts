@@ -711,6 +711,52 @@ export async function getPoolConfig(): Promise<PoolConfigSnapshot> {
   return data
 }
 
+// ---------------------------------------------------------------------------
+// /api/config/pool — 全局池参数 PUT (落 config.db, 重启生效)
+// ---------------------------------------------------------------------------
+
+/** 池字段的 PUT 形态: 三个 int 字段 (与 PoolConfigSnapshot 同 key)。 */
+export interface PoolConfigFields {
+  mootdx2_reader_limit: number
+  mootdx2_worker_threads: number
+  tdx_quant_worker_threads: number
+}
+
+/**
+ * PUT /api/config/pool 成功响应。
+ *
+ * - ``changed=false``: 三字段全 no-op (DB 已有相同值), revision 不变。
+ * - ``pending_restart[k]=true``: DB 中已写入新值, 但运行中进程仍是旧值
+ *   (Semaphore/ThreadPool 无法运行时扩缩, 需用户主动重启 gateway);
+ *   控制台折叠区据此渲染"需重启" badge 而不发第二次 GET。
+ */
+export interface PoolConfigEditResult {
+  changed: boolean
+  revision: number
+  persisted: PoolConfigFields
+  running: PoolConfigFields & { sources: Record<string, PoolConfigSource> }
+  pending_restart: Record<keyof PoolConfigFields, boolean>
+}
+
+/**
+ * PUT /api/config/pool — 写池容量/Reader 闸门到 config.db。
+ *
+ * 状态码语义: 400 (字段形态/范围) / 404 (上游缺失) / 409 (revision 过期)
+ * / 503 (yaml 逃生模式或网关未注入)。错误展示走 ``describeEntityEditError``。
+ *
+ * **不传 revision = 不做乐观锁校验** (单用户本地场景; 多端并发场景下
+ * 推荐回带 ``/api/config`` 的 ``version`` 整数 revision)。
+ */
+export async function updatePoolConfig(
+  fields: PoolConfigFields,
+  opts: { revision?: number } = {},
+): Promise<PoolConfigEditResult> {
+  const body: Record<string, unknown> = { fields }
+  if (opts.revision !== undefined) body.revision = opts.revision
+  const { data } = await http.put<PoolConfigEditResult>('/api/config/pool', body)
+  return data
+}
+
 /** PUT /api/proxy/settings — 启用/停用代理。返回最新设置。 */
 export async function setProxySettings(enabled: boolean): Promise<ProxySettings> {
   const { data } = await http.put<ProxySettings>('/api/proxy/settings', { enabled })

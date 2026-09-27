@@ -147,6 +147,12 @@
           <span class="cfg-section-toggle">▸</span>
           全局池参数
           <span class="cfg-section-sub">— 启动期一次性, 运行时改需重启</span>
+          <el-tag
+            v-if="anyPendingRestart"
+            type="warning"
+            size="small"
+            class="cfg-pool-restart-tag"
+          >已修改, 重启 gateway 后生效</el-tag>
         </span>
       </summary>
       <div class="cfg-section-body">
@@ -154,33 +160,50 @@
           池配置未可用: {{ poolConfigError }}
         </div>
         <div v-else-if="!poolConfig" class="muted">加载中...</div>
-        <div v-else class="cfg-pool-grid">
-          <div class="cfg-pool-row">
-            <span class="cfg-pool-source">mootdx2</span>
-            <span class="cfg-pool-key">reader_limit</span>
-            <span class="cfg-pool-val">{{ poolConfig.mootdx2_reader_limit }}</span>
-            <span
-              class="cfg-pool-badge"
-              :class="`src-${poolConfig.sources.mootdx2_reader_limit || 'default'}`"
-            >来源 {{ sourceLabel(poolConfig.sources.mootdx2_reader_limit) }}</span>
+        <div v-else>
+          <!-- db 模式 + 可编辑: 输入框; 否则只读 -->
+          <div class="cfg-pool-grid">
+            <template v-for="row in poolRows" :key="row.key">
+              <span class="cfg-pool-source">{{ row.source }}</span>
+              <span class="cfg-pool-key">{{ row.key }}</span>
+              <span v-if="!canEditPool" class="cfg-pool-val">{{ row.value }}</span>
+              <el-input-number
+                v-else
+                v-model="row.draft"
+                :min="1"
+                :step="1"
+                size="small"
+                class="cfg-pool-input"
+                :disabled="poolSaving"
+              />
+              <span class="cfg-pool-badge-cell">
+                <span
+                  class="cfg-pool-badge"
+                  :class="`src-${row.sourceKey}`"
+                >来源 {{ row.sourceLabel }}</span>
+                <el-tag
+                  v-if="row.needsRestart"
+                  type="warning"
+                  size="small"
+                  effect="plain"
+                  class="cfg-pool-restart-cell"
+                >需重启</el-tag>
+              </span>
+            </template>
           </div>
-          <div class="cfg-pool-row">
-            <span class="cfg-pool-source">mootdx2</span>
-            <span class="cfg-pool-key">worker_threads</span>
-            <span class="cfg-pool-val">{{ poolConfig.mootdx2_worker_threads }}</span>
-            <span
-              class="cfg-pool-badge"
-              :class="`src-${poolConfig.sources.mootdx2_worker_threads || 'default'}`"
-            >来源 {{ sourceLabel(poolConfig.sources.mootdx2_worker_threads) }}</span>
-          </div>
-          <div class="cfg-pool-row">
-            <span class="cfg-pool-source">tdx_quant</span>
-            <span class="cfg-pool-key">worker_threads</span>
-            <span class="cfg-pool-val">{{ poolConfig.tdx_quant_worker_threads }}</span>
-            <span
-              class="cfg-pool-badge"
-              :class="`src-${poolConfig.sources.tdx_quant_worker_threads || 'default'}`"
-            >来源 {{ sourceLabel(poolConfig.sources.tdx_quant_worker_threads) }}</span>
+          <div v-if="canEditPool" class="cfg-pool-actions">
+            <el-button
+              size="small"
+              type="primary"
+              :loading="poolSaving"
+              :disabled="!poolDirty"
+              @click="onSavePool"
+            >保存池参数</el-button>
+            <el-button
+              size="small"
+              :disabled="poolSaving || !poolDirty"
+              @click="resetPoolDraft"
+            >重置</el-button>
           </div>
         </div>
       </div>
@@ -247,15 +270,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
 import type {
   ConfigRevision,
   GatewayConfig,
+  PoolConfigEditResult,
   PoolConfigSnapshot,
   UpstreamConfig,
 } from '@/api/config'
-import { getPoolConfig, setDisableDangerous, setUpstreamEnabled } from '@/api/config'
+import {
+  getPoolConfig,
+  setDisableDangerous,
+  setUpstreamEnabled,
+  updatePoolConfig,
+} from '@/api/config'
 import { errorMessage } from '@/api/client'
 import { loggingToRows, retryToString } from './format'
 import {
@@ -285,6 +314,10 @@ const emit = defineEmits<{
   killSwitchChanged: [payload: {
     disabled: boolean
     version: ConfigRevision
+  }]
+  poolConfigSaved: [payload: {
+    revision: ConfigRevision
+    pending_restart: PoolConfigEditResult['pending_restart']
   }]
 }>()
 
@@ -565,11 +598,35 @@ async function onToggleKillSwitch(): Promise<void> {
 const logRows = computed(() => loggingToRows(props.config?.logging))
 
 // ---------------------------------------------------------------------------
-// 启动期池配置 (只读展示, 重启才生效)
+// 启动期池配置 (db 模式可编辑; 保存即落 config.db, 运行时改需重启)
 // ---------------------------------------------------------------------------
 
 const poolConfig = ref<PoolConfigSnapshot | null>(null)
 const poolConfigError = ref<string | null>(null)
+/** PUT 响应: persisted + running + pending_restart, 用于"需重启"badge 渲染。 */
+const poolEditState = ref<PoolConfigEditResult | null>(null)
+const poolSaving = ref(false)
+/** 三字段编辑中草稿 (UI 状态, 不持久化)。 */
+const poolDraft = reactive<{ mootdx2_reader_limit: number; mootdx2_worker_threads: number; tdx_quant_worker_threads: number }>({
+  mootdx2_reader_limit: 0,
+  mootdx2_worker_threads: 0,
+  tdx_quant_worker_threads: 0,
+})
+
+/** db 实体模式 + 可编辑 prop + 池 snapshot 已加载 — 三者都齐才显示表单。 */
+const canEditPool = computed(() =>
+  Boolean(props.editable && poolConfig.value && !poolConfigError.value),
+)
+
+interface PoolRow {
+  key: 'mootdx2_reader_limit' | 'mootdx2_worker_threads' | 'tdx_quant_worker_threads'
+  source: string
+  value: number
+  draft: number
+  sourceKey: string
+  sourceLabel: string
+  needsRestart: boolean
+}
 
 /** 把 cfg / env / default 翻成中文标注; 后端返非预期值时保留原文。 */
 function sourceLabel(s: string | undefined): string {
@@ -579,9 +636,107 @@ function sourceLabel(s: string | undefined): string {
   return s || '代码默认'
 }
 
+/** poolConfig + poolEditState + poolDraft → 三行渲染数据。 */
+const poolRows = computed<PoolRow[]>(() => {
+  if (!poolConfig.value) return []
+  const snap = poolConfig.value
+  const edit = poolEditState.value
+  return [
+    {
+      key: 'mootdx2_reader_limit',
+      source: 'mootdx2',
+      value: snap.mootdx2_reader_limit,
+      draft: poolDraft.mootdx2_reader_limit,
+      sourceKey: snap.sources.mootdx2_reader_limit || 'default',
+      sourceLabel: sourceLabel(snap.sources.mootdx2_reader_limit),
+      needsRestart: Boolean(edit?.pending_restart?.mootdx2_reader_limit),
+    },
+    {
+      key: 'mootdx2_worker_threads',
+      source: 'mootdx2',
+      value: snap.mootdx2_worker_threads,
+      draft: poolDraft.mootdx2_worker_threads,
+      sourceKey: snap.sources.mootdx2_worker_threads || 'default',
+      sourceLabel: sourceLabel(snap.sources.mootdx2_worker_threads),
+      needsRestart: Boolean(edit?.pending_restart?.mootdx2_worker_threads),
+    },
+    {
+      key: 'tdx_quant_worker_threads',
+      source: 'tdx_quant',
+      value: snap.tdx_quant_worker_threads,
+      draft: poolDraft.tdx_quant_worker_threads,
+      sourceKey: snap.sources.tdx_quant_worker_threads || 'default',
+      sourceLabel: sourceLabel(snap.sources.tdx_quant_worker_threads),
+      needsRestart: Boolean(edit?.pending_restart?.tdx_quant_worker_threads),
+    },
+  ]
+})
+
+/** 三字段是否都被改过 (与 snapshot 比, 任一不同即 dirty)。 */
+const poolDirty = computed(() => {
+  if (!poolConfig.value) return false
+  return (
+    poolDraft.mootdx2_reader_limit !== poolConfig.value.mootdx2_reader_limit
+    || poolDraft.mootdx2_worker_threads !== poolConfig.value.mootdx2_worker_threads
+    || poolDraft.tdx_quant_worker_threads !== poolConfig.value.tdx_quant_worker_threads
+  )
+})
+
+const anyPendingRestart = computed(() =>
+  Boolean(poolEditState.value?.pending_restart
+    && Object.values(poolEditState.value.pending_restart).some(Boolean)),
+)
+
+function resetPoolDraft(): void {
+  if (!poolConfig.value) return
+  poolDraft.mootdx2_reader_limit = poolConfig.value.mootdx2_reader_limit
+  poolDraft.mootdx2_worker_threads = poolConfig.value.mootdx2_worker_threads
+  poolDraft.tdx_quant_worker_threads = poolConfig.value.tdx_quant_worker_threads
+  poolEditState.value = null
+}
+
+async function onSavePool(): Promise<void> {
+  if (!poolConfig.value || poolSaving.value) return
+  poolSaving.value = true
+  try {
+    const result = await updatePoolConfig(
+      {
+        mootdx2_reader_limit: poolDraft.mootdx2_reader_limit,
+        mootdx2_worker_threads: poolDraft.mootdx2_worker_threads,
+        tdx_quant_worker_threads: poolDraft.tdx_quant_worker_threads,
+      },
+      // revision 0 是合法初值; |"" 跳过乐观锁; 非空 Number 走检查
+      { revision: typeof props.config?.version === 'number' ? props.config.version : undefined },
+    )
+    poolEditState.value = result
+    if (result.changed) {
+      ElMessage.success(
+        `池参数已保存, ${Object.values(result.pending_restart).filter(Boolean).length} 项需重启 gateway 后生效`,
+      )
+      emit('poolConfigSaved', {
+        revision: result.revision,
+        pending_restart: result.pending_restart,
+      })
+    } else {
+      ElMessage.info('池参数无变化')
+    }
+  } catch (e: unknown) {
+    const msg = errorMessage(e, '保存失败')
+    if (msg.includes('version_conflict') || msg.includes('revision 不一致')) {
+      ElMessage.error('配置版本已变更, 请刷新页面后重试')
+    } else {
+      ElMessage.error(msg)
+    }
+  } finally {
+    poolSaving.value = false
+  }
+}
+
 onMounted(async () => {
   try {
-    poolConfig.value = await getPoolConfig()
+    const snap = await getPoolConfig()
+    poolConfig.value = snap
+    resetPoolDraft()
   } catch (e: unknown) {
     // 404/500/503 均降级为只展示错误文本, 不弹 ElMessage (折叠区里静默)
     poolConfigError.value = errorMessage(e, '未知错误')
@@ -755,5 +910,42 @@ onMounted(async () => {
   border-color: var(--cfg-border);
   background: var(--cfg-bg-soft);
   color: var(--cfg-text-secondary);
+}
+
+/* 折叠标题旁的全局"已修改需重启" 提示 */
+.cfg-pool-restart-tag {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+/* badge 单元 (badge + 可选 需重启 tag) */
+.cfg-pool-badge-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cfg-pool-restart-cell {
+  font-weight: 600;
+}
+
+/* el-input-number 在 grid 单元里撑满整列 */
+.cfg-pool-input {
+  width: 100%;
+  justify-self: stretch;
+}
+
+.cfg-pool-input :deep(.el-input__inner) {
+  text-align: left;
+}
+
+/* 保存/重置 行 */
+.cfg-pool-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--cfg-border);
 }
 </style>
