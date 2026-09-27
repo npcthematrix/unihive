@@ -127,6 +127,40 @@ async def test_start_guest_auth_success(guest_env, fake_mod: types.ModuleType):
     }
 
 
+async def test_get_metrics_snapshot(guest_env, fake_mod: types.ModuleType):
+    client = await _started(fake_mod)
+    snap = client.get_metrics()
+    assert snap["status"] == "healthy"
+    assert snap["available"] is True
+    assert snap["authenticated"] is True
+    assert snap["auth_mode"] == "guest"
+    assert snap["watchlist_write"] is False
+    assert snap["circuit_breaker"] == "closed"
+    assert snap["cb_cooldown_remaining_sec"] is None
+    assert snap["call_timeout_sec"] == 5
+    assert snap["throttle_ms"] == 0
+    assert snap["throttle_remaining_sec"] >= 0
+    assert snap["worker_pool"]["capacity"] == 1
+
+
+async def test_throttle_cumulative_counters():
+    from src.unihive.api.thsdk_client import _Throttle
+
+    t = _Throttle(0.0, lambda: None)
+
+    class FakeLoop:
+        async def run_in_executor(self, ex, fn):
+            return fn()
+
+    loop = FakeLoop()
+
+    await t.run(loop, lambda: 1, timeout=5)  # type: ignore[arg-type]
+    await t.run(loop, lambda: 2, timeout=5)  # type: ignore[arg-type]
+    assert t.counters["total"] == 2
+    assert t.counters["current"] == 0
+    assert t.counters["peak"] >= 1
+
+
 async def test_start_credentials_mode(
     monkeypatch: pytest.MonkeyPatch, fake_mod: types.ModuleType
 ):

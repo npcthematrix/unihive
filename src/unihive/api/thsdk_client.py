@@ -274,6 +274,8 @@ class _Throttle:
         self._lock = asyncio.Lock()
         self._last = 0.0
         self._executor_factory = executor_factory
+        # 并发累计 (调用突发短于轮询间隔, 靠 total/peak 留存)
+        self.counters = {"total": 0, "current": 0, "peak": 0}
 
     async def run(
         self, loop: asyncio.AbstractEventLoop, fn: Callable[[], Any], timeout: float
@@ -282,11 +284,16 @@ class _Throttle:
             wait = self._interval - (time.monotonic() - self._last)
             if wait > 0:
                 await asyncio.sleep(wait)
+            counters = self.counters
+            counters["total"] += 1
+            counters["current"] += 1
+            counters["peak"] = max(counters["peak"], counters["current"])
             try:
                 return await asyncio.wait_for(
                     loop.run_in_executor(self._executor_factory(), fn), timeout=timeout
                 )
             finally:
+                counters["current"] -= 1
                 self._last = time.monotonic()
 
 
@@ -688,6 +695,53 @@ class ThsdkClient:
 
     async def health_check(self) -> bool:
         return self._status == UpstreamStatus.HEALTHY
+
+    def get_metrics(self) -> dict:
+        """运行时状态快照 (供 /api/upstreams/thsdk/metrics 与监控页)。
+
+        只含运行时事实: 连接/认证/熔断态 + 生效配置, 不回读配置文件。
+        """
+        from pathlib import Path
+        from ..core.blocking_pool import thsdk_executor_snapshot
+
+        # account.session 复用情况: stop() 不 logout, 重启后免重复登录。
+        session_file = Path("account.session")
+
+        # 熔断剩余冷却 (open 态); half_open 等探针, 无倒计时。
+        cb_remaining: float | None = None
+        if self._cb_state == "open":
+            cb_remaining = max(
+                0.0, _CB_COOLDOWN_SEC
+                - (time.monotonic() - self._cb_opened_at)
+            )
+
+        # 节流冷却剩余: interval - 距上次调用
+        throttle = self._throttle
+        throttle_remaining = max(
+            0.0,
+            throttle._interval - (time.monotonic() - throttle._last),
+        )
+
+        return {
+            "status": self._status.value,
+            "available": self.is_available,
+            "authenticated": self._authed,
+            "auth_mode": self._auth_mode,
+            "watchlist_write": self.config.allow_watchlist_write,
+            "circuit_breaker": self._cb_state,
+            "cb_failures": self._cb_failures,
+            "cb_cooldown_remaining_sec": round(cb_remaining, 1)
+            if cb_remaining is not None else None,
+            "call_timeout_sec": self.config.call_timeout_sec,
+            "throttle_ms": self.config.throttle_ms,
+            "throttle_remaining_sec": round(throttle_remaining, 2),
+            "worker_pool": {
+                **thsdk_executor_snapshot(),
+                "total": throttle.counters["total"],
+                "peak": throttle.counters["peak"],
+            },
+            "session_persisted": session_file.exists(),
+        }
 
     # ========== 只读工具 ==========
 
