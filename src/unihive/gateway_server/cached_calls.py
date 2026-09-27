@@ -246,6 +246,22 @@ class CachedExecutionMixin:
             "tool_count": len(self.tool_specs) if self.tool_specs else 0,
             "calls_last_1m": calls_1m,
             "calls_last_5m": calls_5m,
-            # 显式速率字段: 当前 1 分钟窗口即速率, 留键便于后续换滑窗
-            "calls_per_min": calls_1m,
+        }
+
+    def get_pool_config_snapshot(self) -> dict | None:
+        """启动期 pool 配置快照 (供 console_api GET /api/runtime/pool-config)。
+
+        仅展示, 不修改 — 池/Reader 闸门是 Semaphore/ThreadPool, 运行时改
+        需重启。sources 字段标识每个值来源 (cfg/env/default) 供控制台
+        标注用。返回 None 表示网关未初始化 (极端: yaml 模式预检失败)。
+        """
+        pool_cfg = getattr(self, "_pool_config", None)
+        if pool_cfg is None:
+            return None
+        # dataclass 已 frozen, 直接 dict() 拷一份; sources 也是 dict。
+        return {
+            "mootdx2_reader_limit": pool_cfg.mootdx2_reader_limit,
+            "mootdx2_worker_threads": pool_cfg.mootdx2_worker_threads,
+            "tdx_quant_worker_threads": pool_cfg.tdx_quant_worker_threads,
+            "sources": dict(pool_cfg.sources),
         }

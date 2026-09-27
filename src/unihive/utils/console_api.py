@@ -1053,6 +1053,25 @@ def _shutdown_probe_executor() -> None:
 atexit.register(_shutdown_probe_executor)
 
 
+def _client_status_bucket(client) -> str:
+    """把运行时 client 的状态枚举映射为状态桶, 保留 degraded。
+
+    healthy→online / degraded→degraded / unavailable→offline / unknown→unknown。
+    枚举不可读时回退 is_available 二值 (兼容裸测试双)。
+    """
+    status = getattr(client, "status", None)
+    value = getattr(status, "value", status)
+    mapping = {
+        "healthy": "online",
+        "degraded": "degraded",
+        "unavailable": "offline",
+        "unknown": "unknown",
+    }
+    if isinstance(value, str) and value in mapping:
+        return mapping[value]
+    return "online" if getattr(client, "is_available", False) else "offline"
+
+
 def get_upstream_status() -> dict:
     config = load_config()
     upstreams_cfg = {
@@ -1077,8 +1096,10 @@ def get_upstream_status() -> dict:
         # 2026-09-17: 覆盖运行时 client 状态 (mootdx2/tdx_quant 等非 HTTP 上游)
         client = _get_upstream_client(name)
         if client is not None and hasattr(client, "is_available"):
-            # client.is_available 反映真实运行时状态 (Connected/DEGRADED/Failed)
-            info["status"] = "online" if client.is_available else "offline"
+            # 读真实状态枚举而非 is_available 二值折叠:
+            # tdx_quant 的 is_available 对 DEGRADED 也返回 True, 旧逻辑会把
+            # 「终端在但 TQ 接口未激活」的降级态误报成 online。
+            info["status"] = _client_status_bucket(client)
         upstreams_status[name] = info
         summary["total"] += 1
         if not info.get("enabled", False):
@@ -1493,6 +1514,29 @@ async def runtime_stats_api(req: "Request") -> "JSONResponse":
     except Exception:
         logger.exception("runtime_stats_api raised")
         return JSONResponse({"error": "runtime_read_failed"}, status_code=500)
+    return JSONResponse({**snapshot, "timestamp": int(time.time())})
+
+
+async def pool_config_api(req: "Request") -> "JSONResponse":
+    """GET /api/runtime/pool-config — per-source 池配置 (启动期一次性)。
+
+    返回 mootdx2_reader_limit / mootdx2_worker_threads /
+    tdx_quant_worker_threads + sources (每字段 cfg/env/default 来源标注);
+    控制台配置信息页"全局池参数"卡片只读展示用, 运行时改需重启。
+    503 = 网关未初始化 (yaml 预检失败等极端情形); 404 = 池配置尚未装配。
+    """
+    from starlette.responses import JSONResponse
+
+    server = _gateway_server
+    if server is None:
+        return JSONResponse({"error": "gateway unavailable"}, status_code=503)
+    try:
+        snapshot = server.get_pool_config_snapshot()
+    except Exception:
+        logger.exception("pool_config_api raised")
+        return JSONResponse({"error": "pool_config_read_failed"}, status_code=500)
+    if snapshot is None:
+        return JSONResponse({"error": "pool_config_not_available"}, status_code=404)
     return JSONResponse({**snapshot, "timestamp": int(time.time())})
 
 
@@ -2406,6 +2450,8 @@ def build_upstream_routes() -> list:
     return [
         # 网关进程运行态 (PID/运行时长/在途/工具数/近期调用)
         Route("/api/runtime", runtime_stats_api),
+        # 启动期 per-source 池容量 + Reader 闸门 (cfg > env > default 来源标注)
+        Route("/api/runtime/pool-config", pool_config_api),
         Route(
             "/api/config/upstreams/{name}/enabled",
             upstream_enabled_api,

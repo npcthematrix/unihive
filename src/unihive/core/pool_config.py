@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,8 @@ class PoolConfig:
     mootdx2_reader_limit: int
     mootdx2_worker_threads: int
     tdx_quant_worker_threads: int
+    # 字段名 → 来源 ("cfg" | "env" | "default"); 控制台展示用, 不影响 resolve 逻辑
+    sources: dict[str, str] = field(default_factory=dict)
 
 
 def _resolve_int(
@@ -50,8 +52,8 @@ def _resolve_int(
     default: int,
     *,
     minimum: int = 1,
-) -> int:
-    """``cfg > env > default`` 三级回退 + 钳到 ``minimum``。
+) -> tuple[int, str]:
+    """``cfg > env > default`` 三级回退 + 钳到 ``minimum``; 返 (值, 来源)。
 
     - ``cfg_value`` 是 None / 缺失: 走 env;
     - ``cfg_value`` 非法 (非 int / 不可转换): WARNING + 走 env;
@@ -61,7 +63,7 @@ def _resolve_int(
     if cfg_value is not None:
         try:
             n = int(cfg_value)  # type: ignore[arg-type]
-            return max(minimum, n)
+            return max(minimum, n), "cfg"
         except (TypeError, ValueError):
             logger.warning(
                 "[pool-config] cfg value %r for %s is invalid; falling back to env",
@@ -71,13 +73,13 @@ def _resolve_int(
     if env_val is not None:
         try:
             n = int(env_val)
-            return max(minimum, n)
+            return max(minimum, n), "env"
         except (TypeError, ValueError):
             logger.warning(
                 "[pool-config] env %s=%r is invalid; falling back to default %d",
                 env_var, env_val, default,
             )
-    return max(minimum, default)
+    return max(minimum, default), "default"
 
 
 def resolve_pool_config(cfg: dict | None) -> PoolConfig:
@@ -87,22 +89,31 @@ def resolve_pool_config(cfg: dict | None) -> PoolConfig:
     upstreams = (cfg or {}).get("upstreams") or {}
     mootdx_cfg = upstreams.get("mootdx2") or {}
     tdxq_cfg = upstreams.get("tdx_quant") or {}
+
+    reader_limit, src = _resolve_int(
+        mootdx_cfg.get("reader_limit"),
+        ENV_MOOTDX2_READER_LIMIT,
+        DEFAULT_MOOTDX2_READER_LIMIT,
+    )
+    mootdx_worker, src2 = _resolve_int(
+        mootdx_cfg.get("worker_threads"),
+        ENV_MOOTDX2_WORKER_THREADS,
+        DEFAULT_MOOTDX2_WORKER_THREADS,
+    )
+    tdxq_worker, src3 = _resolve_int(
+        tdxq_cfg.get("worker_threads"),
+        ENV_TDX_QUANT_WORKER_THREADS,
+        DEFAULT_TDX_QUANT_WORKER_THREADS,
+    )
     return PoolConfig(
-        mootdx2_reader_limit=_resolve_int(
-            mootdx_cfg.get("reader_limit"),
-            ENV_MOOTDX2_READER_LIMIT,
-            DEFAULT_MOOTDX2_READER_LIMIT,
-        ),
-        mootdx2_worker_threads=_resolve_int(
-            mootdx_cfg.get("worker_threads"),
-            ENV_MOOTDX2_WORKER_THREADS,
-            DEFAULT_MOOTDX2_WORKER_THREADS,
-        ),
-        tdx_quant_worker_threads=_resolve_int(
-            tdxq_cfg.get("worker_threads"),
-            ENV_TDX_QUANT_WORKER_THREADS,
-            DEFAULT_TDX_QUANT_WORKER_THREADS,
-        ),
+        mootdx2_reader_limit=reader_limit,
+        mootdx2_worker_threads=mootdx_worker,
+        tdx_quant_worker_threads=tdxq_worker,
+        sources={
+            "mootdx2_reader_limit": src,
+            "mootdx2_worker_threads": src2,
+            "tdx_quant_worker_threads": src3,
+        },
     )
 
 

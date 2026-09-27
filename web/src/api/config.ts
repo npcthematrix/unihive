@@ -682,6 +682,35 @@ export async function getProxySettings(): Promise<ProxySettings> {
   return data
 }
 
+// ---------------------------------------------------------------------------
+// /api/runtime/pool-config — per-source 池容量 + Reader 闸门 (启动期一次性)
+// ---------------------------------------------------------------------------
+
+/** 单字段值的来源标注: cfg=配置库 / env=环境变量 / default=代码默认。 */
+export type PoolConfigSource = 'cfg' | 'env' | 'default' | string
+
+/** GET /api/runtime/pool-config 响应。sources 是字段名 → 来源映射。 */
+export interface PoolConfigSnapshot {
+  mootdx2_reader_limit: number
+  mootdx2_worker_threads: number
+  tdx_quant_worker_threads: number
+  sources: Record<string, PoolConfigSource>
+  /** UNIX 秒; 控制台刷新时戳。 */
+  timestamp: number
+}
+
+/**
+ * GET /api/runtime/pool-config — 启动期 pool 配置 (只读)。
+ *
+ * 池是 Semaphore / ThreadPool, 运行时改需重启, 此端点仅供配置信息页
+ * "全局池参数"卡片展示。404/503 表示网关未初始化或未注入, 控制台
+ * 卡片降级为"未可用"。
+ */
+export async function getPoolConfig(): Promise<PoolConfigSnapshot> {
+  const { data } = await http.get<PoolConfigSnapshot>('/api/runtime/pool-config')
+  return data
+}
+
 /** PUT /api/proxy/settings — 启用/停用代理。返回最新设置。 */
 export async function setProxySettings(enabled: boolean): Promise<ProxySettings> {
   const { data } = await http.put<ProxySettings>('/api/proxy/settings', { enabled })

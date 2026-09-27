@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isUsableRevision, revisionOrSkip } from '@/views/config/revisions'
+import { isUsableRevision } from '@/views/config/revisions'
 
 describe('isUsableRevision', () => {
   it('accepts finite numbers including zero', () => {
@@ -24,16 +24,8 @@ describe('isUsableRevision', () => {
   })
 })
 
-describe('revisionOrSkip', () => {
-  it('passes usable revisions through (including 0)', () => {
-    expect(revisionOrSkip(0)).toBe(0)
-    expect(revisionOrSkip(3)).toBe(3)
-    expect(revisionOrSkip('abc123')).toBe('abc123')
-  })
-
-  it('falls back to empty string (backend: skip optimistic check)', () => {
-    expect(revisionOrSkip(undefined)).toBe('')
-    expect(revisionOrSkip(null)).toBe('')
-    expect(revisionOrSkip('')).toBe('')
-  })
-})
+/**
+ * revisionOrSkip 已在 3f5c625 死代码清扫中删除 (ConfigView.vue 重构后
+ * 唯一调用点用 ``v || ''`` 直接内联, 行为保持一致; 见 revisions.ts 头注释)。
+ * 删除对应 describe 块, 不再保留死测试。
+ */

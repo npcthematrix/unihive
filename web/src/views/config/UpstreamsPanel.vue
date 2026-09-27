@@ -140,6 +140,52 @@
     </el-table>
     </div>
 
+    <!-- 启动期池配置 (cfg > env > default 优先级链, 重启才生效) -->
+    <details class="cfg-section">
+      <summary class="cfg-section-header">
+        <span class="cfg-section-title">
+          <span class="cfg-section-toggle">▸</span>
+          全局池参数
+          <span class="cfg-section-sub">— 启动期一次性, 运行时改需重启</span>
+        </span>
+      </summary>
+      <div class="cfg-section-body">
+        <div v-if="poolConfigError" class="muted">
+          池配置未可用: {{ poolConfigError }}
+        </div>
+        <div v-else-if="!poolConfig" class="muted">加载中...</div>
+        <div v-else class="cfg-pool-grid">
+          <div class="cfg-pool-row">
+            <span class="cfg-pool-source">mootdx2</span>
+            <span class="cfg-pool-key">reader_limit</span>
+            <span class="cfg-pool-val">{{ poolConfig.mootdx2_reader_limit }}</span>
+            <span
+              class="cfg-pool-badge"
+              :class="`src-${poolConfig.sources.mootdx2_reader_limit || 'default'}`"
+            >来源 {{ sourceLabel(poolConfig.sources.mootdx2_reader_limit) }}</span>
+          </div>
+          <div class="cfg-pool-row">
+            <span class="cfg-pool-source">mootdx2</span>
+            <span class="cfg-pool-key">worker_threads</span>
+            <span class="cfg-pool-val">{{ poolConfig.mootdx2_worker_threads }}</span>
+            <span
+              class="cfg-pool-badge"
+              :class="`src-${poolConfig.sources.mootdx2_worker_threads || 'default'}`"
+            >来源 {{ sourceLabel(poolConfig.sources.mootdx2_worker_threads) }}</span>
+          </div>
+          <div class="cfg-pool-row">
+            <span class="cfg-pool-source">tdx_quant</span>
+            <span class="cfg-pool-key">worker_threads</span>
+            <span class="cfg-pool-val">{{ poolConfig.tdx_quant_worker_threads }}</span>
+            <span
+              class="cfg-pool-badge"
+              :class="`src-${poolConfig.sources.tdx_quant_worker_threads || 'default'}`"
+            >来源 {{ sourceLabel(poolConfig.sources.tdx_quant_worker_threads) }}</span>
+          </div>
+        </div>
+      </div>
+    </details>
+
     <!-- 全局开关 + 日志: 两个独立折叠区 -->
     <details class="cfg-section" open>
       <summary class="cfg-section-header">
@@ -201,10 +247,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
-import type { ConfigRevision, GatewayConfig, UpstreamConfig } from '@/api/config'
-import { setDisableDangerous, setUpstreamEnabled } from '@/api/config'
+import type {
+  ConfigRevision,
+  GatewayConfig,
+  PoolConfigSnapshot,
+  UpstreamConfig,
+} from '@/api/config'
+import { getPoolConfig, setDisableDangerous, setUpstreamEnabled } from '@/api/config'
 import { errorMessage } from '@/api/client'
 import { loggingToRows, retryToString } from './format'
 import {
@@ -512,6 +563,30 @@ async function onToggleKillSwitch(): Promise<void> {
 }
 
 const logRows = computed(() => loggingToRows(props.config?.logging))
+
+// ---------------------------------------------------------------------------
+// 启动期池配置 (只读展示, 重启才生效)
+// ---------------------------------------------------------------------------
+
+const poolConfig = ref<PoolConfigSnapshot | null>(null)
+const poolConfigError = ref<string | null>(null)
+
+/** 把 cfg / env / default 翻成中文标注; 后端返非预期值时保留原文。 */
+function sourceLabel(s: string | undefined): string {
+  if (s === 'cfg') return '配置库'
+  if (s === 'env') return '环境变量'
+  if (s === 'default') return '代码默认'
+  return s || '代码默认'
+}
+
+onMounted(async () => {
+  try {
+    poolConfig.value = await getPoolConfig()
+  } catch (e: unknown) {
+    // 404/500/503 均降级为只展示错误文本, 不弹 ElMessage (折叠区里静默)
+    poolConfigError.value = errorMessage(e, '未知错误')
+  }
+})
 </script>
 
 <style scoped>
@@ -616,5 +691,69 @@ const logRows = computed(() => loggingToRows(props.config?.logging))
   background: var(--cfg-bg-soft);
   padding: 1px 6px;
   border-radius: 3px;
+}
+
+/* 全局池参数 — 启动期 cfg > env > default 三档来源标注。
+   grid 而非 kv 列表: 让一行四列对齐 (上游/字段/值/来源), 切换折叠时
+   高度变化最小。 */
+.cfg-pool-grid {
+  display: grid;
+  grid-template-columns: minmax(80px, max-content) max-content max-content 1fr;
+  column-gap: 16px;
+  row-gap: 6px;
+  align-items: baseline;
+}
+
+.cfg-pool-row {
+  display: contents;
+}
+
+.cfg-pool-source {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--cfg-text-secondary);
+}
+
+.cfg-pool-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--el-text-color-regular);
+}
+
+.cfg-pool-val {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+
+.cfg-pool-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--cfg-border);
+  background: var(--cfg-bg-soft);
+  color: var(--cfg-text-secondary);
+  white-space: nowrap;
+  justify-self: start;
+}
+
+.cfg-pool-badge.src-cfg {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.cfg-pool-badge.src-env {
+  border-color: var(--el-color-warning-light-5);
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+}
+
+.cfg-pool-badge.src-default {
+  border-color: var(--cfg-border);
+  background: var(--cfg-bg-soft);
+  color: var(--cfg-text-secondary);
 }
 </style>
