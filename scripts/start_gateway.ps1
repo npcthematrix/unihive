@@ -82,7 +82,7 @@ def _gw_port(path):
     p = gw.get('port')
     return int(p) if p is not None else None
 # 优先 config.yaml (bootstrap 段), 再回落 upstreams.yaml
-for _p in (r"$($ConfigYamlPath -replace '\\','/')", r"$($UpstreamsYamlPath -replace '\\','/')"):
+for _p in ("$($ConfigYamlPath -replace '\\','/')", "$($UpstreamsYamlPath -replace '\\','/')"):
     try:
         _port = _gw_port(_p)
     except Exception:

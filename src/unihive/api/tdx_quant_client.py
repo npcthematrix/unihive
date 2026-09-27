@@ -480,10 +480,32 @@ class TdxQuantClient:
         }
 
     async def _health_loop(self):
-        """后台探活：周期性调 tq.get_user_sector()。"""
+        """后台探活：周期性调 tq.get_user_sector()。
+
+        当状态为 UNAVAILABLE 时（启动时 TdxW.exe 未运行），继续以较长间隔
+        重试连接，实现"即插即用"——用户后启动 TdxW.exe 后网关能自动恢复。
+        """
         interval = self.config.settings.health_check_interval_sec
-        while self._status != UpstreamStatus.UNAVAILABLE:
-            await asyncio.sleep(interval)
+        retry_interval = 10  # UNAVAILABLE 状态下每 10 秒重试一次
+        current_interval = interval
+        while True:
+            await asyncio.sleep(current_interval)
+            # UNAVAILABLE 状态下尝试重新初始化
+            if self._status == UpstreamStatus.UNAVAILABLE:
+                logger.info(f"[{self.name}] UNAVAILABLE, attempting reinitialize...")
+                if await self.start():
+                    logger.info(f"[{self.name}] reinitialized successfully, resuming health loop")
+                    self._fail_count = 0
+                    current_interval = interval
+                    continue
+                else:
+                    # 保持 UNAVAILABLE，继续重试
+                    current_interval = retry_interval
+                    continue
+            # 正常运行：非 UNAVILABLE 时才探活
+            if self._status == UpstreamStatus.UNKNOWN:
+                current_interval = retry_interval
+                continue
             try:
                 result = await asyncio.wait_for(
                     asyncio.get_event_loop().run_in_executor(
@@ -501,10 +523,11 @@ class TdxQuantClient:
                         logger.error(
                             f"[{self.name}] marked UNAVAILABLE after {self._fail_count} failures"
                         )
-                        return
+                        current_interval = retry_interval
                 else:
                     self._fail_count = 0
                     self._status = UpstreamStatus.HEALTHY
+                    current_interval = interval
             except (asyncio.TimeoutError, Exception):
                 self._fail_count += 1
                 if self._fail_count >= self.config.settings.reconnect_threshold:
@@ -514,7 +537,7 @@ class TdxQuantClient:
                     logger.error(
                         f"[{self.name}] marked UNAVAILABLE after {self._fail_count} failures"
                     )
-                    return
+                    current_interval = retry_interval
 
     async def _reconnect(self):
         """重连：tq.close() + tq.initialize()，asyncio.Lock 串行化。"""
