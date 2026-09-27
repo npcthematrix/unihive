@@ -464,9 +464,11 @@ class MooTDX2Client:
             # 防止过多并发 Reader 导致 TDX 库性能下降或超时
             self._READER_SEMAPHORE_LIMIT = 4  # 最多 4 个并发 Reader
             self._reader_semaphore = asyncio.Semaphore(self._READER_SEMAPHORE_LIMIT)
-            # 闸门累计计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
+            # 闸门累计/实时计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
+            # waiters_now 由 _reader_gate 自持, 不读 CPython Semaphore 私有字段
             self._gate_counters = {
-                "total": 0, "current": 0, "peak": 0, "waiters_total": 0,
+                "total": 0, "current": 0, "peak": 0,
+                "waiters_now": 0, "waiters_total": 0,
             }
 
             # 2026-09-15 P0 (MOOTDX2 性能审视 H2-a):
@@ -484,7 +486,10 @@ class MooTDX2Client:
             self._unusual_l1_misses = 0
         except ImportError:
             self._DAILY_L1_ENABLED = False
-            self._gate_counters = {"total": 0, "current": 0, "peak": 0, "waiters_total": 0}
+            self._gate_counters = {
+                "total": 0, "current": 0, "peak": 0,
+                "waiters_now": 0, "waiters_total": 0,
+            }
             logger.warning("cachetools not installed, get_daily L1 cache disabled")
 
         # 线程池入口累计计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
@@ -521,22 +526,27 @@ class MooTDX2Client:
 
     @contextlib.asynccontextmanager
     async def _reader_gate(self):
-        """Reader 信号量 + 累计/峰值计数。闸门满时记一次等待。"""
-        semaphore = getattr(self, "_reader_semaphore", None)
-        counters = getattr(self, "_gate_counters", None)
-        if semaphore is None or counters is None:
-            yield
-            return
-        if semaphore.locked():
-            counters["waiters_total"] += 1
-        async with semaphore:
-            counters["total"] += 1
-            counters["current"] += 1
-            counters["peak"] = max(counters["peak"], counters["current"])
+        """Reader 信号量 + 累计/峰值/实时等待者计数。
+
+        闸门满时记一次等待 (waiters_total+1) 并把 waiters_now 增 1,
+        进闸后 waiters_now-1、current+1、total+1、peak 滚动;
+        离开闸门时 current-1。所有计数 self 持, 不读 CPython Semaphore 私有字段
+        (跨 Python 版本脆弱)。
+        """
+        if self._reader_semaphore.locked():
+            self._gate_counters["waiters_total"] += 1
+            self._gate_counters["waiters_now"] += 1
+        async with self._reader_semaphore:
+            self._gate_counters["waiters_now"] -= 1
+            self._gate_counters["total"] += 1
+            self._gate_counters["current"] += 1
+            self._gate_counters["peak"] = max(
+                self._gate_counters["peak"], self._gate_counters["current"]
+            )
             try:
                 yield
             finally:
-                counters["current"] -= 1
+                self._gate_counters["current"] -= 1
 
     def _new_request_id(self) -> str:
         """生成请求 ID"""
@@ -910,9 +920,10 @@ class MooTDX2Client:
         if semaphore is not None and counters is not None:
             reader_gate = {
                 "capacity": self._READER_SEMAPHORE_LIMIT,
-                # 信号量无已占用计数: 容量 - 剩余许可
-                "acquired": self._READER_SEMAPHORE_LIMIT - semaphore._value,
-                "waiters": len(semaphore._waiters or []),
+                # 闸门实时占用 = 当前持有 permit 数 (由 _reader_gate 自持计数,
+                # 不读 CPython Semaphore 私有字段, 跨版本脆弱)。
+                "acquired": counters["current"],
+                "waiters": counters["waiters_now"],
                 "total": counters["total"],
                 "peak": counters["peak"],
                 "waiters_total": counters["waiters_total"],

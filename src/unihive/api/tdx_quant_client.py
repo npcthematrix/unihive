@@ -38,6 +38,23 @@ logger = logging.getLogger(__name__)
 _STRATEGY_ID_FILE = resolve_project_path(None, "logs/tdx_quant_strategy_id")
 
 
+def _do_probe_port(host: str, port: int, timeout: float) -> bool:
+    """socket.create_connection 短超时探测, 失败返 False。
+
+    同步底层, 由 sync 调用方 (get_metrics) 或经 run_in_executor 包装 (async
+    调用方) 复用。OSError 之外的所有异常被视为不可恢复 bug, 向上传播。
+    """
+    sock: Optional[socket.socket] = None
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        return True
+    except OSError:
+        return False
+    finally:
+        if sock is not None:
+            sock.close()
+
+
 def _resolve_strategy_id(configured: str) -> str:
     """LOW7: 配置优先 → 持久化 UUID → 新生成 UUID.
 
@@ -101,20 +118,22 @@ class TdxQuantClient:
         17709 是 TdxW.exe 暴露的本地服务端口, 用于 TQ 策略管理器与外部通信。
         注意: 此端口探测只能反映 TdxW.exe 是否运行, 无法验证 TQ 接口是否
         已激活 (需登录后)。
+
+        外层 wait_for 3s 包含入队/调度时间, 内层 socket 超时 2s 由 _do_probe_port 控。
         """
         host = "127.0.0.1"  # 本地探测
         port = self.config.settings.tdx_remote_port
         try:
-            fut = asyncio.get_event_loop().run_in_executor(
-                get_tdx_quant_executor(),
-                lambda: socket.create_connection((host, port), timeout=2.0),
+            return await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    get_tdx_quant_executor(),
+                    lambda: _do_probe_port(host, port, 2.0),
+                ),
+                timeout=3.0,
             )
-            sock = await asyncio.wait_for(fut, timeout=3.0)
-            sock.close()
-            return True
-        except Exception as e:
+        except asyncio.TimeoutError as e:
             logger.debug(
-                f"[{self.name}] remote TDX port {port} probe failed: {e}"
+                f"[{self.name}] remote TDX port {port} probe timed out: {e}"
             )
             return False
 
@@ -434,16 +453,7 @@ class TdxQuantClient:
         与 async 版 _probe_tdx_remote_port 同源, 供 get_metrics 调用,
         避免依赖可能滞后 (health 间隔 60s) 的缓存 _status。
         """
-        port = self.config.settings.tdx_remote_port
-        sock: Optional[socket.socket] = None
-        try:
-            sock = socket.create_connection(("127.0.0.1", port), timeout=0.5)
-            return True
-        except OSError:
-            return False
-        finally:
-            if sock is not None:
-                sock.close()
+        return _do_probe_port("127.0.0.1", self.config.settings.tdx_remote_port, 0.5)
 
     def get_metrics(self) -> dict:
         """TQ 状态快照 (供 /api/upstreams/tdx_quant/metrics 与上游总览)。

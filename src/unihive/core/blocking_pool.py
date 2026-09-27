@@ -5,9 +5,7 @@ mootdx2（通达信本地 TCP 库）、tdx_quant（tqcenter DLL）、thsdk（本
 (ThreadPoolExecutor, max_workers=min(32, cpu+4))，这些金融阻塞调用会与其它
 默认池任务互相挤占。
 
-历史上三者共享一个 16 worker 池 —— 行情高并发时互相排队，且监控快照把
-mootdx2 的占用与 tdx_quant 的混在一起，监控行不诚实。现按上游各拆一个
-DaemonBlockingExecutor，容量按各上游的并发上限独立设定：
+按上游各拆一个 DaemonBlockingExecutor，容量按各上游的并发上限独立设定：
 
 - mootdx2: 8 worker（Reader 闸门 `_READER_SEMAPHORE_LIMIT=4` 已把并发 Reader
   钉死为 4，池容量给到 8 留余量给 probe/close 等非 Reader 阻塞调用）。
@@ -25,6 +23,8 @@ import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import thread as _cf_thread
+from typing import Optional
+
 
 # 各上游默认 worker 数：阻塞点在本地库/网络 I/O，线程可适当多于 CPU。
 # 可用对应的 env 覆盖。
@@ -32,12 +32,15 @@ _MOOTDX2_DEFAULT_SIZE = 8
 _TDX_QUANT_DEFAULT_SIZE = 10
 
 
-def _pool_size(env_var: str, default: int) -> int:
+def _pool_size(env_var: Optional[str], default: int) -> int:
+    """从 env 读 worker 数。env_var=None 或值非法 → 回落到 default, 钳到 ≥1。"""
+    if env_var is None:
+        return max(1, default)
     try:
         n = int(os.environ.get(env_var, str(default)))
         return max(1, n)
     except (TypeError, ValueError):
-        return default
+        return max(1, default)
 
 
 class DaemonBlockingExecutor(ThreadPoolExecutor):
@@ -107,83 +110,92 @@ def _executor_snapshot(executor: ThreadPoolExecutor) -> dict:
     }
 
 
+class _PoolBundle:
+    """per-source 阻塞池三件套工厂 (get / snapshot / shutdown)。
+
+    每个上游一个实例, 自身持 ThreadPoolExecutor 单例 + env/默认容量/前缀。
+    公共 API 通过下面 9 个 module-level 包装函数暴露, 保持向后兼容的导入面。
+    """
+
+    __slots__ = ("_env_var", "_default_size", "_prefix", "_executor")
+
+    def __init__(self, env_var: Optional[str], default_size: int, prefix: str) -> None:
+        self._env_var = env_var
+        self._default_size = default_size
+        self._prefix = prefix
+        self._executor: Optional[ThreadPoolExecutor] = None
+
+    def get(self) -> ThreadPoolExecutor:
+        """惰性创建并返回专用池 (进程内单例)。"""
+        if self._executor is None:
+            self._executor = DaemonBlockingExecutor(
+                max_workers=_pool_size(self._env_var, self._default_size),
+                thread_name_prefix=self._prefix,
+            )
+        return self._executor
+
+    def snapshot(self) -> dict:
+        """池快照。未创建时按容量事实返空池状态。"""
+        if self._executor is None:
+            return {
+                "capacity": _pool_size(self._env_var, self._default_size),
+                "workers": 0,
+                "active": 0,
+                "queued": 0,
+            }
+        return _executor_snapshot(self._executor)
+
+    def shutdown(self) -> None:
+        """关停并清空单例。
+
+        Round-12 簇H: cancel_futures 刻意为 False —— stop() 摘关 Quotes 的 close
+        job 可能排在一个卡死的 factory 后面 (唯一 worker 被占住, mootdx2 stop 注释
+        承诺 "最终必执行")。daemon worker 会继续排空队列且不注册 atexit join,
+        不拖进程退出; wait=False 让调用立即返回, 不影响关停时延。
+        """
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=False)
+            self._executor = None
+
+
 # ---------------------------------------------------------------------------
-# mootdx2 专用池
+# per-source 实例 + 公共三件套 (向后兼容的 module-level 函数)
 # ---------------------------------------------------------------------------
 
-_mootdx2_executor: ThreadPoolExecutor | None = None
+_mootdx2 = _PoolBundle("UNIHIVE_MOOTDX2_WORKER_THREADS", _MOOTDX2_DEFAULT_SIZE, "unihive-mootdx2")
+_tdx_quant = _PoolBundle("UNIHIVE_TDX_QUANT_WORKER_THREADS", _TDX_QUANT_DEFAULT_SIZE, "unihive-tdx-quant")
+_thsdk = _PoolBundle(env_var=None, default_size=1, prefix="unihive-thsdk")
 
 
+# mootdx2
 def get_mootdx2_executor() -> ThreadPoolExecutor:
     """返回 mootdx2 专用的阻塞调用线程池（惰性创建，默认 8 worker）。"""
-    global _mootdx2_executor
-    if _mootdx2_executor is None:
-        _mootdx2_executor = DaemonBlockingExecutor(
-            max_workers=_pool_size("UNIHIVE_MOOTDX2_WORKER_THREADS", _MOOTDX2_DEFAULT_SIZE),
-            thread_name_prefix="unihive-mootdx2",
-        )
-    return _mootdx2_executor
+    return _mootdx2.get()
 
 
 def mootdx2_executor_snapshot() -> dict:
     """mootdx2 专用池快照 (未创建则返回空池事实)。"""
-    if _mootdx2_executor is None:
-        return {
-            "capacity": _pool_size("UNIHIVE_MOOTDX2_WORKER_THREADS", _MOOTDX2_DEFAULT_SIZE),
-            "workers": 0,
-            "active": 0,
-            "queued": 0,
-        }
-    return _executor_snapshot(_mootdx2_executor)
+    return _mootdx2.snapshot()
 
 
 def shutdown_mootdx2_executor() -> None:
-    """关停 mootdx2 专用池。
-
-    Round-12 簇H: cancel_futures 刻意为 False —— stop() 摘关 Quotes 的 close
-    job 可能排在一个卡死的 factory 后面 (唯一 worker 被占住, mootdx2 stop 注释
-    承诺 "最终必执行")。旧实现 cancel_futures=True 会把这个排队中的 close 直接
-    取消, 晚赋值的活 TDX 连接无人释放。daemon worker 会继续排空队列且不注册
-    atexit join, 不拖进程退出; wait=False 让调用立即返回, 不影响关停时延。
-    """
-    global _mootdx2_executor
-    if _mootdx2_executor is not None:
-        _mootdx2_executor.shutdown(wait=False, cancel_futures=False)
-        _mootdx2_executor = None
+    """关停 mootdx2 专用池。详见 _PoolBundle.shutdown。"""
+    _mootdx2.shutdown()
 
 
-# ---------------------------------------------------------------------------
-# tdx_quant 专用池
-# ---------------------------------------------------------------------------
-
-_tdx_quant_executor: ThreadPoolExecutor | None = None
-
-
+# tdx_quant
 def get_tdx_quant_executor() -> ThreadPoolExecutor:
     """返回 tdx_quant 专用的阻塞调用线程池（惰性创建，默认 10 worker）。
 
     与 mootdx2 拆开: get 调用可并发, init/close 由 ``_dll_lock`` 串行; 共享池
     会把两者占用混进同一快照, 监控行不诚实。
     """
-    global _tdx_quant_executor
-    if _tdx_quant_executor is None:
-        _tdx_quant_executor = DaemonBlockingExecutor(
-            max_workers=_pool_size("UNIHIVE_TDX_QUANT_WORKER_THREADS", _TDX_QUANT_DEFAULT_SIZE),
-            thread_name_prefix="unihive-tdx-quant",
-        )
-    return _tdx_quant_executor
+    return _tdx_quant.get()
 
 
 def tdx_quant_executor_snapshot() -> dict:
     """tdx_quant 专用池快照 (未创建则返回空池事实)。"""
-    if _tdx_quant_executor is None:
-        return {
-            "capacity": _pool_size("UNIHIVE_TDX_QUANT_WORKER_THREADS", _TDX_QUANT_DEFAULT_SIZE),
-            "workers": 0,
-            "active": 0,
-            "queued": 0,
-        }
-    return _executor_snapshot(_tdx_quant_executor)
+    return _tdx_quant.snapshot()
 
 
 def shutdown_tdx_quant_executor() -> None:
@@ -192,19 +204,10 @@ def shutdown_tdx_quant_executor() -> None:
     stop() 摘关 tq 的 close job 可能排在一个卡死的 initialize (DLL 加载) 后面;
     取消它会让晚赋值的 DLL 句柄无人释放。
     """
-    global _tdx_quant_executor
-    if _tdx_quant_executor is not None:
-        _tdx_quant_executor.shutdown(wait=False, cancel_futures=False)
-        _tdx_quant_executor = None
+    _tdx_quant.shutdown()
 
 
-# ---------------------------------------------------------------------------
-# thsdk 专用池
-# ---------------------------------------------------------------------------
-
-_thsdk_executor: ThreadPoolExecutor | None = None
-
-
+# thsdk
 def get_thsdk_executor() -> ThreadPoolExecutor:
     """返回 thsdk 专用的单 worker 线程池（惰性创建）。
 
@@ -214,25 +217,14 @@ def get_thsdk_executor() -> ThreadPoolExecutor:
     其余任务在队列里排队且可随超时取消（未开跑的 Future.cancel 成功）,
     不会像多 worker 池那样每次超时都新增一个僵尸线程。
     """
-    global _thsdk_executor
-    if _thsdk_executor is None:
-        _thsdk_executor = DaemonBlockingExecutor(
-            max_workers=1,
-            thread_name_prefix="unihive-thsdk",
-        )
-    return _thsdk_executor
+    return _thsdk.get()
 
 
 def thsdk_executor_snapshot() -> dict:
     """thsdk 单 worker 池快照。"""
-    if _thsdk_executor is None:
-        return {"capacity": 1, "workers": 0, "active": 0, "queued": 0}
-    return _executor_snapshot(_thsdk_executor)
+    return _thsdk.snapshot()
 
 
 def shutdown_thsdk_executor() -> None:
     """关停 thsdk 专用池（与其它上游池同样的 cancel_futures=False 语义）。"""
-    global _thsdk_executor
-    if _thsdk_executor is not None:
-        _thsdk_executor.shutdown(wait=False, cancel_futures=False)
-        _thsdk_executor = None
+    _thsdk.shutdown()

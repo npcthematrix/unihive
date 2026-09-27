@@ -88,7 +88,6 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   const l1LoadError = ref('')
   const respLoadError = ref('')
   const thsdkLoadError = ref('')
-  const tdxQuantLoadError = ref('')
 
   // 时间戳/时钟: 默认挂生命周期 (1s 时钟 + 轮询 + visibility 重拉); 单测可走本地兜底。
   const autoRefresh = ref(true)
@@ -229,10 +228,8 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     // 失败保留旧值不挂告警 —— 池快照非首屏关键源, 不拖垮卡片。
     if (tdxQuantResult.status === 'fulfilled' && !('skipped' in tdxQuantResult.value)) {
       tdxQuantMetrics.value = tdxQuantResult.value.metrics
-      tdxQuantLoadError.value = ''
     } else if (tdxQuantResult.status === 'rejected') {
       tdxQuantMetrics.value = null
-      tdxQuantLoadError.value = errorMessage(tdxQuantResult.reason, 'TDX 量化状态不可用')
     }
 
     if (statusResult.status === 'fulfilled') {
@@ -473,7 +470,6 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     l1LoadError,
     respLoadError,
     thsdkLoadError,
-    tdxQuantLoadError,
     initialLoading,
     manualLoading,
     statsFromForeignProcess,
