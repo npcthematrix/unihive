@@ -265,6 +265,25 @@ class Router:
                 logger.info(f"[{gateway_tool}] {source} unavailable, trying next...")
                 continue
 
+            # boot 期上游在后台异步 start(); 尚未就绪时立即跳过、试下一个源,
+            # 不空等 (决策 a)。离线工具上面已单独处理, 这里只管其余工具。
+            if not is_offline_tool and not upstream.is_available:
+                hop = RouteHop(
+                    source=source,
+                    tool_name=tool_name,
+                    duration_ms=0,
+                    success=False,
+                    error=(
+                        f"upstream {source!r} is still starting; "
+                        f"retry shortly or use another source"
+                    ),
+                )
+                hops.append(hop)
+                logger.info(
+                    f"[{gateway_tool}] {source} still starting, trying next..."
+                )
+                continue
+
             # 限流：protect 互联网上游 (fuyao/thsdk) 避免触发上游 429/QPD 配额
             # 本地上游 (mootdx2/tdx_quant/omni) 走同一接口也无害（默认 20 QPS
             # 桶大，从不阻塞）。wait=False：桶空直接跳过该 upstream 试下一个。

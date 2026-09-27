@@ -84,7 +84,7 @@ def test_snapshot_counts_and_fields():
     assert snap["tool_count"] == 212
     assert snap["calls_last_1m"] == 2
     assert snap["calls_last_5m"] == 4
-    assert snap["calls_per_min"] == 2
+    assert "calls_per_min" not in snap
 
 
 def test_snapshot_null_uptime_before_ready():
@@ -120,7 +120,6 @@ def test_runtime_api_200():
         "tool_count": 212,
         "calls_last_1m": 3,
         "calls_last_5m": 10,
-        "calls_per_min": 3,
     })
     console_api.set_gateway_server(api_server)
     try:
