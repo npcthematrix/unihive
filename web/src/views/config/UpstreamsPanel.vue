@@ -270,7 +270,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
 import type {
   ConfigRevision,
@@ -293,6 +293,7 @@ import {
   type UpstreamEnabledChanged,
 } from './upstreams'
 import { isUsableRevision } from './revisions'
+import { describeEntityEditError } from './entityErrors'
 import UpstreamEditDialog from './UpstreamEditDialog.vue'
 
 interface Props {
@@ -613,6 +614,24 @@ const poolDraft = reactive<{ mootdx2_reader_limit: number; mootdx2_worker_thread
   tdx_quant_worker_threads: 0,
 })
 
+/**
+ * 草稿任一字段变 → 清掉 "需重启" badge (poolEditState)。
+ *
+ * badge 仅在「落库但运行态未生效」期间显示, 一旦用户再次编辑意味着
+ * 旧 PUT 的 pending_restart 已被覆盖 (新 draft 会重新走 PUT), 不应
+ * 残留误导。resetPoolDraft() 自身也清 poolEditState, 双重保险;
+ * watcher 默认 flush:'pre' 在 resetPoolDraft 的同步赋值后批处理, 不会
+ * 抢先把 poolEditState 置 null 又被 reset 重新覆盖。
+ */
+watch(
+  () => [
+    poolDraft.mootdx2_reader_limit,
+    poolDraft.mootdx2_worker_threads,
+    poolDraft.tdx_quant_worker_threads,
+  ],
+  () => { poolEditState.value = null },
+)
+
 /** db 实体模式 + 可编辑 prop + 池 snapshot 已加载 — 三者都齐才显示表单。 */
 const canEditPool = computed(() =>
   Boolean(props.editable && poolConfig.value && !poolConfigError.value),
@@ -718,14 +737,22 @@ async function onSavePool(): Promise<void> {
         pending_restart: result.pending_restart,
       })
     } else {
+      // no-op 不 emit poolConfigSaved — 与 onUpstreamConnectionSaved/
+      // onFactoryUpgradeApplied 等兄弟 handler 不同: 它们即便 changed=false
+      // 也 emit (revision / enabled 可能未变, 但实体行本身可能漂)。
+      // 池参数 PUT 的 no-op 路径三字段 + revision 全部相等, 父级
+      // ConfigView 跑 loadEntities/loadInterfaceTools 会是无意义的 GET;
+      // 主动跳过可避免额外往返。
       ElMessage.info('池参数无变化')
     }
   } catch (e: unknown) {
-    const msg = errorMessage(e, '保存失败')
-    if (msg.includes('version_conflict') || msg.includes('revision 不一致')) {
+    const info = describeEntityEditError(e)
+    if (info.kind === 'revision_conflict') {
       ElMessage.error('配置版本已变更, 请刷新页面后重试')
+    } else if (info.kind === 'store_unavailable') {
+      ElMessage.error('配置库不可用 (YAML 逃生模式), 无法保存')
     } else {
-      ElMessage.error(msg)
+      ElMessage.error(info.message || '保存失败')
     }
   } finally {
     poolSaving.value = false
