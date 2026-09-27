@@ -70,28 +70,7 @@ $ConfigYamlPath = Join-Path $PSScriptRoot "..\config\config.yaml"
 $UpstreamsYamlPath = Join-Path $PSScriptRoot "..\config\upstreams.yaml"
 
 try {
-    $portStr = python -c @"
-import sys, os
-import yaml
-def _gw_port(path):
-    if not path or not os.path.exists(path):
-        return None
-    with open(path, encoding='utf-8') as f:
-        cfg = yaml.safe_load(f) or {}
-    gw = cfg.get('gateway') or {}
-    p = gw.get('port')
-    return int(p) if p is not None else None
-# 优先 config.yaml (bootstrap 段), 再回落 upstreams.yaml
-for _p in ("$($ConfigYamlPath -replace '\\','/')", "$($UpstreamsYamlPath -replace '\\','/')"):
-    try:
-        _port = _gw_port(_p)
-    except Exception:
-        _port = None
-    if _port and _port > 0:
-        print(_port)
-        sys.exit(0)
-print(18080)
-"@
+    $portStr = python (Join-Path $PSScriptRoot "get_gateway_port.py")
     if ($LASTEXITCODE -eq 0) {
         $parsed = [int]$portStr.Trim()
         if ($parsed -gt 0) {
