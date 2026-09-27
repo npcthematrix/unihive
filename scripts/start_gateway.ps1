@@ -24,6 +24,10 @@
 # - MED 透传子进程退出码 (supervisor / MCP 宿主靠它判失败与重启)。
 #   宿主请用 powershell -File 形式启动; -Command "& ..." 在
 #   $ErrorActionPreference=Stop + 子进程非零退出时会把退出码改写为 1。
+#
+# Self-start (2026-09-27): 清 logs/.stop_watchdog sentinel — 用户可能上次
+# 走 stop_gateway.ps1 后手起一次, sentinel 残留会让 watchdog_gateway.ps1
+# 误判本进程为"用户主动停"直接退出。手动启动路径必须无条件清 sentinel。
 
 param(
     [ValidateSet("http", "stdio")]
@@ -37,6 +41,14 @@ Set-Location (Resolve-Path (Join-Path $PSScriptRoot ".."))
 
 # Load .env into the current shell so the gateway subprocess inherits it.
 . (Join-Path $PSScriptRoot "_load_env.ps1")
+
+# 清理 watchdog 停止 sentinel (避免上次 stop_gateway.ps1 残留让 watchdog 误判
+# 自己启的 gateway 是"用户主动停"而直接退出)。日志目录不存在时静默跳过。
+$logDir = Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")) "logs"
+$sentinel = Join-Path $logDir ".stop_watchdog"
+if (Test-Path $sentinel) {
+    Remove-Item -Force $sentinel
+}
 
 # Round-12 簇I: 必须在 python 进程启动**之前**设置 —— 解释器只在启动瞬间
 # 读 PYTHONIOENCODING 决定 stdio 编码, 进程内再设对自身无效。stdio 模式
