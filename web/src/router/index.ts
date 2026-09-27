@@ -15,16 +15,20 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/layouts/DefaultLayout.vue'),
     redirect: { name: 'guides' },
     children: [
+      // 旧「上游数据PROVIDERs」页已合并进「网关运行监控 → 上游总览」。
       {
         path: 'status',
-        name: 'status',
-        component: () => import('@/views/StatusView.vue'),
-        meta: { title: '上游数据PROVIDERs' },
+        redirect: { name: 'gateway-monitor' },
       },
+      // 旧路由名/路径保留为重定向, 保住已有书签。
       {
         path: 'l1-cache',
-        name: 'l1-cache',
-        component: () => import('@/views/L1CacheView.vue'),
+        redirect: { name: 'gateway-monitor' },
+      },
+      {
+        path: 'gateway-monitor',
+        name: 'gateway-monitor',
+        component: () => import('@/views/GatewayMonitorView.vue'),
         meta: { title: '网关运行监控' },
       },
       {

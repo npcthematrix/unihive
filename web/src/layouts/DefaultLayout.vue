@@ -29,36 +29,44 @@
           </template>
         </el-menu-item>
       </el-menu>
+
+      <!-- 侧栏脚区: 模式/用户 + 退出 + 折叠钮 (顶栏已移除) -->
+      <div class="sidebar-footer" :class="{ collapsed: isCollapsed }">
+        <template v-if="!isCollapsed">
+          <div class="sf-mode" :title="isOpenMode ? '未启用登录鉴权' : ''">
+            <el-icon class="sf-mode-icon">
+              <Unlock v-if="isOpenMode" />
+              <UserFilled v-else />
+            </el-icon>
+            <span class="sf-mode-text">
+              {{ isOpenMode ? '开放模式 · 未启用登录' : auth.username }}
+            </span>
+          </div>
+          <el-button
+            v-if="!isOpenMode"
+            text
+            size="small"
+            class="sf-logout"
+            :loading="loggingOut"
+            @click="confirmLogout"
+          >退出登录</el-button>
+        </template>
+
+        <el-button
+          text
+          class="sf-collapse"
+          :aria-label="isCollapsed ? '展开侧栏' : '折叠侧栏'"
+          @click="toggleCollapsed"
+        >
+          <el-icon :size="18">
+            <Expand v-if="isCollapsed" />
+            <Fold v-else />
+          </el-icon>
+        </el-button>
+      </div>
     </el-aside>
 
     <el-container>
-      <el-header class="topbar" height="52px">
-        <div class="topbar-left">
-          <el-button
-            text
-            class="collapse-btn"
-            :aria-label="isCollapsed ? '展开侧栏' : '折叠侧栏'"
-            @click="toggleCollapsed"
-          >
-            <el-icon :size="20">
-              <Fold v-if="!isCollapsed" />
-              <Expand v-else />
-            </el-icon>
-          </el-button>
-          <span class="page-title">{{ route.meta.title ?? '' }}</span>
-        </div>
-        <div class="topbar-right">
-          <el-icon class="user-icon"><UserFilled /></el-icon>
-          <!-- 鉴权关闭态没有会话/用户名, 也没有可退出的登录态 -->
-          <span class="username">{{ isOpenMode ? '开放模式（未启用登录）' : auth.username }}</span>
-          <template v-if="!isOpenMode">
-            <el-divider direction="vertical" />
-            <el-button text size="small" :loading="loggingOut" @click="confirmLogout">
-              退出登录
-            </el-button>
-          </template>
-        </div>
-      </el-header>
       <el-main id="main-content" class="main" tabindex="-1">
         <router-view />
       </el-main>
@@ -70,7 +78,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Document, Monitor, Connection, Setting, Grid, Files, Fold, Expand, DataLine } from '@element-plus/icons-vue'
+import { Document, Connection, Setting, Grid, Files, Fold, Expand, DataLine, UserFilled, Unlock } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import brandMark from '@/assets/unihive-mark-dark.svg'
 
@@ -119,7 +127,6 @@ function toggleCollapsed(): void {
 
 const MENU = [
   { path: '/guides', title: '接入指南', icon: Document },
-  { path: '/status', title: '上游数据PROVIDERs', icon: Monitor },
   { path: '/l1-cache', title: '网关运行监控', icon: DataLine },
   { path: '/interfaces', title: 'MCP APIs', icon: Connection },
   { path: '/config', title: '配置信息', icon: Setting },
@@ -228,57 +235,57 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.06);
 }
 
-.topbar {
+/* 侧栏脚区: 模式/用户 + 退出 + 折叠钮 */
+.sidebar-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  background: var(--el-bg-color);
-  border-bottom: 1px solid var(--el-border-color-light);
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.topbar-left,
-.topbar-right {
+.sidebar-footer.collapsed {
+  justify-content: center;
+  padding: 10px 0;
+}
+
+.sf-mode {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--el-text-color-regular);
-}
-
-/* 允许左半区在 flex 行内收缩, 长标题才能触发省略号而非顶掉右侧操作区 */
-.topbar-left {
   min-width: 0;
+  flex: 1;
 }
 
-.topbar-right {
+.sf-mode-icon {
+  color: rgba(255, 255, 255, 0.55);
   flex-shrink: 0;
 }
 
-.collapse-btn {
-  padding: 4px;
-  margin-right: 4px;
-  color: var(--el-text-color-regular);
-  flex-shrink: 0;
-}
-
-.collapse-btn:hover {
-  color: var(--el-color-primary);
-}
-
-.page-title {
-  font-size: 15px;
-  font-weight: 600;
-  min-width: 0;
+.sf-mode-text {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.user-icon {
-  color: var(--el-text-color-secondary);
+.sf-logout {
+  color: rgba(255, 255, 255, 0.72);
+  flex-shrink: 0;
 }
 
-.username {
-  font-size: 13px;
+.sf-logout:hover {
+  color: #fff;
+}
+
+.sf-collapse {
+  color: rgba(255, 255, 255, 0.72);
+  flex-shrink: 0;
+}
+
+.sf-collapse:hover {
+  color: #fff;
 }
 
 .main {

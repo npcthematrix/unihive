@@ -9,6 +9,7 @@ import App from './App.vue'
 import { router } from './router'
 import { installChunkReloadGuard } from './utils/chunkReload'
 import './styles/main.css'
+import './styles/view-header.css'
 
 const app = createApp(App)
 

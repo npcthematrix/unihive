@@ -19,9 +19,10 @@ WEB_VIEWS = Path("web/src/views")
 WEB_API = Path("web/src/api")
 WEB_ROUTER = Path("web/src/router/index.ts")
 
-# 6 个路由视图 + LoginView (login 单独路径, 不计入主路由 children)。
+# 主路由视图 + LoginView (login 单独路径, 不计入主路由 children)。
+# StatusView 已合并进 GatewayMonitorView (网关运行监控 → 上游总览)。
 EXPECTED_VIEWS = [
-    "StatusView.vue",
+    "GatewayMonitorView.vue",
     "InterfacesView.vue",
     "ConfigView.vue",
     "OmniView.vue",

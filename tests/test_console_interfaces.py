@@ -242,7 +242,8 @@ def test_console_html_uses_upstream_description():
     client side, i.e. that StatusView/api/status actually fetch from the
     right endpoint instead of relying on a stale client cache or wrong path.
     """
-    status_view = open("web/src/views/StatusView.vue", encoding="utf-8").read()
+    # StatusView 已合并进 GatewayMonitorView (上游总览标签); 该视图是 getStatus 的消费方。
+    monitor_view = open("web/src/views/GatewayMonitorView.vue", encoding="utf-8").read()
     status_api = open("web/src/api/status.ts", encoding="utf-8").read()
 
     # api/status.ts must hit the status endpoint that carries upstream descriptions.
@@ -250,9 +251,9 @@ def test_console_html_uses_upstream_description():
         "web/src/api/status.ts must call /api/status to obtain upstream info "
         "including the description field."
     )
-    # StatusView consumes /api/status via the getStatus() wrapper.
-    assert "getStatus" in status_view, (
-        "StatusView.vue must call getStatus() to populate upstream rows. "
+    # GatewayMonitorView consumes /api/status via the getStatus wrapper.
+    assert "getStatus" in monitor_view, (
+        "GatewayMonitorView.vue must call getStatus() to populate upstream rows. "
         "If removed, the upstream table loses its data source."
     )
 
