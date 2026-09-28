@@ -2388,24 +2388,43 @@ class MooTDX2Client:
         warnings: list[str] = []
         has_structural_errors = False
 
+        import datetime as _dt
+        from .index_registry import INDEX_KIND
+        today = _dt.date.today().isoformat()
+
         for code in code_list:
             try:
-                # 复用现有 _get_daily_sync (Round-3 Batch 2 H2-perf 改为返回全量,
-                # 由本调用方 _filter_records_by_date 切窗, 与 L1 命中路径共用).
-                records, meta = self._get_daily_sync(code, adjust, start_date, end_date)
-                # H2-perf: 批内按用户 start/end 切窗 (与单 symbol 入口一致)
-                records = self._filter_records_by_date(records, start_date, end_date)
+                # Normalize key format first
+                parsed = parse_symbol(code)
+                key = f"{parsed.market}{parsed.code}" if parsed.market else parsed.code
+                reader_symbol = to_reader_symbol(parsed)
+                actual_adjust = "none" if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq") else adjust
 
-                # H5-func: 批内每只 limit 截断 (取最近 limit 条)
+                # Check L1 cache first (same key as get_daily)
+                cache_hit = False
+                cached_records = None
+                if self._DAILY_L1_ENABLED and actual_adjust == "none":
+                    cache_key = (today, reader_symbol, actual_adjust)
+                    cached_records = self._l1_daily.get(cache_key)
+                    if cached_records is not None:
+                        cache_hit = True
+
+                if cache_hit and cached_records is not None:
+                    records = self._filter_records_by_date(cached_records, start_date, end_date)
+                    meta = {"kind": parsed.kind, "warn": None}
+                else:
+                    records, meta = self._get_daily_sync(code, adjust, start_date, end_date)
+                    records = self._filter_records_by_date(records, start_date, end_date)
+                    # Write to L1 cache (only if adjust=none and has data)
+                    if self._DAILY_L1_ENABLED and actual_adjust == "none" and records:
+                        full_recs, _ = self._get_daily_sync(code, adjust, "", "")
+                        if full_recs:
+                            cache_key = (today, reader_symbol, actual_adjust)
+                            self._l1_daily.put(cache_key, full_recs)
+
+                # H5-func: limit 截断
                 if limit and limit > 0 and len(records) > limit:
                     records = records[-limit:]
-
-                # 标准化 key 格式：使用解析后的市场+裸码
-                parsed = parse_symbol(code)
-                if parsed.market:
-                    key = f"{parsed.market}{parsed.code}"
-                else:
-                    key = parsed.code
 
                 results[key] = records
 
