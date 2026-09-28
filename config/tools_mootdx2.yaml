@@ -231,7 +231,7 @@ tools:
 
       【参数说明】
       - code (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - date (可选): 日期，格式 YYYYMMDD，省略则查最近有数据的日期
+      - date (可选): 日期，支持 YYYY-MM-dd 或 YYYYMMDD，省略则查最近有数据的日期
       - start (可选): 起始偏移，默认 0
       - count (可选): 返回条数，默认 100，最大 500
 
@@ -256,7 +256,7 @@ tools:
       - name: date
         type: str
         required: false
-        description: 日期 YYYYMMDD
+        description: 日期，支持 YYYY-MM-dd 或 YYYYMMDD
       - name: start
         type: int
         required: false
@@ -584,7 +584,7 @@ tools:
       - name: date
         type: str
         required: false
-        description: 基准日期 YYYYMMDD（默认当天）
+        description: 基准日期，支持 YYYYMMDD 或 YYYY-MM-dd（默认当天）
       - name: count
         type: int
         required: false
@@ -827,8 +827,8 @@ tools:
 
       【参数说明】
       - code (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - start_date (可选): 开始日期 YYYYMMDD，空则从头开始
-      - end_date (可选): 结束日期 YYYYMMDD，空则到最新
+      - start_date (可选): 开始日期，支持 YYYY-MM-dd 或 YYYYMMDD，空则从头开始
+      - end_date (可选): 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD，空则到最新
 
       【返回示例】
       成功: {"success": true, "data": [{"date": "2024-01-01", "open": 10.0, "high": 10.5, "low": 9.8, "close": 10.2, "vol": 100000}]}
@@ -851,11 +851,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 开始日期 YYYYMMDD（空则从头开始）
+        description: 开始日期，支持 YYYY-MM-dd 或 YYYYMMDD（空则从头开始）
       - name: end_date
         type: str
         required: false
-        description: 结束日期 YYYYMMDD（空则到最新）
+        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD（空则到最新）
 
   - name: get_minutes
     description: |-
@@ -869,7 +869,7 @@ tools:
 
       【参数说明】
       - symbol (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - date (可选): 日期 YYYYMMDD，省略则默认当天
+      - date (可选): 日期，支持 YYYY-MM-dd 或 YYYYMMDD，省略则默认当天
 
       【返回示例】
       成功: {"success": true, "data": [{"time": "09:30:00", "open": 10.0, "high": 10.2, "low": 9.9, "close": 10.1, "vol": 1000}, ...]}
@@ -892,7 +892,7 @@ tools:
       - name: date
         type: str
         required: false
-        description: 日期 YYYYMMDD（默认当天）
+        description: 日期，支持 YYYY-MM-dd 或 YYYYMMDD（默认当天）
 
   - name: search_stock_local
     description: |-
@@ -1109,8 +1109,8 @@ tools:
       - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
       - adjust (可选): 复权方式，默认 none
         none=不复权 / qfq=前复权 / hfq=后复权
-      - start_date (可选): 起始日期 yyyy-MM-dd
-      - end_date (可选): 结束日期 yyyy-MM-dd
+      - start_date (可选): 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
+      - end_date (可选): 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
 
       【代码消歧（重要）】
       - 裸 000xxx 是跨市场歧义码（000001=平安银行/上证指数，000002=万科A/上证A指），
@@ -1146,11 +1146,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 起始日期 yyyy-MM-dd（可选）
+        description: 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
       - name: end_date
         type: str
         required: false
-        description: 结束日期 yyyy-MM-dd（可选）
+        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
 
   - name: get_daily_batch_local
     description: |-
@@ -1190,11 +1190,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 起始日期 yyyy-MM-dd（可选）
+        description: 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
       - name: end_date
         type: str
         required: false
-        description: 结束日期 yyyy-MM-dd（可选）
+        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
       - name: limit
         type: int
         required: false
@@ -1211,8 +1211,8 @@ tools:
       【参数说明】
       - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
       - suffix (可选): '1' = 1 分钟线（默认）/ '5' = 5 分钟线
-      - start_date (可选): 起始日期 yyyy-MM-dd
-      - end_date (可选): 结束日期 yyyy-MM-dd
+      - start_date (可选): 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
+      - end_date (可选): 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
 
       【数据源】
       - suffix='1': {tdxdir}/vipdoc/{sh|sz|bj}/minline/xxx.lc1
@@ -1236,11 +1236,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 起始日期 yyyy-MM-dd（可选）
+        description: 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
       - name: end_date
         type: str
         required: false
-        description: 结束日期 yyyy-MM-dd（可选）
+        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
 
   - name: get_fzline_local
     description: |-

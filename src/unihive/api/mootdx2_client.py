@@ -2455,6 +2455,12 @@ class MooTDX2Client:
             - 指数 .day 本地不存在 → 更明确的 no_data 文案
         """
         self._metrics["total_requests"] += 1
+
+        # 日期归一化 (支持 YYYYMMDD 和 YYYY-MM-DD)
+        start_date, end_date, date_error = _normalize_date_window(start_date, end_date)
+        if date_error is not None:
+            return self._invalid_param_result(date_error)
+
         try:
             # 2026-09-15: get_daily_local L1 缓存 (仅 adjust=none)
             # 2026-09-16: 修复缓存 key 与实际 adjust 不一致问题
