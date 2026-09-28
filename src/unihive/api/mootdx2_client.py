@@ -2622,6 +2622,11 @@ class MooTDX2Client:
                 f"adjust 需为 none/qfq/hfq，当前值: {adjust!r}"
             )
 
+        # 日期归一化 (与 get_daily_local 对齐)
+        start_date, end_date, date_error = _normalize_date_window(start_date, end_date)
+        if date_error is not None:
+            return self._invalid_param_result(date_error)
+
         try:
             results, warnings, has_structural_errors = await self._run_blocking(
                 self._get_daily_batch_local_sync,

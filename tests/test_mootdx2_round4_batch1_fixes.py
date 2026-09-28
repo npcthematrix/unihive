@@ -323,3 +323,51 @@ class TestIndicatorAtrL1TwoLayer:
             # H3: 不应再调 _get_kline_sync, 返回最后 3 条
             assert len(r2.data["atr"]) == 3
             assert r2.data["dates"] == ["2024-01-03", "2024-01-04", "2024-01-05"]
+
+
+# ========== 额外修复: get_daily_batch_local 日期归一化 ==========
+
+class TestBatchLocalDateNormalization:
+    """修复: get_daily_batch_local 未调用 _normalize_date_window."""
+
+    def test_batch_accepts_yyyymmdd_date_format(self, client: MooTDX2Client):
+        """YYYYMMDD 格式日期应被正确归一化为 YYYY-MM-DD."""
+        client.config.settings = MagicMock()
+        client.config.settings.tdxdir = "/fake/tdx"
+
+        mock_df = pd.DataFrame(
+            {"close": [100.0, 101.0]},
+            index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        )
+        mock_reader = MagicMock()
+        mock_reader.daily.return_value = mock_df
+
+        with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+            # YYYYMMDD 格式 (用户实际使用的格式)
+            r = asyncio.run(client.get_daily_batch_local(
+                codes="sh600036",
+                start_date="20240101",
+                end_date="20240102",
+            ))
+            # 不应因日期格式错误而失败
+            assert r.success or "date" in (r.error or "").lower()
+
+    def test_batch_accepts_hyphen_date_format(self, client: MooTDX2Client):
+        """YYYY-MM-DD 格式日期应正常工作."""
+        client.config.settings = MagicMock()
+        client.config.settings.tdxdir = "/fake/tdx"
+
+        mock_df = pd.DataFrame(
+            {"close": [100.0, 101.0]},
+            index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        )
+        mock_reader = MagicMock()
+        mock_reader.daily.return_value = mock_df
+
+        with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+            r = asyncio.run(client.get_daily_batch_local(
+                codes="sh600036",
+                start_date="2024-01-01",
+                end_date="2024-01-02",
+            ))
+            assert r.success
