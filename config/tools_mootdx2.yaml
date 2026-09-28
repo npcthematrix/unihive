@@ -1152,6 +1152,49 @@ tools:
         required: false
         description: 结束日期 yyyy-MM-dd（可选）
 
+  - name: get_daily_batch_local
+    description: |-
+      【批量离线日线】批量读取通达信客户端本地 .day 文件，支持前/后复权。
+
+      【使用场景】
+      - 批量获取多只股票历史行情（不依赖网络，走本地数据）
+      - 需要同时获取多只股票数据时使用
+
+      【参数说明】
+      - codes (必填): 逗号分隔的股票代码（最多20只），如 "sh600036,sh600519"
+      - adjust (可选): 复权方式，默认 none
+        none=不复权 / qfq=前复权 / hfq=后复权
+      - start_date (可选): 起始日期 yyyy-MM-dd
+      - end_date (可选): 结束日期 yyyy-MM-dd
+
+      【返回信封】{success, data: {symbol: [records...]}, source, error_detail.warn}
+      成功: {"success": true, "data": {"sh600036": [...], "sh600519": [...]}, "source": "mootdx2"}
+      部分成功: {"success": true, "data": {"sh600036": [...]}, "error_detail": {"warn": "sh123456: invalid_symbol"}}
+    routing: get_daily_batch_local
+    upstream_tool_mapping:
+      mootdx2: get_daily_batch_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: codes
+        type: str
+        required: true
+        description: 逗号分隔的股票代码（最多20只），如 "sh600036,sh600519"
+      - name: adjust
+        type: str
+        required: false
+        enum: [none, qfq, hfq]
+        description: 复权方式：none=不复权 / qfq=前复权 / hfq=后复权
+      - name: start_date
+        type: str
+        required: false
+        description: 起始日期 yyyy-MM-dd（可选）
+      - name: end_date
+        type: str
+        required: false
+        description: 结束日期 yyyy-MM-dd（可选）
+
   - name: get_minute_local
     description: |-
       【离线分钟线】读取通达信客户端本地 .lc1 / .lc5 文件，支持 1 分钟和 5 分钟周期。
