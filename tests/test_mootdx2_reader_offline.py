@@ -450,7 +450,8 @@ def test_bare_000_warn_survives_l1_cache_hit(client):
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         r1 = asyncio.run(client.get_daily("000001"))
         r2 = asyncio.run(client.get_daily("000001"))
-    assert client._daily_l1_hits == 1
+    # 2026-09-28 L1Slot 重构: 命中计数在 slot 上 (旧属性 _daily_l1_hits 已删)
+    assert client._l1_daily.hits == 1
     assert "歧义" in r1.error_detail["warn"]
     assert "歧义" in r2.error_detail["warn"]
 

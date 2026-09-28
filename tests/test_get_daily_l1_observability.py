@@ -44,8 +44,8 @@ def test_hit_path_does_not_call_reader_again(mock_setup):
         r2 = asyncio.run(client.get_daily("600036"))
         assert r2.success is True
         assert mock_reader.daily.call_count == 1
-        assert client._daily_l1_hits == 1
-        assert client._daily_l1_misses == 1
+        assert client._l1_daily.hits == 1
+        assert client._l1_daily.misses == 1
 
 
 def test_concurrent_miss_is_best_effort_dedup(mock_setup):
@@ -71,14 +71,14 @@ def test_concurrent_miss_is_best_effort_dedup(mock_setup):
 
 
 def test_first_miss_writes_to_l1(mock_setup):
-    """首次 miss 后, _daily_l1 有 1 条; key 为 (date, symbol, adjust, start, end)."""
+    """首次 miss 后, _l1_daily 槽有 1 条; key 为 (date, reader_symbol, adjust)."""
     client, mock_reader, _ = mock_setup
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         asyncio.run(client.get_daily("600036"))
-    assert len(client._daily_l1) == 1
+    assert len(client._l1_daily) == 1
     today = datetime.date.today().isoformat()
-    key = next(iter(client._daily_l1.keys()))
-    assert key == (today, "600036", "none", "", "")
+    key = next(iter(client._l1_daily._cache.keys()))
+    assert key == (today, "600036", "none")
 
 
 def test_index_qfq_forced_none_warn_survives_l1_hit(mock_setup):
@@ -89,7 +89,7 @@ def test_index_qfq_forced_none_warn_survives_l1_hit(mock_setup):
         r2 = asyncio.run(client.get_daily("sh000300", adjust="qfq"))
 
     assert r1.success and r2.success
-    assert client._daily_l1_hits == 1, "指数 qfq 实际按 none 执行，第二次必须命中 L1"
+    assert client._l1_daily.hits == 1, "指数 qfq 实际按 none 执行，第二次必须命中 L1"
     assert mock_reader.daily.call_count == 1
     assert mock_reader.daily.call_args.kwargs["adjust"] == "none"
     for r in (r1, r2):
@@ -103,7 +103,7 @@ def test_qfq_bypasses_l1(mock_setup):
         asyncio.run(client.get_daily("600036", adjust="qfq"))
         asyncio.run(client.get_daily("600036", adjust="qfq"))
     assert mock_reader.daily.call_count == 2
-    assert len(client._daily_l1) == 0
+    assert len(client._l1_daily) == 0
 
 
 def test_reader_exception_returns_failure_toolresult(mock_setup):

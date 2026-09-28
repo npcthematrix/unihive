@@ -666,6 +666,40 @@ class MooTDX2Client:
         return name_by_stem
 
     @staticmethod
+    def _records_from_indexed_df(df, out_key: str = "date") -> list:
+        """DataFrame（DatetimeIndex）→ records，索引列抽成字符串字段。
+
+        2026-09-28 fix: mootdx2 get_df 先 ``df["date"]=pd.to_datetime(...)``
+        再 ``set_index("date")``（tdx/offline/daily_bar.py:170-171），索引名是
+        ``"date"`` — reset_index 后索引列叫 "date" 而非 "index"。旧码只认
+        ``"index"`` 列名，pop 不执行，Timestamp 原样留在 records 里；不传
+        日期时被序列化 default=str 兜住，一传 start/end 就在
+        ``_filter_records_by_date`` 里拿 Timestamp 和 str 比较抛 TypeError
+        （get_daily_local 带日期必炸的根因）。
+
+        这里不依赖索引列名：先 pop "index"，再回退 pop "date"（daily 的
+        索引名恰为 "date"，pop 后按 out_key 重写不冲突）。minute 类 df 的
+        索引名同为 "date"，out_key="datetime" 时写回完整 "YYYY-MM-DD HH:MM:SS"。
+
+        Args:
+            df: 含 DatetimeIndex 的 DataFrame（reset_index 前）
+            out_key: 索引字符串写回的字段名（"date" 截 YYYY-MM-DD；
+                其它值写完整 str(idx)，供 minute/fzline 用 "datetime"）
+        """
+        records = df.reset_index().to_dict(orient="records")
+        for r in records:
+            idx = r.pop("index", None)
+            if idx is None:
+                idx = r.pop("date", None)
+            if idx is None:
+                continue
+            if out_key == "date":
+                r["date"] = str(idx)[:10]
+            else:
+                r[out_key] = str(idx)
+        return records
+
+    @staticmethod
     def _filter_records_by_date(records: list, start_date: str, end_date: str) -> list:
         """缓存命中后在 records 上做 start/end 过滤。O(N) dict 遍历。
         date 字段为 'yyyy-MM-dd' 字符串; 字符串比较即可 (ISO 8601)。"""
@@ -2342,11 +2376,7 @@ class MooTDX2Client:
 
         # H2-perf (Round-3 Batch 2): 返回 FULL records, 由调用方按需切窗,
         # L1 缓存也存 FULL records 避免 (start, end) 维度爆炸 (3125 组合).
-        records = df.reset_index().to_dict(orient="records")
-        for r in records:
-            if "index" in r:
-                idx = r.pop("index")
-                r["date"] = str(idx)[:10]
+        records = self._records_from_indexed_df(df)
         return records, meta
 
     def _get_daily_batch_local_sync(
@@ -2357,23 +2387,18 @@ class MooTDX2Client:
         end_date: str,
         limit: int = 0,
     ) -> tuple[dict[str, list[dict]], list[str], bool]:
-        """同步批量获取离线日线数据，复用 L1 缓存。
+        """同步批量获取离线日线数据。
 
         ⚠ 测试专用 / 生产勿调 (2026-09-28 性能审视): 生产路径
-        ``get_daily_batch_local`` 已改走 ``_get_daily_batch_async`` 逐 symbol
+        ``get_daily_batch_local`` 走 ``_get_daily_batch_async`` 逐 symbol
         async 调度 (受 reader_gate + 批量子闸门约束, 命中 L1 不出线程)。本 sync
-        实现绕过 reader_gate、串行读盘, 仅供单测在无 event-loop 场景直接调用,
-        行为与 async 路径保持对齐 (见 _get_daily_batch_one)。勿在新生产代码复用。
+        实现仅供单测在无 event-loop 场景直接调用。
 
-        2026-09-28 Round-3 修订:
-          - C1 (用户裁决): 异常细分 (OSError/struct.error → 文件错标签,
-            未知异常直接 raise 不再吞). 全失败时 has_structural_errors=True
-            让 async 入口判定 success=False.
-          - H4-func: 000xxx 消歧提示不论 records 空否都拼入 warnings.
-          - H5-func: 接收 limit 参数 (默认 0 = 不截断), 单 symbol 截最近 N 条.
+        2026-09-28 拉通: 缓存/取数逻辑收进 ``_get_daily_records_sync`` 单点,
+        本方法只保留批量编排 (key 归组 / limit 截断 / 异常分类)。
 
         Args:
-            code_list: 股票代码列表（已解析）
+            code_list: 股票代码列表
             adjust: 复权类型 none/qfq/hfq
             start_date: 起始日期 yyyy-MM-dd
             end_date: 结束日期 yyyy-MM-dd
@@ -2383,84 +2408,103 @@ class MooTDX2Client:
             (成功结果字典, 警告列表, 是否有结构性失败)
 
         Raises:
-            Exception: 未知异常直接上抛, 不再吞进 warnings (旧码 bug).
+            Exception: 未知异常直接上抛, 不吞进 warnings.
         """
         import struct as _struct
-        from .index_registry import parse_symbol, to_reader_symbol
+        from .index_registry import parse_symbol
 
         results: dict[str, list[dict]] = {}
         warnings: list[str] = []
         has_structural_errors = False
 
-        import datetime as _dt
-        from .index_registry import INDEX_KIND
-        today = _dt.date.today().isoformat()
-
         for code in code_list:
             try:
-                # Normalize key format first
                 parsed = parse_symbol(code)
                 key = f"{parsed.market}{parsed.code}" if parsed.market else parsed.code
-                reader_symbol = to_reader_symbol(parsed)
-                actual_adjust = "none" if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq") else adjust
-
-                # Check L1 cache first (same key as get_daily)
-                cache_hit = False
-                cached_records = None
-                if self._DAILY_L1_ENABLED and actual_adjust == "none":
-                    cache_key = (today, reader_symbol, actual_adjust)
-                    cached_records = self._l1_daily.get(cache_key)
-                    if cached_records is not None:
-                        cache_hit = True
-
-                if cache_hit and cached_records is not None:
-                    records = self._filter_records_by_date(cached_records, start_date, end_date)
-                    # 2026-09-28 性能审视: 命中分支 warn 用原始入参 adjust 重算,
-                    # 与 async 路径 (_get_daily_batch_one) 对齐; 旧码写死 None
-                    # 导致裸 000xxx 消歧提示在批量命中缓存时丢失。
-                    warn = _daily_request_warn(parsed, adjust)
-                    meta = {"kind": parsed.kind, "warn": warn}
-                else:
-                    # H2-perf (Round-3 Batch 2): _get_daily_sync 已返回 FULL records,
-                    # 切窗一份用于返回, 原始 full 入缓存 — 单次读盘, 不再二次回读。
-                    # (旧码先切窗覆盖 records, 再为缓存全量重调 _get_daily_sync, 每只
-                    #  miss 多读一次 .day 文件, 20 只批量冷读近乎翻倍。)
-                    full, meta = self._get_daily_sync(code, adjust, start_date, end_date)
-                    records = self._filter_records_by_date(full, start_date, end_date)
-                    # Write to L1 cache (only if adjust=none and has data)。
-                    # 门槛看 full 而非切窗后的 records: 空窗口但有全量数据也应入缓存,
-                    # 与单 symbol get_daily 路径行为一致。
-                    if self._DAILY_L1_ENABLED and actual_adjust == "none" and full:
-                        cache_key = (today, reader_symbol, actual_adjust)
-                        self._l1_daily.put(cache_key, full)
-
-                # H5-func: limit 截断
+                records, meta, _hit = self._get_daily_records_sync(
+                    code, adjust, start_date, end_date
+                )
                 if limit and limit > 0 and len(records) > limit:
                     records = records[-limit:]
-
                 results[key] = records
-
-                # H4-func: 000xxx 消歧透传 — 旧码仅 records 空时才拼入
-                # warnings, 导致批量场景下裸 000xxx 静默拿错市场数据。
-                # 现在不论 records 空否都带 warn。
+                # 000xxx 消歧提示不论 records 空否都拼入 warnings (H4-func)
                 if meta.get("warn"):
                     warnings.append(f"{code}: {meta['warn']}")
-
             except ValueError as e:
                 self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
                 warnings.append(f"{code}: invalid_symbol - {e}")
             except (OSError, _struct.error) as e:
-                # C1: 文件级错误细分 (损坏 / IO 失败), 标 file_error 标签
                 self._record_error(MooTDXErrorType.INTERNAL_ERROR.value)
                 has_structural_errors = True
-                warnings.append(
-                    f"{code}: file_error - {type(e).__name__}: {e}"
-                )
+                warnings.append(f"{code}: file_error - {type(e).__name__}: {e}")
             except Exception:
-                # 未知异常直接上抛 — 旧码吞进 warnings 造成批结果对账失败
+                # 未知异常直接上抛 — 吞进 warnings 会造成批结果对账失败
                 raise
 
         return results, warnings, has_structural_errors
+
+    # ========== 日线取数核心 (get_daily_local / get_daily_batch_local 拉通) ==========
+    # 2026-09-28 简化: 旧实现把 L1 预检/写回/切窗在 get_daily、
+    # _get_daily_batch_one、_get_daily_batch_local_sync 三处各写一遍, 已两次
+    # 漂移出细微不一致。现收敛为单点: key 构造 (_daily_l1_get/_daily_l1_put)
+    # + 取数 (_get_daily_records_sync) + 闸门调度 (_get_daily_records)。
+    #
+    # 缓存机制 (刻意保持一层 L1, SQLite cache_ttl_key 对本工具为空):
+    #   key = (today, reader_symbol, adjust) — 日期在 key 里, 跨天自动 miss,
+    #   这是"当日有效"的正确性来源; TTL (到次日 9:00) 只是内存回收上限。
+    #   槽里存 FULL records (key 不含 start/end, 防窗口组合爆炸), 命中后
+    #   _filter_records_by_date 切窗。仅 adjust=none 且非空才写。
+    def _daily_l1_get(self, parsed, adjust: str):
+        """按 (today, symbol, adjust) 查 L1; 非 adjust=none 不查 → records | None。"""
+        actual_adjust = (
+            "none" if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq") else adjust
+        )
+        if not (self._DAILY_L1_ENABLED and actual_adjust == "none"):
+            return None
+        key = (datetime.date.today().isoformat(), to_reader_symbol(parsed), actual_adjust)
+        return self._l1_daily.get(key)
+
+    def _daily_l1_put(self, parsed, adjust: str, full: list) -> None:
+        """写 L1: 仅 adjust=none + 非空 (门槛看 FULL, 空窗口也应入缓存)。"""
+        actual_adjust = (
+            "none" if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq") else adjust
+        )
+        if self._DAILY_L1_ENABLED and actual_adjust == "none" and full:
+            key = (datetime.date.today().isoformat(), to_reader_symbol(parsed), actual_adjust)
+            self._l1_daily.put(key, full)
+
+    def _get_daily_records_sync(
+        self, code: str, adjust: str, start_date: str, end_date: str
+    ) -> tuple[list[dict], dict, bool]:
+        """单 symbol 日线取数单点 (阻塞, 可能读 .day 文件)。
+
+        L1 命中 → 切窗返回; miss → ``_get_daily_sync`` 单次读盘 → 切窗 → 写 L1。
+        返回 ``(records_after_window, meta, cache_hit)``; parse_symbol 的
+        ValueError 直接上抛由入口分类。
+        """
+        parsed = parse_symbol(code)
+        cached = self._daily_l1_get(parsed, adjust)
+        if cached is not None:
+            meta = {"kind": parsed.kind, "warn": _daily_request_warn(parsed, adjust)}
+            return self._filter_records_by_date(cached, start_date, end_date), meta, True
+        full, meta = self._get_daily_sync(code, adjust, start_date, end_date)
+        records = self._filter_records_by_date(full, start_date, end_date)
+        self._daily_l1_put(parsed, adjust, full)
+        return records, meta, False
+
+    async def _get_daily_records(
+        self, code: str, adjust: str, start_date: str, end_date: str
+    ) -> tuple[list[dict], dict, bool]:
+        """async 调度核心: reader_gate 内经线程池执行 ``_get_daily_records_sync``。
+
+        L1 判定全部在 sync 核心单点完成 — 不在 async 层做快速预检, 否则
+        每次冷调用 get() 计 2 次 miss, 污染命中率指标; 命中走线程池的代价
+        (~百µs) 可忽略, 也不再占独立闸门语义。返回值同 ``_get_daily_records_sync``。
+        """
+        async with self._reader_gate():
+            return await self._run_blocking(
+                self._get_daily_records_sync, code, adjust, start_date, end_date
+            )
 
     async def get_daily(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
@@ -2493,97 +2537,16 @@ class MooTDX2Client:
             return self._invalid_param_result(date_error)
 
         try:
-            # 2026-09-15: get_daily_local L1 缓存 (仅 adjust=none)
-            # 2026-09-16: 修复缓存 key 与实际 adjust 不一致问题
-            # 2026-09-28 Round-3 Batch 2 H2-perf: 改为 2 层缓存方案。
-            # 旧 key = (date, symbol, adjust, start_date, end_date) → 同 symbol
-            # 不同窗口各存 1 份全量拷贝, 5 字段组合可爆 3125 份/单 symbol。
-            # 新 key = (date, symbol, adjust) → 同 symbol 1 份全量, 命中后
-            # 用 ``_filter_records_by_date`` 在 records 上做 O(N) 切窗。
-            from .index_registry import parse_symbol, INDEX_KIND, to_reader_symbol
-            cache_hit = False
-            cached_records = None
-            parsed_for_key = None
-            cache_key: tuple | None = None
-            actual_adjust = adjust
-            if self._DAILY_L1_ENABLED:
-                try:
-                    parsed_for_key = parse_symbol(code)
-                except ValueError:
-                    parsed_for_key = None
-                if parsed_for_key is not None:
-                    reader_symbol_key = to_reader_symbol(parsed_for_key)
-                    # 与 _get_daily_sync 保持一致：指数强制 none
-                    if parsed_for_key.kind == INDEX_KIND and adjust in ("qfq", "hfq"):
-                        actual_adjust = "none"
-                    # 2026-09-28 Round-3 Batch 2 H2-perf: key 不含 start/end
-                    import datetime
-                    today = datetime.date.today().isoformat()
-                    cache_key = (today, reader_symbol_key, actual_adjust)
-                    cached_records = self._l1_daily.get(cache_key)
-                    if cached_records is not None:
-                        cache_hit = True
-                    # slot.get() 已自增 hits/misses
-
-            if cache_hit and cached_records is not None:
-                # 在缓存 records 上做 start/end 切片 (dict 遍历, O(N))
-                filtered = self._filter_records_by_date(cached_records, start_date, end_date)
-                result = ToolResult(success=True, data=filtered, source="mootdx2")
-                # 与 miss 分支保持一致：命中缓存也要带成功路径提示
-                # （裸 000xxx 消歧 / 指数 qfq/hfq 强制 none），
-                # 用原始入参 adjust 计算，不能用 actual_adjust="none"
-                hit_warn = _daily_request_warn(parsed_for_key, adjust)
-                if hit_warn:
-                    result.error_detail = {
-                        "warn": hit_warn,
-                        "recoverable": True,
-                    }
-                return result
-
-            # 缓存 miss 或 adjust != none：需要执行 Reader
-            # 2026-09-16: 用信号量限制并发 Reader 数量，防止雪崩
-            async with self._reader_gate():
-                try:
-                    records, meta = await self._run_blocking(self._get_daily_sync,
-                        code,
-                        adjust,
-                        start_date,
-                        end_date,
-                    )
-                    # 2026-09-28 Round-3 Batch 2 H2-perf: sync 返回 FULL records,
-                    # 在此处统一切窗, 与 L1 命中路径同一份过滤实现.
-                    filtered = self._filter_records_by_date(records, start_date, end_date)
-                    result = self._build_daily_tool_result(
-                        code=code,
-                        data=filtered,
-                        meta=meta,
-                        parsed_for_key=parsed_for_key,
-                    )
-                    # 写 L1 — 存 FULL records, key 不含 start/end (2 层方案).
-                    # 触发条件: 实际执行 adjust=none + 解析成功 + 有数据 (防空缓存).
-                    if (
-                        self._DAILY_L1_ENABLED
-                        and actual_adjust == "none"
-                        and records
-                        and parsed_for_key is not None
-                        and cache_key is not None
-                    ):
-                        self._l1_daily.put(cache_key, records)
-                    return result
-                except ValueError as e:
-                    self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
-                    return ToolResult(
-                        success=False,
-                        error=str(e),
-                        error_detail={
-                            "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
-                            "message": str(e),
-                            "recoverable": False,
-                        },
-                    )
-                except Exception as e:
-                    logger.error(f"get_daily failed: {e}")
-                    return self._error_result(e, f"get_daily({code})")
+            # 2026-09-28 拉通: 缓存/取数/切窗全部收进 _get_daily_records
+            # (与 get_daily_batch_local 同一核心); hit/miss 统一走
+            # _build_daily_tool_result 组装, 消除旧 hit 分支手工拼 ToolResult
+            # 与 miss 分支的重复。
+            records, meta, _hit = await self._get_daily_records(
+                code, adjust, start_date, end_date
+            )
+            return self._build_daily_tool_result(
+                code=code, data=records, meta=meta, parsed_for_key=None,
+            )
         except ValueError as e:
             # parse_symbol 抛: 后缀非法 / 主体非 6 位数字 / intent 非法
             self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
@@ -2608,7 +2571,7 @@ class MooTDX2Client:
         end_date: str,
         limit: int,
     ) -> tuple[str | None, list[dict] | None, str | None, bool]:
-        """批量内部: 取单只离线日线。复用 get_daily 的 L1 预检 + reader_gate 路径。
+        """批量内部: 取单只离线日线。复用 get_daily 同一取数核心 (含 L1)。
 
         Returns:
             (key, records, warning, is_structural_error)
@@ -2617,42 +2580,20 @@ class MooTDX2Client:
               供上层累计 has_structural_errors
         """
         import struct as _struct
-        import datetime as _dt
-        from .index_registry import parse_symbol, INDEX_KIND, to_reader_symbol
+        from .index_registry import parse_symbol
 
-        today = _dt.date.today().isoformat()
         try:
             parsed = parse_symbol(code)
             key = f"{parsed.market}{parsed.code}" if parsed.market else parsed.code
-            reader_symbol = to_reader_symbol(parsed)
-            actual_adjust = (
-                "none" if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq") else adjust
-            )
-
-            # L1 预检 (与 get_daily 同 key): 命中则切窗即可, 不出线程、不占闸门。
-            if self._DAILY_L1_ENABLED and actual_adjust == "none":
-                cache_key = (today, reader_symbol, actual_adjust)
-                cached = self._l1_daily.get(cache_key)
-                if cached is not None:
-                    records = self._filter_records_by_date(cached, start_date, end_date)
-                    if limit and limit > 0 and len(records) > limit:
-                        records = records[-limit:]
-                    warn = _daily_request_warn(parsed, adjust)
-                    return key, records, (f"{code}: {warn}" if warn else None), False
-
-            # miss → 双闸门限并发: 批量子闸门 (让出余量给单 symbol) +
-            # reader_gate (总 Reader 并发上限)。单次读盘 (与 get_daily 一致)。
+            # 取数走与 get_daily 同一核心 (_get_daily_records); 外面套批量子闸门
+            # (让出余量给单 symbol), 核心内部再过 reader_gate — 双闸门语义不变。
+            # L1 判定在核心内单点完成, 命中与 miss 同路, 批层不自建缓存。
             async with self._batch_reader_semaphore:
-                async with self._reader_gate():
-                    full, meta = await self._run_blocking(
-                        self._get_daily_sync, code, adjust, start_date, end_date
-                    )
-            records = self._filter_records_by_date(full, start_date, end_date)
+                records, meta, _hit = await self._get_daily_records(
+                    code, adjust, start_date, end_date
+                )
             if limit and limit > 0 and len(records) > limit:
                 records = records[-limit:]
-            # 写 L1 (仅 adjust=none + 有数据; 与 get_daily 同门槛看 full)
-            if self._DAILY_L1_ENABLED and actual_adjust == "none" and full:
-                self._l1_daily.put((today, reader_symbol, actual_adjust), full)
             warn = meta.get("warn")
             return key, records, (f"{code}: {warn}" if warn else None), False
         except ValueError as e:
@@ -2662,7 +2603,7 @@ class MooTDX2Client:
             self._record_error(MooTDXErrorType.INTERNAL_ERROR.value)
             return None, None, f"{code}: file_error - {type(e).__name__}: {e}", True
         except Exception:
-            # 未知异常上抛, 不吞进 warnings (与 _get_daily_batch_local_sync 旧契约一致)
+            # 未知异常上抛, 不吞进 warnings (与 _get_daily_batch_local_sync 契约一致)
             raise
 
     async def _get_daily_batch_async(
@@ -2693,14 +2634,11 @@ class MooTDX2Client:
         has_structural_errors = False
 
         for code, outcome in zip(code_parts, outcomes):
-            # gather(return_exceptions=True): 未知异常在此显形, 转成 file_error
-            # 归类并上抛语义不变 (旧 sync 实现里未知异常是直接 raise 的;
-            # async 聚合若不捕获会让整个批量失败, 故此处降级为结构性失败标签)。
+            # gather(return_exceptions=True): _get_daily_batch_one 已捕获
+            # ValueError / OSError / struct.error 转元组返回, 能以异常形式
+            # 到这里的只有真正未知异常 —— 统一归为结构性失败标签 (旧行为更稳:
+            # 不让单只未知异常炸掉整个批量)。
             if isinstance(outcome, BaseException):
-                # _get_daily_batch_one 已捕获 ValueError / OSError / struct.error
-                # 转成元组返回, 不会以异常形式逃出。能到这里只有真正未知异常,
-                # 统一归为结构性失败 (旧 sync 实现未知异常直接 raise; async 聚合
-                # 若不接会让整个批量失败, 故降级为单只结构性失败标签, 行为更稳)。
                 self._record_error(MooTDXErrorType.INTERNAL_ERROR.value)
                 has_structural_errors = True
                 warnings.append(
@@ -2791,8 +2729,8 @@ class MooTDX2Client:
             # 应让底层单 symbol L1 去重)。
             #
             # 改为 async 逐 symbol 调度 + asyncio.gather: 每只走与
-            # get_daily 相同的 (L1 预检 → reader_gate → 单次读盘 → 写 L1)
-            # 路径, reader_limit 约束生效, 命中 L1 的 symbol 不出线程。
+            # get_daily 相同的 _get_daily_records 核心 (L1 判定单点在核心内,
+            # reader_gate + 单次读盘 + 写 L1), reader_limit 约束生效。
             results, warnings, has_structural_errors = await self._get_daily_batch_async(
                 code_parts, adjust, start_date, end_date, limit
             )
@@ -2870,16 +2808,14 @@ class MooTDX2Client:
         if df is None or df.empty:
             return []
 
+        # 用索引日期串按字典序过滤（与 _get_index_minute_sync 同法；pandas 2
+        # 下 DatetimeIndex 与裸 str 直接 >=/<= 会静默得到空集）
         if start_date:
-            df = df[df.index >= start_date] if hasattr(df.index, "__ge__") else df
-        if end_date:
-            df = df[df.index <= end_date] if hasattr(df.index, "__le__") else df
+            df = df[df.index.strftime("%Y-%m-%d") >= start_date]
+        if end_date and not getattr(df, "empty", True):
+            df = df[df.index.strftime("%Y-%m-%d") <= end_date]
 
-        records = df.reset_index().to_dict(orient="records")
-        for r in records:
-            if "index" in r:
-                idx = r.pop("index")
-                r["datetime"] = str(idx)
+        records = self._records_from_indexed_df(df, out_key="datetime")
         return records
 
     async def get_minute(
@@ -2905,9 +2841,11 @@ class MooTDX2Client:
             data = await self._run_blocking(
                 self._get_minute_sync, code, suffix, start_date, end_date,
             )
+            # 窗口切分已在 _get_minute_sync 内用归一化日期完成 (含 YYYYMMDD
+            # 紧凑串); 此处不能再走 _filter_records_by_date —— 它只认 "date"
+            # 字段, 分钟 records 是 "datetime", 二滤会把结果整体丢空。
             if data:
-                filtered = self._filter_records_by_date(data, start_date, end_date)
-                return ToolResult(success=True, data=filtered, source="mootdx2")
+                return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的{suffix}分钟数据")
         except Exception as e:
             logger.error(f"get_minute failed: {e}")
@@ -2940,11 +2878,7 @@ class MooTDX2Client:
         if isinstance(df, bool):
             return []
 
-        records = df.reset_index().to_dict(orient="records")
-        for r in records:
-            if "index" in r:
-                idx = r.pop("index")
-                r["datetime"] = str(idx)
+        records = self._records_from_indexed_df(df, out_key="datetime")
         return records
 
     async def get_fzline(self, code: str) -> ToolResult:
@@ -3069,11 +3003,7 @@ class MooTDX2Client:
                 .dropna(subset=["open"])
             )
 
-        records = df.reset_index().to_dict(orient="records")
-        for r in records:
-            if "index" in r:
-                idx = r.pop("index")
-                r["date"] = str(idx)[:10]
+        records = self._records_from_indexed_df(df)
 
         # 坑 #5 防御: limit 截断时显式标记 truncated
         if records and limit and limit > 0 and len(records) > limit:
