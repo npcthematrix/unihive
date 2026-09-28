@@ -92,6 +92,16 @@ def test_get_daily_date_filter(client):
     assert r.data[1]["date"] == "2024-01-04"
 
 
+# ========== get_daily_batch_local ==========
+
+async def test_get_daily_batch_local_validates_limit(client):
+    """测试超过20只返回invalid_param"""
+    codes = ",".join([f"sh60000{i}" for i in range(25)])
+    result = await client.get_daily_batch_local(codes=codes)
+    assert result.success is False
+    assert "20" in result.error
+
+
 # ========== get_minute ==========
 
 def test_get_minute_tdxdir_empty(client):

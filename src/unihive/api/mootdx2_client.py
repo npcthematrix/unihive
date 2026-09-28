@@ -2473,6 +2473,80 @@ class MooTDX2Client:
             logger.error(f"get_daily failed: {e}")
             return self._error_result(e, f"get_daily({code})")
 
+    async def get_daily_batch_local(
+        self,
+        codes: str,
+        adjust: str = "none",
+        start_date: str = "",
+        end_date: str = ""
+    ) -> ToolResult:
+        """批量获取股票日线数据（离线，TDX 本地 .day 文件）
+
+        Args:
+            codes: 逗号分隔的股票代码，如 "sh600036,sh600519"（最多20只）
+            adjust: 复权类型
+                - 'none': 不复权（默认）
+                - 'qfq': 前复权
+                - 'hfq': 后复权
+            start_date: 起始日期 yyyy-MM-dd（可选）
+            end_date: 结束日期 yyyy-MM-dd（可选）
+
+        Returns:
+            ToolResult with data as dict {symbol: [records...]}
+        """
+        MAX_BATCH_CODES = 20
+
+        self._metrics["total_requests"] += 1
+
+        # 参数校验
+        if not codes or not codes.strip():
+            return self._invalid_param_result("codes 不能为空")
+
+        code_parts = [p.strip() for p in str(codes).split(",") if p.strip()]
+        if not code_parts:
+            return self._invalid_param_result("codes 不能为空")
+
+        if len(code_parts) > MAX_BATCH_CODES:
+            return self._invalid_param_result(
+                f"批量请求超过 {MAX_BATCH_CODES} 只股票限制"
+            )
+
+        # 校验每只代码格式（6位数字，可带前缀）
+        for code in code_parts:
+            bare = _strip_market_prefix(code)
+            if not (len(bare) == 6 and bare.isdigit()):
+                return self._invalid_symbol_result(
+                    f"代码格式错误: {code!r} (需6位数字，可带 sh/sz/bj 前缀)"
+                )
+
+        # 校验 adjust 参数
+        if adjust not in ("none", "qfq", "hfq"):
+            return self._invalid_param_result(
+                f"adjust 需为 none/qfq/hfq，当前值: {adjust!r}"
+            )
+
+        try:
+            results, warnings = await self._run_blocking(
+                self._get_daily_batch_local_sync,
+                code_parts,
+                adjust,
+                start_date,
+                end_date
+            )
+
+            # 构建响应
+            result = ToolResult(success=True, data=results, source="mootdx2")
+
+            # 添加警告信息
+            if warnings:
+                result.error_detail = {"warn": "; ".join(warnings)}
+
+            return result
+
+        except Exception as e:
+            logger.error(f"get_daily_batch_local failed: {e}")
+            return self._error_result(e, f"get_daily_batch_local({codes})")
+
     # ========== 离线分钟线（Reader，TDX 本地 .lc1/.lc5 文件） ==========
     def _get_minute_sync(
         self, code: str, suffix: str = "1", start_date: str = "", end_date: str = ""
