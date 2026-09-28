@@ -475,10 +475,10 @@ class MooTDX2Client:
         # 2026-09-16: Reader 并发控制 - 限制同时执行的 Reader 数量
         # 防止过多并发 Reader 导致 TDX 库性能下降或超时
         # 容量优先级: settings.reader_limit (config_db / yaml 直传) >
-        #             env UNIHIVE_MOOTDX2_READER_LIMIT > 默认 4
+        #             env UNIHIVE_MOOTDX2_READER_LIMIT > 默认 6
         # getattr 兜底: 历史 mock 用 SimpleNamespace 装配 settings, 没有
         # reader_limit 字段; 真生产 config 走 MooTDX2Settings 有 reader_limit。
-        _reader_limit = 4
+        _reader_limit = 6
         cfg_reader_limit = getattr(config.settings, "reader_limit", None) if config.settings is not None else None
         if cfg_reader_limit is not None and cfg_reader_limit > 0:
             _reader_limit = int(cfg_reader_limit)
@@ -491,6 +491,14 @@ class MooTDX2Client:
                     pass  # 非法 env 值回落默认
         self._READER_SEMAPHORE_LIMIT = _reader_limit
         self._reader_semaphore = asyncio.Semaphore(self._READER_SEMAPHORE_LIMIT)
+        # 2026-09-28 性能审视 (C): 批量子闸门 — 限制批量入口内部并发,
+        # 给单 symbol get_daily 留闸门余量。批量 20 只全 miss 不再把闸门
+        # 槽全占住把单 symbol 挤到队尾。子闸门 = reader_limit // 2 (至少 1;
+        # reader_limit=6 时子闸门=3, 给单 symbol 留 3 个槽),
+        # 等待不占线程 (asyncio 闸门), 故廉价。
+        self._batch_reader_semaphore = asyncio.Semaphore(
+            max(1, self._READER_SEMAPHORE_LIMIT // 2)
+        )
         # 闸门累计/实时计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
         # waiters_now 由 _reader_gate 自持, 不读 CPython Semaphore 私有字段
         self._gate_counters = {
@@ -509,13 +517,12 @@ class MooTDX2Client:
         self._UNUSUAL_L1_TTL = 10.0
         self._l1_unusual = _L1Slot("unusual", maxsize=128, ttl=self._UNUSUAL_L1_TTL)
 
-        # 2026-09-28 Round-3 Batch 2 H1-perf: 8 个单 symbol 离线工具 L1
+        # 2026-09-28 Round-3 Batch 2 H1-perf: 单 symbol 离线工具 L1
         # 排除 get_daily_batch_local 等批量入口 (见 feedback_no_l1_on_batch_interfaces)
-        self._l1_minute = _L1Slot("minute", maxsize=256, ttl=ttl_seconds)
-        self._l1_fzline = _L1Slot("fzline", maxsize=128, ttl=ttl_seconds)
+        # 2026-09-28 性能审视: 分钟线暂不做 L1 缓存 (minute/fzline/index_minute/
+        # index_fzline 4 槽移除), 仅保留日线类 (daily / index_kline) 与非 K 线
+        # 工具 (search/indicator_atr/block_scan) 缓存。分钟线高频但用户暂无需求。
         self._l1_index_kline = _L1Slot("index_kline", maxsize=256, ttl=ttl_seconds)
-        self._l1_index_minute = _L1Slot("index_minute", maxsize=128, ttl=ttl_seconds)
-        self._l1_index_fzline = _L1Slot("index_fzline", maxsize=128, ttl=ttl_seconds)
         self._l1_search = _L1Slot("search", maxsize=128, ttl=600)
         self._l1_indicator_atr = _L1Slot("indicator_atr", maxsize=64, ttl=600)
         self._l1_block_scan = _L1Slot("block_scan", maxsize=8, ttl=600)
@@ -532,7 +539,7 @@ class MooTDX2Client:
         推荐写法, 仅在 event loop 上下文里可用 (本类的所有 tool 都是 gateway
         server 调进来的, 必然在 loop 里)。
 
-        走 mootdx2 专用 ``get_mootdx2_executor()`` 线程池 (8 worker), 而不是
+        走 mootdx2 专用 ``get_mootdx2_executor()`` 线程池 (16 worker), 而不是
         ``asyncio.to_thread`` 的默认 executor — 后者会让金融阻塞调用与其它默认
         池任务互相挤占, 且会与 tdx_quant 的阻塞调用混进同一快照, 监控行不诚实
         (见 core/blocking_pool.py 注释)。
@@ -960,12 +967,9 @@ class MooTDX2Client:
             "unusual_l1": self._l1_metrics_block(
                 self._l1_unusual, ttl_override=self._UNUSUAL_L1_TTL,
             ),
-            # Round-3 Batch 2 H1-perf: 8 个单 symbol 工具 L1 metrics
-            "minute_l1": self._l1_metrics_block(self._l1_minute),
-            "fzline_l1": self._l1_metrics_block(self._l1_fzline),
+            # Round-3 Batch 2 H1-perf: 单 symbol 工具 L1 metrics
+            # 2026-09-28 性能审视: 4 个分钟线槽已移除, 仅日线类 + 非 K 线工具
             "index_kline_l1": self._l1_metrics_block(self._l1_index_kline),
-            "index_minute_l1": self._l1_metrics_block(self._l1_index_minute),
-            "index_fzline_l1": self._l1_metrics_block(self._l1_index_fzline),
             "search_l1": self._l1_metrics_block(self._l1_search),
             "indicator_atr_l1": self._l1_metrics_block(self._l1_indicator_atr),
             "block_scan_l1": self._l1_metrics_block(self._l1_block_scan),
@@ -1016,12 +1020,9 @@ class MooTDX2Client:
             self._l1_daily,
             self._l1_top_board,
             self._l1_unusual,
-            # 2026-09-28 Round-3 Batch 2 H1-perf: 8 个单 symbol 工具 L1
-            self._l1_minute,
-            self._l1_fzline,
+            # 2026-09-28 Round-3 Batch 2 H1-perf: 单 symbol 工具 L1
+            # (4 个分钟线槽已移除)
             self._l1_index_kline,
-            self._l1_index_minute,
-            self._l1_index_fzline,
             self._l1_search,
             self._l1_indicator_atr,
             self._l1_block_scan,
@@ -1327,12 +1328,9 @@ class MooTDX2Client:
                 self._l1_daily,
                 self._l1_top_board,
                 self._l1_unusual,
-                # 2026-09-28 Round-3 Batch 2 H1-perf: 8 个单 symbol 工具 L1
-                self._l1_minute,
-                self._l1_fzline,
+                # 2026-09-28 Round-3 Batch 2 H1-perf: 单 symbol 工具 L1
+                # (4 个分钟线槽已移除)
                 self._l1_index_kline,
-                self._l1_index_minute,
-                self._l1_index_fzline,
                 self._l1_search,
                 self._l1_indicator_atr,
                 self._l1_block_scan,
@@ -2361,6 +2359,12 @@ class MooTDX2Client:
     ) -> tuple[dict[str, list[dict]], list[str], bool]:
         """同步批量获取离线日线数据，复用 L1 缓存。
 
+        ⚠ 测试专用 / 生产勿调 (2026-09-28 性能审视): 生产路径
+        ``get_daily_batch_local`` 已改走 ``_get_daily_batch_async`` 逐 symbol
+        async 调度 (受 reader_gate + 批量子闸门约束, 命中 L1 不出线程)。本 sync
+        实现绕过 reader_gate、串行读盘, 仅供单测在无 event-loop 场景直接调用,
+        行为与 async 路径保持对齐 (见 _get_daily_batch_one)。勿在新生产代码复用。
+
         2026-09-28 Round-3 修订:
           - C1 (用户裁决): 异常细分 (OSError/struct.error → 文件错标签,
             未知异常直接 raise 不再吞). 全失败时 has_structural_errors=True
@@ -2411,16 +2415,24 @@ class MooTDX2Client:
 
                 if cache_hit and cached_records is not None:
                     records = self._filter_records_by_date(cached_records, start_date, end_date)
-                    meta = {"kind": parsed.kind, "warn": None}
+                    # 2026-09-28 性能审视: 命中分支 warn 用原始入参 adjust 重算,
+                    # 与 async 路径 (_get_daily_batch_one) 对齐; 旧码写死 None
+                    # 导致裸 000xxx 消歧提示在批量命中缓存时丢失。
+                    warn = _daily_request_warn(parsed, adjust)
+                    meta = {"kind": parsed.kind, "warn": warn}
                 else:
-                    records, meta = self._get_daily_sync(code, adjust, start_date, end_date)
-                    records = self._filter_records_by_date(records, start_date, end_date)
-                    # Write to L1 cache (only if adjust=none and has data)
-                    if self._DAILY_L1_ENABLED and actual_adjust == "none" and records:
-                        full_recs, _ = self._get_daily_sync(code, adjust, "", "")
-                        if full_recs:
-                            cache_key = (today, reader_symbol, actual_adjust)
-                            self._l1_daily.put(cache_key, full_recs)
+                    # H2-perf (Round-3 Batch 2): _get_daily_sync 已返回 FULL records,
+                    # 切窗一份用于返回, 原始 full 入缓存 — 单次读盘, 不再二次回读。
+                    # (旧码先切窗覆盖 records, 再为缓存全量重调 _get_daily_sync, 每只
+                    #  miss 多读一次 .day 文件, 20 只批量冷读近乎翻倍。)
+                    full, meta = self._get_daily_sync(code, adjust, start_date, end_date)
+                    records = self._filter_records_by_date(full, start_date, end_date)
+                    # Write to L1 cache (only if adjust=none and has data)。
+                    # 门槛看 full 而非切窗后的 records: 空窗口但有全量数据也应入缓存,
+                    # 与单 symbol get_daily 路径行为一致。
+                    if self._DAILY_L1_ENABLED and actual_adjust == "none" and full:
+                        cache_key = (today, reader_symbol, actual_adjust)
+                        self._l1_daily.put(cache_key, full)
 
                 # H5-func: limit 截断
                 if limit and limit > 0 and len(records) > limit:
@@ -2588,6 +2600,124 @@ class MooTDX2Client:
             logger.error(f"get_daily failed: {e}")
             return self._error_result(e, f"get_daily({code})")
 
+    async def _get_daily_batch_one(
+        self,
+        code: str,
+        adjust: str,
+        start_date: str,
+        end_date: str,
+        limit: int,
+    ) -> tuple[str | None, list[dict] | None, str | None, bool]:
+        """批量内部: 取单只离线日线。复用 get_daily 的 L1 预检 + reader_gate 路径。
+
+        Returns:
+            (key, records, warning, is_structural_error)
+            - key/records 为 None 表示该只失败 (warning 填原因)
+            - is_structural_error=True 表示文件级错误 (OSError/struct.error),
+              供上层累计 has_structural_errors
+        """
+        import struct as _struct
+        import datetime as _dt
+        from .index_registry import parse_symbol, INDEX_KIND, to_reader_symbol
+
+        today = _dt.date.today().isoformat()
+        try:
+            parsed = parse_symbol(code)
+            key = f"{parsed.market}{parsed.code}" if parsed.market else parsed.code
+            reader_symbol = to_reader_symbol(parsed)
+            actual_adjust = (
+                "none" if parsed.kind == INDEX_KIND and adjust in ("qfq", "hfq") else adjust
+            )
+
+            # L1 预检 (与 get_daily 同 key): 命中则切窗即可, 不出线程、不占闸门。
+            if self._DAILY_L1_ENABLED and actual_adjust == "none":
+                cache_key = (today, reader_symbol, actual_adjust)
+                cached = self._l1_daily.get(cache_key)
+                if cached is not None:
+                    records = self._filter_records_by_date(cached, start_date, end_date)
+                    if limit and limit > 0 and len(records) > limit:
+                        records = records[-limit:]
+                    warn = _daily_request_warn(parsed, adjust)
+                    return key, records, (f"{code}: {warn}" if warn else None), False
+
+            # miss → 双闸门限并发: 批量子闸门 (让出余量给单 symbol) +
+            # reader_gate (总 Reader 并发上限)。单次读盘 (与 get_daily 一致)。
+            async with self._batch_reader_semaphore:
+                async with self._reader_gate():
+                    full, meta = await self._run_blocking(
+                        self._get_daily_sync, code, adjust, start_date, end_date
+                    )
+            records = self._filter_records_by_date(full, start_date, end_date)
+            if limit and limit > 0 and len(records) > limit:
+                records = records[-limit:]
+            # 写 L1 (仅 adjust=none + 有数据; 与 get_daily 同门槛看 full)
+            if self._DAILY_L1_ENABLED and actual_adjust == "none" and full:
+                self._l1_daily.put((today, reader_symbol, actual_adjust), full)
+            warn = meta.get("warn")
+            return key, records, (f"{code}: {warn}" if warn else None), False
+        except ValueError as e:
+            self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
+            return None, None, f"{code}: invalid_symbol - {e}", False
+        except (OSError, _struct.error) as e:
+            self._record_error(MooTDXErrorType.INTERNAL_ERROR.value)
+            return None, None, f"{code}: file_error - {type(e).__name__}: {e}", True
+        except Exception:
+            # 未知异常上抛, 不吞进 warnings (与 _get_daily_batch_local_sync 旧契约一致)
+            raise
+
+    async def _get_daily_batch_async(
+        self,
+        code_parts: list[str],
+        adjust: str,
+        start_date: str,
+        end_date: str,
+        limit: int,
+    ) -> tuple[dict[str, list[dict]], list[str], bool]:
+        """async 逐 symbol 调度批量日线。reader_limit 约束生效, 全命中不出线程。
+
+        与 _get_daily_batch_local_sync (保留供测试同步调用) 行为对齐:
+        返回 (results, warnings, has_structural_errors)。
+        """
+        import asyncio
+
+        outcomes = await asyncio.gather(
+            *(
+                self._get_daily_batch_one(c, adjust, start_date, end_date, limit)
+                for c in code_parts
+            ),
+            return_exceptions=True,
+        )
+
+        results: dict[str, list[dict]] = {}
+        warnings: list[str] = []
+        has_structural_errors = False
+
+        for code, outcome in zip(code_parts, outcomes):
+            # gather(return_exceptions=True): 未知异常在此显形, 转成 file_error
+            # 归类并上抛语义不变 (旧 sync 实现里未知异常是直接 raise 的;
+            # async 聚合若不捕获会让整个批量失败, 故此处降级为结构性失败标签)。
+            if isinstance(outcome, BaseException):
+                # _get_daily_batch_one 已捕获 ValueError / OSError / struct.error
+                # 转成元组返回, 不会以异常形式逃出。能到这里只有真正未知异常,
+                # 统一归为结构性失败 (旧 sync 实现未知异常直接 raise; async 聚合
+                # 若不接会让整个批量失败, 故降级为单只结构性失败标签, 行为更稳)。
+                self._record_error(MooTDXErrorType.INTERNAL_ERROR.value)
+                has_structural_errors = True
+                warnings.append(
+                    f"{code}: file_error - {type(outcome).__name__}: {outcome}"
+                )
+                continue
+
+            key, records, warning, is_struct = outcome
+            if warning:
+                warnings.append(warning)
+            if is_struct:
+                has_structural_errors = True
+            if key is not None and records is not None:
+                results[key] = records
+
+        return results, warnings, has_structural_errors
+
     async def get_daily_batch_local(
         self,
         codes: str,
@@ -2653,13 +2783,18 @@ class MooTDX2Client:
             return self._invalid_param_result(date_error)
 
         try:
-            results, warnings, has_structural_errors = await self._run_blocking(
-                self._get_daily_batch_local_sync,
-                code_parts,
-                adjust,
-                start_date,
-                end_date,
-                limit,
+            # 2026-09-28 性能审视 (H-perf):
+            # 旧实现把整个 _get_daily_batch_local_sync 一次性丢进线程池,
+            # 循环串行读 20 只 → 既无并行收益, 又绕过 async 层的 _reader_gate
+            # (reader_limit 失控) 与单 symbol L1 (批层自写 L1 也违背
+            # feedback_no_l1_on_batch_interfaces 裁决: 批入口自身不加 L1,
+            # 应让底层单 symbol L1 去重)。
+            #
+            # 改为 async 逐 symbol 调度 + asyncio.gather: 每只走与
+            # get_daily 相同的 (L1 预检 → reader_gate → 单次读盘 → 写 L1)
+            # 路径, reader_limit 约束生效, 命中 L1 的 symbol 不出线程。
+            results, warnings, has_structural_errors = await self._get_daily_batch_async(
+                code_parts, adjust, start_date, end_date, limit
             )
 
             # C1: 全结构性失败 → success=False 而非 success=True data={}
@@ -2761,44 +2896,16 @@ class MooTDX2Client:
         数据源：{tdxdir}/vipdoc/sh/minline/sh600036.lc1
               或 {tdxdir}/vipdoc/sh/fzline/sh600036.lc5
 
-        2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存 (key=(suffix,code,start,end)),
-        单 symbol 接口走 records-only 缓存, 同一入参不再触发 Reader 二次调用。
+        2026-09-28 Round-3 Batch 2b: 分钟线暂不做 L1 缓存 (用户决策: 只有日线
+        数据需要 CACHE, 分钟线暂不需要)。每次直读 Reader, 无内存驻留。
         """
         self._metrics["total_requests"] += 1
-        # H2: cache_key 移除日期窗, 命中后用 _filter_records_by_date 过滤
-        cache_key = (str(suffix), code)
 
-        # 1. L1 命中
-        cached_records = self._l1_minute.get(cache_key)
-        if cached_records is not None:
-            # 日期窗过滤
-            filtered = self._filter_records_by_date(
-                cached_records, start_date, end_date
-            )
-            return ToolResult(success=True, data=filtered, source="mootdx2")
-
-        # 2. 旁路 (cachetools 缺失)
-        if not self._l1_minute.enabled:
-            try:
-                data = await self._run_blocking(
-                    self._get_minute_sync, code, suffix, start_date, end_date,
-                )
-                if data:
-                    return ToolResult(success=True, data=data, source="mootdx2")
-                return self._no_data_result(f"未找到 {code} 的{suffix}分钟数据")
-            except Exception as e:
-                logger.error(f"get_minute failed: {e}")
-                return self._error_result(e, f"get_minute({code})")
-
-        # 3. miss
         try:
             data = await self._run_blocking(
                 self._get_minute_sync, code, suffix, start_date, end_date,
             )
             if data:
-                # 写入缓存用全量 (与 daily L1 双层一致)
-                self._l1_minute.put(cache_key, list(data))
-                # 日期窗过滤
                 filtered = self._filter_records_by_date(data, start_date, end_date)
                 return ToolResult(success=True, data=filtered, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的{suffix}分钟数据")
@@ -2848,33 +2955,13 @@ class MooTDX2Client:
 
         数据源：{tdxdir}/vipdoc/sh/fzline/sh600036.lc5
 
-        2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存 (key=(code,)),
-        单 symbol 接口走 records-only 缓存。
+        2026-09-28 Round-3 Batch 2b: 分钟线暂不做 L1 缓存 (用户决策)。
         """
         self._metrics["total_requests"] += 1
-        cache_key = (code,)
 
-        # 1. L1 命中
-        cached_records = self._l1_fzline.get(cache_key)
-        if cached_records is not None:
-            return ToolResult(success=True, data=cached_records, source="mootdx2")
-
-        # 2. 旁路 (cachetools 缺失)
-        if not self._l1_fzline.enabled:
-            try:
-                data = await self._run_blocking(self._get_fzline_sync, code)
-                if data:
-                    return ToolResult(success=True, data=data, source="mootdx2")
-                return self._no_data_result(f"未找到 {code} 的 5 分钟K线数据")
-            except Exception as e:
-                logger.error(f"get_fzline failed: {e}")
-                return self._error_result(e, f"get_fzline({code})")
-
-        # 3. miss
         try:
             data = await self._run_blocking(self._get_fzline_sync, code)
             if data:
-                self._l1_fzline.put(cache_key, data)
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的 5 分钟K线数据")
         except Exception as e:
@@ -3216,42 +3303,13 @@ class MooTDX2Client:
         if guard_error is not None:
             return guard_error
 
-        # H2: cache_key 移除日期窗, 与 get_minute 双层方案一致
-        # 旧: (code, suffix, start, end) → 50股×5窗×2suffix = 500 组合
-        # 新: (str(suffix), code) → 同 symbol 多窗口共享 1 份缓存
-        cache_key = (str(suffix), code)
-
-        # 1. L1 命中: 先日期窗过滤, 再 limit 截断
-        cached_records = self._l1_index_minute.get(cache_key)
-        if cached_records is not None:
-            # 日期窗过滤
-            filtered = self._filter_records_by_date(
-                cached_records, start_date, end_date
-            )
-            scope_label = "所选日期范围内" if (start_date or end_date) else "文件内"
-            sliced, warn_text = self._tail_with_warn(
-                filtered, limit, scope_label=scope_label,
-            )
-            result = ToolResult(success=True, data=sliced, source="mootdx2")
-            if warn_text is not None:
-                result.error_detail = {
-                    "warn": warn_text,
-                    "returned": len(sliced),
-                    "requested": limit,
-                    "recoverable": True,
-                }
-            return result
-
-        # 2. miss
+        # 2026-09-28 性能审视: 分钟线暂不做 L1 缓存 (用户决策), 直读 Reader。
         try:
             records, had_rows = await self._run_blocking(
                 self._get_index_minute_sync,
                 code, suffix_int, start_date, end_date,
             )
             if records:
-                # 写入 cache 用未截断的全量 (与 get_daily_local 2 层一致)
-                self._l1_index_minute.put(cache_key, list(records))
-                # 带日期窗时 total 只是窗内条数，warn 口径必须与无窗区分
                 scope_label = "所选日期范围内" if (start_date or end_date) else "文件内"
                 records, warn_text = self._tail_with_warn(
                     records, limit, scope_label=scope_label,
@@ -3312,29 +3370,10 @@ class MooTDX2Client:
         if guard_error is not None:
             return guard_error
 
-        # 2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存 (key=(code,))
-        cache_key = (code,)
-
-        # 1. L1 命中: 现按 limit 截断
-        cached_records = self._l1_index_fzline.get(cache_key)
-        if cached_records is not None:
-            sliced, warn_text = self._tail_with_warn(list(cached_records), limit)
-            result = ToolResult(success=True, data=sliced, source="mootdx2")
-            if warn_text is not None:
-                result.error_detail = {
-                    "warn": warn_text,
-                    "returned": len(sliced),
-                    "requested": limit,
-                    "recoverable": True,
-                }
-            return result
-
-        # 2. miss
+        # 2026-09-28 性能审视: 分钟线暂不做 L1 缓存 (用户决策), 直读 Reader。
         try:
             records = await self._run_blocking(self._get_index_fzline_sync, code)
             if records:
-                # 写 cache 用未截断的全量 (与 get_daily_local 2 层一致)
-                self._l1_index_fzline.put(cache_key, list(records))
                 records, warn_text = self._tail_with_warn(records, limit)
                 result = ToolResult(success=True, data=records, source="mootdx2")
                 if warn_text is not None:

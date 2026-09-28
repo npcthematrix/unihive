@@ -97,7 +97,7 @@ $xml = @"
     <Principal id="Author">
       <UserId>$Account</UserId>
       <LogonType>InteractiveToken</LogonType>
-      <RunLevel>Highest</RunLevel>
+      <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
   </Principals>
   <Settings>

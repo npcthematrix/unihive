@@ -167,10 +167,14 @@ class TestIndexKlineL1CacheKeyNormalize:
 # ========== H4: get_minute suffix 类型统一 ==========
 
 class TestGetMinuteSuffixType:
-    """H4: cache_key 用 str(suffix) 统一 int/str."""
+    """H4: suffix str/int 等价处理.
+
+    2026-09-28 性能审视: 分钟线 L1 缓存已移除 (用户决策), 两次调用都读 Reader。
+    保留测试验证 suffix 仍被正确归一化 (str/int 等价), 不再验证缓存命中。
+    """
 
     def test_int_and_str_suffix_share_l1_cache(self, client: MooTDX2Client):
-        """suffix='1' 与 suffix=1 等价, 应共享 L1 缓存."""
+        """suffix='1' 与 suffix=1 等价, 两次调用都成功 (无缓存, reader 调 2 次)."""
         mock_df = pd.DataFrame(
             {"close": [10.0]}, index=pd.to_datetime(["2024-01-02 10:00"])
         )
@@ -182,8 +186,8 @@ class TestGetMinuteSuffixType:
             r2 = asyncio.run(client.get_minute(code="600036", suffix=1))
 
             assert r1.success and r2.success
-            # H4 修复: str/int suffix 应命中同一缓存
-            assert mock_reader.minute.call_count == 1
+            # 无缓存: 两次都读 reader
+            assert mock_reader.minute.call_count == 2
 
 
 # ========== H5: search_stock 空白 keyword ==========
@@ -231,10 +235,13 @@ class TestSearchStockBlankKeyword:
 # ========== H2: get_minute / get_index_minute L1 双层 ==========
 
 class TestGetMinuteL1TwoLayer:
-    """H2: get_minute cache_key 移除日期窗, 同 symbol 多日期窗共享 L1."""
+    """get_minute 日期窗过滤 (2026-09-28: 分钟线 L1 已移除).
+
+    分钟线无缓存 → 每次读 Reader, 但日期窗过滤仍生效 (返回窗内条数)。
+    """
 
     def test_different_date_windows_share_l1_cache(self, client: MooTDX2Client):
-        """不同 start/end 日期窗应命中同一 L1 缓存."""
+        """无日期窗 vs 有日期窗: 两次都读 reader, 各自按窗过滤."""
         mock_df = pd.DataFrame(
             {"close": [10.0, 11.0, 12.0]},
             index=pd.to_datetime([
@@ -252,21 +259,20 @@ class TestGetMinuteL1TwoLayer:
             assert r1.success
             assert mock_reader.minute.call_count == 1
 
-            # 第二次: 有日期窗, 应命中同一缓存
+            # 第二次: 有日期窗 — 无缓存, 再读 reader
             r2 = asyncio.run(client.get_minute(
                 code="600036", suffix=1,
                 start_date="2024-01-01", end_date="2024-01-02"
             ))
             assert r2.success
-            # H2: 不应再调 reader
-            assert mock_reader.minute.call_count == 1
+            assert mock_reader.minute.call_count == 2
 
 
 class TestGetIndexMinuteL1TwoLayer:
-    """H2: get_index_minute_local L1 双层."""
+    """get_index_minute_local 日期窗过滤 (2026-09-28: 分钟线 L1 已移除)."""
 
     def test_index_minute_different_date_windows_share_l1(self, client: MooTDX2Client):
-        """不同日期窗应命中同一 L1 缓存."""
+        """不同日期窗: 两次都读 reader, 各自按窗过滤."""
         # get_index_minute_local 内部调用 reader.minute()
         mock_df = pd.DataFrame(
             {"close": [3000.0, 3010.0, 3020.0]},
@@ -284,14 +290,13 @@ class TestGetIndexMinuteL1TwoLayer:
             r1 = asyncio.run(client.get_index_minute_local(code="sh000001", suffix="1"))
             assert r1.success
 
-            # 第二次: 有日期窗
+            # 第二次: 有日期窗 — 无缓存, 再读 reader
             r2 = asyncio.run(client.get_index_minute_local(
                 code="sh000001", suffix="1",
                 start_date="2024-01-01", end_date="2024-01-02"
             ))
             assert r2.success
-            # H2: 不应再调 reader
-            assert mock_reader.minute.call_count == 1
+            assert mock_reader.minute.call_count == 2
 
 
 # ========== H3: indicator_atr L1 双层 ==========

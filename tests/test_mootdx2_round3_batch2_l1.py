@@ -148,41 +148,57 @@ class TestTopBoardUnusualRecordsOnly:
 # ========== H1-perf: 8 工具 L1 ==========
 
 class TestEightToolsL1:
-    """8 个单 symbol 工具 L1 缓存接入."""
+    """单 symbol 工具 L1 缓存接入。
+
+    2026-09-28 性能审视: 4 个分钟线槽已移除 (用户决策: 只有日线数据需要 CACHE)。
+    仅 index_kline (日K类) 保留 L1; minute/fzline/index_minute/index_fzline
+    每次直读 Reader, 无缓存。
+    """
 
     @pytest.mark.parametrize(
         "method_name, kwargs, fixture_df",
         [
-            ("get_minute", {"code": "600036", "suffix": "1"}, "minute"),
-            ("get_fzline", {"code": "600036"}, "fzline"),
+            # index_kline 是日K类 (Reader.daily 读 .day), 保留 L1
             ("get_index_kline_local", {"code": "sh000001"}, "kline"),
-            ("get_index_minute_local", {"code": "sh000001", "suffix": "1"}, "minute"),
-            ("get_index_fzline_local", {"code": "sh000001"}, "fzline"),
         ],
     )
-    @pytest.mark.skip(reason="Round-3 Batch 2 H1-perf 8 工具 L1 接入尚未 ship; 当前 PR 仅 H2 + L1Slot 抽象")
     def test_offline_kline_l1_hit(
         self, method_name, kwargs, fixture_df, client: MooTDX2Client
     ):
-        """5 个 K线/分时工具连续同入参 → 第二次命中 L1, reader 只调 1 次."""
-        if fixture_df == "minute":
-            mock_df = pd.DataFrame(
-                {"close": [10.0]},
-                index=pd.to_datetime(["2024-01-02 10:00"]),
-            )
-            reader_method = "minute"
-        elif fixture_df == "fzline":
-            mock_df = pd.DataFrame(
-                {"close": [10.0]},
-                index=pd.to_datetime(["2024-01-02 10:00"]),
-            )
-            reader_method = "fzline"
-        else:  # kline
-            mock_df = pd.DataFrame(
-                {"close": [3000.0]},
-                index=pd.to_datetime(["2024-01-02"]),
-            )
-            reader_method = "daily"
+        """index_kline 连续同入参 → 第二次命中 L1, reader 只调 1 次."""
+        mock_df = pd.DataFrame(
+            {"close": [3000.0]},
+            index=pd.to_datetime(["2024-01-02"]),
+        )
+        mock_reader = MagicMock()
+        mock_reader.daily = MagicMock(return_value=mock_df)
+
+        with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+            method = getattr(client, method_name)
+            r1 = asyncio.run(method(**kwargs))
+            r2 = asyncio.run(method(**kwargs))
+
+        assert r1.success and r2.success
+        # reader 实际只调 1 次 (L1 命中)
+        assert mock_reader.daily.call_count == 1
+
+    @pytest.mark.parametrize(
+        "method_name, kwargs, reader_method, fixture_kind",
+        [
+            ("get_minute", {"code": "600036", "suffix": "1"}, "minute", "minute"),
+            ("get_fzline", {"code": "600036"}, "fzline", "fzline"),
+            ("get_index_minute_local", {"code": "sh000001", "suffix": "1"}, "minute", "minute"),
+            ("get_index_fzline_local", {"code": "sh000001"}, "fzline", "fzline"),
+        ],
+    )
+    def test_minute_tools_no_l1_cache(
+        self, method_name, kwargs, reader_method, fixture_kind, client: MooTDX2Client
+    ):
+        """分钟线工具无 L1 缓存 (2026-09-28 决策): 连续两次同入参都读 Reader."""
+        mock_df = pd.DataFrame(
+            {"close": [10.0]},
+            index=pd.to_datetime(["2024-01-02 10:00"]),
+        )
         mock_reader = MagicMock()
         setattr(mock_reader, reader_method, MagicMock(return_value=mock_df))
 
@@ -192,11 +208,10 @@ class TestEightToolsL1:
             r2 = asyncio.run(method(**kwargs))
 
         assert r1.success and r2.success
-        # reader 实际只调 1 次
+        # 无缓存 → reader 两次都调
         reader_mock = getattr(mock_reader, reader_method)
-        assert reader_mock.call_count == 1
+        assert reader_mock.call_count == 2
 
-    @pytest.mark.skip(reason="Round-3 Batch 2 H1-perf search_stock L1 接入尚未 ship; 当前 PR 仅 H2 + L1Slot 抽象")
     def test_search_stock_l1_hit(self, client: MooTDX2Client):
         """search_stock 连续同 keyword → 第二次命中 L1."""
         df_block = pd.DataFrame({

@@ -58,11 +58,11 @@ upstreams:
     # - 进程内 cache.db 外的二级闸门, 与 worker_threads 同进程互斥;
     # - 建议 reader_limit ≤ worker_threads (否则 Reader 永远跑不满, 见启动校验);
     # - 也可用 env UNIHIVE_MOOTDX2_READER_LIMIT 临时覆盖 (优先级低于本字段)。
-    reader_limit: 4
+    reader_limit: 6
     # 阻塞线程池 worker 数: TDX 同步调用 (Reader / Quotes.factory 等) 落到
     # 这个池。Reader 闸门是更细粒度的并发控制, worker 数应 ≥ reader_limit。
     # env UNIHIVE_MOOTDX2_WORKER_THREADS 可临时覆盖 (优先级低于本字段)。
-    worker_threads: 8
+    worker_threads: 16
     capabilities:
       - market_data
       - realtime_quote

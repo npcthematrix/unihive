@@ -1,4 +1,4 @@
-# Run UniHive MCP gateway detached from any interactive Claude Code session.
+﻿# Run UniHive MCP gateway detached from any interactive Claude Code session.
 # PowerShell launches the installed console script 'unihive' via Start-Process
 # with native stdout/stderr redirection (NOT `*>>` which mangles UTF-8 logs and
 # dies silently under a hidden window).
