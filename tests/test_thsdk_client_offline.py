@@ -898,10 +898,10 @@ def _yaml_specs() -> list[dict]:
 
 def test_yaml_shape():
     specs = _yaml_specs()
-    assert len(specs) == 57
+    assert len(specs) == 63
     writes = [s for s in specs if s.get("requires_env")]
     assert len(writes) == 10
-    assert len(specs) - len(writes) == 47
+    assert len(specs) - len(writes) == 53
     for spec in writes:
         assert spec["requires_env"] == "ALLOW_WATCHLIST_WRITE"
         assert spec["dangerous"] is True
@@ -1068,14 +1068,14 @@ def test_WRITE_TOOLS_no_dead_entries():
 def test_filter_specs_by_env_off(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("ALLOW_WATCHLIST_WRITE", raising=False)
     specs = filter_specs_by_env(_yaml_specs())
-    assert len(specs) == 47
+    assert len(specs) == 53
     assert all(not s.get("dangerous") for s in specs)
 
 
 def test_filter_specs_by_env_on(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ALLOW_WATCHLIST_WRITE", "true")
     specs = filter_specs_by_env(_yaml_specs())
-    assert len(specs) == 57
+    assert len(specs) == 63
 
 
 def test_load_all_tools_gates_specs_and_mapping_off(

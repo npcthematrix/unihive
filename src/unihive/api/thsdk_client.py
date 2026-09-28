@@ -1322,6 +1322,67 @@ class ThsdkClient:
             securities=[security],
         )
 
+    # ===== 2026-09-28 新增: 第一档推荐工具（实测可用） =====
+
+    async def _tool_ths_daily_k_lines_with_prev_close(self, p: dict) -> Any:
+        # 日线含前收盘价（可算跳空缺口/真实涨跌幅），普通 klines 不给 prev_close。
+        count = int(p.get("count", 20))
+        return await self._call(
+            self._mod.list_security_daily_k_lines_with_previous_close,
+            security=p["security"], start=-count, end=0, adjust=0,
+        )
+
+    async def _tool_ths_security_research_reports(self, p: dict) -> Any:
+        # 个股券商研报（标题/机构/研究员/评级/摘要/链接）。
+        return await self._call(
+            self._mod.list_security_research_reports,
+            security=p["security"], traversal={"mode": "page"},
+        )
+
+    async def _tool_ths_index_call_auction_quotes(self, p: dict) -> Any:
+        # 指数集合竞价快照。index 为完整代码如 USHI1A0001（上证）/USZI399001（深证）。
+        idx = str(p["index"]).strip()
+        return await self._call(
+            self._mod.list_index_call_auction_quotes,
+            index={"security": {"market": idx[:4], "code": idx[4:]}},
+            phase=str(p.get("phase") or "opening"),
+        )
+
+    async def _tool_ths_index_constituent_contribution(self, p: dict) -> Any:
+        # 指数成分按涨跌贡献度排名（谁拉动/拖累指数）。
+        count = int(p.get("count", 20))
+        return await self._call(
+            self._mod.rank_constituents_by_performance_contribution,
+            code=str(p["code"]),
+            market=str(p.get("market") or "USHI"),
+            target="index", sort_id=2708, sort_order="D",
+            sort_begin=0, sort_count=count, valid_begin=0, valid_end=0,
+        )
+
+    async def _tool_ths_rank_block_by_wencai_field(self, p: dict) -> Any:
+        # 板块成分按任意问财字段（换手率/市盈率/ROE…）排名。
+        # field 对外只需字段名，网关先经 list_wencai_expression_fields 解析为完整字段对象。
+        field_name = str(p["field_name"])
+        fields = await self._call(
+            self._mod.list_wencai_expression_fields, field_name
+        )
+        if not isinstance(fields, list) or not fields:
+            raise ValueError(f"未找到问财字段：{field_name}")
+        return await self._call(
+            self._mod.rank_block_securities_by_wencai_field,
+            block=int(p["block"]), field=dict(fields[0]),
+            offset=0, limit=int(p.get("count", 20)), sort_order="D",
+        )
+
+    async def _tool_ths_security_news(self, p: dict) -> Any:
+        # 个股分类正式新闻（区别于 ths_news 的 7x24 快讯）。
+        return await self._call(
+            self._mod.list_news_items,
+            category=14339, security=p["security"],
+            traversal={"mode": str(p.get("mode") or "since")},
+            summary_mode=2, advertorial=False,
+        )
+
     async def _tool_ths_get_market_security_names(self, p: dict) -> Any:
         return await self._call(
             self._mod.get_market_security_names,

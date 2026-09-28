@@ -1,7 +1,10 @@
-# THSDK 上游（社区 thsdk 2.0.2 包，panghu11033/thsdk）工具定义
+# THSDK 上游（panghu11033/thsdk 包，运行版本 3.0.0）工具定义
 #
-# THSCODE 格式：4 位市场前缀 + 代码，如 USHA600519（沪）、USZA300033（深）、HK03968（港）。
+# THSCODE 格式：4 位市场前缀 + 代码，如 USHA600519（沪股）、USZA300033（深股）、
+# USHJ510300（沪基金）、USZJ159915（深基金）、HK03968（港股；网关市场归一仅支持沪深，港股仅部分工具可用）。
 # 只有短代码或名称时先调 ths_search_symbols / ths_complete_ths_code / ths_resolve_securities 拿到完整 THSCODE。
+#
+# 市场前缀（官方 get_market_metadata）：USHA=沪股 / USZA=深股 / USHJ=沪基金 / USZJ=深基金 / USHI·USZI=指数。
 #
 # 参数命名约定（网关层对外参数名 → thsdk 内部参数名）：
 #   - 行情类对外统一用 security，内部映射 thsdk 的 ths_code（klines/intraday_data/depth/tick_level1/corporate_action）
@@ -9,6 +12,11 @@
 #   - 问财自然语言对外用 query，内部映射 wencai_nlp 的 condition
 #   - 多个"单只证券"工具内部把 security 包成 thsdk 要求的 securities 数组
 # 写工具通过 requires_env: ALLOW_WATCHLIST_WRITE 在加载期决定是否注册；clear/delete/replace 四类还需 confirm=true。
+#
+# 别名（同一原生方法的不同对外入口，择一使用即可，无需都调）：
+#   - ths_search_symbols ≡ ths_search_securities（原生 search_securities；入参 pattern vs keyword）
+#   - ths_complete_ths_code ≡ ths_resolve_securities（原生 resolve_securities；后者额外做市场一致性校验，推荐）
+#   - ths_get_price ≈ ths_klines（别名；默认复权不同：get_price 默认前复权，klines 默认不复权，见各自描述）
 
 tools:
   # ========== 认证与账户只读 ==========
@@ -74,6 +82,7 @@ tools:
   - name: ths_search_symbols
     description: |-
       【证券搜索】按代码/拼音缩写/中文名称搜索证券，返回候选的完整 THSCODE、名称与市场。
+      别名 ths_search_securities（同一原生 search_securities，入参名 keyword），二者择一即可。
       对应 thsdk search_symbols(pattern, market=None)。
       【参数】
       - pattern (必填): 关键词，如 '600519' / 'gzmt' / '茅台'
@@ -90,6 +99,7 @@ tools:
   - name: ths_complete_ths_code
     description: |-
       【短代码补全】把一个或多个短代码（如 300033、600519）批量解析为完整 THSCODE（如 USZA300033、USHA600519）。
+      别名 ths_resolve_securities（同一原生方法）；resolve 版本额外做市场一致性校验，需要严格校验时优先用它。
       对应 thsdk complete_ths_code(ths_code)，入参支持单个字符串或字符串数组。
       【参数】codes (必填): 短代码或其数组，如 ["600519", "300033"]
     routing: ths_complete_ths_code
@@ -105,6 +115,7 @@ tools:
   - name: ths_get_price
     description: |-
       【K线-参数版】查询单只证券 K 线，返回 records（DataFrame 编码），时间为 ISO 字符串。
+      默认【前复权】(fq='pre')；传统别名 ths_klines 默认不复权、周期枚举为 day/week/month，按需选择。
       对应 thsdk get_price(security, start_date, end_date, frequency, fields, fq, count)。
       【参数】
       - security (必填): 完整 THSCODE，如 USHA600519
@@ -128,13 +139,14 @@ tools:
 
   - name: ths_klines
     description: |-
-      【K线-传统参数名】与 ths_get_price 等价的传统写法。
+      【K线-传统参数名】ths_get_price 的传统别名（底层同为取 K 线）。
+      ⚠ 默认复权与 get_price 不同：本工具默认【不复权】(adjust='')，get_price 默认【前复权】(fq='pre')；周期枚举也不同（本工具 day/week/month，get_price daily/weekly/monthly）。
       对应 thsdk klines(ths_code, start_time, end_time, adjust, interval, count)；网关对外参数名用 security。
       【参数】
       - security (必填): 完整 THSCODE，如 USHA600519
       - interval (可选): 周期，默认 day；可选 1m/5m/15m/30m/60m/120m/day/week/month
       - count (可选): 条数，默认 20；与 start_time/end_time 二选一
-      - adjust (可选): 复权，省略或空串=不复权(库默认 '')；pre/post 取值以库支持为准
+      - adjust (可选): 复权，省略或空串=不复权(默认 '')；pre=前复权 / post=后复权
       - start_time, end_time (可选): 日期范围，必须成对
     routing: ths_klines
     upstream_tool_mapping:
@@ -148,6 +160,22 @@ tools:
       - {name: adjust, type: str, required: false, description: "复权；省略或空串=不复权(库默认 '')"}
       - {name: start_time, type: str, required: false, description: "起始日期 yyyy-MM-dd，与 end_time 成对"}
       - {name: end_time, type: str, required: false, description: "结束日期 yyyy-MM-dd，与 start_time 成对"}
+
+  - name: ths_daily_k_lines_with_prev_close
+    description: |-
+      【日线含前收盘】查询 A 股日 K 线及其前一日收盘价（prev_close），可据此计算跳空缺口与真实涨跌幅。
+      对应 list_security_daily_k_lines_with_previous_close(security, start, end, adjust)；网关按最近 N 根构造。
+      【参数】
+      - security (必填): 个股完整 THSCODE，如 USHA600519
+      - count (可选): 最近交易日数，默认 20
+    routing: ths_daily_k_lines_with_prev_close
+    upstream_tool_mapping:
+      thsdk: ths_daily_k_lines_with_prev_close
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: security, type: str, required: true, description: "个股完整 THSCODE，如 USHA600519"}
+      - {name: count, type: int, required: false, description: "最近交易日数，默认 20"}
 
   - name: ths_intraday_data
     description: |-
@@ -177,6 +205,22 @@ tools:
     dangerous: false
     params:
       - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519（内部参数名 ths_code），单个证券"}
+
+  - name: ths_index_call_auction_quotes
+    description: |-
+      【指数集合竞价】查询指数在集合竞价（开盘 opening / 收盘 closing）阶段的快照：价格、成交量等。
+      对应 list_index_call_auction_quotes(index, phase)。
+      【参数】
+      - index (必填): 指数完整代码，如 USHI1A0001（上证指数）、USZI399001（深证成指）
+      - phase (可选): opening=开盘竞价(默认) / closing=收盘竞价
+    routing: ths_index_call_auction_quotes
+    upstream_tool_mapping:
+      thsdk: ths_index_call_auction_quotes
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: index, type: str, required: true, description: "指数完整代码，如 USHI1A0001 / USZI399001"}
+      - {name: phase, type: str, required: false, enum: ["opening", "closing"], description: "opening=开盘竞价(默认) / closing=收盘竞价"}
 
   - name: ths_tick_level1
     description: |-
@@ -550,6 +594,42 @@ tools:
       - {name: sort_id, type: str, required: false, description: "原生排序字段代码，如 55=涨幅；不传用默认排序"}
       - {name: order, type: str, required: false, enum: ["D", "A"], description: "排序方向：D=降序(默认示例) / A=升序"}
 
+  - name: ths_rank_block_by_wencai_field
+    description: |-
+      【板块按字段排名】对板块内成分按任意问财字段（换手率 / 市盈率 / ROE / 净利润增速等）排名。
+      对应 rank_block_securities_by_wencai_field(block, field, …)；网关按字段名自动解析完整问财字段。
+      【参数】
+      - block (必填): 板块数字 ID，如 61322
+      - field_name (必填): 问财字段名，如 换手率 / 市盈率 / ROE
+      - count (可选): 返回条数，默认 20
+    routing: ths_rank_block_by_wencai_field
+    upstream_tool_mapping:
+      thsdk: ths_rank_block_by_wencai_field
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: block, type: int, required: true, description: "板块数字 ID，如 61322"}
+      - {name: field_name, type: str, required: true, description: "问财字段名，如 换手率 / 市盈率 / ROE"}
+      - {name: count, type: int, required: false, description: "返回条数，默认 20"}
+
+  - name: ths_index_constituent_contribution
+    description: |-
+      【成分涨跌贡献度】对指数成分按当日涨跌贡献度排名，回答"谁拉动/拖累了指数"。
+      对应 rank_constituents_by_performance_contribution(code, market, target, …)；与上方板块成分排名为姊妹方法。
+      【参数】
+      - code (必填): 指数代码，如 1A0001（上证指数；指数专用代码，非 6 位个股裸码）
+      - market (可选): 指数市场前缀，默认 USHI（上证）；深证指数用 USZI
+      - count (可选): 返回条数，默认 20
+    routing: ths_index_constituent_contribution
+    upstream_tool_mapping:
+      thsdk: ths_index_constituent_contribution
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: code, type: str, required: true, description: "指数代码，如 1A0001"}
+      - {name: market, type: str, required: false, description: "指数市场前缀，默认 USHI；深证用 USZI"}
+      - {name: count, type: int, required: false, description: "返回条数，默认 20"}
+
   # ========== 问财 WenCai ==========
 
   - name: ths_query_wencai
@@ -661,6 +741,36 @@ tools:
       - {name: timeline, type: str, required: false, enum: [historical, realtime], description: "historical=历史(默认) / realtime=实时"}
       - {name: start, type: str, required: true, description: "窗口起点 ISO 时间，如 2026-08-01T00:00:00+08:00；与 end 同时提供"}
       - {name: end, type: str, required: true, description: "窗口终点 ISO 时间"}
+
+  - name: ths_security_news
+    description: |-
+      【个股正式新闻】查询与某只个股相关的分类正式新闻（标题、摘要、来源、时间）。
+      区别于 ths_news 的 7x24 全球快讯（flash）；本工具聚焦个股相关报道。
+      对应 list_news_items(category, security, traversal, …)。
+      【参数】
+      - security (必填): 个股完整 THSCODE，如 USHA600519
+      - mode (可选): since=增量(默认) / page=分页
+    routing: ths_security_news
+    upstream_tool_mapping:
+      thsdk: ths_security_news
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: security, type: str, required: true, description: "个股完整 THSCODE，如 USHA600519"}
+      - {name: mode, type: str, required: false, enum: ["since", "page"], description: "since=增量(默认) / page=分页"}
+
+  - name: ths_security_research_reports
+    description: |-
+      【个股券商研报】查询某只个股的券商研究报告：标题、机构、研究员、评级、EPS 预测、摘要与原文链接。
+      对应 list_security_research_reports(security, traversal)；网关按分页模式请求。
+      【参数】security (必填): 个股完整 THSCODE，如 USHA600519
+    routing: ths_security_research_reports
+    upstream_tool_mapping:
+      thsdk: ths_security_research_reports
+    data_source_type: online
+    dangerous: false
+    params:
+      - {name: security, type: str, required: true, description: "个股完整 THSCODE，如 USHA600519"}
 
   # ========== 实时统计 Realtime ==========
 
@@ -821,6 +931,7 @@ tools:
   - name: ths_search_securities
     description: |-
       【证券检索】按关键词检索证券，返回候选列表。对应 search_securities(*, pattern, market=None)。
+      别名 ths_search_symbols（同一原生方法，入参名 pattern），二者择一即可。
       【参数】
       - keyword (必填): 搜索关键词（内部参数名 pattern）
       - market (可选): 市场前缀，如 USHA
@@ -836,6 +947,7 @@ tools:
   - name: ths_resolve_securities
     description: |-
       【证券解析】把代码解析为标准证券身份。对应 resolve_securities(*, codes)，原生 codes 只收裸数字码。
+      别名 ths_complete_ths_code（同一原生方法）；本工具额外做市场一致性校验（推荐），需保留原始输入形式时用 complete 版本。
       【参数】codes (必填): 代码数组，元素支持 600519 / sh600519 / 600519.SH / USHA600519（网关统一剥成裸码后下发，自动去重）；无法识别的元素直接报参数错误，不静默丢弃。
       指数代码（如 sh000001 上证指数）裸码会与深市股票冲突，市场标记与代码段不一致时直接报参数错误；不支持北交所代码。
     routing: ths_resolve_securities
