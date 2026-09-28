@@ -17,6 +17,7 @@ from ..core.blocking_pool import get_mootdx2_executor
 from ..core.config_db import resolve_project_path
 from ..models.mootdx2_errors import MooTDXErrorType, error_to_result
 from .index_registry import INDEX_KIND, STOCK_KIND, parse_symbol, to_reader_symbol
+from ._l1_slot import _L1Slot
 
 
 def _bare_000_ambiguity_warn(code: str) -> str:
@@ -454,66 +455,70 @@ class MooTDX2Client:
         # 2026-09-16: 缓存策略改为当日有效（到次日 9:00 过期）
         # 方案：用日期作为缓存 key 的一部分，同一天内命中，次日自动 miss
         # 这是为了避免缓存隔日陈旧行情数据（如停牌/退市/复权价）
-        try:
-            from cachetools import TTLCache
-            # 次日 9:00 过期 = 计算到次日 9:00 的秒数
-            now = datetime.datetime.now()
-            tomorrow_9am = now.replace(hour=9, minute=0, second=0, microsecond=0)
-            if now.hour >= 9:
-                tomorrow_9am += datetime.timedelta(days=1)
-            ttl_seconds = (tomorrow_9am - now).total_seconds()
-            self._daily_l1 = TTLCache(maxsize=2048, ttl=ttl_seconds)
-            self._daily_l1_hits = 0
-            self._daily_l1_misses = 0
-            self._DAILY_L1_ENABLED = True
-            logger.info(f"get_daily L1 cache initialized: ttl={ttl_seconds}s (expires at {tomorrow_9am.strftime('%Y-%m-%d %H:%M')})")
+        # 2026-09-28 Round-3 Batch 2: 抽 _L1Slot 抽象, 统一 8 个单 symbol 工具缓存
+        # 并改造 daily L1 为 2 层 (key 不含 start/end, 命中后切窗)
+        # 次日 9:00 过期 = 计算到次日 9:00 的秒数
+        now = datetime.datetime.now()
+        tomorrow_9am = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now.hour >= 9:
+            tomorrow_9am += datetime.timedelta(days=1)
+        ttl_seconds = (tomorrow_9am - now).total_seconds()
+        self._DAILY_L1_TTL = ttl_seconds
+        self._l1_daily = _L1Slot("daily", maxsize=2048, ttl=ttl_seconds)
+        self._DAILY_L1_ENABLED = self._l1_daily.enabled
+        if self._DAILY_L1_ENABLED:
+            logger.info(
+                f"get_daily L1 cache initialized: ttl={ttl_seconds}s "
+                f"(expires at {tomorrow_9am.strftime('%Y-%m-%d %H:%M')})"
+            )
 
-            # 2026-09-16: Reader 并发控制 - 限制同时执行的 Reader 数量
-            # 防止过多并发 Reader 导致 TDX 库性能下降或超时
-            # 容量优先级: settings.reader_limit (config_db / yaml 直传) >
-            #             env UNIHIVE_MOOTDX2_READER_LIMIT > 默认 4
-            # getattr 兜底: 历史 mock 用 SimpleNamespace 装配 settings, 没有
-            # reader_limit 字段; 真生产 config 走 MooTDX2Settings 有 reader_limit。
-            _reader_limit = 4
-            cfg_reader_limit = getattr(config.settings, "reader_limit", None) if config.settings is not None else None
-            if cfg_reader_limit is not None and cfg_reader_limit > 0:
-                _reader_limit = int(cfg_reader_limit)
-            else:
-                _env = os.environ.get("UNIHIVE_MOOTDX2_READER_LIMIT")
-                if _env:
-                    try:
-                        _reader_limit = max(1, int(_env))
-                    except (TypeError, ValueError):
-                        pass  # 非法 env 值回落默认
-            self._READER_SEMAPHORE_LIMIT = _reader_limit
-            self._reader_semaphore = asyncio.Semaphore(self._READER_SEMAPHORE_LIMIT)
-            # 闸门累计/实时计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
-            # waiters_now 由 _reader_gate 自持, 不读 CPython Semaphore 私有字段
-            self._gate_counters = {
-                "total": 0, "current": 0, "peak": 0,
-                "waiters_now": 0, "waiters_total": 0,
-            }
+        # 2026-09-16: Reader 并发控制 - 限制同时执行的 Reader 数量
+        # 防止过多并发 Reader 导致 TDX 库性能下降或超时
+        # 容量优先级: settings.reader_limit (config_db / yaml 直传) >
+        #             env UNIHIVE_MOOTDX2_READER_LIMIT > 默认 4
+        # getattr 兜底: 历史 mock 用 SimpleNamespace 装配 settings, 没有
+        # reader_limit 字段; 真生产 config 走 MooTDX2Settings 有 reader_limit。
+        _reader_limit = 4
+        cfg_reader_limit = getattr(config.settings, "reader_limit", None) if config.settings is not None else None
+        if cfg_reader_limit is not None and cfg_reader_limit > 0:
+            _reader_limit = int(cfg_reader_limit)
+        else:
+            _env = os.environ.get("UNIHIVE_MOOTDX2_READER_LIMIT")
+            if _env:
+                try:
+                    _reader_limit = max(1, int(_env))
+                except (TypeError, ValueError):
+                    pass  # 非法 env 值回落默认
+        self._READER_SEMAPHORE_LIMIT = _reader_limit
+        self._reader_semaphore = asyncio.Semaphore(self._READER_SEMAPHORE_LIMIT)
+        # 闸门累计/实时计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
+        # waiters_now 由 _reader_gate 自持, 不读 CPython Semaphore 私有字段
+        self._gate_counters = {
+            "total": 0, "current": 0, "peak": 0,
+            "waiters_now": 0, "waiters_total": 0,
+        }
 
-            # 2026-09-15 P0 (MOOTDX2 性能审视 H2-a):
-            # stock_top_board / stock_unusual 全市场扫描 N 个 50-batch roundtrip
-            # (~5-20s), 加 10s TTL 结果缓存, 命中后 0ms 返回。
-            # 行情 10s 内变化 < 0.5%, 用户感知不到差异。
-            self._TOP_BOARD_L1_TTL = 10.0
-            self._top_board_l1: TTLCache = TTLCache(maxsize=128, ttl=self._TOP_BOARD_L1_TTL)
-            self._top_board_l1_hits = 0
-            self._top_board_l1_misses = 0
+        # 2026-09-15 P0 (MOOTDX2 性能审视 H2-a):
+        # stock_top_board / stock_unusual 全市场扫描 N 个 50-batch roundtrip
+        # (~5-20s), 加 10s TTL 结果缓存, 命中后 0ms 返回。
+        # 行情 10s 内变化 < 0.5%, 用户感知不到差异。
+        # 2026-09-28 Round-3 Batch 2 H4-silent: 改用 _L1Slot, cache 只存 records,
+        # ToolResult 每次重包, 杜绝引用共享导致的下游修改污染。
+        self._TOP_BOARD_L1_TTL = 10.0
+        self._l1_top_board = _L1Slot("top_board", maxsize=128, ttl=self._TOP_BOARD_L1_TTL)
+        self._UNUSUAL_L1_TTL = 10.0
+        self._l1_unusual = _L1Slot("unusual", maxsize=128, ttl=self._UNUSUAL_L1_TTL)
 
-            self._UNUSUAL_L1_TTL = 10.0
-            self._unusual_l1: TTLCache = TTLCache(maxsize=128, ttl=self._UNUSUAL_L1_TTL)
-            self._unusual_l1_hits = 0
-            self._unusual_l1_misses = 0
-        except ImportError:
-            self._DAILY_L1_ENABLED = False
-            self._gate_counters = {
-                "total": 0, "current": 0, "peak": 0,
-                "waiters_now": 0, "waiters_total": 0,
-            }
-            logger.warning("cachetools not installed, get_daily L1 cache disabled")
+        # 2026-09-28 Round-3 Batch 2 H1-perf: 8 个单 symbol 离线工具 L1
+        # 排除 get_daily_batch_local 等批量入口 (见 feedback_no_l1_on_batch_interfaces)
+        self._l1_minute = _L1Slot("minute", maxsize=256, ttl=ttl_seconds)
+        self._l1_fzline = _L1Slot("fzline", maxsize=128, ttl=ttl_seconds)
+        self._l1_index_kline = _L1Slot("index_kline", maxsize=256, ttl=ttl_seconds)
+        self._l1_index_minute = _L1Slot("index_minute", maxsize=128, ttl=ttl_seconds)
+        self._l1_index_fzline = _L1Slot("index_fzline", maxsize=128, ttl=ttl_seconds)
+        self._l1_search = _L1Slot("search", maxsize=128, ttl=600)
+        self._l1_indicator_atr = _L1Slot("indicator_atr", maxsize=64, ttl=600)
+        self._l1_block_scan = _L1Slot("block_scan", maxsize=8, ttl=600)
 
         # 线程池入口累计计数 (突发短于轮询间隔, 瞬时值抓不到, 靠累计/峰值留存)
         self._pool_counters = {"total": 0, "current": 0, "peak": 0}
@@ -908,25 +913,12 @@ class MooTDX2Client:
         return {"host": current[0], "port": int(current[1])}
 
     def get_metrics(self) -> dict:
-        """获取客户端指标 — 含 L1 缓存运行时统计 (2026-09-15)."""
-        daily_l1_block: dict
-        if self._DAILY_L1_ENABLED:
-            hits = self._daily_l1_hits
-            misses = self._daily_l1_misses
-            total = hits + misses
-            daily_l1_block = {
-                "enabled": True,
-                "hits": hits,
-                "misses": misses,
-                "hit_rate": (hits / total) if total > 0 else None,
-                "size": len(self._daily_l1),
-                "maxsize": 2048,
-                # 动态计算到次日 9:00 的剩余秒数
-                "ttl_seconds": self._get_ttl_until_tomorrow_9am(),
-                "reader_semaphore_limit": self._READER_SEMAPHORE_LIMIT,
-            }
-        else:
-            daily_l1_block = {"enabled": False}
+        """获取客户端指标 — 含 L1 缓存运行时统计 (2026-09-15).
+
+        2026-09-28 Round-3 Batch 2: 重构为 ``_L1Slot`` 协议; ``top_board_l1``
+        / ``unusual_l1`` / 8 个新单 symbol 工具 L1 全部走 ``slot.metrics_block()``
+        统一口径。
+        """
         # 2026-09-15 P0 (H2-a): stock_top_board / stock_unusual L1 metrics
         # 阻塞线程池 + Reader 闸门: 实时快照 + 累计/峰值计数
         # (历史K线突发 <1s, 10s 轮询抓不到瞬时值, 靠累计/峰值留存事实)。
@@ -958,32 +950,59 @@ class MooTDX2Client:
             "current_server": self._current_server(),
             "thread_pool": pool_snapshot,
             "reader_gate": reader_gate,
-            "daily_l1": daily_l1_block,
+            "daily_l1": self._l1_metrics_block(
+                self._l1_daily, ttl_override=self._get_ttl_until_tomorrow_9am(),
+                reader_semaphore_limit=self._READER_SEMAPHORE_LIMIT,
+            ),
             "top_board_l1": self._l1_metrics_block(
-                self._top_board_l1, self._top_board_l1_hits,
-                self._top_board_l1_misses, self._TOP_BOARD_L1_TTL,
+                self._l1_top_board, ttl_override=self._TOP_BOARD_L1_TTL,
             ),
             "unusual_l1": self._l1_metrics_block(
-                self._unusual_l1, self._unusual_l1_hits,
-                self._unusual_l1_misses, self._UNUSUAL_L1_TTL,
+                self._l1_unusual, ttl_override=self._UNUSUAL_L1_TTL,
             ),
+            # Round-3 Batch 2 H1-perf: 8 个单 symbol 工具 L1 metrics
+            "minute_l1": self._l1_metrics_block(self._l1_minute),
+            "fzline_l1": self._l1_metrics_block(self._l1_fzline),
+            "index_kline_l1": self._l1_metrics_block(self._l1_index_kline),
+            "index_minute_l1": self._l1_metrics_block(self._l1_index_minute),
+            "index_fzline_l1": self._l1_metrics_block(self._l1_index_fzline),
+            "search_l1": self._l1_metrics_block(self._l1_search),
+            "indicator_atr_l1": self._l1_metrics_block(self._l1_indicator_atr),
+            "block_scan_l1": self._l1_metrics_block(self._l1_block_scan),
             "pool_stats": self.config.pool.get_stats() if self.config.pool else {},
         }
 
-    def _l1_metrics_block(self, cache, hits, misses, ttl):
-        """生成 L1 metrics 子块 — 3 个 L1 cache 共享同一结构。"""
-        if not self._DAILY_L1_ENABLED:
-            return {"enabled": False}
-        total = hits + misses
-        return {
+    def _l1_metrics_block(
+        self, slot: _L1Slot, ttl_override: float | None = None,
+        reader_semaphore_limit: int | None = None,
+    ) -> dict:
+        """生成 L1 metrics 子块 — 全部 L1Slot 共享同一结构 (Round-3 Batch 2).
+
+        Args:
+            slot: ``_L1Slot`` 实例
+            ttl_override: 强制覆盖 slot.ttl (例如 daily L1 用动态计算到次日 9:00)
+            reader_semaphore_limit: 仅 daily L1 暴露闸门容量
+        """
+        if not slot.enabled:
+            return {"enabled": False, "slot": slot.name}
+        total = slot.hits + slot.misses
+        ttl_value = ttl_override if ttl_override is not None else (
+            slot._cache.ttl if slot._cache is not None else None
+        )
+        maxsize = slot._cache.maxsize if slot._cache is not None else None
+        block: dict = {
             "enabled": True,
-            "hits": hits,
-            "misses": misses,
-            "hit_rate": (hits / total) if total > 0 else None,
-            "size": len(cache),
-            "maxsize": cache.maxsize,
-            "ttl_seconds": ttl,
+            "slot": slot.name,
+            "hits": slot.hits,
+            "misses": slot.misses,
+            "hit_rate": (slot.hits / total) if total > 0 else None,
+            "size": len(slot),
+            "maxsize": maxsize,
+            "ttl_seconds": ttl_value,
         }
+        if reader_semaphore_limit is not None:
+            block["reader_semaphore_limit"] = reader_semaphore_limit
+        return block
 
     def reset_l1_caches(self) -> dict:
         """手动清空全部 L1 内存缓存 (控制台 /l1-cache 管理端点调用)。
@@ -992,11 +1011,26 @@ class MooTDX2Client:
         """
         if not self._DAILY_L1_ENABLED:
             return {"enabled": False, "cleared": []}
-        self._daily_l1.clear()
-        self._top_board_l1.clear()
-        self._unusual_l1.clear()
-        logger.info("All L1 caches manually reset via console")
-        return {"enabled": True, "cleared": ["daily", "top_board", "unusual"]}
+        cleared = []
+        for slot in (
+            self._l1_daily,
+            self._l1_top_board,
+            self._l1_unusual,
+            # 2026-09-28 Round-3 Batch 2 H1-perf: 8 个单 symbol 工具 L1
+            self._l1_minute,
+            self._l1_fzline,
+            self._l1_index_kline,
+            self._l1_index_minute,
+            self._l1_index_fzline,
+            self._l1_search,
+            self._l1_indicator_atr,
+            self._l1_block_scan,
+        ):
+            if slot.enabled:
+                slot.clear()
+                cleared.append(slot.name)
+        logger.info(f"All L1 caches manually reset via console: {cleared}")
+        return {"enabled": True, "cleared": cleared}
 
     async def get_health(self) -> ToolResult:
         """健康检查接口（轻量 ping）"""
@@ -1288,13 +1322,23 @@ class MooTDX2Client:
         # 循环复活 (与摘除/关闭 Quotes 分开, 无需持锁即可立即生效)。
         self._stopped = True
         # 2026-09-16: 清理 L1 缓存 (去掉了 single-flight)
-        if self._DAILY_L1_ENABLED and hasattr(self, '_daily_l1'):
-            self._daily_l1.clear()
-            # 2026-09-15 P0 (H2-a): stock_top_board / stock_unusual L1 清理
-            if hasattr(self, '_top_board_l1'):
-                self._top_board_l1.clear()
-            if hasattr(self, '_unusual_l1'):
-                self._unusual_l1.clear()
+        if self._DAILY_L1_ENABLED and hasattr(self, '_l1_daily'):
+            for slot in (
+                self._l1_daily,
+                self._l1_top_board,
+                self._l1_unusual,
+                # 2026-09-28 Round-3 Batch 2 H1-perf: 8 个单 symbol 工具 L1
+                self._l1_minute,
+                self._l1_fzline,
+                self._l1_index_kline,
+                self._l1_index_minute,
+                self._l1_index_fzline,
+                self._l1_search,
+                self._l1_indicator_atr,
+                self._l1_block_scan,
+            ):
+                if hasattr(slot, "clear"):
+                    slot.clear()
 
         # M4 (round 8 audit): 关闭 Quotes 实例防止连接泄漏。
         # L1 (round 11): start() 超时后在途 factory 线程 (预算可达 90s) 可能
@@ -2252,16 +2296,21 @@ class MooTDX2Client:
     def _get_daily_sync(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
     ) -> tuple[list[dict], dict]:
-        """同步读取离线日线数据, 返回 (records, meta)。
+        """同步读取离线日线数据, 返回 **(filtered_records, meta)**。
 
         2026-09-19 LOW: meta 随返回值带出 (旧实现写 self._last_daily_meta
         实例属性, 并发调用互相覆盖, 且要求 wrapper 用 getattr 回读)。
 
+        2026-09-28 Round-3 Batch 2 H2-perf: 内部不再应用 start/end 过滤,
+        由调用方 (``_get_daily`` async + ``_get_daily_batch_local_sync``)
+        统一走 ``_filter_records_by_date``, 与 L1 命中路径共用同一份过滤实现,
+        避免缓存双份同 symbol 不同窗口的全量拷贝。
+
         Args:
             code: 6 位代码，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀
             adjust: 复权方式 none / qfq / hfq（默认不复权）
-            start_date: 起始日期 yyyy-MM-dd（可选）
-            end_date: 结束日期 yyyy-MM-dd（可选）
+            start_date: 起始日期 yyyy-MM-dd（可选, 已废弃保留兼容, 不再过滤）
+            end_date: 结束日期 yyyy-MM-dd（可选, 已废弃保留兼容, 不再过滤）
 
         代码解析规则见 ``index_registry``（2026-09-20 移除旧
         INDEX_MARKET_MAP 枚举表）：
@@ -2293,11 +2342,8 @@ class MooTDX2Client:
             # kind 信息随 meta 返回, 便于 _get_daily 给更明确的 no_data 文案
             return [], meta
 
-        if start_date:
-            df = df[df.index >= start_date] if hasattr(df.index, "__ge__") else df
-        if end_date:
-            df = df[df.index <= end_date] if hasattr(df.index, "__le__") else df
-
+        # H2-perf (Round-3 Batch 2): 返回 FULL records, 由调用方按需切窗,
+        # L1 缓存也存 FULL records 避免 (start, end) 维度爆炸 (3125 组合).
         records = df.reset_index().to_dict(orient="records")
         for r in records:
             if "index" in r:
@@ -2344,8 +2390,11 @@ class MooTDX2Client:
 
         for code in code_list:
             try:
-                # 复用现有 _get_daily_sync（自动命中 L1 缓存）
+                # 复用现有 _get_daily_sync (Round-3 Batch 2 H2-perf 改为返回全量,
+                # 由本调用方 _filter_records_by_date 切窗, 与 L1 命中路径共用).
                 records, meta = self._get_daily_sync(code, adjust, start_date, end_date)
+                # H2-perf: 批内按用户 start/end 切窗 (与单 symbol 入口一致)
+                records = self._filter_records_by_date(records, start_date, end_date)
 
                 # H5-func: 批内每只 limit 截断 (取最近 limit 条)
                 if limit and limit > 0 and len(records) > limit:
@@ -2409,14 +2458,17 @@ class MooTDX2Client:
         try:
             # 2026-09-15: get_daily_local L1 缓存 (仅 adjust=none)
             # 2026-09-16: 修复缓存 key 与实际 adjust 不一致问题
-            #   - 指数代码传 qfq/hfq 会被 _get_daily_sync 强制覆盖为 none
-            #   - 缓存 key 必须使用实际执行的 adjust 值，否则永远 miss
+            # 2026-09-28 Round-3 Batch 2 H2-perf: 改为 2 层缓存方案。
+            # 旧 key = (date, symbol, adjust, start_date, end_date) → 同 symbol
+            # 不同窗口各存 1 份全量拷贝, 5 字段组合可爆 3125 份/单 symbol。
+            # 新 key = (date, symbol, adjust) → 同 symbol 1 份全量, 命中后
+            # 用 ``_filter_records_by_date`` 在 records 上做 O(N) 切窗。
             from .index_registry import parse_symbol, INDEX_KIND, to_reader_symbol
             cache_hit = False
             cached_records = None
-            # 2026-09-19 LOW: cachetools ImportError (_DAILY_L1_ENABLED=False)
-            # 时旧码在 miss 分支引用未定义的 parsed_for_key 抛 UnboundLocalError。
             parsed_for_key = None
+            cache_key: tuple | None = None
+            actual_adjust = adjust
             if self._DAILY_L1_ENABLED:
                 try:
                     parsed_for_key = parse_symbol(code)
@@ -2424,22 +2476,17 @@ class MooTDX2Client:
                     parsed_for_key = None
                 if parsed_for_key is not None:
                     reader_symbol_key = to_reader_symbol(parsed_for_key)
-                    # 2026-09-16: 缓存 key 加入日期 + 日期范围，实现当日有效
-                    import datetime
-                    today = datetime.date.today().isoformat()  # "2026-09-16"
                     # 与 _get_daily_sync 保持一致：指数强制 none
-                    actual_adjust = adjust
                     if parsed_for_key.kind == INDEX_KIND and adjust in ("qfq", "hfq"):
                         actual_adjust = "none"
-                    # cache_key = (date, symbol, adjust, start_date, end_date)
-                    # 不同日期范围请求 → 不同缓存
-                    cache_key = (today, reader_symbol_key, actual_adjust, start_date or "", end_date or "")
-                    cached_records = self._daily_l1.get(cache_key)
+                    # 2026-09-28 Round-3 Batch 2 H2-perf: key 不含 start/end
+                    import datetime
+                    today = datetime.date.today().isoformat()
+                    cache_key = (today, reader_symbol_key, actual_adjust)
+                    cached_records = self._l1_daily.get(cache_key)
                     if cached_records is not None:
-                        self._daily_l1_hits += 1
                         cache_hit = True
-                    else:
-                        self._daily_l1_misses += 1
+                    # slot.get() 已自增 hits/misses
 
             if cache_hit and cached_records is not None:
                 # 在缓存 records 上做 start/end 切片 (dict 遍历, O(N))
@@ -2466,20 +2513,25 @@ class MooTDX2Client:
                         start_date,
                         end_date,
                     )
+                    # 2026-09-28 Round-3 Batch 2 H2-perf: sync 返回 FULL records,
+                    # 在此处统一切窗, 与 L1 命中路径同一份过滤实现.
+                    filtered = self._filter_records_by_date(records, start_date, end_date)
                     result = self._build_daily_tool_result(
                         code=code,
-                        data=records,
+                        data=filtered,
                         meta=meta,
                         parsed_for_key=parsed_for_key,
                     )
-                    # 写 L1 (仅 actual_adjust=none + 有数据 + 解析成功)
+                    # 写 L1 — 存 FULL records, key 不含 start/end (2 层方案).
+                    # 触发条件: 实际执行 adjust=none + 解析成功 + 有数据 (防空缓存).
                     if (
                         self._DAILY_L1_ENABLED
                         and actual_adjust == "none"
                         and records
                         and parsed_for_key is not None
+                        and cache_key is not None
                     ):
-                        self._daily_l1[(today, reader_symbol_key, actual_adjust, start_date or "", end_date or "")] = records
+                        self._l1_daily.put(cache_key, records)
                     return result
                 except ValueError as e:
                     self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
