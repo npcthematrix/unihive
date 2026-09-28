@@ -117,11 +117,29 @@ class ErrorClassifier:
                     details={"context": context},
                 )
 
-        # 参数错误
-        if isinstance(exc, (ValueError, KeyError)):
+        # 参数错误 (用户传错, 重试无意义)
+        if isinstance(exc, ValueError):
             return MooTDXError(
                 error_type=MooTDXErrorType.INVALID_PARAM,
                 message=f"参数错误: {str(exc)[:100]}",
+                recoverable=False,
+                details={"context": context},
+            )
+
+        # 2026-09-28 Round-3 D4 (用户裁决 A):
+        # KeyError / AttributeError / TypeError 是代码 bug 而非参数错,
+        # 旧码混入 INVALID_PARAM 会让运维误以为是用户传参错, 排查路径走偏。
+        # 显式归 INTERNAL_ERROR + 单独 logger.error 带 traceback, 默认
+        # 分支的 logger.error (line 131-133) 已写堆栈, 这里补一条语义化
+        # 的日志便于按 type 过滤。
+        if isinstance(exc, (KeyError, AttributeError, TypeError)):
+            logger.error(
+                f"[{context}] Code-bug class exception: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return MooTDXError(
+                error_type=MooTDXErrorType.INTERNAL_ERROR,
+                message=f"代码错误: {type(exc).__name__}",
                 recoverable=False,
                 details={"context": context},
             )

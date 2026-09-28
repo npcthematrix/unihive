@@ -120,7 +120,7 @@ def test_get_daily_batch_local_success(client):
 
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
         # Use sync method directly to avoid executor issues in tests
-        result, warnings = client._get_daily_batch_local_sync(
+        result, warnings, has_struct = client._get_daily_batch_local_sync(
             code_list=["sh600036", "sh600519"],
             adjust="none",
             start_date="",
@@ -148,7 +148,7 @@ def test_get_daily_batch_local_with_date_filter(client):
     mock_reader.daily.return_value = mock_df
 
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        result, warnings = client._get_daily_batch_local_sync(
+        result, warnings, has_struct = client._get_daily_batch_local_sync(
             code_list=["sh600036"],
             adjust="none",
             start_date="2026-01-01",
@@ -176,7 +176,7 @@ def test_get_daily_batch_local_with_adjust(client):
     mock_reader.daily.return_value = mock_df
 
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        result, warnings = client._get_daily_batch_local_sync(
+        result, warnings, has_struct = client._get_daily_batch_local_sync(
             code_list=["sh600036"],
             adjust="qfq",
             start_date="",
@@ -974,18 +974,19 @@ def test_get_daily_batch_local_two_codes(client):
     mock_reader.daily.side_effect = [mock_df_600036, mock_df_600519]
 
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        result = client._get_daily_batch_local_sync(
+        results, warnings, has_struct = client._get_daily_batch_local_sync(
             code_list=["sh600036", "sh600519"],
             adjust="none",
             start_date="",
             end_date=""
         )
 
-    results, warnings = result
     # key 保留输入的前缀格式
     assert "sh600036" in results
     assert "sh600519" in results
     assert isinstance(results["sh600036"], list)
     assert len(results["sh600036"]) == 1
+    assert has_struct is False  # 无结构性失败
+    assert warnings == []
     assert results["sh600036"][0]["close"] == 10.3
     assert results["sh600519"][0]["close"] == 1510.0

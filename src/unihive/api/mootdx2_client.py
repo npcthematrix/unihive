@@ -410,6 +410,15 @@ class MooTDX2Config:
     pool: "ConnectionPool | None" = None  # 连接池
 
 
+class _SearchDataUnavailable(Exception):
+    """search_stock 双源 (tdxdir + board.db) 都不可用, async 入口包装为 no_data。
+
+    2026-09-28 Round-3 H1-silent: 旧码两源都缺时静默 success=True data=[],
+    运维以为搜索功能坏了。抛该异常让 async 入口显式走 ``_no_data_result`` 路径,
+    业务侧可基于 ``error_detail.error_type=no_data`` 分流 (与单源无结果区分)。
+    """
+
+
 class MooTDX2Client:
     """MooTDX2 MCP 客户端"""
 
@@ -2301,28 +2310,46 @@ class MooTDX2Client:
         code_list: list[str],
         adjust: str,
         start_date: str,
-        end_date: str
-    ) -> tuple[dict[str, list[dict]], list[str]]:
+        end_date: str,
+        limit: int = 0,
+    ) -> tuple[dict[str, list[dict]], list[str], bool]:
         """同步批量获取离线日线数据，复用 L1 缓存。
+
+        2026-09-28 Round-3 修订:
+          - C1 (用户裁决): 异常细分 (OSError/struct.error → 文件错标签,
+            未知异常直接 raise 不再吞). 全失败时 has_structural_errors=True
+            让 async 入口判定 success=False.
+          - H4-func: 000xxx 消歧提示不论 records 空否都拼入 warnings.
+          - H5-func: 接收 limit 参数 (默认 0 = 不截断), 单 symbol 截最近 N 条.
 
         Args:
             code_list: 股票代码列表（已解析）
             adjust: 复权类型 none/qfq/hfq
             start_date: 起始日期 yyyy-MM-dd
             end_date: 结束日期 yyyy-MM-dd
+            limit: 每只股票最多返回根数 (0/负数 = 不截断, 默认 0)
 
         Returns:
-            (成功结果字典, 警告列表)
+            (成功结果字典, 警告列表, 是否有结构性失败)
+
+        Raises:
+            Exception: 未知异常直接上抛, 不再吞进 warnings (旧码 bug).
         """
+        import struct as _struct
         from .index_registry import parse_symbol, to_reader_symbol
 
         results: dict[str, list[dict]] = {}
         warnings: list[str] = []
+        has_structural_errors = False
 
         for code in code_list:
             try:
                 # 复用现有 _get_daily_sync（自动命中 L1 缓存）
                 records, meta = self._get_daily_sync(code, adjust, start_date, end_date)
+
+                # H5-func: 批内每只 limit 截断 (取最近 limit 条)
+                if limit and limit > 0 and len(records) > limit:
+                    records = records[-limit:]
 
                 # 标准化 key 格式：使用解析后的市场+裸码
                 parsed = parse_symbol(code)
@@ -2333,16 +2360,27 @@ class MooTDX2Client:
 
                 results[key] = records
 
-                # 无数据时记录警告
-                if not records and meta.get("warn"):
+                # H4-func: 000xxx 消歧透传 — 旧码仅 records 空时才拼入
+                # warnings, 导致批量场景下裸 000xxx 静默拿错市场数据。
+                # 现在不论 records 空否都带 warn。
+                if meta.get("warn"):
                     warnings.append(f"{code}: {meta['warn']}")
 
             except ValueError as e:
+                self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
                 warnings.append(f"{code}: invalid_symbol - {e}")
-            except Exception as e:
-                warnings.append(f"{code}: {str(e)}")
+            except (OSError, _struct.error) as e:
+                # C1: 文件级错误细分 (损坏 / IO 失败), 标 file_error 标签
+                self._record_error(MooTDXErrorType.INTERNAL_ERROR.value)
+                has_structural_errors = True
+                warnings.append(
+                    f"{code}: file_error - {type(e).__name__}: {e}"
+                )
+            except Exception:
+                # 未知异常直接上抛 — 旧码吞进 warnings 造成批结果对账失败
+                raise
 
-        return results, warnings
+        return results, warnings, has_structural_errors
 
     async def get_daily(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
@@ -2478,9 +2516,15 @@ class MooTDX2Client:
         codes: str,
         adjust: str = "none",
         start_date: str = "",
-        end_date: str = ""
+        end_date: str = "",
+        limit: int = 0,
     ) -> ToolResult:
         """批量获取股票日线数据（离线，TDX 本地 .day 文件）
+
+        2026-09-28 Round-3 修订:
+          - H5-func: 新增 ``limit`` 参数, 单 symbol 最多返回根数
+            (默认 0 = 不截断; ≤0 不抛错, 仅不截断)
+          - C1: 全部结构性失败时返 ``success=False`` 而非静默 ``success=True data={}``
 
         Args:
             codes: 逗号分隔的股票代码，如 "sh600036,sh600519"（最多20只）
@@ -2490,6 +2534,7 @@ class MooTDX2Client:
                 - 'hfq': 后复权
             start_date: 起始日期 yyyy-MM-dd（可选）
             end_date: 结束日期 yyyy-MM-dd（可选）
+            limit: 每只股票最多返回根数 (默认 0 = 不截断; >0 截最近 N 条)
 
         Returns:
             ToolResult with data as dict {symbol: [records...]}
@@ -2526,20 +2571,36 @@ class MooTDX2Client:
             )
 
         try:
-            results, warnings = await self._run_blocking(
+            results, warnings, has_structural_errors = await self._run_blocking(
                 self._get_daily_batch_local_sync,
                 code_parts,
                 adjust,
                 start_date,
-                end_date
+                end_date,
+                limit,
             )
 
-            # 构建响应
+            # C1: 全结构性失败 → success=False 而非 success=True data={}
+            if has_structural_errors and not results:
+                return ToolResult(
+                    success=False,
+                    error=f"批内全部失败: {'; '.join(warnings)}",
+                    error_detail={
+                        "error_type": MooTDXErrorType.INTERNAL_ERROR.value,
+                        "message": "batch all structurally failed",
+                        "warn": "; ".join(warnings),
+                        "recoverable": False,
+                    },
+                )
+
+            # 部分失败或全成功 → success=True, 失败进 warn
             result = ToolResult(success=True, data=results, source="mootdx2")
 
-            # 添加警告信息
             if warnings:
-                result.error_detail = {"warn": "; ".join(warnings)}
+                result.error_detail = {
+                    "warn": "; ".join(warnings),
+                    "recoverable": True,
+                }
 
             return result
 
@@ -2553,22 +2614,39 @@ class MooTDX2Client:
     ) -> list:
         """同步读取离线分钟线数据。
 
+        2026-09-28 Round-3 修订:
+          - C2: parse_symbol ValueError 自然透传 (旧码吞掉转 no_data 是 contract violation,
+            用户传 'abc' 应拿到 INVALID_PARAM 而非 NO_DATA).
+          - H2-func: suffix 白名单 (旧码 suffix='2'/'0'/'' 静默映射 5 分钟线).
+          - H3-func: 日期窗归一化 (YYYYMMDD 紧凑串 + 非法日历日 → ValueError).
+            与 get_index_minute_local 对齐, 通过 _normalize_date_window 校验.
+
         Args:
             code: 6 位股票代码
             suffix: '1' = 1 分钟线（minline/.lc1）/ '5' = 5 分钟线（fzline/.lc5）
-            start_date: 起始日期（可选）
-            end_date: 结束日期（可选）
-        """
-        tdxdir = self._get_tdxdir()
-        suffix_int = 1 if str(suffix) == "1" else 5
+            start_date: 起始日期（可选，YYYY-MM-DD 或 YYYYMMDD）
+            end_date: 结束日期（可选，同上）
 
-        # 统一走 parse_symbol（裸码交 reader 推断，显式前缀始终信任）；
-        # 旧实现裸 .replace("bj") 会把 bj920000 剥成 920000 再被上游
-        # get_stock_market 的 9→sh 兜底误路由
-        try:
-            sym = to_reader_symbol(parse_symbol(code))
-        except ValueError:
-            return []
+        Raises:
+            ValueError: suffix 非 '1'/'5'、code 解析失败、日期格式非法
+        """
+        # H2-func: suffix 白名单校验 (与 get_index_minute_local 一致)
+        suffix_str = str(suffix)
+        if suffix_str not in ("1", "5"):
+            raise ValueError(
+                f"suffix 仅支持 '1'/'5'，收到 {suffix!r}"
+            )
+        suffix_int = 1 if suffix_str == "1" else 5
+
+        # H3-func: 日期窗归一化, 非法格式 / 不可解析 → ValueError
+        start_date, end_date, date_error = _normalize_date_window(
+            start_date, end_date,
+        )
+        if date_error is not None:
+            raise ValueError(date_error)
+
+        # C2: parse_symbol ValueError 自然透传
+        sym = to_reader_symbol(parse_symbol(code))
 
         reader = self._get_reader()
         df = reader.minute(symbol=sym, suffix=suffix_int)
@@ -2619,14 +2697,20 @@ class MooTDX2Client:
     def _get_fzline_sync(self, code: str) -> list:
         """同步读取离线 5 分钟K线数据。
 
+        2026-09-28 Round-3 C2 修订:
+          parse_symbol ValueError 自然透传 (旧码 try/except ValueError → []
+          把 'abc' 等非法代码伪装成 no_data, 误导用户去查本地数据目录)。
+          外层 ``get_fzline`` 的 ``except Exception`` 经 ``_error_result``
+          正确归类为 INVALID_PARAM。
+
         Args:
             code: 6 位股票代码
+
+        Raises:
+            ValueError: code 解析失败
         """
         reader = self._get_reader()
-        try:
-            sym = to_reader_symbol(parse_symbol(code))
-        except ValueError:
-            return []
+        sym = to_reader_symbol(parse_symbol(code))
         df = reader.fzline(symbol=sym)
         if df is None or (hasattr(df, "empty") and df.empty):
             return []
@@ -2814,6 +2898,12 @@ class MooTDX2Client:
                     "message": DATA_TOO_LARGE_MSG.format(limit=MAX_LIMIT_KLINE),
                     "recoverable": False,
                 },
+            )
+        # M-silent4 (Round-3 2026-09-28): limit 必须正整数, limit=0 旧逻辑
+        # 静默走"不截断"返回全集, 与用户期望 0 条矛盾; 与 _validate_minute_limit 对齐
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            return self._invalid_param_result(
+                f"limit 需为正整数，收到 {limit!r}"
             )
 
         self._metrics["total_requests"] += 1
@@ -3155,11 +3245,27 @@ class MooTDX2Client:
         V7.73-64 注意事项：mootdx2 `reader.block()` 接口在新版通达信已废弃
         （官方 dat 文件迁到 infoharbor_block.dat / spblock.dat，mootdx2 未适配)。
         当 block 为空时，fallback 到 SQLite (board.db) 搜索。
+
+        2026-09-28 Round-3 H1-silent 修订:
+          - 双源 (tdxdir + board.db) 都不可用 → 抛 ``_SearchDataUnavailable``
+            让 async 入口显式包装为 no_data (旧码静默 success=True data=[])。
+          - ``reader.block()`` 失败 ``logger.debug`` → ``logger.warning``
+            (运维可见, 不依赖默认 INFO 级别以下被吞)。
         """
+        # H1-silent 前置守卫: 双源不可用显式抛错, 不再静默
+        has_tdx = bool(self._get_tdxdir())
+        db_path = resolve_project_path(None, "data/board.db")
+        has_db = db_path.exists()
+        if not has_tdx and not has_db:
+            raise _SearchDataUnavailable(
+                f"search_stock: tdxdir 与 board.db 均不可用"
+                f" (tdxdir={has_tdx}, board.db={db_path})"
+            )
+
         # 优先尝试本地 block 文件
         try:
             reader = self._get_reader()
-            if self._get_tdxdir():
+            if has_tdx:
                 df_block = reader.block()
                 if df_block is not None and len(df_block) > 0:
                     kw = keyword.lower()
@@ -3190,7 +3296,8 @@ class MooTDX2Client:
                         })
                     return result
         except Exception as e:
-            logger.debug(f"search_stock reader.block() failed: {e}")
+            # H1-silent: debug → warning, 运维不再依赖 INFO 级别以下被吞
+            logger.warning(f"search_stock reader.block() failed: {e}")
 
         # Fallback: 从 SQLite (board.db) 搜索
         return self._search_stock_from_sqlite(keyword)
@@ -3236,13 +3343,32 @@ class MooTDX2Client:
     async def search_stock(self, keyword: str) -> ToolResult:
         """搜索股票（名称/代码模糊匹配; board.db 无拼音列, 不支持拼音）
 
+        2026-09-28 Round-3 H1-silent: 双源不可用 → no_data 状态 (业务), 与
+        单源无结果 (data=[]) 区分。
+
         Args:
             keyword: 搜索关键词（股票名称或代码）
         """
         self._metrics["total_requests"] += 1
         try:
             data = await self._run_blocking(self._search_stock_sync, keyword)
-            return ToolResult(success=True, data=data, source="mootdx2")
+            if data:
+                return ToolResult(success=True, data=data, source="mootdx2")
+            # 单源无结果 (keyword 不匹配), 与双源不可用区分
+            return ToolResult(
+                success=True,
+                data=None,
+                source="mootdx2",
+                error=f"未找到匹配 {keyword!r}",
+                error_detail={
+                    "error_type": MooTDXErrorType.NO_DATA.value,
+                    "message": f"未找到匹配 {keyword!r}",
+                    "recoverable": True,
+                },
+            )
+        except _SearchDataUnavailable as e:
+            # 双源不可用显式化 (运维可基于 error_type=no_data 分流)
+            return self._no_data_result(str(e))
         except Exception as e:
             logger.error(f"search_stock failed: {e}")
             return self._error_result(e, f"search_stock({keyword})")
