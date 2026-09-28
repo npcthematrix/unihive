@@ -899,15 +899,18 @@ tools:
 
   - name: ths_list_security_daily_capital_flows
     description: |-
-      【每日资金流向】查询证券每日资金流向。对应 list_security_daily_capital_flows(*, securities)；网关把单个 security 包成 securities 数组。
-      【参数】security (必填): 完整 THSCODE，如 USHA600519
+      【每日资金流向】查询 A 股每日资金流向（超大/大/中/小单 × 主动/被动买卖额）。
+      对应 list_security_daily_capital_flows(*, securities)；网关把单个 security 包成 securities 数组。
+      ⚠ 仅支持个股（USHA/USZA 的 A 股）；ETF/基金（USHJ/USZJ）、指数、债券不支持
+      （同花顺该接口按个股资金分单口径，基金无此数据，传入会明确报错）。
+      【参数】security (必填): 个股完整 THSCODE，如 USHA600519
     routing: ths_list_security_daily_capital_flows
     upstream_tool_mapping:
       thsdk: ths_list_security_daily_capital_flows
     data_source_type: online
     dangerous: false
     params:
-      - {name: security, type: str, required: true, description: "完整 THSCODE，如 USHA600519（内部包成 securities 数组）"}
+      - {name: security, type: str, required: true, description: "个股完整 THSCODE，如 USHA600519；仅限 USHA/USZA 个股，不支持 USHJ/USZJ 基金/ETF"}
 
   - name: ths_get_market_security_names
     description: |-

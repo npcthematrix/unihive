@@ -142,6 +142,45 @@ def is_full_thscode(code: str) -> bool:
     return bool(_THSCODE_RE.match(str(code).strip()))
 
 
+# 基金市场前缀（get_market_metadata 官方子类型: 上证基金 sub=20 / 深证基金 sub=36）。
+# 同花顺每日资金流向接口按 A 股资金分单口径，基金无此数据，需提前识别并明确拒绝。
+_FUND_MARKET_PREFIXES = frozenset({"USHJ", "USZJ"})
+# 裸码 ETF/基金段（无市场前缀时按代码段推断; 与 mootdx2 ETF 前缀对齐）：
+# 沪 51/56/58（含 ETF/基金），深 15（ETF）、16（LOF/分级）、18。
+_FUND_BARE_PREFIXES_SH = ("51", "56", "58")
+_FUND_BARE_PREFIXES_SZ = ("15", "16", "18")
+
+
+def is_fund_security(value: Any) -> bool:
+    """判定一个 security 入参是否为基金/ETF（每日资金流向接口不支持的品种）。
+
+    支持形态：完整 THSCODE（USHJ510300）、sh/sz 前缀（sh510300）、裸码（510300）。
+    非基金或无法判定 → False（交由下游处理，不误拦）。
+    """
+    text = str(value).strip()
+    if not text:
+        return False
+    upper = text.upper()
+
+    # 完整 THSCODE: 前 4 位市场前缀
+    if _THSCODE_RE.match(upper) and upper[:4] in _FUND_MARKET_PREFIXES:
+        return True
+
+    # sh/sz 文字前缀: 剥离后看裸码段（沪 51/56/58 为基金；深 15/16/18 为基金）
+    m = re.match(r"^(SH|SZ)([0-9]{4,12})$", upper)
+    if m:
+        side, bare = m.group(1), m.group(2)
+        prefixes = _FUND_BARE_PREFIXES_SH if side == "SH" else _FUND_BARE_PREFIXES_SZ
+        return bare[:2] in prefixes
+
+    # 纯裸码: 沪市基金段（51/56/58）；深市基金段（15/16/18）。
+    if re.match(r"^[0-9]{4,12}$", text):
+        bare2 = text[:2]
+        return bare2 in _FUND_BARE_PREFIXES_SH or bare2 in _FUND_BARE_PREFIXES_SZ
+
+    return False
+
+
 # resolve_securities 的 codes 只收裸数字码（官方示例 ["300033","600519"]）；
 # sh/sz/bj 前缀、.SH/.SZ/.BJ 后缀、完整 THSCODE 均被服务端静默丢弃返 0 行。
 _BARE_DIGITS_RE = re.compile(r"^\d{4,12}$")
@@ -1270,9 +1309,17 @@ class ThsdkClient:
         )
 
     async def _tool_ths_list_security_daily_capital_flows(self, p: dict) -> Any:
+        security = p["security"]
+        # 前置识别基金/ETF: 同花顺该接口仅支持 A 股资金分单口径, 基金无此数据。
+        # 提前给明确错误, 而不是让原生在编码阶段返回含糊的 "failed to encode response"。
+        if is_fund_security(security):
+            raise ValueError(
+                "同花顺每日资金流向接口仅支持个股（USHA/USZA 的 A 股），"
+                "暂不支持 ETF/基金（USHJ/USZJ）、指数、债券"
+            )
         return await self._call(
             self._mod.list_security_daily_capital_flows,
-            securities=[p["security"]],
+            securities=[security],
         )
 
     async def _tool_ths_get_market_security_names(self, p: dict) -> Any:
