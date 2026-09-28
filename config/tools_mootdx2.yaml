@@ -1167,9 +1167,10 @@ tools:
       - start_date (可选): 起始日期 yyyy-MM-dd
       - end_date (可选): 结束日期 yyyy-MM-dd
 
-      【返回信封】{success, data: {symbol: [records...]}, source, error_detail.warn}
+      【返回信封】{success, data: {symbol: [records...]}, source, error_detail: {warn, recoverable}}
       成功: {"success": true, "data": {"sh600036": [...], "sh600519": [...]}, "source": "mootdx2"}
-      部分成功: {"success": true, "data": {"sh600036": [...]}, "error_detail": {"warn": "sh123456: invalid_symbol"}}
+      部分成功: {"success": true, "data": {"sh600036": [...]}, "error_detail": {"warn": "sh123456: invalid_symbol", "recoverable": true}}
+      全失败: {"success": false, "error": "批内全部失败: ...", "error_detail": {"error_type": "internal_error", "recoverable": false}}
     routing: get_daily_batch_local
     upstream_tool_mapping:
       mootdx2: get_daily_batch_local
@@ -1194,6 +1195,10 @@ tools:
         type: str
         required: false
         description: 结束日期 yyyy-MM-dd（可选）
+      - name: limit
+        type: int
+        required: false
+        description: 每只股票最多返回根数，默认 0=不截断
 
   - name: get_minute_local
     description: |-
