@@ -2838,9 +2838,11 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
 
         try:
-            data = await self._run_blocking(
-                self._get_minute_sync, code, suffix, start_date, end_date,
-            )
+            # 2026-09-28 闸门拉平: 凡碰共享 Reader 都过 _reader_gate (下同)
+            async with self._reader_gate():
+                data = await self._run_blocking(
+                    self._get_minute_sync, code, suffix, start_date, end_date,
+                )
             # 窗口切分已在 _get_minute_sync 内用归一化日期完成 (含 YYYYMMDD
             # 紧凑串); 此处不能再走 _filter_records_by_date —— 它只认 "date"
             # 字段, 分钟 records 是 "datetime", 二滤会把结果整体丢空。
@@ -2894,7 +2896,8 @@ class MooTDX2Client:
         self._metrics["total_requests"] += 1
 
         try:
-            data = await self._run_blocking(self._get_fzline_sync, code)
+            async with self._reader_gate():
+                data = await self._run_blocking(self._get_fzline_sync, code)
             if data:
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的 5 分钟K线数据")
@@ -3071,59 +3074,49 @@ class MooTDX2Client:
         if guard_error is not None:
             return guard_error
 
-        # 2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存
-        # Round-4 Batch 1 H1: cache_key 用 parse_symbol 归一化, 'sh000001' 与
-        # '000001' 同 symbol 共享缓存 (消除等效调用不同 key 的浪费)
-        # limit 不入键 — 同一指数同一频率, limit 越大裁得越少, cache 只存
-        # 全量 records, 命中后按 limit 现切窗 (与 get_daily_local 同策略)。
+        # 2026-09-28 拉通: 与 get_daily_local 同一缓存契约 —
+        # cache_key 不含 limit (同指数同频率共享), 缓存只存全量 records,
+        # 命中后按 limit 现切窗。Round-4 曾把 sync 核心的 limit 截断结果
+        # 直接入缓存: 首个请求 limit 小, 后续大 limit 请求命中后静默少给。
         cache_key = (to_reader_symbol(parsed), type)
 
-        # 1. L1 命中 (records 全量, 现按 limit 切窗)
-        # Round-4 Batch 1 CR2: list 复制防下游污染, 与 get_index_minute_local
-        # / get_index_fzline_local 一致 (此 wrapper 原实现直接返回缓存原引用)
+        # 1. L1 命中 → 全量 records; miss → 读盘后同样只缓存全量
         cached_records = self._l1_index_kline.get(cache_key)
-        if cached_records is not None:
-            sliced = (
-                list(cached_records[-limit:]) if limit and len(cached_records) > limit
-                else list(cached_records)
-            )
-            result = ToolResult(success=True, data=sliced, source="mootdx2")
-            if limit and len(cached_records) > limit:
-                result.error_detail = {
-                    "warn": f"结果已截断为最近 {len(sliced)} 条（缓存全量 {len(cached_records)} 条，请求 {limit} 条）",
-                    "returned": len(sliced),
-                    "requested": limit,
-                    "recoverable": True,
-                }
-            return result
-
-        # 2. miss
-        try:
-            records, meta = await self._run_blocking(
-                self._get_index_kline_local_sync, code, limit, type,
-            )
-            if records:
-                # Round-4 Batch 1 M1: 写入前 list 复制, 与 index_minute 防御一致
+        if cached_records is None:
+            try:
+                # Round-4 Batch 1 CR2/M1: list 复制防下游污染缓存
+                # limit=0 → sync 核心不做截断 (截断统一在本层切窗完成)
+                async with self._reader_gate():
+                    records, _meta = await self._run_blocking(
+                        self._get_index_kline_local_sync, code, 0, type,
+                    )
+                if not records:
+                    # 坑 #4 防御: 本地 .day 缺失给明确 no_data 文案
+                    return self._no_data_result(
+                        f"指数 {to_reader_symbol(parsed)} 本地无日线文件"
+                        f"（vipdoc/{parsed.market}/lday/{to_reader_symbol(parsed)}.day "
+                        f"不存在，可能该标的本地数据未下载）"
+                    )
                 self._l1_index_kline.put(cache_key, list(records))
-                result = ToolResult(success=True, data=records, source="mootdx2")
-                if meta.get("truncated"):
-                    # 坑 #5 防御: offset 截断时显式告警（warn 会透传到 HTTP 信封顶层）
-                    result.error_detail = {
-                        "warn": f"结果已截断为最近 {len(records)} 条（请求 {limit} 条）",
-                        "returned": len(records),
-                        "requested": limit,
-                        "recoverable": True,
-                    }
-                return result
-            # 坑 #4 防御: 本地 .day 缺失给明确 no_data 文案
-            return self._no_data_result(
-                f"指数 {to_reader_symbol(parsed)} 本地无日线文件"
-                f"（vipdoc/{parsed.market}/lday/{to_reader_symbol(parsed)}.day "
-                f"不存在，可能该标的本地数据未下载）"
-            )
-        except Exception as e:
-            logger.error(f"get_index_kline_local failed: {e}")
-            return self._error_result(e, f"get_index_kline_local({code})")
+                cached_records = records
+            except Exception as e:
+                logger.error(f"get_index_kline_local failed: {e}")
+                return self._error_result(e, f"get_index_kline_local({code})")
+
+        # 2. hit 与 miss 同路: 按 limit 切最近 N 条 + 显式 warn
+        if limit and len(cached_records) > limit:
+            sliced = list(cached_records[-limit:])
+            result = ToolResult(success=True, data=sliced, source="mootdx2")
+            result.error_detail = {
+                "warn": f"结果已截断为最近 {len(sliced)} 条（本地共 {len(cached_records)} 条，请求 {limit} 条）",
+                "returned": len(sliced),
+                "requested": limit,
+                "recoverable": True,
+            }
+            return result
+        return ToolResult(
+            success=True, data=list(cached_records), source="mootdx2",
+        )
 
     # ========== 离线指数分钟线（Reader.minute，本地 .lc1/.lc5） ==========
     # 与 get_index_kline_local 同一套入口约定（_parse_index_entry 守卫）：
@@ -3233,12 +3226,14 @@ class MooTDX2Client:
         if guard_error is not None:
             return guard_error
 
-        # 2026-09-28 性能审视: 分钟线暂不做 L1 缓存 (用户决策), 直读 Reader。
+        # 2026-09-28 性能审视: 分钟线暂不做 L1 缓存 (用户决策), 直读 Reader
+        # (经 _reader_gate 排队)。
         try:
-            records, had_rows = await self._run_blocking(
-                self._get_index_minute_sync,
-                code, suffix_int, start_date, end_date,
-            )
+            async with self._reader_gate():
+                records, had_rows = await self._run_blocking(
+                    self._get_index_minute_sync,
+                    code, suffix_int, start_date, end_date,
+                )
             if records:
                 scope_label = "所选日期范围内" if (start_date or end_date) else "文件内"
                 records, warn_text = self._tail_with_warn(
@@ -3302,7 +3297,8 @@ class MooTDX2Client:
 
         # 2026-09-28 性能审视: 分钟线暂不做 L1 缓存 (用户决策), 直读 Reader。
         try:
-            records = await self._run_blocking(self._get_index_fzline_sync, code)
+            async with self._reader_gate():
+                records = await self._run_blocking(self._get_index_fzline_sync, code)
             if records:
                 records, warn_text = self._tail_with_warn(records, limit)
                 result = ToolResult(success=True, data=records, source="mootdx2")
@@ -3551,7 +3547,8 @@ class MooTDX2Client:
             return ToolResult(success=True, data=cached_records, source="mootdx2")
 
         try:
-            data = await self._run_blocking(self._search_stock_sync, keyword)
+            async with self._reader_gate():
+                data = await self._run_blocking(self._search_stock_sync, keyword)
             if data:
                 # 仅缓存"找到结果"分支 (data 非空), 单源无结果与双源不可用
                 # 均不写 L1 — 否则下次同 keyword 会拿到错误的"找到"响应
@@ -3632,7 +3629,9 @@ class MooTDX2Client:
             )
         self._metrics["total_requests"] += 1
         try:
-            data = await self._run_blocking(self._get_stock_info_sync, code, market, kline_period, kline_count)
+            # _get_stock_info_sync 内部读离线 K线/分时, 同样过 Reader 闸门
+            async with self._reader_gate():
+                data = await self._run_blocking(self._get_stock_info_sync, code, market, kline_period, kline_count)
             if data.get("quote") is None and not data.get("kline") and not data.get("minute"):
                 return self._no_data_result(f"股票 {market}{code} 无数据")
             return ToolResult(success=True, data=data, source="mootdx2")

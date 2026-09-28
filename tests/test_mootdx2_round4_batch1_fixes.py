@@ -123,6 +123,35 @@ class TestIndexKlineL1HitCopy:
             # 切窗返回的也不是缓存原引用
             assert r2.data is not cached_obj
 
+    def test_small_limit_first_then_large_limit_gets_full_data(self, client: MooTDX2Client):
+        """先小 limit 后大 limit: 缓存存全量, 大 limit 不得静默少给.
+
+        2026-09-28 拉通修复: 旧实现把 sync 核心按 limit 截断后的结果直接
+        入缓存 (key 不含 limit), 首个请求 limit=10 时缓存只剩 10 条,
+        后续 limit=100 命中后静默返回 10 条且无 warn。
+        """
+        mock_df = pd.DataFrame(
+            {"close": list(range(100, 200))},
+            index=pd.date_range("2023-01-01", periods=100, freq="D"),
+        )
+        mock_reader = MagicMock()
+        mock_reader.daily.return_value = mock_df
+
+        with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+            r1 = asyncio.run(
+                client.get_index_kline_local(code="sh000001", type="day", limit=10)
+            )
+            assert r1.success and len(r1.data) == 10
+            assert "截断" in r1.error_detail["warn"]
+
+            r2 = asyncio.run(
+                client.get_index_kline_local(code="sh000001", type="day", limit=100)
+            )
+            assert r2.success
+            # 缓存存的是全量 100 条, 大 limit 请求拿到完整数据
+            assert len(r2.data) == 100
+            assert mock_reader.daily.call_count == 1  # 第二次走 L1, 不再读盘
+
 
 # ========== H1: get_index_kline_local cache_key 归一化 ==========
 
