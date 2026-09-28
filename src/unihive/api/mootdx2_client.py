@@ -2730,13 +2730,47 @@ class MooTDX2Client:
 
         数据源：{tdxdir}/vipdoc/sh/minline/sh600036.lc1
               或 {tdxdir}/vipdoc/sh/fzline/sh600036.lc5
+
+        2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存 (key=(suffix,code,start,end)),
+        单 symbol 接口走 records-only 缓存, 同一入参不再触发 Reader 二次调用。
         """
         self._metrics["total_requests"] += 1
+        # H2: cache_key 移除日期窗, 命中后用 _filter_records_by_date 过滤
+        cache_key = (str(suffix), code)
+
+        # 1. L1 命中
+        cached_records = self._l1_minute.get(cache_key)
+        if cached_records is not None:
+            # 日期窗过滤
+            filtered = self._filter_records_by_date(
+                cached_records, start_date, end_date
+            )
+            return ToolResult(success=True, data=filtered, source="mootdx2")
+
+        # 2. 旁路 (cachetools 缺失)
+        if not self._l1_minute.enabled:
+            try:
+                data = await self._run_blocking(
+                    self._get_minute_sync, code, suffix, start_date, end_date,
+                )
+                if data:
+                    return ToolResult(success=True, data=data, source="mootdx2")
+                return self._no_data_result(f"未找到 {code} 的{suffix}分钟数据")
+            except Exception as e:
+                logger.error(f"get_minute failed: {e}")
+                return self._error_result(e, f"get_minute({code})")
+
+        # 3. miss
         try:
-            data = await self._run_blocking(self._get_minute_sync, code, suffix, start_date, end_date
+            data = await self._run_blocking(
+                self._get_minute_sync, code, suffix, start_date, end_date,
             )
             if data:
-                return ToolResult(success=True, data=data, source="mootdx2")
+                # 写入缓存用全量 (与 daily L1 双层一致)
+                self._l1_minute.put(cache_key, list(data))
+                # 日期窗过滤
+                filtered = self._filter_records_by_date(data, start_date, end_date)
+                return ToolResult(success=True, data=filtered, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的{suffix}分钟数据")
         except Exception as e:
             logger.error(f"get_minute failed: {e}")
@@ -2783,11 +2817,34 @@ class MooTDX2Client:
             code: 股票代码（6 位数字）
 
         数据源：{tdxdir}/vipdoc/sh/fzline/sh600036.lc5
+
+        2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存 (key=(code,)),
+        单 symbol 接口走 records-only 缓存。
         """
         self._metrics["total_requests"] += 1
+        cache_key = (code,)
+
+        # 1. L1 命中
+        cached_records = self._l1_fzline.get(cache_key)
+        if cached_records is not None:
+            return ToolResult(success=True, data=cached_records, source="mootdx2")
+
+        # 2. 旁路 (cachetools 缺失)
+        if not self._l1_fzline.enabled:
+            try:
+                data = await self._run_blocking(self._get_fzline_sync, code)
+                if data:
+                    return ToolResult(success=True, data=data, source="mootdx2")
+                return self._no_data_result(f"未找到 {code} 的 5 分钟K线数据")
+            except Exception as e:
+                logger.error(f"get_fzline failed: {e}")
+                return self._error_result(e, f"get_fzline({code})")
+
+        # 3. miss
         try:
             data = await self._run_blocking(self._get_fzline_sync, code)
             if data:
+                self._l1_fzline.put(cache_key, data)
                 return ToolResult(success=True, data=data, source="mootdx2")
             return self._no_data_result(f"未找到 {code} 的 5 分钟K线数据")
         except Exception as e:
@@ -2967,11 +3024,40 @@ class MooTDX2Client:
         if guard_error is not None:
             return guard_error
 
+        # 2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存
+        # Round-4 Batch 1 H1: cache_key 用 parse_symbol 归一化, 'sh000001' 与
+        # '000001' 同 symbol 共享缓存 (消除等效调用不同 key 的浪费)
+        # limit 不入键 — 同一指数同一频率, limit 越大裁得越少, cache 只存
+        # 全量 records, 命中后按 limit 现切窗 (与 get_daily_local 同策略)。
+        cache_key = (to_reader_symbol(parsed), type)
+
+        # 1. L1 命中 (records 全量, 现按 limit 切窗)
+        # Round-4 Batch 1 CR2: list 复制防下游污染, 与 get_index_minute_local
+        # / get_index_fzline_local 一致 (此 wrapper 原实现直接返回缓存原引用)
+        cached_records = self._l1_index_kline.get(cache_key)
+        if cached_records is not None:
+            sliced = (
+                list(cached_records[-limit:]) if limit and len(cached_records) > limit
+                else list(cached_records)
+            )
+            result = ToolResult(success=True, data=sliced, source="mootdx2")
+            if limit and len(cached_records) > limit:
+                result.error_detail = {
+                    "warn": f"结果已截断为最近 {len(sliced)} 条（缓存全量 {len(cached_records)} 条，请求 {limit} 条）",
+                    "returned": len(sliced),
+                    "requested": limit,
+                    "recoverable": True,
+                }
+            return result
+
+        # 2. miss
         try:
             records, meta = await self._run_blocking(
                 self._get_index_kline_local_sync, code, limit, type,
             )
             if records:
+                # Round-4 Batch 1 M1: 写入前 list 复制, 与 index_minute 防御一致
+                self._l1_index_kline.put(cache_key, list(records))
                 result = ToolResult(success=True, data=records, source="mootdx2")
                 if meta.get("truncated"):
                     # 坑 #5 防御: offset 截断时显式告警（warn 会透传到 HTTP 信封顶层）
@@ -3100,12 +3186,41 @@ class MooTDX2Client:
         if guard_error is not None:
             return guard_error
 
+        # H2: cache_key 移除日期窗, 与 get_minute 双层方案一致
+        # 旧: (code, suffix, start, end) → 50股×5窗×2suffix = 500 组合
+        # 新: (str(suffix), code) → 同 symbol 多窗口共享 1 份缓存
+        cache_key = (str(suffix), code)
+
+        # 1. L1 命中: 先日期窗过滤, 再 limit 截断
+        cached_records = self._l1_index_minute.get(cache_key)
+        if cached_records is not None:
+            # 日期窗过滤
+            filtered = self._filter_records_by_date(
+                cached_records, start_date, end_date
+            )
+            scope_label = "所选日期范围内" if (start_date or end_date) else "文件内"
+            sliced, warn_text = self._tail_with_warn(
+                filtered, limit, scope_label=scope_label,
+            )
+            result = ToolResult(success=True, data=sliced, source="mootdx2")
+            if warn_text is not None:
+                result.error_detail = {
+                    "warn": warn_text,
+                    "returned": len(sliced),
+                    "requested": limit,
+                    "recoverable": True,
+                }
+            return result
+
+        # 2. miss
         try:
             records, had_rows = await self._run_blocking(
                 self._get_index_minute_sync,
                 code, suffix_int, start_date, end_date,
             )
             if records:
+                # 写入 cache 用未截断的全量 (与 get_daily_local 2 层一致)
+                self._l1_index_minute.put(cache_key, list(records))
                 # 带日期窗时 total 只是窗内条数，warn 口径必须与无窗区分
                 scope_label = "所选日期范围内" if (start_date or end_date) else "文件内"
                 records, warn_text = self._tail_with_warn(
@@ -3167,9 +3282,29 @@ class MooTDX2Client:
         if guard_error is not None:
             return guard_error
 
+        # 2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存 (key=(code,))
+        cache_key = (code,)
+
+        # 1. L1 命中: 现按 limit 截断
+        cached_records = self._l1_index_fzline.get(cache_key)
+        if cached_records is not None:
+            sliced, warn_text = self._tail_with_warn(list(cached_records), limit)
+            result = ToolResult(success=True, data=sliced, source="mootdx2")
+            if warn_text is not None:
+                result.error_detail = {
+                    "warn": warn_text,
+                    "returned": len(sliced),
+                    "requested": limit,
+                    "recoverable": True,
+                }
+            return result
+
+        # 2. miss
         try:
             records = await self._run_blocking(self._get_index_fzline_sync, code)
             if records:
+                # 写 cache 用未截断的全量 (与 get_daily_local 2 层一致)
+                self._l1_index_fzline.put(cache_key, list(records))
                 records, warn_text = self._tail_with_warn(records, limit)
                 result = ToolResult(success=True, data=records, source="mootdx2")
                 if warn_text is not None:
@@ -3397,14 +3532,31 @@ class MooTDX2Client:
 
         2026-09-28 Round-3 H1-silent: 双源不可用 → no_data 状态 (业务), 与
         单源无结果 (data=[]) 区分。
+        2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存 (key=(keyword.lower(),)),
+        keyword 归一化小写, 同义大小写共享缓存。仅缓存"找到结果"分支, 不可用
+        (双源失败) 与单源无结果不写 L1, 避免错误状态被锁在缓存里误导后续请求。
 
         Args:
             keyword: 搜索关键词（股票名称或代码）
         """
         self._metrics["total_requests"] += 1
+        # H5: 空白 keyword 入口校验, 返 no_data 不污染 L1
+        if not keyword or not keyword.strip():
+            return self._no_data_result("搜索关键字不能为空")
+        # keyword.lower() 为 L1 key, 原 keyword 用于 error 文案保持用户入参
+        cache_key = (keyword.lower(),)
+
+        # 1. L1 命中: 命中即成功, 现包 ToolResult (单源无结果分支不入 L1)
+        cached_records = self._l1_search.get(cache_key)
+        if cached_records is not None:
+            return ToolResult(success=True, data=cached_records, source="mootdx2")
+
         try:
             data = await self._run_blocking(self._search_stock_sync, keyword)
             if data:
+                # 仅缓存"找到结果"分支 (data 非空), 单源无结果与双源不可用
+                # 均不写 L1 — 否则下次同 keyword 会拿到错误的"找到"响应
+                self._l1_search.put(cache_key, data)
                 return ToolResult(success=True, data=data, source="mootdx2")
             # 单源无结果 (keyword 不匹配), 与双源不可用区分
             return ToolResult(
@@ -3533,16 +3685,35 @@ class MooTDX2Client:
             code: 股票代码
             type: K线类型 (day/week/month/minute1/5/15/30/60)
             limit: 返回条数，默认100，最大1000
+
+        2026-09-28 Round-3 Batch 2b H1-perf: L1 缓存 (key=(code, type, limit)),
+        单 symbol 接口走 records-only 缓存。仅缓存"成功计算"分支。
         """
         if not isinstance(limit, int) or not (1 <= limit <= MAX_LIMIT_KLINE):
             return self._invalid_param_result(
                 f"limit 需为 1-{MAX_LIMIT_KLINE} 的整数, 收到 {limit!r}"
             )
         self._metrics["total_requests"] += 1
+        # H3: cache_key 移除 limit, 避免 (code,type,limit) ∈ [1,1000] 基数爆炸
+        # 旧: (code,type,limit) → maxsize 64 失效 (800万组合)
+        # 新: (code,type), 命中后按 limit 切片 atr/dates 两列表
+        cache_key = (code, type)
+
+        # 1. L1 命中 (ATR dict 含 atr/dates 两个等长列表)
+        cached_data = self._l1_indicator_atr.get(cache_key)
+        if cached_data is not None:
+            # 按 limit 切片: 保持 dict 结构, 只截取两列表
+            sliced = {
+                "atr": cached_data.get("atr", [])[-limit:],
+                "dates": cached_data.get("dates", [])[-limit:],
+            }
+            return ToolResult(success=True, data=sliced, source="mootdx2")
+
         try:
             data = await self._run_blocking(self._indicator_atr_sync, code, type, limit)
             if not data:
                 return self._no_data_result(f"股票 {code} 无 K 线数据, 无法计算 ATR")
+            self._l1_indicator_atr.put(cache_key, data)
             return ToolResult(success=True, data=data, source="mootdx2")
         except Exception as e:
             logger.error(f"indicator_atr failed: {e}")
@@ -3764,14 +3935,27 @@ class MooTDX2Client:
 
     @staticmethod
     def _with_warn(result: ToolResult, warn: str | None) -> ToolResult:
-        """成功结果附带 warn (返回新对象, 不改动 L1 缓存里的 ToolResult)。"""
+        """成功结果附带 warn (返回新对象, 不改动 L1 缓存里的 ToolResult)。
+
+        2026-09-28 Round-3 Batch 2b H4-silent: data 列表复制防下游修改污染
+        L1 缓存里的同一引用, 同时确保每次响应是独立 ToolResult (避免跨请求
+        error_detail/warn 字段互串)。
+        """
         if not warn or not result.success:
             return result
         detail = dict(result.error_detail or {})
         detail["warn"] = warn
+        # data None/非 list 直传, list 才浅复制防 L1 命中响应与下游共用引用
+        # Round-4 Batch 1 CR1: data=None 时 list(None) 抛 TypeError 修复
+        if result.data is None:
+            safe_data = None
+        elif isinstance(result.data, list):
+            safe_data = list(result.data)
+        else:
+            safe_data = result.data  # dict/generator 等透传
         return ToolResult(
             success=True,
-            data=result.data,
+            data=safe_data,
             source=result.source,
             error=result.error,
             error_detail=detail,
@@ -3785,6 +3969,8 @@ class MooTDX2Client:
         行情 10s 内变化 < 0.5%, 用户感知不到差异。
         2026-09-19 LOW: bj 显式 no_data (旧实现静默空列表); 换手率/量比
         排序在 error_detail.warn 诚实说明降级。
+        2026-09-28 Round-3 Batch 2b H4-silent: 改用 _L1Slot, 只缓存 records,
+        ToolResult 每次现包, 杜绝跨请求引用共享与 stale error_detail。
         """
         self._metrics["total_requests"] += 1
         if market == "bj":
@@ -3793,7 +3979,18 @@ class MooTDX2Client:
                 "北交所(bj)无排行榜数据源 (stocks(market=2) 不支持), 榜单仅支持 all/sh/sz"
             )
         warn = self._top_board_sort_warn(sort_by)
-        if not self._DAILY_L1_ENABLED:
+        cache_key = (sort_by, direction, limit, market)
+
+        # 1. L1 命中: 直接返回缓存里的 records, 现包 ToolResult
+        cached_records = self._l1_top_board.get(cache_key)
+        if cached_records is not None:
+            return self._with_warn(
+                ToolResult(success=True, data=cached_records, source="mootdx2"),
+                warn,
+            )
+
+        # 2. 旁路 (cachetools 缺失 / 槽 disabled)
+        if not self._l1_top_board.enabled:
             try:
                 data = await self._run_blocking(
                     self._stock_top_board_sync, sort_by, direction, limit, market
@@ -3805,22 +4002,16 @@ class MooTDX2Client:
                 logger.error(f"stock_top_board failed: {e}")
                 return self._error_result(e, "stock_top_board")
 
-        cache_key = (sort_by, direction, limit, market)
-        cached = self._top_board_l1.get(cache_key)
-        if cached is not None:
-            self._top_board_l1_hits += 1
-            # warn 由入参决定, 每次重新附加 (缓存对象本身不写 warn)
-            return self._with_warn(cached, warn)
-
-        self._top_board_l1_misses += 1
+        # 3. miss + Reader 闸门 + 写 records (而非整 ToolResult)
         async with self._reader_gate():
             try:
                 data = await self._run_blocking(
                     self._stock_top_board_sync, sort_by, direction, limit, market
                 )
-                result = ToolResult(success=True, data=data, source="mootdx2")
-                self._top_board_l1[cache_key] = result
-                return self._with_warn(result, warn)
+                self._l1_top_board.put(cache_key, data or [])
+                return self._with_warn(
+                    ToolResult(success=True, data=data, source="mootdx2"), warn
+                )
             except Exception as e:
                 logger.error(f"stock_top_board failed: {e}")
                 return self._error_result(e, "stock_top_board")
@@ -3829,9 +4020,19 @@ class MooTDX2Client:
         """获取市场异动数据（主力监控精灵）
 
         2026-09-16: 移除 single-flight，改用 L1 缓存 + Reader 并发控制。
+        2026-09-28 Round-3 Batch 2b H4-silent: 改用 _L1Slot, 只缓存 records,
+        ToolResult 每次现包 (records-only)。
         """
         self._metrics["total_requests"] += 1
-        if not self._DAILY_L1_ENABLED:
+        cache_key = (event_type,)
+
+        # 1. L1 命中: 现包 ToolResult (无 warn, 但保持每次响应独立)
+        cached_records = self._l1_unusual.get(cache_key)
+        if cached_records is not None:
+            return ToolResult(success=True, data=cached_records, source="mootdx2")
+
+        # 2. 旁路 (cachetools 缺失 / 槽 disabled)
+        if not self._l1_unusual.enabled:
             try:
                 data = await self._run_blocking(self._stock_unusual_sync, event_type)
                 return ToolResult(success=True, data=data, source="mootdx2")
@@ -3839,19 +4040,12 @@ class MooTDX2Client:
                 logger.error(f"stock_unusual failed: {e}")
                 return self._error_result(e, "stock_unusual")
 
-        cache_key = (event_type,)
-        cached = self._unusual_l1.get(cache_key)
-        if cached is not None:
-            self._unusual_l1_hits += 1
-            return cached
-
-        self._unusual_l1_misses += 1
+        # 3. miss + Reader 闸门 + 写 records (而非整 ToolResult)
         async with self._reader_gate():
             try:
                 data = await self._run_blocking(self._stock_unusual_sync, event_type)
-                result = ToolResult(success=True, data=data, source="mootdx2")
-                self._unusual_l1[cache_key] = result
-                return result
+                self._l1_unusual.put(cache_key, data or [])
+                return ToolResult(success=True, data=data, source="mootdx2")
             except Exception as e:
                 logger.error(f"stock_unusual failed: {e}")
                 return self._error_result(e, "stock_unusual")
