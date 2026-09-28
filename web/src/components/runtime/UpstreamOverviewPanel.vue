@@ -223,8 +223,9 @@ function statusIcon(status: UpstreamStatusValue): string {
   switch (status) {
     case 'online': return '✓'
     case 'degraded': return '⚠'
-    case 'offline':
-    case 'unknown': return '✕'
+    case 'offline': return '✕'
+    // M2: unknown = 启动中未探测, 用中性 '?' (旧码与 offline 同 '✕' 红色, 误报故障)。
+    case 'unknown': return '?'
     case 'configured': return '●'
     case 'disabled': return '⊘'
     default: return '?'
@@ -360,15 +361,17 @@ function onSortChange(payload: { prop: string | null; order: 'ascending' | 'desc
 
 .icon-online { color: var(--el-color-success); }
 .icon-degraded { color: var(--el-color-warning); }
-.icon-offline,
-.icon-unknown { color: var(--el-color-danger); }
+.icon-offline { color: var(--el-color-danger); }
+/* M2: unknown 中性灰, 不与 offline 红色故障同色。 */
+.icon-unknown { color: var(--el-text-color-placeholder); }
 .icon-configured { color: var(--el-color-primary); }
 .icon-disabled { color: var(--el-text-color-secondary); }
 
 .b-online { color: var(--el-color-success); background: var(--el-color-success-light-9); }
 .b-degraded { color: var(--el-color-warning); background: var(--el-color-warning-light-9); }
-.b-offline,
-.b-unknown { color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
+.b-offline { color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
+/* M2: unknown 中性浅灰底 (启动中), 不再是红色 danger。 */
+.b-unknown { color: var(--el-text-color-secondary); background: var(--el-fill-color-light); }
 .b-configured { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .b-disabled { color: var(--el-text-color-secondary); background: var(--el-fill-color-light); }
 

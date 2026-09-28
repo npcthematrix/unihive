@@ -33,10 +33,8 @@
 
       <MiniStat label="状态">
         <template #value>
-          <span class="status-dot" :class="dailyL1?.enabled ? 'status-online' : 'status-disabled'" />
-          <span :class="dailyL1?.enabled ? 'on' : 'off'">
-            {{ dailyL1?.enabled ? '启用' : '停用' }}
-          </span>
+          <span class="status-dot" :class="statusDotClass" />
+          <span :class="statusValueClass">{{ statusText }}</span>
         </template>
       </MiniStat>
 
@@ -51,7 +49,7 @@
         hint="Reader 并发控制"
       />
       <MiniStat label="TTL" :value="ttlText" hint="到次日 9:00" />
-      <MiniStat label="总请求数" :value="metrics?.total_requests ?? 0" />
+      <MiniStat label="总请求数" :value="metrics?.total_requests ?? '—'" />
       <MiniStat label="扫描 L1 条目" :value="scanL1Size" hint="板块 + 异动" />
     </div>
 
@@ -130,6 +128,23 @@ const dailyL1 = computed<L1CacheStats | null>(
 )
 const hr = useHitRate(toRef(dailyL1))
 
+// M2: dailyL1 未加载 (null) = 「未知」, enabled===false 才是「停用」。
+const statusText = computed(() => {
+  const l1 = dailyL1.value
+  if (l1 == null) return '未知'
+  return l1.enabled ? '启用' : '停用'
+})
+const statusDotClass = computed(() => {
+  const l1 = dailyL1.value
+  if (l1 == null) return 'status-unknown'
+  return l1.enabled ? 'status-online' : 'status-disabled'
+})
+const statusValueClass = computed(() => {
+  const l1 = dailyL1.value
+  if (l1 == null) return 'unknown'
+  return l1.enabled ? 'on' : 'off'
+})
+
 const hitRateHint = computed(() => {
   const l1 = dailyL1.value
   if (!l1?.enabled) return l1 ? '缓存已停用' : '尚未拉到指标'
@@ -161,10 +176,15 @@ const ttlText = computed(() => {
   return ttl == null ? '—' : formatTtl(ttl)
 })
 
-const scanL1Size = computed(() =>
-  (props.metrics?.top_board_l1?.size ?? 0)
-  + (props.metrics?.unusual_l1?.size ?? 0),
-)
+const scanL1Size = computed<number | string>(() => {
+  // M2: metrics 未加载 / 两扫描块 size 皆 null → '—', 不把缺失伪装成空 0。
+  const m = props.metrics
+  if (m == null) return '—'
+  const top = m.top_board_l1?.size
+  const unu = m.unusual_l1?.size
+  if (top == null && unu == null) return '—'
+  return (top ?? 0) + (unu ?? 0)
+})
 
 // 扫描 L1 块副标题: TTL 取实时指标, 不再硬编码 "10s 档"
 function blockSub(prefix: string, stats?: L1CacheStats): string {
@@ -241,9 +261,16 @@ function blockSub(prefix: string, stats?: L1CacheStats): string {
   background: var(--el-text-color-placeholder);
 }
 
+/* M2: 未知 = 空心虚框, 区别于停用实心灰。 */
+.status-unknown {
+  background: transparent;
+  border: 1px dashed var(--el-border-color);
+}
+
 /* .on/.off 着色必须用 :slotted: 父 scope 的 .mini-value 在 MiniStat 内部, 跨组件 scope 隔离让普通后代选择器失效 */
 :slotted(.on) { color: var(--el-color-success); }
 :slotted(.off) { color: var(--el-text-color-secondary); }
+:slotted(.unknown) { color: var(--el-text-color-placeholder); }
 
 /* 折叠的配置常量 */
 .constants-details {

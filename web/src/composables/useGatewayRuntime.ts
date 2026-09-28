@@ -107,6 +107,12 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   let pollCount = 0
   /** 手动刷新撞在途轮询时排队: 本轮结束后补一次真正的手动刷新。 */
   let pendingManual = false
+  /**
+   * 管理操作 (cleanup/vacuum/clear/resetL1) 收尾的强制 breakdown 刷新
+   * 撞在途轮询时排队 (H2): 旧码 manual=false 不排队, refreshBreakdown 参数
+   * 被 inFlight 早退丢弃 → 破坏性操作后最长 60s 看到旧明细。
+   */
+  let pendingBreakdownRefresh = false
   /** 任一主源成功过即锁存: 之前 firstLoad 只看两源是否为 null, 两源持续
    * 失败时每轮都算首屏 → 遮罩反复闪。 */
   let everLoaded = false
@@ -126,6 +132,11 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   const breakdownTotalTools = ref(0)
   const breakdownLoading = ref(false)
   const breakdownEverLoaded = ref(false)
+  /**
+   * breakdown 首次拉取失败时的提示 (M4): 旧码空 catch 静默, 表格
+   * 「暂无缓存条目」与 status「总条目 N」自相矛盾。成功后清空。
+   */
+  const breakdownLoadError = ref('')
 
   /** 遮罩只在首屏 (含首次失败) 显示; 之后静默刷新, 表格不再每轮闪烁。 */
   const breakdownTableLoading = computed(() =>
@@ -177,6 +188,9 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
         // 不丢点击: 排队, 本轮结束后补刷; loading 持续到补刷完成。
         pendingManual = true
         manualLoading.value = true
+      } else if (refreshBreakdown) {
+        // H2: 操作后的强制 breakdown 刷新也排队, 不被丢弃。
+        pendingBreakdownRefresh = true
       }
       return
     }
@@ -274,8 +288,13 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     const finishCycle = (): void => {
       inFlight = false
       if (pendingManual) {
+        // manual load 本身就刷 breakdown, 合并掉排队的 breakdown 刷新。
         pendingManual = false
+        pendingBreakdownRefresh = false
         void load(true)
+      } else if (pendingBreakdownRefresh) {
+        pendingBreakdownRefresh = false
+        void load(false, true)
       } else {
         manualLoading.value = false
       }
@@ -293,8 +312,14 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
         breakdownRows.value = resp.tools
         breakdownTotalTools.value = resp.total_tools
         breakdownFirstSucceeded = true
+        breakdownLoadError.value = ''
       } catch {
-        // 旧网关无此路由/瞬时失败: 保留旧行不空表 (首屏时本就为空)
+        // 保留旧行不空表。首次失败给显式提示 (M4): 否则空表「暂无缓存条目」
+        // 与 status「总条目 N」矛盾, 无法区分"真没条目"与"明细拉取失败"。
+        // 成功过后的失败保留旧行、不再挂错 (旧数据仍可读)。
+        if (!breakdownFirstSucceeded) {
+          breakdownLoadError.value = '缓存明细加载失败 (请稍后重试)'
+        }
       } finally {
         breakdownLoading.value = false
         breakdownEverLoaded.value = true
@@ -332,7 +357,9 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       if (typeof document !== 'undefined' && document.hidden) return
       void load(false)
     }, POLL_INTERVAL_MS)
-  })
+  }, { immediate: true })
+  // H1: immediate 让 autoRefresh 默认 true 时 setup 即建 pollTimer; 旧码无
+  // immediate + onMounted 不建 pollTimer → 初始 10s 自动轮询从未启动。
 
   if (withLifecycle) {
     onMounted(() => {
@@ -366,20 +393,15 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       getUpstreamMetrics('thsdk'),
       getUpstreamMetrics('tdx_quant'),
     ])
+    // M6: 快采偶发失败保留旧值, 不置 null 闪空 (与主 load() 的失败策略一致)。
     if (mootdxResult.status === 'fulfilled') {
       metrics.value = mootdxResult.value.metrics
-    } else {
-      metrics.value = null
     }
     if (thsdkResult.status === 'fulfilled') {
       thsdkMetrics.value = thsdkResult.value.metrics as unknown as ThsdkMetrics
-    } else {
-      thsdkMetrics.value = null
     }
     if (tdxQuantResult.status === 'fulfilled') {
       tdxQuantMetrics.value = tdxQuantResult.value.metrics
-    } else {
-      tdxQuantMetrics.value = null
     }
   }
 
@@ -487,6 +509,7 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     breakdownRows,
     breakdownTotalTools,
     breakdownTableLoading,
+    breakdownLoadError,
     // 管理 loading
     resetL1Loading,
     cleanupLoading,

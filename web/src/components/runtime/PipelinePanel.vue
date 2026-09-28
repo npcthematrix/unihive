@@ -133,7 +133,10 @@ const pipelines = computed(() => {
     component: 'MooTDX2',
     isPrimary: true,
     layers: mootdxLayers,
-    summary: mBusy > 0 ? mParts.join(' · ') : '空闲',
+    // M2: props 未加载/无 layers 是「未采样」, 不是「空闲」(监控页方向性误导)。
+    summary: mootdxLayers.length
+      ? (mBusy > 0 ? mParts.join(' · ') : '空闲')
+      : '未采样',
     note: mootdxLayers.length ? undefined : '指标未加载',
   })
 
@@ -147,7 +150,9 @@ const pipelines = computed(() => {
   result.push({
     component: 'TDX 量化终端',
     layers: tdqLayers,
-    summary: tdqBusy > 0 ? `${tdqPool?.active} 执行 · ${tdqPool?.queued ?? 0} 排队` : '空闲',
+    summary: tdqLayers.length
+      ? (tdqBusy > 0 ? `${tdqPool?.active} 执行 · ${tdqPool?.queued ?? 0} 排队` : '空闲')
+      : '未采样',
     note: tdqLayers.length ? undefined : '指标未加载',
   })
 
@@ -167,7 +172,9 @@ const pipelines = computed(() => {
   result.push({
     component: 'THSDK',
     layers: tLayers,
-    summary: busy > 0 ? `${thsdkPool?.active} 执行 · ${thsdkPool?.queued ?? 0} 排队` : '空闲',
+    summary: tLayers.length
+      ? (busy > 0 ? `${thsdkPool?.active} 执行 · ${thsdkPool?.queued ?? 0} 排队` : '空闲')
+      : '未采样',
     note: note ?? (tLayers.length ? undefined : '指标未加载'),
   })
 
@@ -251,7 +258,9 @@ const pipelines = computed(() => {
   color: var(--el-text-color-regular);
 }
 
-.pipeline-name.is-primary {
+/* M8: is-primary 绑在 .pipeline-block (模板 :17), 旧选择器 .pipeline-name.is-primary
+   永不命中 → 主源强调失效。改后代选择器。 */
+.pipeline-block.is-primary .pipeline-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--el-text-color-primary);

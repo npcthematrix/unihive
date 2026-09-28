@@ -105,6 +105,7 @@
           :breakdown-rows="breakdownRows"
           :breakdown-loading="breakdownTableLoading"
           :breakdown-total-tools="breakdownTotalTools"
+          :breakdown-error="breakdownLoadError"
           :cleanup-loading="cleanupLoading"
           :vacuum-loading="vacuumLoading"
           :clear-loading="clearLoading"
@@ -132,9 +133,11 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { STALE_THRESHOLD_SEC } from '@/constants/time'
 import { marketSession } from '@/utils/market-session'
 import { getStatus as getStatusDirect } from '@/api/status'
+import { errorMessage } from '@/api/client'
 import { parseHashTab } from './_shared/hashTab'
 import { useGatewayRuntime } from '@/composables/useGatewayRuntime'
 import SessionBar from '@/components/SessionBar.vue'
@@ -168,6 +171,7 @@ const {
   breakdownRows,
   breakdownTotalTools,
   breakdownTableLoading,
+  breakdownLoadError,
   resetL1Loading,
   cleanupLoading,
   vacuumLoading,
@@ -264,6 +268,9 @@ async function refreshOverview(): Promise<void> {
     upstreamRows.value = toUpstreamRows(data.upstreams)
     upstreamSummary.value = data.summary
     overviewEverLoaded.value = true
+  } catch (e) {
+    // M1: 旧码只有 try/finally, 失败无反馈 + unhandled rejection, 用户误以为刷新成功。
+    ElMessage.error(errorMessage(e, '上游状态刷新失败'))
   } finally {
     overviewLoading.value = false
   }

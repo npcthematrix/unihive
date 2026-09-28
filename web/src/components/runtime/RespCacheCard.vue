@@ -7,13 +7,18 @@
           响应缓存 <small class="sub">SQLite · logs/cache.db</small>
         </h2>
         <div class="mgmt-actions">
-          <el-button size="small" :loading="cleanupLoading" @click="emit('cleanup')">
+          <el-button
+            size="small"
+            :loading="cleanupLoading"
+            :disabled="anyBusy"
+            @click="emit('cleanup')"
+          >
             清理过期
           </el-button>
           <el-button
             size="small"
             :loading="vacuumLoading"
-            :disabled="!hasReclaimablePages"
+            :disabled="!hasReclaimablePages || anyBusy"
             @click="emit('vacuum')"
           >
             整理 (VACUUM)
@@ -23,7 +28,7 @@
             type="danger"
             plain
             class="danger-action"
-            :disabled="(cache?.entries ?? 0) === 0"
+            :disabled="(cache?.entries ?? 0) === 0 || anyBusy"
             :loading="clearLoading"
             @click="emit('clear')"
           >
@@ -54,9 +59,9 @@
 
       <MiniStat label="状态">
         <template #value>
-          <span class="status-dot" :class="cache?.enabled ? 'status-online' : 'status-disabled'" />
-          <span :class="cache?.enabled ? 'on' : 'off'">
-            {{ cache?.enabled ? '启用' : '停用' }}
+          <span class="status-dot" :class="statusDotClass" />
+          <span :class="statusValueClass">
+            {{ statusText }}
           </span>
         </template>
       </MiniStat>
@@ -83,6 +88,14 @@
       />
     </div>
 
+    <el-alert
+      v-if="breakdownError"
+      type="warning"
+      :title="breakdownError"
+      show-icon
+      :closable="false"
+      class="breakdown-error"
+    />
     <CacheBreakdownTable
       :rows="breakdownRows"
       :loading="breakdownLoading"
@@ -119,6 +132,8 @@ const props = defineProps<{
   breakdownRows: CacheToolBreakdownRow[]
   breakdownLoading: boolean
   breakdownTotalTools: number
+  /** breakdown 首次拉取失败提示 (M4), '' 无错误。 */
+  breakdownError: string
   cleanupLoading: boolean
   vacuumLoading: boolean
   clearLoading: boolean
@@ -130,8 +145,31 @@ const emit = defineEmits<{
   (e: 'clear'): void
 }>()
 
+// M3: 任一管理操作在途 → 三按钮互斥禁用。防 cleanup/VACUUM/clear 并发
+// (DELETE 与 VACUUM 锁库并发 → database is locked; clear 与 cleanup 语义冲突)。
+const anyBusy = computed(
+  () => props.cleanupLoading || props.vacuumLoading || props.clearLoading,
+)
+
 const hr = useHitRate(toRef(props, 'cache'), {
   suppressed: computed(() => props.foreign),
+})
+
+// M2: cache 未加载 (null) 是「未知」, 只有拿到 enabled===false 才是「停用」。
+const statusText = computed(() => {
+  const c = props.cache
+  if (c == null) return '未知'
+  return c.enabled ? '启用' : '停用'
+})
+const statusDotClass = computed(() => {
+  const c = props.cache
+  if (c == null) return 'status-unknown'
+  return c.enabled ? 'status-online' : 'status-disabled'
+})
+const statusValueClass = computed(() => {
+  const c = props.cache
+  if (c == null) return 'unknown'
+  return c.enabled ? 'on' : 'off'
 })
 
 const hitsDisplay = computed(() =>
@@ -199,6 +237,10 @@ const breakdownNote = computed(() => {
   margin-bottom: 12px;
 }
 
+.breakdown-error {
+  margin-bottom: 12px;
+}
+
 .card-toolbar {
   display: flex;
   align-items: center;
@@ -262,9 +304,16 @@ const breakdownNote = computed(() => {
   background: var(--el-text-color-placeholder);
 }
 
+/* M2: 未知 = 空心虚框 (未决), 区别于停用的实心灰点。 */
+.status-unknown {
+  background: transparent;
+  border: 1px dashed var(--el-border-color);
+}
+
 /* .on/.off 着色必须用 :slotted: 父 scope 的 .mini-value 在 MiniStat 内部, 跨组件 scope 隔离让普通后代选择器失效 */
 :slotted(.on) { color: var(--el-color-success); }
 :slotted(.off) { color: var(--el-text-color-secondary); }
+:slotted(.unknown) { color: var(--el-text-color-placeholder); }
 
 .trunc-note {
   margin: 8px 2px 0;
