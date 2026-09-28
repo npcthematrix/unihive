@@ -2296,6 +2296,54 @@ class MooTDX2Client:
                 r["date"] = str(idx)[:10]
         return records, meta
 
+    def _get_daily_batch_local_sync(
+        self,
+        code_list: list[str],
+        adjust: str,
+        start_date: str,
+        end_date: str
+    ) -> tuple[dict[str, list[dict]], list[str]]:
+        """同步批量获取离线日线数据，复用 L1 缓存。
+
+        Args:
+            code_list: 股票代码列表（已解析）
+            adjust: 复权类型 none/qfq/hfq
+            start_date: 起始日期 yyyy-MM-dd
+            end_date: 结束日期 yyyy-MM-dd
+
+        Returns:
+            (成功结果字典, 警告列表)
+        """
+        from .index_registry import parse_symbol, to_reader_symbol
+
+        results: dict[str, list[dict]] = {}
+        warnings: list[str] = []
+
+        for code in code_list:
+            try:
+                # 复用现有 _get_daily_sync（自动命中 L1 缓存）
+                records, meta = self._get_daily_sync(code, adjust, start_date, end_date)
+
+                # 标准化 key 格式：使用解析后的市场+裸码
+                parsed = parse_symbol(code)
+                if parsed.market:
+                    key = f"{parsed.market}{parsed.code}"
+                else:
+                    key = parsed.code
+
+                results[key] = records
+
+                # 无数据时记录警告
+                if not records and meta.get("warn"):
+                    warnings.append(f"{code}: {meta['warn']}")
+
+            except ValueError as e:
+                warnings.append(f"{code}: invalid_symbol - {e}")
+            except Exception as e:
+                warnings.append(f"{code}: {str(e)}")
+
+        return results, warnings
+
     async def get_daily(
         self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
     ) -> ToolResult:

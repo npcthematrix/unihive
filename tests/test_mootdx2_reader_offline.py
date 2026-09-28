@@ -834,3 +834,49 @@ def test_yaml_has_index_minute_fzline_offline():
     # 离线分时图工具已下线（2026-09-21）：当日实时分时用 get_minute_data
     assert "get_index_timeshare_local" not in by_name
     assert "get_timeshare_local" not in by_name
+
+
+# ========== _get_daily_batch_local_sync ==========
+
+def test_get_daily_batch_local_two_codes(client):
+    """测试批量获取2只股票"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+
+    # Mock two different stock DataFrames
+    mock_df_600036 = pd.DataFrame({
+        "open": [10.0],
+        "high": [10.5],
+        "low": [9.9],
+        "close": [10.3],
+        "vol": [1000.0],
+    }, index=pd.to_datetime(["2024-01-02"]))
+
+    mock_df_600519 = pd.DataFrame({
+        "open": [1500.0],
+        "high": [1520.0],
+        "low": [1490.0],
+        "close": [1510.0],
+        "vol": [5000.0],
+    }, index=pd.to_datetime(["2024-01-02"]))
+
+    mock_reader = MagicMock()
+    # Reader.daily receives bare symbols (600036, 600519)
+    mock_reader.daily.side_effect = [mock_df_600036, mock_df_600519]
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        result = client._get_daily_batch_local_sync(
+            code_list=["sh600036", "sh600519"],
+            adjust="none",
+            start_date="",
+            end_date=""
+        )
+
+    results, warnings = result
+    # key 保留输入的前缀格式
+    assert "sh600036" in results
+    assert "sh600519" in results
+    assert isinstance(results["sh600036"], list)
+    assert len(results["sh600036"]) == 1
+    assert results["sh600036"][0]["close"] == 10.3
+    assert results["sh600519"][0]["close"] == 1510.0
