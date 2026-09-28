@@ -102,6 +102,105 @@ async def test_get_daily_batch_local_validates_limit(client):
     assert "20" in result.error
 
 
+def test_get_daily_batch_local_success(client):
+    """测试批量获取成功场景"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+
+    mock_df = pd.DataFrame({
+        "open": [10.0],
+        "high": [10.5],
+        "low": [9.9],
+        "close": [10.3],
+        "vol": [1000.0],
+    }, index=pd.to_datetime(["2024-01-02"]))
+
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = mock_df
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        # Use sync method directly to avoid executor issues in tests
+        result, warnings = client._get_daily_batch_local_sync(
+            code_list=["sh600036", "sh600519"],
+            adjust="none",
+            start_date="",
+            end_date=""
+        )
+    assert "sh600036" in result
+    assert "sh600519" in result
+    assert isinstance(result["sh600036"], list)
+
+
+def test_get_daily_batch_local_with_date_filter(client):
+    """测试带日期范围参数"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+
+    mock_df = pd.DataFrame({
+        "open": [10.0, 11.0, 12.0],
+        "high": [10.5, 11.5, 12.5],
+        "low": [9.5, 10.5, 11.5],
+        "close": [10.0, 11.0, 12.0],
+        "vol": [1000.0, 2000.0, 3000.0],
+    }, index=pd.to_datetime(["2026-01-02", "2026-03-15", "2026-06-30"]))
+
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = mock_df
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        result, warnings = client._get_daily_batch_local_sync(
+            code_list=["sh600036"],
+            adjust="none",
+            start_date="2026-01-01",
+            end_date="2026-06-30"
+        )
+    assert "sh600036" in result
+    # 返回数据
+    assert isinstance(result["sh600036"], list)
+
+
+def test_get_daily_batch_local_with_adjust(client):
+    """测试复权类型 qfq"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+
+    mock_df = pd.DataFrame({
+        "open": [10.0],
+        "high": [10.5],
+        "low": [9.9],
+        "close": [10.3],
+        "vol": [1000.0],
+    }, index=pd.to_datetime(["2024-01-02"]))
+
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = mock_df
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        result, warnings = client._get_daily_batch_local_sync(
+            code_list=["sh600036"],
+            adjust="qfq",
+            start_date="",
+            end_date=""
+        )
+    # Verify qfq is passed to Reader
+    assert mock_reader.daily.call_args.kwargs.get("adjust") == "qfq"
+
+
+async def test_get_daily_batch_local_empty_codes(client):
+    """测试空codes返回invalid_param"""
+    result = await client.get_daily_batch_local(codes="")
+    assert result.success is False
+    assert result.error_detail["error_type"] == "invalid_param"
+
+
+async def test_get_daily_batch_local_over_limit(client):
+    """测试超过20只返回invalid_param"""
+    codes = ",".join([f"sh60000{i}" for i in range(21)])
+    result = await client.get_daily_batch_local(codes=codes)
+    assert result.success is False
+    assert "20" in result.error
+
+
 # ========== get_minute ==========
 
 def test_get_minute_tdxdir_empty(client):
