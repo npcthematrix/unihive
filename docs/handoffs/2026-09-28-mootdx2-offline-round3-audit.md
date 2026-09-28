@@ -406,7 +406,33 @@ L1 覆盖率: **1 / 12** (仅 `get_daily_local`)。Reader 类共 8 个工具
 
 ---
 
-## 十一、待用户裁决
+## 十一、用户裁决 (2026-09-28)
 
-请告知要 ship 哪些批次 / 条目,按用户偏好"让改就只改,不主动跑测试/重启/apply/验证"
+### 4 个设计决策
+
+| ID | 决策 | 含义 |
+|---|---|---|
+| D1 | **A** 下沉到 sync 内层 | `_get_daily_sync` 内层读/写 `self._daily_l1`,批入口(`get_daily_batch_local`)零改动,自然复用单 symbol L1 |
+| D2 | **B** 接受现状 | Reader 信号量=4 + 单例不动,不调研 mootdx2 `StdReader` 线程安全;若生产观测到 race 再回头 |
+| D3 | **B** 改文案不增错误类型 | 文件空/损坏合并到现有 `no_data` 文案("不存在或损坏"),不在 `MooTDXErrorType` 加 `FILE_CORRUPTED` |
+| D4 | **A** 异常分类细化 | `KeyError`/`AttributeError`/`TypeError` 单列 `INTERNAL_ERROR`(不再误标 `INVALID_PARAM`),同时 `traceback.format_exc()` 写 logs |
+
+### 影响批次落地的具体改动
+
+- **批次 1**(C1/C2/H2-func/H3-func/H4-func/H5-func/H1-silent/M-silent4):
+  - D1 落地:`_get_daily_sync` 入口加 L1 检查/写回,`get_daily_batch_local` 调用路径自然复用
+  - D4 落地:`mootdx2_errors.py` 改 `isinstance(exc, (ValueError, KeyError, AttributeError, TypeError))` 分支,
+    把 `KeyError/AttributeError/TypeError` 单走 `INTERNAL_ERROR` + `traceback.format_exc()` 到 logs
+- **批次 2**(H1-perf 8 单 symbol L1 + H2-perf daily 双层 + H4-silent 缓存只存 records):
+  - 配合 D1:`get_daily_local` L1 双层方案直接落地
+  - 不动 Reader 闸门(D2)
+- **批次 4**(H2-silent 文件空 vs 缺失 + H3-silent stock_info partial + M-silent1/2):
+  - D3 落地:`_index_minute_file_message` 等文案改"不存在或损坏",**不**改 `MooTDXErrorType` 枚举
+  - D4 落地见上(M-silent2)
+- **H3-性能 Reader 闸门**:D2 决定不动,留作"若 race 观测回头处理",doc 注释
+
+### 待用户裁决: ship 范围
+
+5 个批次,详见 doc §八。请告知 ship 哪些批次 + 顺序偏好 + 测试策略,
+按用户偏好"让改就只改,不主动跑测试/重启/apply/验证"
 (feedback: `feedback_modify_dont_test_until_told`)。
