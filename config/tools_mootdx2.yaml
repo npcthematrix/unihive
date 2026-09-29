@@ -231,7 +231,7 @@ tools:
 
       【参数说明】
       - code (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - date (可选): 日期，支持 YYYY-MM-dd 或 YYYYMMDD，省略则查最近有数据的日期
+      - date (可选): 日期，支持 YYYY-MM-DD 或 YYYYMMDD，省略则查最近有数据的日期
       - start (可选): 起始偏移，默认 0
       - count (可选): 返回条数，默认 100，最大 500
 
@@ -256,7 +256,7 @@ tools:
       - name: date
         type: str
         required: false
-        description: 日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 日期，支持 YYYY-MM-DD 或 YYYYMMDD
       - name: start
         type: int
         required: false
@@ -570,10 +570,10 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": ["20240101", "20240102", ...]}
-      失败: {"success": false, "error": {"error_type": "invalid_param", "message": "日期格式错误"}}
+      失败: {"success": false, "error": "日期格式错误", "error_kind": "invalid_request"}
 
       【典型错误】
-      - invalid_param: 日期格式错误 / count 超出 1-365
+      - invalid_param（网关 error_kind=invalid_request）: 日期格式错误 / count 超出 1-365
     routing: get_workday
     upstream_tool_mapping:
       mootdx2: get_workday
@@ -584,7 +584,7 @@ tools:
       - name: date
         type: str
         required: false
-        description: 基准日期，支持 YYYYMMDD 或 YYYY-MM-dd（默认当天）
+        description: 基准日期，支持 YYYYMMDD 或 YYYY-MM-DD（默认当天）
       - name: count
         type: int
         required: false
@@ -605,13 +605,15 @@ tools:
       【重要说明】
       - 本工具只做周末数学（周一至周五），**未剔除法定节假日**，
         网关不内置节假日历；start 晚于 end 返回 invalid_param
+      - 纯周末区间（区间内没有任何周一至周五）返回 no_data 业务态：
+        success=true、data=null
 
       【返回示例】
       成功: {"success": true, "data": ["20240101", "20240102", "20240103", ...]}
-      失败: {"success": false, "error": {"error_type": "invalid_param", "message": "日期格式错误"}}
+      失败: {"success": false, "error": "日期格式错误", "error_kind": "invalid_request"}
 
       【典型错误】
-      - invalid_param: 日期格式错误 / start 晚于 end
+      - invalid_param（网关 error_kind=invalid_request）: 日期格式错误 / start 晚于 end
     routing: get_workday_range
     upstream_tool_mapping:
       mootdx2: get_workday_range
@@ -689,7 +691,7 @@ tools:
       - name: market
         type: str
         required: false
-        description: 市场，默认 'auto'（按代码前缀推断）
+        description: 保留参数，当前实现忽略；成分股市场按 .blk 行 market_id 推断
 
   - name: get_f10
     description: |-
@@ -827,8 +829,8 @@ tools:
 
       【参数说明】
       - code (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - start_date (可选): 开始日期，支持 YYYY-MM-dd 或 YYYYMMDD，空则从头开始
-      - end_date (可选): 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD，空则到最新
+      - start_date (可选): 开始日期，支持 YYYY-MM-DD 或 YYYYMMDD，空则从头开始
+      - end_date (可选): 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD，空则到最新
 
       【返回示例】
       成功: {"success": true, "data": [{"date": "2024-01-01", "open": 10.0, "high": 10.5, "low": 9.8, "close": 10.2, "vol": 100000}]}
@@ -851,11 +853,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 开始日期，支持 YYYY-MM-dd 或 YYYYMMDD（空则从头开始）
+        description: 开始日期，支持 YYYY-MM-DD 或 YYYYMMDD（空则从头开始）
       - name: end_date
         type: str
         required: false
-        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD（空则到最新）
+        description: 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD（空则到最新）
 
   - name: get_minutes
     description: |-
@@ -869,7 +871,7 @@ tools:
 
       【参数说明】
       - symbol (必填): 股票代码，支持格式：6位纯数字或带前缀（sh/sz/bj）
-      - date (可选): 日期，支持 YYYY-MM-dd 或 YYYYMMDD，省略则默认当天
+      - date (可选): 日期，支持 YYYY-MM-DD 或 YYYYMMDD，省略则默认当天
 
       【返回示例】
       成功: {"success": true, "data": [{"time": "09:30:00", "open": 10.0, "high": 10.2, "low": 9.9, "close": 10.1, "vol": 1000}, ...]}
@@ -892,7 +894,7 @@ tools:
       - name: date
         type: str
         required: false
-        description: 日期，支持 YYYY-MM-dd 或 YYYYMMDD（默认当天）
+        description: 日期，支持 YYYY-MM-DD 或 YYYYMMDD（默认当天）
 
   - name: search_stock_local
     description: |-
@@ -910,10 +912,13 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"code": "600000", "market": "sh", "name": "浦发银行"}, ...]}
-      失败: {"success": false, "error": {"error_type": "no_data", "message": "未找到匹配股票"}}
+      未找到匹配（业务态，不是失败）: {"success": true, "data": null, "error": "未找到匹配 'xxx'"}
+      双源均不可用（tdxdir 与 board.db 都缺失）: {"success": true, "data": null,
+        "error": "search_stock: tdxdir 与 board.db 均不可用 ..."}
 
       【典型错误】
-      - no_data: 未找到匹配股票
+      - no_data（网关 error_kind=no_data，业务态 success=true data=null）: 未找到匹配股票 /
+        tdxdir 与 board.db 均不可用
     routing: search_stock_local
     upstream_tool_mapping:
       mootdx2: search_stock
@@ -1104,13 +1109,17 @@ tools:
       【使用场景】
       - 历史行情分析（不依赖网络，走本地数据）
       - 需要前/后复权数据时使用
+      - 路由提示：批量多股日线请用 get_daily_batch_local；ETF 日线请用
+        get_etf_daily_local；指数日K请用 get_index_kline_local
 
       【参数说明】
       - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
       - adjust (可选): 复权方式，默认 none
         none=不复权 / qfq=前复权 / hfq=后复权
-      - start_date (可选): 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
-      - end_date (可选): 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+      - start_date (可选): 起始日期，支持 YYYY-MM-DD 或 YYYYMMDD
+      - end_date (可选): 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD
+      - start_date/end_date 传未来日期会被 invalid_param 拒绝（网关
+        error_kind=invalid_request；本地文件不可能有未来交易日数据）
 
       【代码消歧（重要）】
       - 裸 000xxx 是跨市场歧义码（000001=平安银行/上证指数，000002=万科A/上证A指），
@@ -1126,7 +1135,7 @@ tools:
       成功但有非阻断提示（消歧/无本地文件/截断）时额外带顶层 warn 字段。
       成功: {"success": true, "data": [{"date": "2024-01-02", "open": 10.0, ...}], "source": "mootdx2"}
       歧义: {"success": true, "data": [...], "warn": "代码 000001 为跨市场歧义码…如需上证指数请显式传 sh000001"}
-      失败: {"success": false, "error": "TDX 安装目录未配置"}
+      失败: {"success": false, "error": "TDX 安装目录未配置", "error_kind": "upstream_unavailable"}
     routing: get_daily_local
     upstream_tool_mapping:
       mootdx2: get_daily
@@ -1146,11 +1155,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 起始日期，支持 YYYY-MM-DD 或 YYYYMMDD
       - name: end_date
         type: str
         required: false
-        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD
 
   - name: get_daily_batch_local
     description: |-
@@ -1164,13 +1173,13 @@ tools:
       - codes (必填): 逗号分隔的股票代码（最多20只），如 "sh600036,sh600519"
       - adjust (可选): 复权方式，默认 none
         none=不复权 / qfq=前复权 / hfq=后复权
-      - start_date (可选): 起始日期 yyyy-MM-dd
-      - end_date (可选): 结束日期 yyyy-MM-dd
+      - start_date (可选): 起始日期 YYYY-MM-DD（兼容 YYYYMMDD；未来日期拒绝）
+      - end_date (可选): 结束日期 YYYY-MM-DD（兼容 YYYYMMDD；未来日期拒绝）
 
       【返回信封】{success, data: {symbol: [records...]}, source, error_detail: {warn, recoverable}}
       成功: {"success": true, "data": {"sh600036": [...], "sh600519": [...]}, "source": "mootdx2"}
       部分成功: {"success": true, "data": {"sh600036": [...]}, "error_detail": {"warn": "sh123456: invalid_symbol", "recoverable": true}}
-      全失败: {"success": false, "error": "批内全部失败: ...", "error_detail": {"error_type": "internal_error", "recoverable": false}}
+      全失败: {"success": false, "error": "批内全部失败: ...", "error_kind": "internal_error"}
     routing: get_daily_batch_local
     upstream_tool_mapping:
       mootdx2: get_daily_batch_local
@@ -1190,11 +1199,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 起始日期，支持 YYYY-MM-DD 或 YYYYMMDD
       - name: end_date
         type: str
         required: false
-        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD
       - name: limit
         type: int
         required: false
@@ -1213,21 +1222,25 @@ tools:
         例: sh510300（沪深300ETF）、159915（创业板ETF）、sh518880（黄金ETF）
       - adjust (可选): 复权方式，默认 none
         none=不复权 / qfq=前复权 / hfq=后复权
-      - start_date (可选): 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
-      - end_date (可选): 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+      - start_date (可选): 起始日期，支持 YYYY-MM-DD 或 YYYYMMDD
+      - end_date (可选): 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD
+      - start_date/end_date 传未来日期会被 invalid_param 拒绝（网关
+        error_kind=invalid_request；本地文件不可能有未来交易日数据）
 
       【代码消歧（重要）】
       - 本入口宽松放行：不校验代码是否真为 ETF（本地 .day 文件按代码寻址）
       - 传指数代码（sh000001、399001、880xxx、bj899050 等）会返回 invalid_param，
         请改用 get_index_kline_local
+      - 裸 000xxx 歧义码在本入口按深市股票解析（如 000001 返回平安银行日线，
+        不报错）；ETF 代码没有 000 段，但本入口不会因此拒绝
       - 股票代码传入本入口也能返回数据；股票日线请优先用 get_daily_local
 
       【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/{sh|sz|bj}xxx.day
 
       【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
       成功: {"success": true, "data": [{"date": "2024-01-02", "open": 10.0, ...}], "source": "mootdx2"}
-      指数误传: {"success": false, "error": "sh000001 是指数代码；获取指数日K请使用 get_index_kline_local"}
-      失败: {"success": false, "error": "未找到 510300 的日线数据"}
+      指数误传: {"success": false, "error": "sh000001 是指数代码；获取指数日K请使用 get_index_kline_local", "error_kind": "invalid_request"}
+      未找到（业务态，不是失败）: {"success": true, "data": null, "error": "未找到 510300 的日线数据", "error_kind": "no_data"}
     routing: get_etf_daily_local
     upstream_tool_mapping:
       mootdx2: get_etf_daily_local
@@ -1247,11 +1260,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 起始日期，支持 YYYY-MM-DD 或 YYYYMMDD
       - name: end_date
         type: str
         required: false
-        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD
 
   - name: get_minute_local
     description: |-
@@ -1261,11 +1274,18 @@ tools:
       - 历史分钟级别回放
       - 不依赖网络
 
+      【响应体大小（注意）】
+      - 本工具无 limit 参数；不传日期窗时返回本地文件**全部**内容，
+        多年累积的 .lc1/.lc5 可达数万根，响应体可能非常大
+      - 强烈建议传 start_date/end_date 缩窗，控制单次返回规模
+
       【参数说明】
       - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
       - suffix (可选): '1' = 1 分钟线（默认）/ '5' = 5 分钟线
-      - start_date (可选): 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
-      - end_date (可选): 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+      - start_date (可选): 起始日期，支持 YYYY-MM-DD 或 YYYYMMDD
+      - end_date (可选): 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD
+      - start_date/end_date 传未来日期会被 invalid_param 拒绝（网关
+        error_kind=invalid_request；本地文件不可能有未来交易日数据）
 
       【数据源】
       - suffix='1': {tdxdir}/vipdoc/{sh|sz|bj}/minline/xxx.lc1
@@ -1289,11 +1309,11 @@ tools:
       - name: start_date
         type: str
         required: false
-        description: 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 起始日期，支持 YYYY-MM-DD 或 YYYYMMDD
       - name: end_date
         type: str
         required: false
-        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+        description: 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD
 
   - name: get_fzline_local
     description: |-
@@ -1303,7 +1323,13 @@ tools:
 
       【使用场景】
       - 历史 5 分钟K线回放
-      - 与 get_minute suffix='5' 等价（相同数据源 fzline/*.lc5）
+      - 与 get_minute_local(suffix='5') 读同一数据源 fzline/*.lc5；本入口
+        无日期窗参数、返回文件全部内容，get_minute_local(suffix='5') 支持
+        start_date/end_date 缩窗
+
+      【响应体大小（注意）】
+      - 本工具无日期窗与 limit 参数，返回本地文件**全部**内容；
+        多年累积的 .lc5 响应体可能很大，缩窗需求请用 get_minute_local(suffix='5')
 
       【参数说明】
       - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
@@ -1338,11 +1364,15 @@ tools:
         · 裸 000xxx 为歧义码（上证指数 vs 深市股票），本工具按 sh 指数解析
           （如 000001=上证指数、000300=沪深300）；显式前缀始终生效
       - type (可选): day(默认)/week/month；week/month 由本地日线重采样
-      - limit (可选): 返回最近 N 条，默认 100，最大 1000；超限时截断并在信封 warn 说明
+      - limit (可选): 返回最近 N 条，默认 100，最大 1000；需正整数
+        （0/负数/非整数会被 invalid_param 拒绝），超限时截断并在信封 warn 说明
 
       【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/{sh|sz|bj}xxx.day
       【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
       成功但有非阻断提示（本地无文件/截断）时额外带顶层 warn 字段。
+      【典型情况】中的 invalid_symbol/invalid_param/no_data 为上游细分诊断名，
+      /mcp 网关信封只透出 error 字符串与 error_kind 类别
+      （invalid_request/upstream_unavailable/no_data/internal_error）。
       【典型情况】
       - invalid_symbol: 传入股票代码（如 600000/sz000001/bj920000）请改用 get_daily_local，success=false
       - no_data: 指数 .day 本地不存在（TDX 未下载该数据），不代表代码错误；
@@ -1389,7 +1419,8 @@ tools:
         YYYYMMDD 紧凑写法），含当日
       - end_date (可选): 结束日期，同上，含当日全天；非零填充/非法日历日或
         start_date 晚于 end_date → invalid_param
-      - limit (可选): 返回最近 N 条，默认 1000，最大 20000；超出时截断为最近
+      - limit (可选): 返回最近 N 条，默认 1000，最大 20000；需正整数
+        （0/负数/非整数会被 invalid_param 拒绝），超出时截断为最近
         N 条并在信封 warn 中说明（无日期窗时给文件总数，带日期窗时给窗内条数）
 
       【数据源】
@@ -1397,9 +1428,13 @@ tools:
       - suffix='5': {tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
       【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
       成功但本地无文件时 success=true、data=null，缺失路径在顶层 warn 中给出。
+      【典型情况】中的细分 error_type 为上游诊断名，/mcp 网关信封只透出
+      error 字符串与 error_kind 类别
+      （invalid_request/upstream_unavailable/no_data/internal_error）。
       【典型情况】
       - invalid_param: suffix 非 '1'/'5'、日期非 YYYY-MM-DD/YYYYMMDD 合法日历日、
-        start_date 晚于 end_date、limit 非正整数或 >20000，success=false
+        日期传未来日期（本地文件不可能有未来交易日数据）、start_date 晚于
+        end_date、limit 非正整数或 >20000，success=false
       - invalid_symbol: 传入股票代码（如 600000/sz000001）请改用 get_minute_local，success=false
       - no_data: 指数分钟文件本地不存在或为空（TDX 未下载该数据），不代表代码错误；
         文件存在但所选日期范围内无数据时，warn 会明确提示"文件存在但日期范围内无数据"
@@ -1438,12 +1473,19 @@ tools:
 
       【使用场景】
       - 离线环境回放指数 5 分钟走势
-      - 与 get_index_minute_local(code, suffix='5') 等价（相同数据源 fzline/*.lc5）
+      - 与 get_index_minute_local(code, suffix='5') 读同一数据源 fzline/*.lc5；
+        但本入口**无日期窗参数**，不支持缩窗，仅支持 limit 截最近 N 条；
+        需要日期窗请改用 get_index_minute_local(suffix='5')
+
+      【响应体大小（注意）】
+      - 无日期窗时返回文件（截至 limit）全部内容，多年累积的 .lc5 响应体
+        可能很大；缩窗需求请用 get_index_minute_local(suffix='5')
 
       【参数说明】
       - code (必填): 指数代码，前缀/歧义码约定同 get_index_minute_local
         （000xxx 裸码按 sh 指数；399=sz；899=bj；880/881/930-932=sh）
-      - limit (可选): 返回最近 N 条，默认 1000，最大 20000；超出截断并在
+      - limit (可选): 返回最近 N 条，默认 1000，最大 20000；需正整数
+        （0/负数/非整数会被 invalid_param 拒绝），超出截断并在
         信封 warn 中说明
 
       【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
