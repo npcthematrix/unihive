@@ -20,12 +20,12 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": {"symbol": "600000", "close": 10.5, "open": 10.2, "high": 10.8, "low": 10.1, "volume": 1000000}}
-      失败（停牌/非交易日）: {"success": true, "data": null, "error": {"error_type": "no_data", "message": "股票停牌或非交易日"}}
-      失败（无效代码）: {"success": false, "error": {"error_type": "invalid_symbol", "message": "股票代码不存在"}}
+      无数据（业务态，不是失败；代码不存在时同此形态）: {"success": true, "data": null,
+        "error": "股票 600000 无行情数据（可能停牌或非交易日）", "error_kind": "no_data"}
 
       【典型错误】
-      - invalid_symbol: 传入不存在的股票代码
-      - no_data: 股票停牌或非交易日，无需重试
+      - no_data（网关 error_kind=no_data，业务态 success=true data=null）:
+        股票停牌/非交易日/代码无数据，无需重试
     routing: get_quote
     upstream_tool_mapping:
       mootdx2: get_quote
@@ -57,11 +57,13 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"date": "2024-01-01", "open": 10.0, "high": 10.5, "low": 9.8, "close": 10.2, "volume": 100000}]}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "股票代码不存在"}}
+      失败: {"success": false, "error": "limit 需为 1-1000 的整数, 收到 ...", "error_kind": "invalid_request"}
+      无数据（业务态，代码无数据或不存在同此形态）: {"success": true, "data": null,
+        "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - invalid_symbol: 股票代码不存在
-      - invalid_param: limit 超过 1000，数据量过大
+      - invalid_param（网关 error_kind=invalid_request）: limit 需为 1-1000 的整数
+      - no_data（业务态 success=true data=null）: 代码无数据 / K线数据校验失败
     routing: get_kline
     upstream_tool_mapping:
       mootdx2: get_kline
@@ -99,10 +101,11 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"symbol": "600000", "close": 10.5, ...}, {"symbol": "000001", "close": 12.0, ...}]}
-      失败: {"success": false, "error": {"error_type": "invalid_param", "message": "批量请求超过 50 只股票限制"}}
+      失败: {"success": false, "error": "批量请求超过 50 只股票限制", "error_kind": "invalid_request"}
 
       【典型错误】
-      - invalid_param: 股票数量超过 50 只限制
+      - invalid_param/invalid_symbol（网关 error_kind=invalid_request）:
+        codes 为空 / 代码非法 / 超过 50 只限制
     routing: get_batch_quote
     upstream_tool_mapping:
       mootdx2: get_batch_quote
@@ -134,10 +137,10 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": {"600000": [{date: "2024-01-01", open: 10.0, ...}], "000001": [...]}}
-      失败: {"success": false, "error": {"error_type": "invalid_param", "message": "批量请求超过 20 只股票限制"}}
+      失败: {"success": false, "error": "批量请求超过 20 只股票限制", "error_kind": "invalid_request"}
 
       【典型错误】
-      - invalid_param: 股票数量超过 20 只限制
+      - invalid_param（网关 error_kind=invalid_request）: 股票数量超过 20 只限制
     routing: batch_bars
     upstream_tool_mapping:
       mootdx2: batch_bars
@@ -172,7 +175,7 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"time": "09:30:00", "price": 10.5, "volume": 1000}, ...]}
-      失败: {"success": true, "data": null, "error": {"error_type": "no_data", "message": "股票停牌或非交易日"}}
+      无数据（业务态，不是失败）: {"success": true, "data": null, "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
       - no_data: 非交易时段或停牌股票无分时数据
@@ -203,7 +206,7 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"time": "09:30:05", "price": 10.5, "volume": 1000, "buyorsell": "B"}, ...]}
-      失败: {"success": true, "data": null, "error": {"error_type": "no_data", "message": "股票停牌或非交易日"}}
+      无数据（业务态，不是失败）: {"success": true, "data": null, "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
       - no_data: 非交易时段或停牌股票无逐笔数据
@@ -237,10 +240,12 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"time": "09:30:05", "price": 10.5, "volume": 1000}, ...]}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "股票代码不存在"}}
+      无数据（业务态，代码无数据或不存在同此形态）: {"success": true, "data": null,
+        "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - invalid_symbol: 股票代码不存在
+      - no_data（网关 error_kind=no_data，业务态 success=true data=null）:
+        指定日期无逐笔数据 / 代码无数据
     routing: get_trade_history
     upstream_tool_mapping:
       mootdx2: get_trade_history
@@ -284,7 +289,7 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"date": "2024-01-01", "open": 3000, "high": 3050, "low": 2980, "close": 3020, "volume": 100000000}]}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "指数代码不存在"}}
+      无数据（业务态，代码无数据或不存在同此形态）: {"success": true, "data": null, "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
       - invalid_symbol: 指数代码不存在
@@ -322,7 +327,7 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [...]}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "指数代码不存在"}}
+      无数据（业务态，代码无数据或不存在同此形态）: {"success": true, "data": null, "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
       - invalid_symbol: 指数代码不存在
@@ -365,7 +370,7 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [...]}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "指数代码不存在"}}
+      无数据（业务态，代码无数据或不存在同此形态）: {"success": true, "data": null, "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
       - invalid_symbol: 指数代码不存在
@@ -406,10 +411,13 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"code": "600000", "name": "浦发银行"}, ...]}
-      失败: {"success": false, "error": {"error_type": "invalid_param", "message": "无效的交易所代码"}}
+      不支持的交易所（业务态，不是失败）: {"success": true, "data": null,
+        "error": "mootdx2 全量代码列表仅支持沪深 (sh/sz),暂不支持北京证券交易所",
+        "error_kind": "no_data"}
 
       【典型错误】
-      - invalid_param: 无效的交易所代码
+      - no_data（网关 error_kind=no_data，业务态 success=true data=null）:
+        exchange=bj 不受支持（底层仅支持沪深）/ 上游无数据
     routing: get_code_list
     upstream_tool_mapping:
       mootdx2: get_code_list
@@ -438,10 +446,12 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": ["000001", "000002", ...]}
-      失败: {"success": false, "error": {"error_type": "internal_error", "message": "获取失败"}}
+      失败: {"success": false, "error": "limit 需为正整数, 收到 ...", "error_kind": "invalid_request"}
+      无数据（业务态）: {"success": true, "data": null, "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - internal_error: 服务内部错误
+      - invalid_param（网关 error_kind=invalid_request）: limit 需为正整数
+      - internal_error（网关 error_kind=internal_error）: 服务内部错误
     routing: get_stock_codes
     upstream_tool_mapping:
       mootdx2: get_stock_codes
@@ -472,10 +482,12 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": ["159001", "159003", ...]}
-      失败: {"success": false, "error": {"error_type": "internal_error", "message": "获取失败"}}
+      失败: {"success": false, "error": "limit 需为正整数, 收到 ...", "error_kind": "invalid_request"}
+      无数据（业务态）: {"success": true, "data": null, "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - internal_error: 服务内部错误
+      - invalid_param（网关 error_kind=invalid_request）: limit 需为正整数
+      - internal_error（网关 error_kind=internal_error）: 服务内部错误
     routing: get_etf_codes
     upstream_tool_mapping:
       mootdx2: get_etf_codes
@@ -506,10 +518,13 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"code": "159001", "name": "货币ETF", "exchange": "SZ"}, ...]}
-      失败: {"success": false, "error": {"error_type": "internal_error", "message": "获取失败"}}
+      失败: {"success": false, "error": "limit 需为正整数, 收到 ...", "error_kind": "invalid_request"}
+      不支持的交易所（业务态，不是失败）: {"success": true, "data": null,
+        "error": "mootdx2 ETF 列表仅支持沪深 (sh/sz),暂不支持该交易所", "error_kind": "no_data"}
 
       【典型错误】
-      - internal_error: 服务内部错误
+      - invalid_param（网关 error_kind=invalid_request）: limit 需为正整数
+      - no_data（业务态 success=true data=null）: exchange 非沪深（底层仅支持 sh/sz）/ 无数据
     routing: get_etf_list
     upstream_tool_mapping:
       mootdx2: get_etf_list
@@ -539,10 +554,10 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": {"market": 0, "count": 5000}}
-      失败: {"success": false, "error": {"error_type": "internal_error", "message": "获取失败"}}
+      失败: {"success": false, "error": "获取失败", "error_kind": "internal_error"}
 
       【典型错误】
-      - internal_error: 服务内部错误
+      - internal_error（网关 error_kind=internal_error）: 服务内部错误
     routing: get_market_count
     upstream_tool_mapping:
       mootdx2: get_market_count
@@ -708,10 +723,11 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [...]}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "股票代码不存在"}}
+      无数据（业务态，代码无数据或不存在同此形态）: {"success": true, "data": null,
+        "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - invalid_symbol: 股票代码不存在
+      - no_data（网关 error_kind=no_data，业务态 success=true data=null）: 代码无 F10 数据
     routing: get_f10
     upstream_tool_mapping:
       mootdx2: get_f10
@@ -743,10 +759,11 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": {"name": "浦发银行", "main_business": "银行业", "total_shares": 10000000000, ...}}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "股票代码不存在"}}
+      无数据（业务态，代码无数据或不存在同此形态）: {"success": true, "data": null,
+        "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - invalid_symbol: 股票代码不存在
+      - no_data（网关 error_kind=no_data，业务态 success=true data=null）: 代码无 F10 公司概况
     routing: get_f10_company
     upstream_tool_mapping:
       mootdx2: get_f10_company
@@ -773,10 +790,11 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"date": "2024-01-01", "type": "分红", "ratio": 0.1}, ...]}
-      失败: {"success": false, "error": {"error_type": "invalid_symbol", "message": "股票代码不存在"}}
+      无数据（业务态，代码无数据或不存在同此形态）: {"success": true, "data": null,
+        "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - invalid_symbol: 股票代码不存在
+      - no_data（网关 error_kind=no_data，业务态 success=true data=null）: 代码无除权除息记录
     routing: get_xdxr
     upstream_tool_mapping:
       mootdx2: get_xdxr
@@ -804,10 +822,10 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"code": "600000", "name": "浦发银行", "market": "sh"}, ...]}
-      失败: {"success": false, "error": {"error_type": "internal_error", "message": "获取失败"}}
+      失败: {"success": false, "error": "获取失败", "error_kind": "internal_error"}
 
       【典型错误】
-      - internal_error: 服务内部错误
+      - internal_error（网关 error_kind=internal_error）: 服务内部错误
     routing: get_stock_all
     upstream_tool_mapping:
       mootdx2: get_stock_all
@@ -834,10 +852,12 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"date": "2024-01-01", "open": 10.0, "high": 10.5, "low": 9.8, "close": 10.2, "vol": 100000}]}
-      失败: {"success": false, "error": {"error_type": "no_data", "message": "本地无此股票数据"}}
+      无数据（业务态，不是失败；代码无数据或不存在同此形态）: {"success": true, "data": null,
+        "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - no_data: 本地无此股票数据或文件不存在
+      - no_data（网关 error_kind=no_data，业务态 success=true data=null）:
+        服务器无此股票数据
     routing: get_k_data
     upstream_tool_mapping:
       mootdx2: get_k_data
@@ -875,10 +895,12 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": [{"time": "09:30:00", "open": 10.0, "high": 10.2, "low": 9.9, "close": 10.1, "vol": 1000}, ...]}
-      失败: {"success": false, "error": {"error_type": "no_data", "message": "本地无此股票分钟数据"}}
+      失败（date 非法）: {"success": false, "error": "需为 YYYYMMDD 或 YYYY-MM-DD 合法日历日, 收到 ...", "error_kind": "invalid_request"}
+      无数据（业务态，不是失败）: {"success": true, "data": null, "error": "查询成功但无数据", "error_kind": "no_data"}
 
       【典型错误】
-      - no_data: 本地无此股票分钟数据或文件不存在
+      - invalid_param（网关 error_kind=invalid_request）: date 非合法日历日
+      - no_data（业务态 success=true data=null）: 服务器无此股票分钟数据
     routing: get_minutes
     upstream_tool_mapping:
       mootdx2: get_minutes
@@ -949,10 +971,15 @@ tools:
 
       【返回示例】
       成功: {"success": true, "data": {"code": "600000", "market": "sh", "quote": {...}, "kline": [...], "minute": [...]}}
-      失败: {"success": true, "data": {"code": "600000", "market": "sh", "quote": null, "kline": [], "minute": []}, "error": {"error_type": "no_data"}}
+      部分缺失（不报错，按可得字段返回）: {"success": true, "data": {"code": "600000",
+        "market": "sh", "quote": null, "kline": [...], "minute": [...]}}
+      全空（业务态，不是失败）: {"success": true, "data": null,
+        "error": "股票 sz600000 无数据", "error_kind": "no_data"}
+      失败: {"success": false, "error": "market 仅支持 sh/sz/bj, 收到 ...", "error_kind": "invalid_request"}
 
       【典型错误】
-      - no_data: 股票无任何数据（可能代码错误或停牌）
+      - invalid_param（网关 error_kind=invalid_request）: market 非 sh/sz/bj
+      - no_data（业务态 success=true data=null）: 股票无任何数据（可能代码错误或停牌）
     routing: mootdx2_stock_info
     upstream_tool_mapping:
       mootdx2: get_stock_info
@@ -993,7 +1020,7 @@ tools:
       成功: {"success": true, "data": [{"code": "000001", "name": "上证指数", "market": "sh", "close": 3100.0, "change_pct": 0.5}, ...], "source": "mootdx2"}
 
       【典型错误】
-      - internal_error: 网络连接失败
+      - internal_error（网关 error_kind=internal_error）: 网络连接失败
     routing: get_index_overview
     upstream_tool_mapping:
       mootdx2: get_index_overview
