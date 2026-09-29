@@ -583,3 +583,23 @@ def test_conflict_json_shape_uses_none_for_missing_sides():
     assert conflict["new"] is None
     assert conflict["cur"] == cur["tools"][0]  # cur 行完整回带
     json.dumps(payload)  # 不抛 TypeError = 无 MISSING 哨兵泄漏
+
+
+def test_conflict_json_serializable_when_old_side_missing_entirely():
+    """回归 (2026-09-29): 快照里没有、cur/new 都有的字段走 modify 冲突时,
+    旧实现 ``copy.deepcopy(MISSING)`` 生成新 object() 实例, 逃过 to_json 的
+    is MISSING 判定 → dry-run/apply HTTP 500。断言 JSON 可序列化且 old=None。
+    """
+    import json
+
+    old = bundle()  # 快照没有该工具 → 字段级 old 侧为 MISSING
+    cur = bundle(tools=[tool(description="cur 版")])
+    new = bundle(tools=[tool(description="factory 新版")])
+    result = merge_bundles(old, cur, new)
+    conflicts = [c for c in result.conflicts if c.name == "get_quote"]
+    assert conflicts, "cur/new 不一致应产生 modify 冲突"
+    payload = result.to_json()
+    for c in payload["conflicts"]:
+        if c["name"] == "get_quote":
+            assert c["old"] is None
+    json.dumps(payload)  # 不抛 TypeError = 无 deepcopy 出的哨兵泄漏

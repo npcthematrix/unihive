@@ -219,6 +219,17 @@ def _factory_changed_paths(old: Any, new: Any, path: str) -> list[str]:
     return [path]
 
 
+def _dc(value: Any) -> Any:
+    """deepcopy 但 ``MISSING`` 哨兵保持同一性。
+
+    ``copy.deepcopy(MISSING)`` 会产生**新的** ``object()`` 实例, 破坏
+    ``FieldConflict.to_json`` 的 ``is MISSING`` 判定, 让哨兵泄漏进 JSON
+    序列化 (dry-run/apply HTTP 500: "Object of type object is not
+    JSON serializable")。构造 FieldConflict 时一律经本函数。
+    """
+    return value if value is MISSING else copy.deepcopy(value)
+
+
 def merge_value(
     kind: str,
     entity: str,
@@ -258,7 +269,7 @@ def merge_value(
             conflicts=[
                 FieldConflict(
                     kind, entity, path, CONFLICT_MODIFY_DELETE, RESOLUTION_KEEP_CUR,
-                    old=copy.deepcopy(old), cur=MISSING, new=copy.deepcopy(new),
+                    old=_dc(old), cur=MISSING, new=_dc(new),
                 )
             ],
         )
@@ -274,7 +285,7 @@ def merge_value(
             conflicts=[
                 FieldConflict(
                     kind, entity, path, CONFLICT_DELETE_MODIFY, RESOLUTION_KEEP_CUR,
-                    old=copy.deepcopy(old), cur=copy.deepcopy(cur), new=MISSING,
+                    old=_dc(old), cur=_dc(cur), new=MISSING,
                 )
             ],
         )
@@ -309,7 +320,7 @@ def merge_value(
             conflicts=[
                 FieldConflict(
                     kind, entity, path, CONFLICT_MODIFY, RESOLUTION_ACCEPT_NEW,
-                    old=copy.deepcopy(old), cur=copy.deepcopy(cur), new=copy.deepcopy(new),
+                    old=_dc(old), cur=_dc(cur), new=_dc(new),
                 )
             ],
         )
@@ -318,7 +329,7 @@ def merge_value(
         conflicts=[
             FieldConflict(
                 kind, entity, path, CONFLICT_MODIFY, RESOLUTION_KEEP_CUR,
-                old=copy.deepcopy(old), cur=copy.deepcopy(cur), new=copy.deepcopy(new),
+                old=_dc(old), cur=_dc(cur), new=_dc(new),
             )
         ],
     )
