@@ -19,15 +19,20 @@ tools:
   - name: period
     required: true
     type: str
-    description: K线周期：`'1m'`（1分钟）/`'5m'`（5分钟）/`'15m'`（15分钟）/`'30m'`（30分钟）/`'1h'`（60分钟）/`'1d'`（日线）/`'1w'`（周线）
+    description: 'K线周期：`''1m''`（1分钟）/`''5m''`（5分钟）/`''10m''`（10分钟）/`''15m''`（15分钟）/`''30m''`（30分钟）/`''1h''`（60分钟）/`''45d''`（45日）/`''1d''`（日线）/`''1w''`（周线）/`''1mon''`（月线）/`''1q''`（季线）/`''1y''`（年线）'
     enum:
-    - 15m
-    - 1d
-    - 1h
     - 1m
-    - 1w
-    - 30m
     - 5m
+    - 10m
+    - 15m
+    - 30m
+    - 1h
+    - 45d
+    - 1d
+    - 1w
+    - 1mon
+    - 1q
+    - 1y
   - name: start_time
     required: false
     type: str
@@ -689,7 +694,7 @@ tools:
     required: false
     type: str
     description: 目标板块简称；**为空字符串时发送到"临时条件股"板块**
-  - name: stocks
+  - name: stock_list
     required: false
     type: List[str]
     description: 股票代码列表；**传入空列表 `[]` = 清空板块**
@@ -893,52 +898,12 @@ tools:
     type: str
     description: 逗号分隔的数字字符串，最多16个参数，如 `'12,26,9'`
 - name: formula_get_data
-  description: 在调用公式后，获取当前设置的公式数据结果。
+  description: 取回此前设置的公式数据结果（无入参；需先通过 formula_xg / formula_exp / formula_process_* 等设置好公式与股票参数）。
   routing: formula_get_data
   upstream_tool_mapping:
     tdx_quant: formula_get_data
   dangerous: true
-  params:
-  - name: formula_name
-    required: true
-    type: str
-    description: 公式名称
-  - name: formula_arg
-    required: false
-    type: str
-    description: 公式参数字符串
-  - name: return_count
-    required: false
-    type: int
-    description: 每只股票返回结果数量
-  - name: return_date
-    required: false
-    type: bool
-    description: 是否返回日期
-  - name: stock_list
-    required: true
-    type: List[str]
-    description: 股票代码列表
-  - name: stock_period
-    required: false
-    type: str
-    description: K线周期，默认 `'1d'`
-  - name: start_time
-    required: false
-    type: str
-    description: 开始日期
-  - name: end_time
-    required: false
-    type: str
-    description: 结束日期
-  - name: count
-    required: false
-    type: int
-    description: K线数量
-  - name: dividend_type
-    required: false
-    type: int
-    description: 复权类型
+  params: []
 - name: formula_process_mul_zb
   description: 对多只股票批量调用通达信指标公式，参数含义同 `formula_process_mul_xg`，额外支持 `xsflag` 精度控制。
   routing: formula_process_mul_zb
