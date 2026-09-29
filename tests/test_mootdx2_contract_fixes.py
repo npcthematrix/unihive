@@ -779,18 +779,6 @@ class TestLowDailyMetaTuple:
         assert meta["kind"] == "stock"
         assert not hasattr(client, "_last_daily_meta")
 
-    async def test_disabled_l1_path_does_not_raise_unbound_local(self):
-        """cachetools ImportError 路径: parsed_for_key 未定义不应 UnboundLocalError。"""
-        client = make_client()
-        client._DAILY_L1_ENABLED = False
-        client._reader_semaphore = asyncio.Semaphore(4)
-        client._reader = FakeReader(daily_df=None)
-
-        result = await client.get_daily("600000")
-
-        assert result.success is True
-        assert result.data is None  # no_data, 不是 500/internal_error
-
 
 class TestLowUnusualLabels:
     @staticmethod

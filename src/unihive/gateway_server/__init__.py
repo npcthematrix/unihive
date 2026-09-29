@@ -25,6 +25,7 @@ from ..core.config_db import resolve_project_path
 # register_tool: 历史 facade 入口 (测试依赖), 子模块内部走 registry.register_tool。
 from ..core.registry import register_tool  # noqa: F401
 from ..core.router import Router
+from ..core.error_buffer import ErrorBuffer
 from ..storage.cache import Cache
 from ..storage.config_store import ConfigStore
 from ..utils.config_loader import (
@@ -161,6 +162,9 @@ class GatewayServer(
         self.upstreams: dict[str, UpstreamClient | FuyaoClient | MooTDX2Client | TdxQuantClient] = {}
         self.cache: Cache | None = None
         self.router: Router | None = None
+        # MCP 工具调用错误缓冲 (内存环形 + SQLite 溢写; 2026-09-28 错误跟踪页)。
+        # _execute_cached 失败出口捕获结构化记录 (不含入参)。
+        self._error_buffer: ErrorBuffer | None = None
         self.mcp: FastMCP | None = None
         # 上游启用/禁用热开关 (2026-09-18):
         # tool_specs 存全量 spec (validate 对全部生效, 与 enabled 无关);

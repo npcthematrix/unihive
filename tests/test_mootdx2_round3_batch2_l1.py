@@ -40,7 +40,6 @@ class TestL1SlotUnit:
 
     def test_hit_miss_counters(self):
         slot = _L1Slot("t", maxsize=8, ttl=10)
-        assert slot.enabled
         assert slot.get(("k",)) is None  # miss
         assert slot.misses == 1
         slot.put(("k",), [{"a": 1}])
@@ -61,19 +60,6 @@ class TestL1SlotUnit:
         slot.put(("k",), [1])
         assert len(slot) == 1
         slot.clear()
-        assert len(slot) == 0
-
-    def test_disabled_when_cachetools_missing(self):
-        """ImportError 降级: enabled=False, get/put 静默 no-op."""
-        slot = _L1Slot.__new__(_L1Slot)  # bypass __init__
-        slot._enabled = False
-        slot._cache = None
-        slot.hits = 0
-        slot.misses = 0
-        assert slot.enabled is False
-        assert slot.get(("k",)) is None
-        slot.put(("k",), [1])  # no-op
-        slot.clear()  # no-op
         assert len(slot) == 0
 
 

@@ -41,11 +41,13 @@ class Normalizer:
         source: str | None = None,
         hops: list = None,
         warn: str | None = None,
+        error_kind: str | None = None,
     ) -> dict:
         """标准化网关响应格式。
 
         ``warn`` 为成功路径的非阻断提示（消歧/no_data/truncated 等），
         为 None 时不出现在信封中，保持既有消费者看到的字段集合不变。
+        ``error_kind`` 为全链失败时的网关级错误类别 (仅失败路径)。
         """
         resp = {
             "success": success,
@@ -56,4 +58,6 @@ class Normalizer:
         }
         if warn is not None:
             resp["warn"] = warn
+        if error_kind is not None:
+            resp["error_kind"] = error_kind
         return resp

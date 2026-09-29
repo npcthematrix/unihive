@@ -10,11 +10,57 @@ import os
 import time
 
 from ..core.normalizer import Normalizer
+from ..core.error_buffer import ErrorRecord
 
 # /api/runtime 调用时间戳环的回溯窗口
 CALL_LOOKBACK_SEC = 300.0
 
 logger = logging.getLogger(__name__)
+
+# 入参快照上限: 单个值字符串截断长度 / 键数上限。
+# 入参可能含长文本 (如 wencai 自然语言条件), 截断防错误记录膨胀。
+_PARAM_VALUE_MAXLEN = 500
+_PARAM_MAX_KEYS = 30
+
+
+def _safe_params_snapshot(params: dict) -> dict:
+    """入参做安全快照: 浅拷贝 + 标量化 + 截断。
+
+    - 不引用原 dict (params 在调用后可能被调用方修改/复用);
+    - 值统一转成 JSON 安全的基础类型 (str/int/float/bool/None/list/dict),
+      非标量转 str 后截断;
+    - 限制键数与单值长度, 防超长入参塞爆内存缓冲/SQLite。
+    """
+    if not isinstance(params, dict):
+        return {}
+    snapshot: dict = {}
+    for i, (k, v) in enumerate(params.items()):
+        if i >= _PARAM_MAX_KEYS:
+            snapshot["__truncated_keys__"] = len(params) - _PARAM_MAX_KEYS
+            break
+        key = str(k)
+        try:
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                val = v
+            elif isinstance(v, (list, tuple)):
+                val = [_scalar(x) for x in list(v)[:_PARAM_MAX_KEYS]]
+            elif isinstance(v, dict):
+                val = {str(a): _scalar(b) for a, b in list(v.items())[:_PARAM_MAX_KEYS]}
+            else:
+                val = _scalar(v)
+            if isinstance(val, str) and len(val) > _PARAM_VALUE_MAXLEN:
+                val = val[:_PARAM_VALUE_MAXLEN] + "…<truncated>"
+            snapshot[key] = val
+        except Exception:
+            snapshot[key] = f"<unserializable: {type(v).__name__}>"
+    return snapshot
+
+
+def _scalar(v):
+    """把任意值转成 JSON 安全标量 (str 截断由调用方处理)。"""
+    if isinstance(v, (str, int, float, bool)) or v is None:
+        return v
+    return repr(v)[:_PARAM_VALUE_MAXLEN]
 
 
 class CachedExecutionMixin:
@@ -151,6 +197,7 @@ class CachedExecutionMixin:
                     # 成功路径的非阻断提示（消歧/no_data/truncated）随信封透传，
                     # 并随 {**resp} 一起进入缓存，命中路径经 **cached 自动带回。
                     warn=getattr(result, "warn", None),
+                    error_kind=getattr(result, "error_kind", None),
                 )
                 # 仅当本次实际命中远程 fuyao 源才写缓存：若链上本地源优先并成功，
                 # 不能把本地结果按 fuyao 的 key 缓存，否则后续 fuyao 直查会误命中。
@@ -165,6 +212,18 @@ class CachedExecutionMixin:
                     await self.cache.set(key, {**resp, "hops": []}, ttl=ttl)
                 # 标记 miss，让消费者区分"缓存端点本次未命中"与"无缓存端点"
                 resp.setdefault("cache_hit", False)
+                return resp
+
+            async def _route_then_capture() -> dict:
+                """路由 + 失败时捕获错误记录 (错误跟踪页数据源)。
+
+                仅当 ``resp['success'] is False`` 才入缓冲 (成功路径不记录,
+                避免噪音)。记录附传入参数, 便于复现。wrapper 在 single-flight
+                leader / 直查两条路径共用, 保证所有失败都捕获一次。
+                """
+                resp = await _route_and_respond()
+                if not resp.get("success"):
+                    self._record_error_entry(name, route_key, resp, params)
                 return resp
 
             # HIGH 1 (2026-09-07 4th-round audit): cache miss 后到 route 之间
@@ -192,7 +251,7 @@ class CachedExecutionMixin:
                 # miss 只对发起者记一次, waiter 复用 leader 的 future 不重复计
                 self.cache.record_miss()
                 try:
-                    resp = await _route_and_respond()
+                    resp = await _route_then_capture()
                     future.set_result(resp)
                     return resp
                 except BaseException as exc:
@@ -204,7 +263,7 @@ class CachedExecutionMixin:
                     self._in_flight_requests.pop(key, None)
 
             # can_cache=False 走无单飞直接路径
-            return await _route_and_respond()
+            return await _route_then_capture()
         finally:
             async with self._requests_lock:
                 self._active_requests -= 1
@@ -223,6 +282,46 @@ class CachedExecutionMixin:
         cutoff = now_mono - CALL_LOOKBACK_SEC
         while self._call_timestamps and self._call_timestamps[0] < cutoff:
             self._call_timestamps.popleft()
+
+    def _record_error_entry(
+        self, name: str, route_key: str, resp: dict, params: dict,
+    ) -> None:
+        """失败响应入错误缓冲 (错误跟踪页数据源)。
+
+        从 resp 取 hops/source/error 构造 ``ErrorRecord``, 并附传入参数
+        (2026-09-29 应需求加入, 便于复现)。``_error_buffer`` 可能为 None
+        (init 失败/测试旁路), 优雅跳过。
+        """
+        buf = getattr(self, "_error_buffer", None)
+        if buf is None:
+            return
+        hops_raw = resp.get("hops") or []
+        # hops 在响应信封里是 source 名字符串列表 (Normalizer.to_gateway_response);
+        # 若上游返回的是 RouteHop 列表则取结构化字段。两者都容错。
+        hops: list[dict] = []
+        for h in hops_raw:
+            if isinstance(h, dict):
+                hops.append({
+                    "source": h.get("source"),
+                    "success": h.get("success"),
+                    "error": h.get("error"),
+                    "duration_ms": h.get("duration_ms"),
+                })
+            else:
+                hops.append({"source": str(h), "success": None, "error": None})
+        buf.append(ErrorRecord(
+            ts=time.time(),
+            tool=name,
+            route_key=route_key,
+            source=resp.get("source"),
+            success=bool(resp.get("success")),
+            error=str(resp.get("error") or "")[:1000],  # 截断防超长错误塞爆缓冲
+            duration_ms=0,  # _execute_cached 不持单调用计时; hops 内有逐跳耗时
+            hops=hops,
+            # 安全拷贝 + 截断, 避免引用可变 params 被后续修改 / 超长值塞爆缓冲
+            params=_safe_params_snapshot(params),
+            error_kind=resp.get("error_kind"),
+        ))
 
     def get_runtime_snapshot(self) -> dict:
         """运行态快照 (供 console_api GET /api/runtime)。

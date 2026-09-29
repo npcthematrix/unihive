@@ -119,12 +119,11 @@ def test_get_daily_batch_local_success(client):
     mock_reader.daily.return_value = mock_df
 
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        # Use sync method directly to avoid executor issues in tests
-        result, warnings, has_struct = client._get_daily_batch_local_sync(
-            code_list=["sh600036", "sh600519"],
-            adjust="none",
-            start_date="",
-            end_date=""
+        # 生产唯一批量实现: async 核心逐 symbol 调度 (测试专用 sync 副本已删)
+        result, warnings, has_struct = asyncio.run(
+            client._get_daily_batch_async(
+                ["sh600036", "sh600519"], "none", "", "", 0,
+            )
         )
     assert "sh600036" in result
     assert "sh600519" in result
@@ -148,11 +147,10 @@ def test_get_daily_batch_local_with_date_filter(client):
     mock_reader.daily.return_value = mock_df
 
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        result, warnings, has_struct = client._get_daily_batch_local_sync(
-            code_list=["sh600036"],
-            adjust="none",
-            start_date="2026-01-01",
-            end_date="2026-06-30"
+        result, warnings, has_struct = asyncio.run(
+            client._get_daily_batch_async(
+                ["sh600036"], "none", "2026-01-01", "2026-06-30", 0,
+            )
         )
     assert "sh600036" in result
     # 返回数据
@@ -176,11 +174,10 @@ def test_get_daily_batch_local_with_adjust(client):
     mock_reader.daily.return_value = mock_df
 
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        result, warnings, has_struct = client._get_daily_batch_local_sync(
-            code_list=["sh600036"],
-            adjust="qfq",
-            start_date="",
-            end_date=""
+        result, warnings, has_struct = asyncio.run(
+            client._get_daily_batch_async(
+                ["sh600036"], "qfq", "", "", 0,
+            )
         )
     # Verify qfq is passed to Reader
     assert mock_reader.daily.call_args.kwargs.get("adjust") == "qfq"
@@ -975,11 +972,10 @@ def test_get_daily_batch_local_two_codes(client):
     mock_reader.daily.side_effect = [mock_df_600036, mock_df_600519]
 
     with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
-        results, warnings, has_struct = client._get_daily_batch_local_sync(
-            code_list=["sh600036", "sh600519"],
-            adjust="none",
-            start_date="",
-            end_date=""
+        results, warnings, has_struct = asyncio.run(
+            client._get_daily_batch_async(
+                ["sh600036", "sh600519"], "none", "", "", 0,
+            )
         )
 
     # key 保留输入的前缀格式

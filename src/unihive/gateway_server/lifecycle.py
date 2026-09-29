@@ -12,6 +12,7 @@ import sys
 import time
 
 from ..core.config_db import resolve_project_path
+from ..core.error_buffer import ErrorBuffer
 from ..core.proxy_settings import ProxySettings
 from ..core.router import Router
 from ._helpers import coerce_float_field, coerce_int_field
@@ -166,6 +167,11 @@ class LifecycleMixin:
                 ),
             ))
             await self.cache.initialize()
+
+            # 错误缓冲 (内存环形 + SQLite 溢写; 错误跟踪页数据源)。
+            # init 失败降级纯内存, 不阻断启动 (与 cache 同款容错)。
+            self._error_buffer = ErrorBuffer()
+            await self._error_buffer.initialize()
 
             # 启动周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4):
             # 间隔 5 min, 等价于把 LRU 上界从「50000 条随时混过期」
@@ -445,6 +451,21 @@ class LifecycleMixin:
                 except asyncio.TimeoutError:
                     logger.warning("cache close() timed out after 2s")
                 self.cache = None
+
+            # 关闭错误缓冲 (flush 残留内存到 SQLite 后释放引擎)。
+            # getattr 兜底: 测试用 __new__ 跳过 __init__ 时字段不存在。
+            error_buffer = getattr(self, "_error_buffer", None)
+            if error_buffer is not None:
+                try:
+                    await asyncio.wait_for(
+                        error_buffer._force_flush(), timeout=2.0
+                    )
+                    await asyncio.wait_for(error_buffer.close(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("error_buffer close() timed out after 2s")
+                except Exception as e:
+                    logger.warning("error_buffer close() failed: %s", e)
+                self._error_buffer = None
 
             # 关闭 SQLite 配置覆盖层连接池
             # getattr 兜底: 测试用 __new__ 跳过 __init__ 时字段不存在

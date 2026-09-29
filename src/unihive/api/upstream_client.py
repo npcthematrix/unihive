@@ -24,6 +24,74 @@ class UpstreamStatus(Enum):
     UNAVAILABLE = "unavailable"
 
 
+class ErrorKind(str, Enum):
+    """网关级统一错误类别 (跨上游归一)。
+
+    各上游 client 的细分 ``error_detail.error_type`` 字符串不同
+    (mootdx2/thsdk/tdx_quant 各自一套枚举), router 经 :func:`classify_error_kind`
+    归一到本枚举, 以便:
+      - 产出准确的对外文案 (参数错 vs 服务不可用, 而不是笼统的
+        "All upstream failed");
+      - 前端错误跟踪页按类别筛选 / 着色;
+      - 调用方判断是否值得重试 (``retryable``)。
+    """
+
+    INVALID_REQUEST = "invalid_request"          # 参数/代码/品种/鉴权错, 不可重试
+    UPSTREAM_UNAVAILABLE = "upstream_unavailable"  # 上游故障/未就绪, 可重试
+    TIMEOUT = "timeout"                          # 调用超时, 可重试
+    RATE_LIMITED = "rate_limited"                # 触发限流, 稍后重试
+    NO_DATA = "no_data"                          # 查询成功但无数据 (业务态, 非错误)
+    INTERNAL_ERROR = "internal_error"            # 未预期异常, 不可重试
+
+    @property
+    def retryable(self) -> bool:
+        return self in (
+            ErrorKind.UPSTREAM_UNAVAILABLE,
+            ErrorKind.TIMEOUT,
+            ErrorKind.RATE_LIMITED,
+        )
+
+
+# 各上游细分 error_type → canonical ErrorKind。
+# 未列出的一律回落 INTERNAL_ERROR (保守, 不当成可重试)。
+_ERROR_TYPE_TO_KIND: dict[str, "ErrorKind"] = {
+    # mootdx2 MooTDXErrorType
+    "invalid_param": ErrorKind.INVALID_REQUEST,
+    "invalid_symbol": ErrorKind.INVALID_REQUEST,
+    "stock_not_found": ErrorKind.INVALID_REQUEST,
+    "sector_not_found": ErrorKind.INVALID_REQUEST,
+    "no_data": ErrorKind.NO_DATA,
+    "rate_limited": ErrorKind.RATE_LIMITED,
+    "timeout_error": ErrorKind.TIMEOUT,
+    "timeout": ErrorKind.TIMEOUT,
+    "connection_error": ErrorKind.UPSTREAM_UNAVAILABLE,
+    "server_unavailable": ErrorKind.UPSTREAM_UNAVAILABLE,
+    "tdx_not_installed": ErrorKind.UPSTREAM_UNAVAILABLE,
+    "tdx_sector_file_missing": ErrorKind.UPSTREAM_UNAVAILABLE,
+    "tdx_custom_sector_unavailable": ErrorKind.UPSTREAM_UNAVAILABLE,
+    # thsdk ThsdkErrorType
+    "not_authenticated": ErrorKind.INVALID_REQUEST,
+    "auth_failed": ErrorKind.INVALID_REQUEST,
+    "invalid_request": ErrorKind.INVALID_REQUEST,
+    "init_failed": ErrorKind.UPSTREAM_UNAVAILABLE,
+    "api_error": ErrorKind.UPSTREAM_UNAVAILABLE,
+    "unknown": ErrorKind.INTERNAL_ERROR,
+    "internal_error": ErrorKind.INTERNAL_ERROR,
+}
+
+
+def classify_error_kind(error_type: str | None) -> "ErrorKind":
+    """上游细分 error_type → canonical ErrorKind。
+
+    None / 未识别值回落 :attr:`ErrorKind.INTERNAL_ERROR` (保守)。
+    """
+    if not error_type:
+        return ErrorKind.INTERNAL_ERROR
+    return _ERROR_TYPE_TO_KIND.get(
+        str(error_type), ErrorKind.INTERNAL_ERROR
+    )
+
+
 @dataclass
 class UpstreamConfig:
     name: str
@@ -49,6 +117,18 @@ class ToolResult:
     error_detail: dict | None = None  # 详细错误信息 {"error_type": "...", "message": "...", "recoverable": true/false}
     source: str | None = None
     duration_ms: int = 0
+
+    @property
+    def error_kind(self) -> str | None:
+        """网关级统一错误类别，从 ``error_detail.error_type`` 即时归一。
+
+        派生属性而非构造字段: 各上游 client 的失败构造点很多，让每个点都显式
+        填 error_kind 容易漏; 统一从已有的 error_type 推导则零改动、不漂移。
+        成功路径 (error_detail 无 error_type) 返回 None。
+        """
+        if not self.error_detail:
+            return None
+        return classify_error_kind(self.error_detail.get("error_type")).value
 
 
 @dataclass

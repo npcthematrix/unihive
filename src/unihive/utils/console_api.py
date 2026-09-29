@@ -2669,3 +2669,53 @@ def build_cache_routes() -> list:
             methods=["POST"],
         ),
     ]
+
+
+async def errors_api(req: "Request") -> "JSONResponse":
+    """GET /api/errors — MCP 工具调用错误跟踪 (错误跟踪页数据源)。
+
+    query:
+      - limit (默认 50): 返回条数上限
+      - history (默认 false): true 时返回 SQLite 历史 + 内存近期合并去重;
+        false 仅内存近期 (秒级轮询零 I/O)
+    """
+    from starlette.responses import JSONResponse
+
+    value, error_resp = _positive_int_param(req.query_params, "limit", 50)
+    if error_resp is not None:
+        return error_resp
+    history = req.query_params.get("history", "false").strip().lower() in ("1", "true", "yes")
+    server = _gateway_server
+    buf = getattr(server, "_error_buffer", None) if server else None
+    if buf is None:
+        return JSONResponse({
+            "items": [],
+            "in_memory": 0,
+            "in_db": 0,
+            "latest_ts": None,
+            "history_available": False,
+            "timestamp": int(time.time()),
+        })
+    try:
+        items = await buf.query(limit=value, history=history)
+    except Exception:
+        logger.exception("errors_api raised")
+        return JSONResponse({"error": "errors_read_failed"}, status_code=500)
+    stats = buf.stats()
+    return JSONResponse({
+        "items": items,
+        "in_memory": stats["in_memory"],
+        "in_db": stats["in_db"],
+        "latest_ts": stats["latest_ts"],
+        "history_available": stats["in_db"] > 0 or history,
+        "timestamp": int(time.time()),
+    })
+
+
+def build_error_routes() -> list:
+    """错误跟踪路由 (挂载进 gateway_server http app)。"""
+    from starlette.routing import Route
+
+    return [
+        Route("/api/errors", errors_api),
+    ]

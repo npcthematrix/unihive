@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ..api.upstream_client import ToolResult, UpstreamClient
+from ..api.upstream_client import ErrorKind, ToolResult, UpstreamClient
 from .proxy_adapter import Mootdx2ToTdxQuantAdapter, ProxyAdapterError
 from .proxy_settings import ProxySettings
 from .rate_limiter import AsyncTokenBucketLimiter, get_default_limiter
@@ -30,6 +30,9 @@ class RouteHop:
     duration_ms: int
     success: bool
     error: str | None = None
+    # 网关级错误类别 (invalid_request/timeout/...); 失败路径从上游
+    # ToolResult.error_kind 或 router 自身的超时判定填, 供最终文案分类。
+    error_kind: str | None = None
 
 
 @dataclass
@@ -44,6 +47,8 @@ class RouteResult:
     # 成功响应的非阻断告警（如裸 000xxx 消歧提示、truncated、BJ 批次降级）。
     # ToolResult.error 只在失败路径进信封，成功路径的提示经此字段透传。
     warn: str | None = None
+    # 全链失败时的网关级错误类别 (invalid_request/upstream_unavailable/...)。
+    error_kind: str | None = None
 
 
 # no_data 业务态标记（与 models 层 MooTDXErrorType.NO_DATA.value 保持字面量一致，
@@ -163,6 +168,56 @@ class Router:
     def _get_upstream_tool_mapping(self, gateway_tool: str) -> dict[str, str]:
         """网关工具到上游工具的映射。从 config 读取。"""
         return self.upstream_tool_mapping.get(gateway_tool, {})
+
+    def _build_failure_message(
+        self, gateway_tool: str, hops: list[RouteHop],
+    ) -> tuple[str, str]:
+        """根据各跳错误类别构造可读、可区分的失败文案。
+
+        归类规则 (决定整体语义):
+          - 若所有失败 hop 都是 ``invalid_request`` → 整体判为参数/输入问题
+            (不可重试), 文案引导用户检查入参;
+          - 否则视为数据源侧问题 (默认 upstream_unavailable, 可重试)。
+        单源 / 多源用不同措辞, 不再输出 Python dict repr。
+
+        Returns:
+            (面向调用方的消息, 整体错误类别 ErrorKind 值)
+        """
+        failed = [h for h in hops if not h.success]
+        if not failed:
+            return (f"工具 {gateway_tool} 未返回数据", ErrorKind.INTERNAL_ERROR.value)
+
+        # 逐跳的 "数据源: 错误" 可读拼接 (替代 dict repr)
+        detail_parts = [
+            f"{h.source}: {h.error or '未知错误'}" for h in failed
+        ]
+
+        kinds = {h.error_kind for h in failed if h.error_kind}
+        all_invalid = kinds and kinds == {ErrorKind.INVALID_REQUEST.value}
+
+        if all_invalid:
+            head = f"请求参数有误，{len(failed)} 个数据源均拒绝该调用"
+            kind = ErrorKind.INVALID_REQUEST.value
+        elif len(failed) == 1:
+            h = failed[0]
+            if h.error_kind == ErrorKind.TIMEOUT.value:
+                head = f"数据源 {h.source} 调用超时"
+                kind = ErrorKind.TIMEOUT.value
+            elif h.error_kind == ErrorKind.RATE_LIMITED.value:
+                head = f"数据源 {h.source} 触发限流，请稍后重试"
+                kind = ErrorKind.RATE_LIMITED.value
+            else:
+                head = f"数据源 {h.source} 调用失败"
+                kind = ErrorKind.UPSTREAM_UNAVAILABLE.value
+        else:
+            head = f"全部 {len(failed)} 个数据源当前均不可用，请稍后重试"
+            # 多源混合类别时, 若含超时则归超时, 否则不可用
+            if ErrorKind.TIMEOUT.value in kinds and len(kinds) == 1:
+                kind = ErrorKind.TIMEOUT.value
+            else:
+                kind = ErrorKind.UPSTREAM_UNAVAILABLE.value
+
+        return (f"{head}（{'；'.join(detail_parts)}）", kind)
 
     async def route(
         self,
@@ -324,6 +379,7 @@ class Router:
                     duration_ms=int((time.time() - hop_start) * 1000),
                     success=False,
                     error=f"call_tool timed out after {timeout}s",
+                    error_kind=ErrorKind.TIMEOUT.value,
                 )
                 hops.append(hop)
                 continue
@@ -333,7 +389,8 @@ class Router:
                 tool_name=tool_name,
                 duration_ms=int((time.time() - hop_start) * 1000),
                 success=result.success,
-                error=result.error
+                error=result.error,
+                error_kind=getattr(result, "error_kind", None),
             )
             hops.append(hop)
 
@@ -356,17 +413,23 @@ class Router:
                     f"[{gateway_tool}] Failed via {source}: {result.error}"
                 )
 
-        # 所有上游都失败
-        total_duration = int((time.time() - start_time) * 1000)
-        errors = {hop.source: hop.error for hop in hops if hop.error}
+        # 所有上游都失败: 按错误类别生成准确、可读的文案 (替代旧的
+        # "All upstream failed: {python dict repr}")。
+        total_duration = int((time.time() - start_time) * 100)
+        message, overall_kind = self._build_failure_message(gateway_tool, hops)
 
-        logger.error(f"[{gateway_tool}] All upstream failed: {errors}")
+        if overall_kind == ErrorKind.INVALID_REQUEST.value:
+            # 参数/输入类问题是用户侧错误, warning 而非 error (非网关故障)
+            logger.warning(f"[{gateway_tool}] invalid request: {message}")
+        else:
+            logger.error(f"[{gateway_tool}] failed ({overall_kind}): {message}")
 
         return RouteResult(
             success=False,
-            error=f"All upstream failed: {errors}",
+            error=message,
             source=None,
             hops=hops,
+            error_kind=overall_kind,
         )
 
     async def _try_proxy(

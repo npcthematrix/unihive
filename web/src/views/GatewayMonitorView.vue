@@ -125,6 +125,14 @@
           @reset="onResetL1"
         />
       </el-tab-pane>
+
+      <!-- ===== 错误跟踪 ===== -->
+      <el-tab-pane name="errors">
+        <template #label>
+          <span class="tab-label">错误跟踪</span>
+        </template>
+        <ErrorTrackingPanel :active="activeTab === 'errors'" />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -146,6 +154,7 @@ import UpstreamOverviewPanel, { type UpstreamRow } from '@/components/runtime/Up
 import RespCacheCard from '@/components/runtime/RespCacheCard.vue'
 import Mootdx2L1Card from '@/components/runtime/Mootdx2L1Card.vue'
 import PipelinePanel from '@/components/runtime/PipelinePanel.vue'
+import ErrorTrackingPanel from '@/components/runtime/ErrorTrackingPanel.vue'
 
 const {
   metrics,
@@ -191,7 +200,7 @@ const session = computed(() => marketSession(new Date(nowSec.value * 1000)))
 // ===== 子标签 ↔ URL (?tab=) 双向同步, 参照 OmniView =====
 const route = useRoute()
 const router = useRouter()
-const TAB_KEYS = ['overview', 'gateway', 'pipeline', 'cache'] as const
+const TAB_KEYS = ['overview', 'gateway', 'pipeline', 'cache', 'errors'] as const
 type MonitorTab = (typeof TAB_KEYS)[number]
 
 // 初始标签从 URL 解析 (支持刷新/分享链接定位), 非法值回退 overview
