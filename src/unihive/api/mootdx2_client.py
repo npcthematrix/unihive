@@ -3438,68 +3438,60 @@ class MooTDX2Client:
             return self._error_result(e, f"get_k_data({code})")
 
     # ========== 搜索股票 ==========
-    def _search_stock_sync(self, keyword: str):
-        """同步搜索股票（优先本地 block 文件，fallback 到 SQLite）
+    def _search_stock_via_reader(self, keyword: str):
+        """block 文件搜索段（仅 Reader 访问, 须在 _reader_gate 内调用）
+
+        2026-09-29 审视批B H3: 原 ``_search_stock_sync`` 把 Reader block
+        与 SQLite 回退捆绑执行, 二者整体持闸 —— SQLite 全表扫 70-350ms
+        白占 1/reader_limit 并发额度。现拆为两段: 本函数只走 block 源
+        （在闸内）, SQLite 回退由 async 入口在闸外单独执行。
 
         V7.73-64 注意事项：mootdx2 `reader.block()` 接口在新版通达信已废弃
         （官方 dat 文件迁到 infoharbor_block.dat / spblock.dat，mootdx2 未适配)。
-        当 block 为空时，fallback 到 SQLite (board.db) 搜索。
-
-        2026-09-28 Round-3 H1-silent 修订:
-          - 双源 (tdxdir + board.db) 都不可用 → 抛 ``_SearchDataUnavailable``
-            让 async 入口显式包装为 no_data (旧码静默 success=True data=[])。
-          - ``reader.block()`` 失败 ``logger.debug`` → ``logger.warning``
-            (运维可见, 不依赖默认 INFO 级别以下被吞)。
+        block 不可用/空/异常时返回 None（不是空列表）, 语义区分:
+          - None  → block 源不可用, 调用方应回退 SQLite
+          - []    → block 源可用但无匹配, 不回退（与旧 ``_search_stock_sync``
+                    "block 有数据则以其结论为准" 行为一致）
         """
-        # H1-silent 前置守卫: 双源不可用显式抛错, 不再静默
-        has_tdx = bool(self._get_tdxdir())
-        db_path = resolve_project_path(None, "data/board.db")
-        has_db = db_path.exists()
-        if not has_tdx and not has_db:
-            raise _SearchDataUnavailable(
-                f"search_stock: tdxdir 与 board.db 均不可用"
-                f" (tdxdir={has_tdx}, board.db={db_path})"
-            )
-
         # 优先尝试本地 block 文件
         try:
             reader = self._get_reader()
-            if has_tdx:
-                df_block = reader.block()
-                if df_block is not None and len(df_block) > 0:
-                    kw = keyword.lower()
-                    # 2026-09-15 P0 (MOOTDX2 性能审视 M3): 改用 pandas
-                    # str.contains 向量化代替 iterrows, 5000 行从 ~1s 降到
-                    # ~5ms。name 也走 str.contains, case=False 覆盖原
-                    # name.lower() 比对。
-                    code_col = df_block["code"].astype(str)
-                    name_col = df_block["name"].astype(str) if "name" in df_block.columns else None
-                    mask = code_col.str.contains(kw, case=False, na=False)
-                    if name_col is not None:
-                        mask = mask | name_col.str.contains(kw, case=False, na=False)
-                    matches = df_block[mask].head(20)
-                    result = []
-                    for code, name in zip(
-                        code_col[matches.index].tolist(),
-                        (name_col[matches.index].tolist() if name_col is not None else [None] * len(matches)),
-                    ):
-                        if not code:
-                            continue
-                        code = str(code)
-                        # FLAT block 行为 7 位 "市场位+6 位裸码", 归一化成裸码
-                        bare = code[1:] if len(code) == 7 and code[0].isdigit() else code
-                        result.append({
-                            "code": bare,
-                            "market": _classify_search_code(code),
-                            "name": name,
-                        })
-                    return result
+            if not bool(self._get_tdxdir()):
+                return None
+            df_block = reader.block()
+            if df_block is None or len(df_block) == 0:
+                return None
+            kw = keyword.lower()
+            # 2026-09-15 P0 (MOOTDX2 性能审视 M3): 改用 pandas
+            # str.contains 向量化代替 iterrows, 5000 行从 ~1s 降到
+            # ~5ms。name 也走 str.contains, case=False 覆盖原
+            # name.lower() 比对。
+            code_col = df_block["code"].astype(str)
+            name_col = df_block["name"].astype(str) if "name" in df_block.columns else None
+            mask = code_col.str.contains(kw, case=False, na=False)
+            if name_col is not None:
+                mask = mask | name_col.str.contains(kw, case=False, na=False)
+            matches = df_block[mask].head(20)
+            result = []
+            for code, name in zip(
+                code_col[matches.index].tolist(),
+                (name_col[matches.index].tolist() if name_col is not None else [None] * len(matches)),
+            ):
+                if not code:
+                    continue
+                code = str(code)
+                # FLAT block 行为 7 位 "市场位+6 位裸码", 归一化成裸码
+                bare = code[1:] if len(code) == 7 and code[0].isdigit() else code
+                result.append({
+                    "code": bare,
+                    "market": _classify_search_code(code),
+                    "name": name,
+                })
+            return result
         except Exception as e:
             # H1-silent: debug → warning, 运维不再依赖 INFO 级别以下被吞
             logger.warning(f"search_stock reader.block() failed: {e}")
-
-        # Fallback: 从 SQLite (board.db) 搜索
-        return self._search_stock_from_sqlite(keyword)
+            return None
 
     def _search_stock_from_sqlite(self, keyword: str) -> list[dict]:
         """从 board.db.sector_stocks 搜索股票 (名称/代码 LIKE, 无拼音列)。"""
@@ -3516,11 +3508,24 @@ class MooTDX2Client:
         try:
             conn = sqlite3.connect(str(db_path))
             kw = f"%{keyword}%"
+            # 2026-09-29 审视批B H3: 前导通配 LIKE 走不了索引, 原
+            # "全表扫 + DISTINCT temp B-tree" 一次吃满全部 15.8 万行。拆成
+            # 两个各带 LIMIT 20 的子查询 UNION 去重, 命中密集时各自凑满 20
+            # 行即提前终止扫描; 无匹配时退化为两次全表扫, 与旧码同量级。
+            # 注: 部分 SQLite 不允许复合 SELECT 的臂上带 LIMIT, 须再包一层
+            # FROM 子查询 (arm LIMIT 写进括号内)。
             cursor = conn.execute("""
-                SELECT DISTINCT stock_code, stock_name
-                FROM sector_stocks
-                WHERE stock_name LIKE ? OR stock_code LIKE ?
-                LIMIT 20
+                SELECT stock_code, stock_name FROM (
+                    SELECT stock_code, stock_name FROM (
+                        SELECT stock_code, stock_name FROM sector_stocks
+                        WHERE stock_name LIKE ? LIMIT 20
+                    )
+                    UNION
+                    SELECT stock_code, stock_name FROM (
+                        SELECT stock_code, stock_name FROM sector_stocks
+                        WHERE stock_code LIKE ? LIMIT 20
+                    )
+                ) LIMIT 20
             """, (kw, kw))
             result = []
             for stock_code, stock_name in cursor.fetchall():
@@ -3548,8 +3553,9 @@ class MooTDX2Client:
         keyword 归一化小写, 同义大小写共享缓存。仅缓存"找到结果"分支, 不可用
         (双源失败) 与单源无结果不写 L1, 避免错误状态被锁在缓存里误导后续请求。
 
-        Args:
-            keyword: 搜索关键词（股票名称或代码）
+        2026-09-29 审视批B H3: 双源守卫在闸外前置; Reader block 段持闸执行,
+        SQLite 回退段不含 Reader 访问, 移出 _reader_gate —— 全表扫 70-350ms
+        不再白占 1/reader_limit 并发额度。
         """
         self._metrics["total_requests"] += 1
         # H5: 空白 keyword 入口校验, 返 no_data 不污染 L1
@@ -3564,8 +3570,21 @@ class MooTDX2Client:
             return ToolResult(success=True, data=cached_records, source="mootdx2")
 
         try:
+            # H1-silent 双源守卫: tdxdir 与 board.db 均不可用 → 显式 no_data,
+            # 不再静默 success=True data=[]。纯 FS 元数据检查, 闸外执行 (批B H3)。
+            has_tdx = bool(self._get_tdxdir())
+            db_path = resolve_project_path(None, "data/board.db")
+            if not has_tdx and not db_path.exists():
+                raise _SearchDataUnavailable(
+                    f"search_stock: tdxdir 与 board.db 均不可用"
+                    f" (tdxdir={has_tdx}, board.db={db_path})"
+                )
+
             async with self._reader_gate():
-                data = await self._run_blocking(self._search_stock_sync, keyword)
+                data = await self._run_blocking(self._search_stock_via_reader, keyword)
+            if data is None:
+                # block 源不可用/空 → SQLite 回退; 不持闸 (批B H3)
+                data = await self._run_blocking(self._search_stock_from_sqlite, keyword)
             if data:
                 # 仅缓存"找到结果"分支 (data 非空), 单源无结果与双源不可用
                 # 均不写 L1 — 否则下次同 keyword 会拿到错误的"找到"响应

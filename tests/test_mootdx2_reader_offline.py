@@ -1247,3 +1247,114 @@ def test_reader_gate_cancelled_waiter_no_leak():
         assert c._gate_counters["waiters_now"] == 0
 
     asyncio.run(scenario())
+
+
+# ========== 2026-09-29 审视批 B: search_stock SQLite 移出闸门 + 查询提前终止 ==========
+
+def _make_search_board_db(db_path, rows):
+    """建最小 board.db.sector_stocks 表并写入 (stock_code, stock_name) 行。"""
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE sector_stocks (stock_code TEXT, stock_name TEXT)")
+    conn.executemany(
+        "INSERT INTO sector_stocks (stock_code, stock_name) VALUES (?, ?)", rows
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_search_sqlite_fallback_runs_outside_reader_gate(tmp_path, monkeypatch):
+    """H3 回归: block 源不可用时 SQLite 回退在闸外执行, 不占 reader 并发额度。"""
+    db_path = tmp_path / "board.db"
+    _make_search_board_db(db_path, [("600519", "贵州茅台")])
+    monkeypatch.setattr(
+        "src.unihive.api.mootdx2_client.resolve_project_path",
+        lambda p, default: db_path,
+    )
+    c = _gate_scenario_client()
+    c._reader = MagicMock()  # block() 返回 None → 走 SQLite 回退
+    c._reader.block.return_value = None
+    # 闸容量压到 1: locked() ⟺ 持闸 (默认 6 时空闲判定区分不出部分占用)
+    c._reader_semaphore = asyncio.Semaphore(1)
+
+    gate_states: list[bool] = []
+    original_sqlite = c._search_stock_from_sqlite
+
+    def spy_sqlite(keyword):
+        # 执行点闸必须空闲: Semaphore(1) 下持闸时 locked() 必为 True
+        gate_states.append(c._reader_semaphore.locked())
+        return original_sqlite(keyword)
+
+    with patch.object(c, "_search_stock_from_sqlite", side_effect=spy_sqlite):
+        r = asyncio.run(c.search_stock("茅台"))
+
+    assert gate_states == [False], "SQLite 回退分支不得在 _reader_gate 内执行"
+    assert r.success is True
+    assert r.data[0]["code"] == "600519"
+
+
+def test_search_reader_no_match_does_not_fall_back_to_sqlite():
+    """block 源可用但无匹配 → 结论以 block 为准 ([]), 不回退 SQLite (旧契约保持)。"""
+    c = _gate_scenario_client()
+    block_df = pd.DataFrame({"code": ["600519"], "name": ["贵州茅台"]})
+    c._reader = MagicMock()
+    c._reader.block.return_value = block_df
+
+    with patch.object(
+        c, "_search_stock_from_sqlite",
+        side_effect=AssertionError("block 有数据但无匹配时不得回退 SQLite"),
+    ):
+        r = asyncio.run(c.search_stock("平安"))
+
+    assert r.success is True
+    assert r.data is None
+    assert "未找到匹配" in (r.error or "")
+
+
+def test_search_dual_source_unavailable_explicit_no_data(tmp_path, monkeypatch):
+    """H1-silent 契约保持: 双源守卫移闸外后仍走 no_data 显式路径, 不静默 []。"""
+    missing = tmp_path / "no_board.db"
+    monkeypatch.setattr(
+        "src.unihive.api.mootdx2_client.resolve_project_path",
+        lambda p, default: missing,
+    )
+    c = MooTDX2Client(MooTDX2Config(name="test", market="std"))  # 无 settings → tdxdir None
+    c._reader = MagicMock()
+
+    r = asyncio.run(c.search_stock("茅台"))
+
+    assert r.success is True  # 业务状态 no_data (非错误), 与单源无结果同形
+    assert r.data is None
+    assert r.error_detail["error_type"] == "no_data"
+    assert "均不可用" in (r.error or "")
+
+
+def test_search_sqlite_union_query_dedups_and_limits(tmp_path, monkeypatch):
+    """SQL 改写回归: 两子查询 UNION 去重 (同股多板块重复行收敛为 1), 结果仍封顶 20。"""
+    db_path = tmp_path / "board.db"
+    rows = [
+        # 茅台同时挂在 2 个板块下 → 旧 DISTINCT 依赖, 新 UNION 去重
+        ("600519", "贵州茅台"),
+        ("600519", "贵州茅台"),
+        ("600519", "贵州茅台"),
+        ("600520", "茅台酒二"),  # 名称命中第二行, 代码不重复
+    ]
+    rows += [(f"{600000 + i:06d}", f" filler{i:03d}") for i in range(30)]
+    _make_search_board_db(db_path, rows)
+    monkeypatch.setattr(
+        "src.unihive.api.mootdx2_client.resolve_project_path",
+        lambda p, default: db_path,
+    )
+    client = MooTDX2Client(MooTDX2Config(name="test", market="std"))
+
+    by_name = client._search_stock_from_sqlite("茅台")
+    codes = [r["code"] for r in by_name]
+    assert codes.count("600519") == 1, "UNION 必须去掉板块重复行"
+    assert "600520" in codes
+
+    by_code = client._search_stock_from_sqlite("600519")
+    assert [r["code"] for r in by_code] == ["600519"]
+    assert by_code[0]["market"] == "sh"
+
+    filler = client._search_stock_from_sqlite("filler")
+    assert len(filler) == 20, "LIMIT 20 仍生效"

@@ -610,10 +610,12 @@ class TestM4SearchStock:
         client = make_client()
         client._reader = reader
 
-        result = await client.search_stock("")
+        # 2026-09-29 批B: 旧写法 search_stock("") 已被 Round-3 H5 空白 keyword
+        # 入口校验拦截 (no_data, data=None), 一直挂在基线。本测试的真实意图是
+        # 验证 SQLite 路径锚定 + 920/43x 市场分类, 改直调 _search_stock_from_sqlite。
+        result_data = await asyncio.to_thread(client._search_stock_from_sqlite, "")
 
-        assert result.success is True
-        by_code = {r["code"]: r["market"] for r in result.data}
+        by_code = {r["code"]: r["market"] for r in result_data}
         assert by_code == {
             "600519": "sh",
             "000001": "sz",
