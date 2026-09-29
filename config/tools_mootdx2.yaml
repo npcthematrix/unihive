@@ -1200,6 +1200,59 @@ tools:
         required: false
         description: 每只股票最多返回根数，默认 0=不截断
 
+  - name: get_etf_daily_local
+    description: |-
+      【离线 ETF 日线】读取通达信客户端本地 .day 文件获取 ETF 日线，支持前/后复权。
+
+      【使用场景】
+      - 明确要查 ETF（场内基金）历史日线时使用，避免与股票/指数入口混淆
+      - 底层与 get_daily_local 同一取数核心（含共享 L1 缓存），仅入口语义更聚焦
+
+      【参数说明】
+      - code (必填): ETF 代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
+        例: sh510300（沪深300ETF）、159915（创业板ETF）、sh518880（黄金ETF）
+      - adjust (可选): 复权方式，默认 none
+        none=不复权 / qfq=前复权 / hfq=后复权
+      - start_date (可选): 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
+      - end_date (可选): 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+
+      【代码消歧（重要）】
+      - 本入口宽松放行：不校验代码是否真为 ETF（本地 .day 文件按代码寻址）
+      - 传指数代码（sh000001、399001、880xxx、bj899050 等）会返回 invalid_param，
+        请改用 get_index_kline_local
+      - 股票代码传入本入口也能返回数据；股票日线请优先用 get_daily_local
+
+      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/{sh|sz|bj}xxx.day
+
+      【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
+      成功: {"success": true, "data": [{"date": "2024-01-02", "open": 10.0, ...}], "source": "mootdx2"}
+      指数误传: {"success": false, "error": "sh000001 是指数代码；获取指数日K请使用 get_index_kline_local"}
+      失败: {"success": false, "error": "未找到 510300 的日线数据"}
+    routing: get_etf_daily_local
+    upstream_tool_mapping:
+      mootdx2: get_etf_daily_local
+    cache_ttl_key:
+    data_source_type: offline
+    dangerous: false
+    params:
+      - name: code
+        type: str
+        required: true
+        description: ETF 代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀，如 sh510300 / 159915）
+      - name: adjust
+        type: str
+        required: false
+        enum: [none, qfq, hfq]
+        description: 复权方式：none=不复权 / qfq=前复权 / hfq=后复权
+      - name: start_date
+        type: str
+        required: false
+        description: 起始日期，支持 YYYY-MM-dd 或 YYYYMMDD
+      - name: end_date
+        type: str
+        required: false
+        description: 结束日期，支持 YYYY-MM-dd 或 YYYYMMDD
+
   - name: get_minute_local
     description: |-
       【离线分钟线】读取通达信客户端本地 .lc1 / .lc5 文件，支持 1 分钟和 5 分钟周期。

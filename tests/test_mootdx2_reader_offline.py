@@ -987,3 +987,112 @@ def test_get_daily_batch_local_two_codes(client):
     assert warnings == []
     assert results["sh600036"][0]["close"] == 10.3
     assert results["sh600519"][0]["close"] == 1510.0
+
+
+# ========== get_etf_daily_local (2026-09-28 新增, 复用 get_daily 取数核心) ==========
+
+def _etf_df():
+    return pd.DataFrame({
+        "open": [3.10, 3.15],
+        "high": [3.20, 3.22],
+        "low": [3.08, 3.12],
+        "close": [3.18, 3.20],
+        "vol": [100000.0, 120000.0],
+    }, index=pd.to_datetime(["2024-01-02", "2024-01-03"]))
+
+
+def test_etf_daily_rejects_index_code(client):
+    """指数代码传给 ETF 入口 → invalid_param 并引导 get_index_kline_local。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(client.get_etf_daily_local("sh000001"))
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_param"
+    assert "get_index_kline_local" in r.error
+
+
+def test_etf_daily_invalid_symbol(client):
+    """非法代码 (非 6 位主体) → invalid_symbol。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(client.get_etf_daily_local("sh51030"))
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_symbol"
+
+
+def test_etf_daily_returns_records(client):
+    """sh510300 前缀码 → reader.daily 正常取数, adjust 透传。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = _etf_df()
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_etf_daily_local("sh510300", adjust="qfq"))
+
+    assert r.success is True
+    assert len(r.data) == 2
+    assert r.data[0]["date"] == "2024-01-02"
+    assert r.data[1]["close"] == 3.20
+    assert mock_reader.daily.call_args.kwargs.get("adjust") == "qfq"
+
+
+def test_etf_daily_bare_code_accepted(client):
+    """裸 6 位 ETF 码 (510300) 宽松放行, 交 reader.find_path 推断市场。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = _etf_df()
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_etf_daily_local("510300"))
+
+    assert r.success is True
+    assert len(r.data) == 2
+
+
+def test_etf_daily_shares_l1_with_get_daily(client):
+    """与 get_daily 同一 L1 槽: 同 symbol 同日先 get_daily 再 ETF 入口命中缓存。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = _etf_df()
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r1 = asyncio.run(client.get_daily("sh510300"))
+        r2 = asyncio.run(client.get_etf_daily_local("sh510300"))
+
+    assert r1.success and r2.success
+    assert mock_reader.daily.call_count == 1
+
+
+def test_etf_daily_date_window(client):
+    """start/end 切窗: 全量入 L1, 窗口切片返回。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = _etf_df()
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(
+            client.get_etf_daily_local("sh510300", start_date="2024-01-03")
+        )
+
+    assert r.success is True
+    assert len(r.data) == 1
+    assert r.data[0]["date"] == "2024-01-03"
+
+
+def test_yaml_has_get_etf_daily_local_offline():
+    """get_etf_daily_local 在 YAML 声明为 offline, routing/mapping 齐备。"""
+    import yaml
+    with open("config/tools_mootdx2.yaml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    by_name = {t["name"]: t for t in data["tools"]}
+    spec = by_name["get_etf_daily_local"]
+    assert spec["data_source_type"] == "offline"
+    assert spec["routing"] == "get_etf_daily_local"
+    assert spec["upstream_tool_mapping"]["mootdx2"] == "get_etf_daily_local"
+    params = {p["name"]: p for p in spec["params"]}
+    assert params["code"]["required"] is True
+    assert params["adjust"]["enum"] == ["none", "qfq", "hfq"]

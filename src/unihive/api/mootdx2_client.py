@@ -2489,6 +2489,62 @@ class MooTDX2Client:
             logger.error(f"get_daily failed: {e}")
             return self._error_result(e, f"get_daily({code})")
 
+    async def get_etf_daily_local(
+        self, code: str, adjust: str = "none", start_date: str = "", end_date: str = ""
+    ) -> ToolResult:
+        """获取 ETF 日线数据（离线，TDX 本地 .day 文件）
+
+        专用 ETF 日线入口 — 底层与 get_daily 完全同一取数核心
+        (``_get_daily_records``, 含共享 L1 缓存), 仅在入口做意图校验:
+            - 传指数代码 (sh000001 / 399001 等) → invalid_param,
+              引导走 get_index_kline_local
+            - 其余代码宽松放行 (不校验是否真为 ETF — 本地 .day 文件
+              按代码寻址, 无需资产类型信息)
+
+        Args:
+            code: ETF 代码, 6 位数字可带市场前缀 (sh510300 / 159915 / sz159915)
+            adjust: 复权方式 none / qfq / hfq（默认不复权）
+            start_date: 起始日期, 支持 YYYY-MM-dd 或 YYYYMMDD（可选）
+            end_date: 结束日期, 支持 YYYY-MM-dd 或 YYYYMMDD（可选）
+
+        数据源：{tdxdir}/vipdoc/sh/lday/sh510300.day 等本地二进制文件
+        """
+        self._metrics["total_requests"] += 1
+
+        start_date, end_date, date_error = _normalize_date_window(start_date, end_date)
+        if date_error is not None:
+            return self._invalid_param_result(date_error)
+
+        try:
+            parsed = parse_symbol(code)
+        except ValueError as e:
+            self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
+            return ToolResult(
+                success=False,
+                error=str(e),
+                error_detail={
+                    "error_type": MooTDXErrorType.INVALID_SYMBOL.value,
+                    "message": str(e),
+                    "recoverable": False,
+                },
+            )
+        if parsed.kind == INDEX_KIND:
+            return self._invalid_param_result(
+                f"{code} 是指数代码；获取指数日K请使用 get_index_kline_local"
+            )
+
+        try:
+            # 取数/缓存/切窗与 get_daily 完全同路 (同一 L1 槽, 同 key 语义)
+            records, meta, _hit = await self._get_daily_records(
+                code, adjust, start_date, end_date
+            )
+            return self._build_daily_tool_result(
+                code=code, data=records, meta=meta, parsed_for_key=parsed,
+            )
+        except Exception as e:
+            logger.error(f"get_etf_daily_local failed: {e}")
+            return self._error_result(e, f"get_etf_daily_local({code})")
+
     async def _get_daily_batch_one(
         self,
         code: str,
