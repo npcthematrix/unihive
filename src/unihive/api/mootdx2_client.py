@@ -470,17 +470,16 @@ class MooTDX2Client:
         # 这是为了避免缓存隔日陈旧行情数据（如停牌/退市/复权价）
         # 2026-09-28 Round-3 Batch 2: 抽 _L1Slot 抽象, 统一 8 个单 symbol 工具缓存
         # 并改造 daily L1 为 2 层 (key 不含 start/end, 命中后切窗)
-        # 次日 9:00 过期 = 计算到次日 9:00 的秒数
-        now = datetime.datetime.now()
-        tomorrow_9am = now.replace(hour=9, minute=0, second=0, microsecond=0)
-        if now.hour >= 9:
-            tomorrow_9am += datetime.timedelta(days=1)
-        ttl_seconds = (tomorrow_9am - now).total_seconds()
-        self._DAILY_L1_TTL = ttl_seconds
-        self._l1_daily = _L1Slot("daily", maxsize=2048, ttl=ttl_seconds)
+        # 2026-09-29 审视 H1: 旧实现在此一次性算"到次日 9:00"秒数钉进槽级 TTL,
+        # 但 cachetools 每条目过期 = 写入时刻 + 槽级 TTL — 9 点前启动的进程
+        # (detached + 开机自启常态) 当天写入的条目上午即全部过期, L1 全天退化。
+        # 日线正确性由 key 内日期保证 (跨天必 miss), TTL 只是内存回收上限,
+        # 故改固定 24h: 条目最多活到写入次日同一时刻, 而其 key 明天已不可达。
+        self._DAYKLINE_L1_TTL = 24 * 3600.0
+        self._l1_daily = _L1Slot("daily", maxsize=2048, ttl=self._DAYKLINE_L1_TTL)
         logger.info(
-            f"get_daily L1 cache initialized: ttl={ttl_seconds}s "
-            f"(expires at {tomorrow_9am.strftime('%Y-%m-%d %H:%M')})"
+            f"get_daily L1 cache initialized: ttl={self._DAYKLINE_L1_TTL}s "
+            "(固定 24h 内存回收上限; 数据当日有效由 key 内日期保证)"
         )
 
         # 2026-09-16: Reader 并发控制 - 限制同时执行的 Reader 数量
@@ -527,7 +526,9 @@ class MooTDX2Client:
         # 2026-09-28 性能审视: 分钟线暂不做 L1 缓存 (minute/fzline/index_minute/
         # index_fzline 4 槽移除), 仅保留日线类 (daily / index_kline) 与非 K 线
         # 工具 (search/indicator_atr/block_scan) 缓存。分钟线高频但用户暂无需求。
-        self._l1_index_kline = _L1Slot("index_kline", maxsize=256, ttl=ttl_seconds)
+        # 2026-09-29 审视 H2: TTL 同 daily 改固定 24h (仅内存回收); 跨天正确性
+        # 由 cache_key 内日期维度保证 (见 get_index_kline_local)。
+        self._l1_index_kline = _L1Slot("index_kline", maxsize=256, ttl=self._DAYKLINE_L1_TTL)
         self._l1_search = _L1Slot("search", maxsize=128, ttl=600)
         self._l1_indicator_atr = _L1Slot("indicator_atr", maxsize=64, ttl=600)
 
@@ -571,21 +572,36 @@ class MooTDX2Client:
         进闸后 waiters_now-1、current+1、total+1、peak 滚动;
         离开闸门时 current-1。所有计数 self 持, 不读 CPython Semaphore 私有字段
         (跨 Python 版本脆弱)。
+
+        2026-09-29 审视 M1: 旧实现 waiters_now 增减不配对 — 无竞争过闸
+        (locked() 为 False 未增) 也无条件自减, 计数必然漂成负数;
+        等待中被取消 (请求超时) 则增了不减。现改为: 仅 counted 时进闸冲销,
+        取消路径经外层 finally 冲销 (acquire 成功后 entered 置位与自减是
+        同步序列, 之间无 await, 不会被取消打断)。
         """
-        if self._reader_semaphore.locked():
+        counted = self._reader_semaphore.locked()
+        if counted:
             self._gate_counters["waiters_total"] += 1
             self._gate_counters["waiters_now"] += 1
-        async with self._reader_semaphore:
-            self._gate_counters["waiters_now"] -= 1
-            self._gate_counters["total"] += 1
-            self._gate_counters["current"] += 1
-            self._gate_counters["peak"] = max(
-                self._gate_counters["peak"], self._gate_counters["current"]
-            )
-            try:
-                yield
-            finally:
-                self._gate_counters["current"] -= 1
+        entered = False
+        try:
+            async with self._reader_semaphore:
+                entered = True
+                if counted:
+                    self._gate_counters["waiters_now"] -= 1
+                self._gate_counters["total"] += 1
+                self._gate_counters["current"] += 1
+                self._gate_counters["peak"] = max(
+                    self._gate_counters["peak"], self._gate_counters["current"]
+                )
+                try:
+                    yield
+                finally:
+                    self._gate_counters["current"] -= 1
+        finally:
+            # 等待中被取消 (entered=False): 冲销等待计数, 防 waiters_now 泄漏。
+            if counted and not entered:
+                self._gate_counters["waiters_now"] -= 1
 
     def _new_request_id(self) -> str:
         """生成请求 ID"""
@@ -2458,6 +2474,13 @@ class MooTDX2Client:
         """
         self._metrics["total_requests"] += 1
 
+        # 2026-09-29 审视 H4: 库端 to_data 把未知 adjust 归一为 None (静默按
+        # 不复权返回), 复权请求拿到原始价; 与 get_daily_batch_local 校验对齐。
+        if adjust not in ("none", "qfq", "hfq"):
+            return self._invalid_param_result(
+                f"adjust 需为 none/qfq/hfq，当前值: {adjust!r}"
+            )
+
         # 日期归一化 (支持 YYYYMMDD 和 YYYY-MM-DD)
         start_date, end_date, date_error = _normalize_date_window(start_date, end_date)
         if date_error is not None:
@@ -2511,6 +2534,13 @@ class MooTDX2Client:
         数据源：{tdxdir}/vipdoc/sh/lday/sh510300.day 等本地二进制文件
         """
         self._metrics["total_requests"] += 1
+
+        # 2026-09-29 审视 H4: 与 get_daily / get_daily_batch_local 同一校验
+        # (库端未知 adjust 静默按不复权返回)
+        if adjust not in ("none", "qfq", "hfq"):
+            return self._invalid_param_result(
+                f"adjust 需为 none/qfq/hfq，当前值: {adjust!r}"
+            )
 
         start_date, end_date, date_error = _normalize_date_window(start_date, end_date)
         if date_error is not None:
@@ -3030,6 +3060,14 @@ class MooTDX2Client:
                     "recoverable": False,
                 },
             )
+        # M-silent4 (Round-3 2026-09-28): limit 必须正整数, limit=0 旧逻辑
+        # 静默走"不截断"返回全集, 与用户期望 0 条矛盾; 与 _validate_minute_limit 对齐
+        # 2026-09-29 审视 L8: 类型校验必须在 MAX_LIMIT 比较之前, 否则非 int
+        # 输入在 `>` 比较处抛 TypeError 逃成 internal_error。
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            return self._invalid_param_result(
+                f"limit 需为正整数，收到 {limit!r}"
+            )
         if limit > MAX_LIMIT_KLINE:
             return ToolResult(
                 success=False,
@@ -3039,12 +3077,6 @@ class MooTDX2Client:
                     "message": DATA_TOO_LARGE_MSG.format(limit=MAX_LIMIT_KLINE),
                     "recoverable": False,
                 },
-            )
-        # M-silent4 (Round-3 2026-09-28): limit 必须正整数, limit=0 旧逻辑
-        # 静默走"不截断"返回全集, 与用户期望 0 条矛盾; 与 _validate_minute_limit 对齐
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
-            return self._invalid_param_result(
-                f"limit 需为正整数，收到 {limit!r}"
             )
 
         self._metrics["total_requests"] += 1
@@ -3060,7 +3092,10 @@ class MooTDX2Client:
         # cache_key 不含 limit (同指数同频率共享), 缓存只存全量 records,
         # 命中后按 limit 现切窗。Round-4 曾把 sync 核心的 limit 截断结果
         # 直接入缓存: 首个请求 limit 小, 后续大 limit 请求命中后静默少给。
-        cache_key = (to_reader_symbol(parsed), type)
+        # 2026-09-29 审视 H2: key 加入当日日期 — 跨天必 miss, 本地 .day 文件
+        # 盘后追加当日 bar 后同进程内也能拿到新数据 (旧键在 24h TTL 内残留
+        # 但已不可达, 由 LRU 淘汰)。
+        cache_key = (datetime.date.today().isoformat(), to_reader_symbol(parsed), type)
 
         # 1. L1 命中 → 全量 records; miss → 读盘后同样只缓存全量
         cached_records = self._l1_index_kline.get(cache_key)

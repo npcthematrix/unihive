@@ -1112,3 +1112,138 @@ def test_yaml_tools_all_resolvable_in_method_map():
         data = yaml.safe_load(f)
     missing = [t["name"] for t in data["tools"] if t["name"] not in _TOOL_METHOD_NAMES]
     assert missing == [], f"以下工具未在分发表注册: {missing}"
+
+
+# ========== 2026-09-29 审视批 A: TTL / adjust / gate 计数 ==========
+
+from src.unihive.api.mootdx2_client import MooTDX2Client, MooTDX2Config
+
+
+def test_day_kline_l1_ttl_fixed_24h():
+    """H1 回归: 槽 TTL 固定 24h, 不随启动时刻漂移 (9 点前启动不再全天失效)。
+
+    数据正确性由 key 内日期保证 (跨天必 miss), TTL 仅内存回收上限。
+    """
+    c = MooTDX2Client(MooTDX2Config(name="test", market="std"))
+    assert c._DAYKLINE_L1_TTL == 24 * 3600.0
+    assert c._l1_daily._cache.ttl == 24 * 3600.0
+    assert c._l1_index_kline._cache.ttl == 24 * 3600.0
+
+
+def test_index_kline_cache_key_includes_date(client):
+    """H2 回归: index_kline 缓存键首元素是当日日期 — 跨天必 miss,
+    盘后 .day 追加当日 bar 后同进程内可取到新数据。"""
+    import datetime
+    mock_df = pd.DataFrame(
+        {"close": [3000.0]}, index=pd.to_datetime(["2024-01-02"])
+    )
+    mock_reader = MagicMock()
+    mock_reader.daily.return_value = mock_df
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+
+    with patch("mootdx2.reader.Reader.factory", return_value=mock_reader):
+        r = asyncio.run(client.get_index_kline_local(code="sh000001"))
+
+    assert r.success
+    keys = list(client._l1_index_kline._cache.keys())
+    assert len(keys) == 1
+    assert keys[0][0] == datetime.date.today().isoformat()
+
+
+def test_get_daily_invalid_adjust_rejected(client):
+    """H4 回归: 非法 adjust 不再被库端静默归一为不复权, 返 invalid_param。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(client.get_daily("sh600036", adjust="qqfq"))
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_param"
+    assert "none/qfq/hfq" in r.error
+
+
+def test_get_etf_daily_invalid_adjust_rejected(client):
+    """H4 回归: ETF 入口同一 adjust 校验。"""
+    client.config.settings = MagicMock()
+    client.config.settings.tdxdir = "/fake/tdx"
+    r = asyncio.run(client.get_etf_daily_local("sh510300", adjust="hfq "))
+    assert r.success is False
+    assert r.error_detail["error_type"] == "invalid_param"
+
+
+# ---- M1: _reader_gate waiters 计数配对 ----
+
+def _gate_scenario_client():
+    c = MooTDX2Client(MooTDX2Config(name="test", market="std"))
+    c.config.settings = MagicMock()
+    c.config.settings.tdxdir = "/fake/tdx"
+    return c
+
+
+def test_reader_gate_no_negative_drift_on_uncontended_passes():
+    """M1 回归: 无竞争过闸不消耗 waiters_now (旧实现每次 -1 漂成负数)。"""
+    c = _gate_scenario_client()
+
+    async def scenario():
+        for _ in range(50):
+            async with c._reader_gate():
+                pass
+        assert c._gate_counters["waiters_now"] == 0
+        assert c._gate_counters["total"] == 50
+        assert c._gate_counters["current"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_reader_gate_waiter_counted_and_released():
+    """M1 回归: 闸满时 waiter +1, 进闸后冲销回 0。"""
+    c = _gate_scenario_client()
+
+    async def scenario():
+        sem = c._reader_semaphore
+        for _ in range(c._READER_SEMAPHORE_LIMIT):
+            await sem.acquire()
+
+        async def gated():
+            async with c._reader_gate():
+                pass
+
+        t = asyncio.create_task(gated())
+        await asyncio.sleep(0.05)
+        assert c._gate_counters["waiters_now"] == 1
+        sem.release()
+        await asyncio.wait_for(t, 2)
+        assert c._gate_counters["waiters_now"] == 0
+        assert c._gate_counters["current"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_reader_gate_cancelled_waiter_no_leak():
+    """M1 回归: 等待中被取消的 waiter 冲销计数, waiters_now 不泄漏。"""
+    c = _gate_scenario_client()
+
+    async def scenario():
+        sem = c._reader_semaphore
+        for _ in range(c._READER_SEMAPHORE_LIMIT):
+            await sem.acquire()
+
+        async def gated():
+            async with c._reader_gate():
+                pass
+
+        t = asyncio.create_task(gated())
+        await asyncio.sleep(0.05)
+        assert c._gate_counters["waiters_now"] == 1
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+        assert c._gate_counters["waiters_now"] == 0
+
+        sem.release()
+        async with c._reader_gate():
+            pass
+        assert c._gate_counters["waiters_now"] == 0
+
+    asyncio.run(scenario())
