@@ -202,6 +202,7 @@ _TOOL_METHOD_NAMES: dict[str, str] = {
     # YAML 工具名别名
     "get_daily_local": "get_daily",
     "get_daily_batch_local": "get_daily_batch_local",
+    "get_etf_daily_local": "get_etf_daily_local",
     "get_fzline_local": "get_fzline",
     "get_minute_local": "get_minute",
     "mootdx2_stock_info": "get_stock_info",

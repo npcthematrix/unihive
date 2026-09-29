@@ -1096,3 +1096,19 @@ def test_yaml_has_get_etf_daily_local_offline():
     params = {p["name"]: p for p in spec["params"]}
     assert params["code"]["required"] is True
     assert params["adjust"]["enum"] == ["none", "qfq", "hfq"]
+
+
+def test_yaml_tools_all_resolvable_in_method_map():
+    """tools_mootdx2.yaml 每个工具都必须在 _TOOL_METHOD_NAMES 分发表内。
+
+    回归 (2026-09-29): get_etf_daily_local 漏登记分发表 → call_tool 返回
+    Unknown tool (upstream_unavailable), golden/YAML 声明类测试均无法发现。
+    """
+    import yaml
+    from pathlib import Path
+    from src.unihive.api.mootdx2_client import _TOOL_METHOD_NAMES
+
+    with open(Path("config") / "tools_mootdx2.yaml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    missing = [t["name"] for t in data["tools"] if t["name"] not in _TOOL_METHOD_NAMES]
+    assert missing == [], f"以下工具未在分发表注册: {missing}"
