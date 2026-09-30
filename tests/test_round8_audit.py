@@ -182,47 +182,16 @@ class TestMooTDX2StartProbe:
         assert client.status == UpstreamStatus.HEALTHY
 
 
-# ========== H1: MooTDX2 后台健康循环 ==========
+# ========== H1/M4: MooTDX2 stop() 资源回收 ==========
+# 注：原 H1 后台 _health_loop 已在 Round-11 L5 (commit d385d4b) 作为死代码
+# 删除，对应两个健康循环用例一并移除；保留 stop() 关闭 Quotes 的资源泄漏用例。
 
 class TestMooTDX2HealthLoop:
-    """H1: 后台 _health_loop 让 DEGRADED 状态有机会自动恢复到 HEALTHY."""
+    """M4: stop() 关闭底层 Quotes 实例，防止连接泄漏。"""
 
     def _make_client(self):
         config = MooTDX2Config(name="test_tdx", market="std")
         return MooTDX2Client(config)
-
-    @pytest.mark.asyncio
-    async def test_start_starts_health_loop(self):
-        """start() 后会启动 _health_loop 后台任务."""
-        client = self._make_client()
-
-        with patch.object(
-            client, "_ensure_quotes_initialized"
-        ), patch.object(
-            client, "_probe_with_existing_quotes", return_value=True
-        ):
-            await client.start()
-
-        assert client._health_task is not None
-        assert not client._health_task.done()
-        # 清理
-        await client.stop()
-
-    @pytest.mark.asyncio
-    async def test_stop_cancels_health_loop(self):
-        """stop() 取消 _health_loop 任务."""
-        client = self._make_client()
-
-        with patch.object(
-            client, "_ensure_quotes_initialized"
-        ), patch.object(
-            client, "_probe_with_existing_quotes", return_value=True
-        ):
-            await client.start()
-
-        health_task = client._health_task
-        await client.stop()
-        assert health_task.done()
 
     @pytest.mark.asyncio
     async def test_stop_closes_quotes_instance(self):

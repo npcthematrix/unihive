@@ -286,9 +286,14 @@ async def async_main(transport: str = "stdio", host: str | None = None, port: in
                 host, port,
             )
     server = GatewayServer(config_path=cfg_path)
-    logger.info(
+    # 启动横幅直接写 stderr 而非 logger.info：configure_logging 默认级别
+    # WARNING，走 logger 会被静默吞掉；横幅是每次启动都应可见的一次性信息
+    # (stdio 模式 stdout 留给 JSON-RPC，stderr 不受影响)。
+    print(
         f"unihive starting: transport={transport} config={cfg_path} "
-        f"upstreams={len(server.config.get('upstreams') or {})}"
+        f"upstreams={len(server.config.get('upstreams') or {})}",
+        file=sys.stderr,
+        flush=True,
     )
     if transport == "stdio":
         await server.start()

@@ -256,20 +256,9 @@ def _mootdx2_client() -> MooTDX2Client:
     return MooTDX2Client(MooTDX2Config(name="mootdx2"))
 
 
-async def test_m2_mootdx2_health_loop_not_started_when_stopped():
-    client = _mootdx2_client()
-    client._stopped = True
-    assert client._start_health_loop() is None
-    assert client._health_task is None
-
-    client._stopped = False
-    task = client._start_health_loop()
-    assert task is not None and not task.done()
-    # dedup: 第二次不另起
-    assert client._start_health_loop() is task
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+# 注：原 test_m2_mootdx2_health_loop_not_started_when_stopped 已随
+# Round-11 L5 删除后台 _health_loop / _start_health_loop 一并移除
+# (commit d385d4b)。
 
 
 async def test_m2_mootdx2_start_after_timeout_skips_when_stopped():

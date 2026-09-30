@@ -101,7 +101,9 @@ class TestConfigureLogging:
 
     def test_file_handler_writes_json(self, tmp_path, restore_root_logger):
         log_path = tmp_path / "gateway.log"
-        configure_logging("stdio", log_path=log_path)
+        # configure_logging 默认 WARNING，本用例要验证文件处理器对 INFO 的
+        # JSON 落盘，显式抬到 INFO（不是改默认级别）。
+        configure_logging("stdio", log_path=log_path, level=logging.INFO)
         logging.getLogger("src.test").info("registered %d tools", 147)
         for h in logging.getLogger().handlers:
             h.flush()
