@@ -17,8 +17,33 @@ class TestNormalizeCode:
         # 注意: Normalizer 不改写已有 prefix 的大小写，调用方需统一输入
         ("  600519  ", "sh600519"), # 去除空白
         ("", ""),                   # 空字符串
+        # 港股：.HK 后缀（THS/fuyao 格式，大小写不敏感）
+        ("00700.HK", "hk00700"),
+        ("00005.hk", "hk00005"),
+        # 港股：hk 前缀
+        ("hk00700", "hk00700"),
+        ("HK00700", "hk00700"),
+        # 港股：不足 5 位左侧补零
+        ("700.HK", "hk00700"),
+        ("hk5", "hk00005"),
+        # 港股：1~5 位裸码
+        ("00700", "hk00700"),
+        ("1", "hk00001"),
     ])
     def test_normalize(self, raw, expected):
+        assert Normalizer.normalize_code(raw) == expected
+
+    @pytest.mark.parametrize("raw,expected", [
+        # 6 位裸码仍按 A 股号段，不被港股规则吞掉
+        ("600519", "sh600519"),
+        ("000001", "sz000001"),
+        # 非法/超宽代码原样返回
+        ("abc", "abc"),
+        ("1234567", "1234567"),
+        ("hk007000", "hk007000"),   # 6 位超宽不匹配港股
+        ("00700.XX", "00700.XX"),
+    ])
+    def test_normalize_non_hk_unchanged(self, raw, expected):
         assert Normalizer.normalize_code(raw) == expected
 
 

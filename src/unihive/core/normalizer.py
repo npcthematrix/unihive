@@ -1,6 +1,13 @@
 """股票代码标准化和数据规范化"""
 import re
 
+# 港股代码固定为 5 位（不足左侧补零），如 700 → 00700
+HK_CODE_LEN = 5
+
+
+def _pad_hk_code(digits: str) -> str:
+    return digits.zfill(HK_CODE_LEN)
+
 
 class Normalizer:
     """股票代码规范化"""
@@ -14,7 +21,13 @@ class Normalizer:
 
     @staticmethod
     def normalize_code(code: str) -> str:
-        """将各种格式的股票代码标准化"""
+        """将各种格式的股票代码标准化。
+
+        A 股：6 位数字按号段补 sh/sz/bj 前缀；已带前缀则归一为小写。
+        港股：1~5 位数字，支持 THS 后缀格式 ``00700.HK`` 与通达信扩展行情
+        前缀格式 ``hk00700``，统一输出 ``hk`` + 5 位补零代码；1~5 位裸码
+        也按港股处理（6 位裸码仍是 A 股）。
+        """
         if not code:
             return code
         code = code.strip()
@@ -28,7 +41,18 @@ class Normalizer:
                 return f"sh{code}"
             elif code.startswith(('8', '4')):
                 return f"bj{code}"
-        # 已有前缀（大小写均可），统一小写
+        # 港股：1~5 位数字 + .HK 后缀（THS/fuyao 格式）
+        m = re.match(r'^(\d{1,5})\.hk$', lower)
+        if m:
+            return f"hk{_pad_hk_code(m.group(1))}"
+        # 港股：已带 hk 前缀，代码补零并统一小写
+        m = re.match(r'^hk(\d{1,5})$', lower)
+        if m:
+            return f"hk{_pad_hk_code(m.group(1))}"
+        # 港股：1~5 位裸码（6 位裸码在上方按 A 股处理）
+        if re.match(r'^\d{1,5}$', code):
+            return f"hk{_pad_hk_code(code)}"
+        # 已有 A 股前缀（大小写均可），统一小写
         if re.match(r'^(sh|sz|bj)\d{6}$', lower):
             return lower
         return code
