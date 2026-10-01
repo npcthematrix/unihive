@@ -1,31 +1,54 @@
-<!-- UniHive 品牌标 (浅底版: 登录页/白卡)。与 web/public/favicon.svg 同几何, 改一处记得同步。 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="UniHive">
+<!--
+  UniHive 应用 mark (浅底版): 数据流汇聚场景
+  ─────────────────────────────────────────
+  几何: 6 条入线 (60° 间隔) 从外圈向中心节点汇聚, 节点内部嵌微缩蜂巢 + 玻璃高光。
+  隐喻: 6 个上游数据源 → UniHive 单点接入 → 统一 /mcp 暴露。
+  风格: Editorial + Glassmorphism, 极简抽象。
+
+  配色: 深蓝 #0e3a8c → 青绿 #14b8a6 沿中心径向, 玻璃高光用白 70% 模糊。
+  反色伴生版: unihive-mark-dark.svg (同几何, 仅配色不同)。
+  改此处记得同步 dark + favicon + wordmark。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="UniHive">
   <title>UniHive</title>
   <defs>
-    <linearGradient id="uh-hex" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4d94ff"/>
-      <stop offset="0.55" stop-color="#1a6ff5"/>
-      <stop offset="1" stop-color="#0a4fc4"/>
+    <!-- 入线 + 中心节点的渐变 (外端深蓝 → 中心青绿) -->
+    <linearGradient id="uh-stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e3a8c"/>
+      <stop offset="0.6" stop-color="#0d9488"/>
+      <stop offset="1" stop-color="#14b8a6"/>
     </linearGradient>
-    <linearGradient id="uh-red" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f5564f"/>
-      <stop offset="1" stop-color="#cf1f1f"/>
-    </linearGradient>
+    <!-- 节点径向渐变 (中心偏亮) -->
+    <radialGradient id="uh-node" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="0.55" stop-color="#14b8a6"/>
+      <stop offset="1" stop-color="#0e3a8c"/>
+    </radialGradient>
+    <!-- 玻璃高光 (左上 40% 模糊白) -->
+    <radialGradient id="uh-glass" cx="0.3" cy="0.3" r="0.35">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <!-- hive cell: six-source aggregation — bare mark, no app tile -->
-  <polygon
-    points="57,32 44.5,54.2 19.5,54.2 7,32 19.5,9.8 44.5,9.8"
-    fill="#0d6efd" fill-opacity="0.07"
-    stroke="url(#uh-hex)" stroke-width="5"
-    stroke-linejoin="round"/>
-  <!-- three ascending candlesticks: 红涨绿跌 (A 股配色), 中间红柱为视觉焦点
-       线 bbox 宽为 0, 竖渐变不渲染 (SVG 规范坑) —— 柱体用渐变, 影线用实色 -->
-  <g stroke-linecap="round">
-    <line x1="24.5" y1="25.5" x2="24.5" y2="44.5" stroke="#2b9e5f" stroke-width="2.8"/>
-    <rect x="21.7" y="30.5" width="5.6" height="9" rx="1.4" fill="#2b9e5f"/>
-    <line x1="32" y1="21.5" x2="32" y2="45.5" stroke="#cf1f1f" stroke-width="3"/>
-    <rect x="29.3" y="26" width="5.6" height="13.5" rx="1.4" fill="url(#uh-red)"/>
-    <line x1="39.5" y1="25.5" x2="39.5" y2="43" stroke="#147a44" stroke-width="2.8"/>
-    <rect x="36.7" y="29.5" width="5.6" height="10" rx="1.4" fill="#147a44"/>
+
+  <!-- 6 条入线 (60° 间隔), 中心微蓄 mesh 高亮让深处也可见 -->
+  <g stroke="url(#uh-stroke)" stroke-width="3.6" stroke-linecap="round" fill="none" opacity="0.85">
+    <line x1="48" y1="6"  x2="48" y2="30"/>   <!-- 12 点钟 -->
+    <line x1="87" y1="27" x2="63.6" y2="39"/> <!-- 2 点钟 -->
+    <line x1="87" y1="69" x2="63.6" y2="57"/> <!-- 4 点钟 -->
+    <line x1="48" y1="90" x2="48" y2="66"/>   <!-- 6 点钟 -->
+    <line x1="9"  y1="69" x2="32.4" y2="57"/> <!-- 8 点钟 -->
+    <line x1="9"  y1="27" x2="32.4" y2="39"/> <!-- 10 点钟 -->
   </g>
+
+  <!-- 节点圆环 (填色径向渐变) -->
+  <circle cx="48" cy="48" r="18" fill="url(#uh-node)"/>
+
+  <!-- 节点内嵌微缩蜂巢: 隐喻"6 入 1 出" -->
+  <polygon
+    points="48,38 55.6,42.5 55.6,52.5 48,57 40.4,52.5 40.4,42.5"
+    fill="none" stroke="#ffffff" stroke-width="1.4" stroke-opacity="0.7" stroke-linejoin="round"/>
+
+  <!-- 玻璃高光 (左上 偏淡, 不会眩) -->
+  <circle cx="48" cy="48" r="18" fill="url(#uh-glass)"/>
 </svg>

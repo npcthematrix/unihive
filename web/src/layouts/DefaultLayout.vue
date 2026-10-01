@@ -211,8 +211,14 @@ onBeforeUnmount(() => {
 .brand-name {
   font-size: 16px;
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: -0.2px;
   white-space: nowrap;
+  /* 优先 Space Grotesk, 本机未装则 fallback sans-serif (无需网络字体)。 */
+  font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
+  background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .nav-menu {

@@ -1,0 +1,43 @@
+<!--
+  UniHive wordmark 横排 (浅底版): mark + 文字。改此处同步 dark + favicon。
+  字体优先 Space Grotesk (vite.config 引入), fallback sans-serif。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 96" width="320" height="96" role="img" aria-label="UniHive">
+  <title>UniHive</title>
+  <defs>
+    <linearGradient id="wm-stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e3a8c"/>
+      <stop offset="0.6" stop-color="#0d9488"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+    <radialGradient id="wm-node" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="0.55" stop-color="#14b8a6"/>
+      <stop offset="1" stop-color="#0e3a8c"/>
+    </radialGradient>
+    <radialGradient id="wm-glass" cx="0.3" cy="0.3" r="0.35">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- mark (左, 与 mark SVG 同几何) -->
+  <g stroke="url(#wm-stroke)" stroke-width="3.6" stroke-linecap="round" fill="none" opacity="0.85">
+    <line x1="48" y1="6"  x2="48" y2="30"/>
+    <line x1="87" y1="27" x2="63.6" y2="39"/>
+    <line x1="87" y1="69" x2="63.6" y2="57"/>
+    <line x1="48" y1="90" x2="48" y2="66"/>
+    <line x1="9"  y1="69" x2="32.4" y2="57"/>
+    <line x1="9"  y1="27" x2="32.4" y2="39"/>
+  </g>
+  <circle cx="48" cy="48" r="18" fill="url(#wm-node)"/>
+  <polygon
+    points="48,38 55.6,42.5 55.6,52.5 48,57 40.4,52.5 40.4,42.5"
+    fill="none" stroke="#ffffff" stroke-width="1.4" stroke-opacity="0.7" stroke-linejoin="round"/>
+  <circle cx="48" cy="48" r="18" fill="url(#wm-glass)"/>
+
+  <!-- 文字 (右) -->
+  <text x="108" y="62" font-family="'Space Grotesk', 'Inter', system-ui, sans-serif" font-weight="600" font-size="40" fill="#0e3a8c" letter-spacing="-0.5">UniHive</text>
+  <!-- tagline (可选, 浅底小字) -->
+  <text x="109" y="80" font-family="'JetBrains Mono', ui-monospace, monospace" font-weight="500" font-size="9" fill="#475569" letter-spacing="2.4">MCP · AGGREGATE</text>
+</svg>

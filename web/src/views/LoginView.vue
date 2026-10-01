@@ -185,8 +185,10 @@ async function retryProbe(): Promise<void> {
 
 .login-head h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
+  letter-spacing: -0.3px;
+  font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
 }
 
 .subtitle {
