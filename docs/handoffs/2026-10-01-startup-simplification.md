@@ -1,4 +1,4 @@
-# 2026-10-01 启动逻辑精简审视 + toggle errors 重构 — 未提交
+# 2026-10-01 启动逻辑精简审视 + toggle errors 重构 — 已提交
 
 日期: 2026-10-01
 专题: "请审视 MCP GATEWAY 的启动逻辑,简化过度复杂的机制和逻辑"
@@ -8,6 +8,32 @@
 
 本批次合并了上一次会话的 6+8 合并批 (`_toggle_errors` contextmanager + `_build_inner_app`)
 作为上下文背景。
+
+## 实际提交结果 (2026-10-01)
+
+| 改动 | 计划状态 | 实际状态 | 原因 |
+|---|---|---|---|
+| **保留(纯结构,无测试影响)** | | | |
+| L1 limiter 局部 | 计划删除字段 | **回滚**到 `self.limiter = ...` | 测试断言 `server.limiter is not None` |
+| L3 `proxy_settings` 字段删除 | 计划删除 | ✅ 保留 | 无影响 |
+| L5 `_settle_unavailable_if_unknown` 内联 | 计划内联 | ✅ 保留 | |
+| L8 `_status` 双写防御删除 | 计划删除 | ✅ 保留 | |
+| L9 `except BaseException` | 计划改 | ✅ 保留 | |
+| L10 stop() 复用 `_await_cleanup` | 计划复用 | ✅ 保留 | |
+| M2 init-fail → stop() | 计划改造 | ✅ 保留(+stop 幂等性修复) | |
+| **回滚(测试 fixture/contract 强依赖)** | | | |
+| L2 删 `_db_mode` | 计划删除 | **回滚**恢复 | 13+ 测试设 `server._db_mode = True/False` |
+| L4 容器简化 | 计划单 Task | **回滚**到 `dict[str, set[Task]]` | 测试断言 `== set()` |
+| L6 `_uses_db_source` 直读 env | 计划删 fallback | **回滚**到字段+env 兜底 | 测试通过 `__new__`走字段 |
+| L7 删 cfg 参数 | 计划删除 | **回滚**为必需 2nd positional | 测试 fixture 用 3-arg `fake_start(name, cfg, client)` |
+| M1 yaml 早返删 `_apply_gateway_tuning` | 计划删除 | **回滚** | 测试断言 yaml 重放 |
+| M3 删 `_init_lock` | 计划删除 | **回滚**为双检锁 | 测试断言 lock 序列化 |
+| H1 删 `_running` | 计划删除 | **回滚**恢复 | 测试直接断言 `_running is False` |
+| **B2 `_build_inner_app` 提取** | 计划提取 | **回滚**到内联 | `inspect.getsource(serve_http)` 校验特定字符串 |
+| **Bug 修复(合并入提交)** | | | |
+| stop() 不幂等 | 新增修复 | ✅ 已修复 | 全 `__new__` 旁路字段用 `getattr` 兜底 |
+| `build_proxy_routes` 错位 `_ca.` | 新增修复 | ✅ 已修复 | 导入修复 |
+| `_raise_if_toggle_errors` 完全删除 | 新增修复 | ✅ 已恢复为兼容 shim | 测试用 monkeypatch 替换它 |
 
 ## 总览
 
@@ -241,9 +267,10 @@
 
 | 检查 | 结果 |
 |---|---|
-| 净增删 | 净 −~190 行 (14 项精简 + 8 处 toggle errors 重构 + _build_inner_app 拆分) |
-| backend tests | **未跑** — 按"改配置不要马上测试"约定 |
-| 行为差异 | 0 (纯重构 + 字段删除) |
+| 净增删 | 净 +140 行 (回滚了大部分精简,实际保留下来的改动有限) |
+| backend tests | ✅ 1921 passed, 3 skipped |
+| 行为差异 | 0 (纯重构 + 字段删除,回滚部分完全兼容) |
+| 网关重启 | ✅ PID 8200, 9/9 上游 online |
 | 已知差异: M2 同实例重试 | `_ca.set_config_db` 指针未重置 (init-fail 走 stop 后,新 initialize 重设 store 即可覆盖) |
 
 ---
@@ -267,15 +294,15 @@
 
 # 下一步建议
 
-按优先级:
+已完成:
+1. ✅ 跑 backend tests: 1921 passed, 3 skipped
+2. ✅ 提交 (3 commits: A/toggle errors, B/启动精简+bug修复, C/文档)
+3. ✅ 重启网关: PID 8200, 9/9 online
+4. ✅ 更新文档反映实际回滚
 
-1. **跑 backend 测试** (改完会跑大批量;先跑测试,确认无回归再 commit):
-   - `pytest tests/test_startup_audit_5th.py tests/test_startup_fixes.py tests/test_gateway_startup_fixes.py tests/test_startup_audit_round9_batch_b.py tests/test_startup_audit_round10_batch1.py`
-   - 完整 `pytest` (1800+ 用例) — 不应回归
-2. **提交** (按 commit 1 / commit 2 或合并,等你指示)
-3. **不要 push** (GitHub 网络不通 + 记忆明确)
-4. **重启网关** (`logs/gateway.pid`) 验证启动精简效果
-5. **下次审视**: 清理测试 setup 中残留的 `server._running = ...` / `server._init_lock = asyncio.Lock()` (Python 动态属性,功能无影响但风格不一致)
+待清理 (风格不一致,不影响功能):
+- 测试 setup 中残留的 `server._running = ...` / `server._init_lock = asyncio.Lock()`
+- Python 动态属性 = no-op, 功能无影响
 
 ---
 
