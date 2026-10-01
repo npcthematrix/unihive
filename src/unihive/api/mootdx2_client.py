@@ -17,6 +17,12 @@ from ..core.blocking_pool import get_mootdx2_executor
 from ..core.config_db import resolve_project_path
 from ..models.mootdx2_errors import MooTDXErrorType, error_to_result
 from .index_registry import INDEX_KIND, STOCK_KIND, parse_symbol, to_reader_symbol
+from .hk_symbols import (
+    ParsedHk,
+    hk_day_path_segments,
+    parse_hk_index,
+    parse_hk_stock,
+)
 from ._l1_slot import _L1Slot
 
 
@@ -317,6 +323,21 @@ def _strip_market_prefix(code: str) -> str:
     if s[:2] in ("sh", "sz", "bj"):
         s = s[2:]
     return s
+
+
+def _is_supported_daily_code(code: str) -> bool:
+    """批量入口的代码合法性：港股个股（parse_hk_stock 命中）或 A 股 6 位数字。
+
+    parse_hk_stock 对显式 ``hk``/``.HK`` 包装但主体非数字会抛 ValueError，
+    本判定只回答"形状是否可接受"，故包一层返回 False，由入口统一给格式错误。
+    """
+    try:
+        if parse_hk_stock(code) is not None:
+            return True
+    except ValueError:
+        return False
+    bare = _strip_market_prefix(code)
+    return len(bare) == 6 and bare.isdigit()
 
 
 def _classify_bare_market(code: str) -> str:
@@ -764,6 +785,49 @@ class MooTDX2Client:
                     # 北交所股票与 899 北证指数全部读不到，实例级打补丁
                     patch_reader_bj_paths(self._reader)
         return self._reader
+
+    def _get_exhq_reader(self):
+        """获取缓存的扩展市场日线 Reader（``TdxExHqDailyBarReader``）。
+
+        与 std Reader 不同：它不按 symbol 寻址，直接吃 ds/lday 下的文件
+        路径，记录结构为 ``<IffffIIf``。复用 ``_reader_lock`` 做懒初始化。
+        """
+        if self._stopped:
+            raise RuntimeError(
+                f"{self.name}: client has been stopped; call start() first"
+            )
+        if getattr(self, "_exhq_reader", None) is None:
+            with self._reader_lock:
+                if self._stopped:
+                    raise RuntimeError(
+                        f"{self.name}: client has been stopped; call start() first"
+                    )
+                if getattr(self, "_exhq_reader", None) is None:
+                    from mootdx2.tdx.offline.exhq_daily_bar import TdxExHqDailyBarReader
+                    self._exhq_reader = TdxExHqDailyBarReader()
+        return self._exhq_reader
+
+    def _resolve_tdx_base(self) -> str:
+        """解析扩展市场文件锚定的通达信目录（配置优先，缺省回上游默认探测）。"""
+        tdxdir = self._get_tdxdir()
+        if tdxdir:
+            return tdxdir
+        from mootdx2.consts import _default_tdxdir
+        return _default_tdxdir()
+
+    @staticmethod
+    def _normalize_hk_df(df):
+        """扩展市场日线 df → 与 std 日K对外合同对齐的列。
+
+        std 日K 记录读 ``vol``/``amount`` + OHLC；扩展市场原始列是
+        volume/jiesuan/hk_stock_amount。这里 volume→vol，并剔除 std 合同
+        中不存在的 jiesuan/hk_stock_amount，保证前端/重采样拿到一致字段。
+        """
+        if df is None or getattr(df, "empty", True):
+            return df
+        df = df.rename(columns={"volume": "vol"})
+        cols = ["open", "high", "low", "close", "vol", "amount"]
+        return df[[c for c in cols if c in df.columns]]
 
     # 2026-09-14 round 11 audit (坑 #6 防御):
     # mootdx2 `_default_tdxdir()` 按平台惯例返回:
@@ -2423,8 +2487,15 @@ class MooTDX2Client:
 
         L1 命中 → 切窗返回; miss → ``_get_daily_sync`` 单次读盘 → 切窗 → 写 L1。
         返回 ``(records_after_window, meta, cache_hit)``; parse_symbol 的
-        ValueError 直接上抛由入口分类。
+        ValueError 直接上抛由入口分类。港股个股（1~5 位数字 / hk / .HK）
+        走 ds/lday/31# 码.day 的同一缓存契约，由 ``_get_hk_daily_records_sync`` 处理。
         """
+        hk = parse_hk_stock(code)
+        if hk is not None:
+            return self._get_hk_daily_records_sync(
+                hk, adjust, start_date, end_date
+            )
+
         parsed = parse_symbol(code)
         cached = self._daily_l1_get(parsed, adjust)
         if cached is not None:
@@ -2433,6 +2504,60 @@ class MooTDX2Client:
         full, meta = self._get_daily_sync(code, adjust, start_date, end_date)
         records = self._filter_records_by_date(full, start_date, end_date)
         self._daily_l1_put(parsed, adjust, full)
+        return records, meta, False
+
+    def _get_hk_daily_sync(self, hk: ParsedHk, adjust: str) -> tuple[list[dict], dict]:
+        """同步读取港股个股日线（ds/lday/31#码.day），返回 (full_records, meta)。
+
+        扩展市场日线 Reader 不做 XDXR 复权，故 qfq/hfq 强制为 none 并在
+        meta.warn 说明（与指数复权同样的非阻断处理，而非报错）。
+        """
+        meta = {"kind": STOCK_KIND, "warn": None, "market": "hk"}
+        if adjust in ("qfq", "hfq"):
+            meta["warn"] = (
+                f"港股 {hk.token} 本地日K仅支持不复权，已强制为 none"
+            )
+            adjust = "none"
+
+        path = Path(self._resolve_tdx_base(), *hk_day_path_segments(hk))
+        # ExHq reader 对缺文件抛 FileNotFoundError，与 std reader 返空 df
+        # 语义对齐：缺失 = 本地未下载，转 no_data 而非 internal_error。
+        try:
+            df = self._normalize_hk_df(self._get_exhq_reader().get_df(path))
+        except FileNotFoundError:
+            return [], meta
+        if df is None or getattr(df, "empty", True):
+            return [], meta
+        return self._records_from_indexed_df(df), meta
+
+    def _get_hk_daily_records_sync(
+        self, hk: ParsedHk, adjust: str, start_date: str, end_date: str
+    ) -> tuple[list[dict], dict, bool]:
+        """港股个股日线取数单点：L1（仅 none）→ 读盘 → 切窗 → 写 L1。
+
+        与 A 股共用 ``_l1_daily`` 槽，key 用 hk.key（hk00700）天然不与
+        sh/sz/bj 符号碰撞；槽内存 FULL records，窗口命中后现切。
+        """
+        actual_adjust = "none" if adjust in ("qfq", "hfq") else adjust
+        if actual_adjust == "none":
+            key = (datetime.date.today().isoformat(), hk.key, "none")
+            cached = self._l1_daily.get(key)
+            if cached is not None:
+                warn = (
+                    f"港股 {hk.token} 本地日K仅支持不复权，已强制为 none"
+                    if adjust in ("qfq", "hfq") else None
+                )
+                meta = {"kind": STOCK_KIND, "warn": warn, "market": "hk"}
+                return (
+                    self._filter_records_by_date(cached, start_date, end_date),
+                    meta, True,
+                )
+
+        full, meta = self._get_hk_daily_sync(hk, adjust)
+        records = self._filter_records_by_date(full, start_date, end_date)
+        if actual_adjust == "none" and full:
+            key = (datetime.date.today().isoformat(), hk.key, "none")
+            self._l1_daily.put(key, full)
         return records, meta, False
 
     async def _get_daily_records(
@@ -2593,11 +2718,13 @@ class MooTDX2Client:
               供上层累计 has_structural_errors
         """
         import struct as _struct
-        from .index_registry import parse_symbol
 
         try:
-            parsed = parse_symbol(code)
-            key = f"{parsed.market}{parsed.code}" if parsed.market else parsed.code
+            hk = parse_hk_stock(code)
+            if hk is not None:
+                key = hk.key
+            else:
+                key = to_reader_symbol(parse_symbol(code))
             # 取数走与 get_daily 同一核心 (_get_daily_records), 直接在共享
             # reader_gate 排队 (子闸门已移除)。L1 判定在核心内单点完成,
             # 命中与 miss 同路, 批层不自建缓存。
@@ -2713,12 +2840,13 @@ class MooTDX2Client:
                 f"批量请求超过 {MAX_BATCH_CODES} 只股票限制"
             )
 
-        # 校验每只代码格式（6位数字，可带前缀）
+        # 校验每只代码格式：A 股 6 位数字（可带前缀）或港股个股
         for code in code_parts:
-            bare = _strip_market_prefix(code)
-            if not (len(bare) == 6 and bare.isdigit()):
+            if not _is_supported_daily_code(code):
                 return self._invalid_symbol_result(
-                    f"代码格式错误: {code!r} (需6位数字，可带 sh/sz/bj 前缀)"
+                    f"代码格式错误: {code!r} "
+                    f"(A 股需 6 位数字可带 sh/sz/bj 前缀；港股需 1~5 位数字、"
+                    f"hk 前缀或 .HK 后缀，如 00700.HK)"
                 )
 
         # 校验 adjust 参数
@@ -3026,6 +3154,35 @@ class MooTDX2Client:
             meta["truncated"] = True
         return records, meta
 
+    def _get_hk_index_kline_sync(self, hk: ParsedHk, period: str) -> list:
+        """同步读取港股/中华指数 K线（ds/lday/27#token.day，无复权）。
+
+        week/month 与 A 股指数同样由本地日线重采样（vol/amount）。
+        不做 limit 截断（统一在入口切最近 N 条）。
+        """
+        path = Path(self._resolve_tdx_base(), *hk_day_path_segments(hk))
+        # 缺文件与 std reader 返空对齐 → 入口给 no_data，不抛 internal_error。
+        try:
+            df = self._normalize_hk_df(self._get_exhq_reader().get_df(path))
+        except FileNotFoundError:
+            return []
+        if df is None or getattr(df, "empty", True):
+            return []
+
+        if period in self._INDEX_RESAMPLE_RULES:
+            agg = {
+                "open": "first", "high": "max", "low": "min", "close": "last",
+                "vol": "sum", "amount": "sum",
+            }
+            cols = [c for c in agg if c in df.columns]
+            df = (
+                df[cols]
+                .resample(self._INDEX_RESAMPLE_RULES[period])
+                .agg({c: agg[c] for c in cols})
+                .dropna(subset=["open"])
+            )
+        return self._records_from_indexed_df(df)
+
     async def get_index_kline_local(
         self, code: str, type: str = "day", limit: int = 100,
     ) -> ToolResult:
@@ -3080,13 +3237,25 @@ class MooTDX2Client:
             )
 
         self._metrics["total_requests"] += 1
-        # 入口解析（指数意图）: 非法后缀 / 非 6 位主体 → invalid_symbol；
-        # kind=stock 走错工具: 明确告知用户
-        parsed, guard_error = self._parse_index_entry(
-            code, stock_hint="请用 get_daily_local / get_kline",
-        )
-        if guard_error is not None:
-            return guard_error
+        # 港股指数（HSI / CES* / HZ*，hk 前缀或 .HK 后缀）先于 A 股解析；
+        # parse_hk_index 对数字代码 / 非法 token 抛 ValueError → invalid_symbol。
+        try:
+            hk = parse_hk_index(code)
+        except ValueError as e:
+            self._record_error(MooTDXErrorType.INVALID_SYMBOL.value)
+            return self._invalid_symbol_result(str(e))
+
+        if hk is None:
+            # A 股入口解析（指数意图）: 非法后缀 / 非 6 位主体 → invalid_symbol；
+            # kind=stock 走错工具: 明确告知用户
+            parsed, guard_error = self._parse_index_entry(
+                code, stock_hint="请用 get_daily_local / get_kline",
+            )
+            if guard_error is not None:
+                return guard_error
+        else:
+            parsed = None
+        index_key = hk.key if hk is not None else to_reader_symbol(parsed)
 
         # 2026-09-28 拉通: 与 get_daily_local 同一缓存契约 —
         # cache_key 不含 limit (同指数同频率共享), 缓存只存全量 records,
@@ -3095,7 +3264,7 @@ class MooTDX2Client:
         # 2026-09-29 审视 H2: key 加入当日日期 — 跨天必 miss, 本地 .day 文件
         # 盘后追加当日 bar 后同进程内也能拿到新数据 (旧键在 24h TTL 内残留
         # 但已不可达, 由 LRU 淘汰)。
-        cache_key = (datetime.date.today().isoformat(), to_reader_symbol(parsed), type)
+        cache_key = (datetime.date.today().isoformat(), index_key, type)
 
         # 1. L1 命中 → 全量 records; miss → 读盘后同样只缓存全量
         cached_records = self._l1_index_kline.get(cache_key)
@@ -3104,15 +3273,19 @@ class MooTDX2Client:
                 # Round-4 Batch 1 CR2/M1: list 复制防下游污染缓存
                 # limit=0 → sync 核心不做截断 (截断统一在本层切窗完成)
                 async with self._reader_gate():
-                    records, _meta = await self._run_blocking(
-                        self._get_index_kline_local_sync, code, 0, type,
-                    )
+                    if hk is not None:
+                        records = await self._run_blocking(
+                            self._get_hk_index_kline_sync, hk, type,
+                        )
+                    else:
+                        records, _meta = await self._run_blocking(
+                            self._get_index_kline_local_sync, code, 0, type,
+                        )
                 if not records:
                     # 坑 #4 防御: 本地 .day 缺失给明确 no_data 文案
                     return self._no_data_result(
-                        f"指数 {to_reader_symbol(parsed)} 本地无日线文件"
-                        f"（vipdoc/{parsed.market}/lday/{to_reader_symbol(parsed)}.day "
-                        f"不存在，可能该标的本地数据未下载）"
+                        f"指数 {index_key} 本地无日线文件"
+                        f"（可能该标的本地数据未下载）"
                     )
                 self._l1_index_kline.put(cache_key, list(records))
                 cached_records = records

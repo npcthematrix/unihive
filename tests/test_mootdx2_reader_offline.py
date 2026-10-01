@@ -402,7 +402,11 @@ def test_index_kline_limit_truncation_sets_meta(client):
 
 
 def test_index_kline_no_data_message_names_actual_file(client):
-    """指数文件缺失时 no_data 文案给出实际查找的市场前缀路径（932000 → sh）。"""
+    """指数文件缺失时 no_data 文案点名实际解析出的标的（932000 → sh932000）。
+
+    本地文件路径（.day）属于实现细节，已按产品要求从对外文案移除，
+    故不再断言 .day；仅核对市场前缀消歧结果仍在。
+    """
     client.config.settings = MagicMock()
     client.config.settings.tdxdir = "/fake/tdx"
     mock_reader = MagicMock()
@@ -413,7 +417,7 @@ def test_index_kline_no_data_message_names_actual_file(client):
 
     assert r.success is True
     assert r.data is None
-    assert "sh932000" in r.error and ".day" in r.error
+    assert "sh932000" in r.error and ".day" not in r.error
 
 
 # ========== get_daily 裸 000xxx 歧义码 warn ==========

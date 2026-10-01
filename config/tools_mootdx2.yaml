@@ -1140,7 +1140,9 @@ tools:
         get_etf_daily_local；指数日K请用 get_index_kline_local
 
       【参数说明】
-      - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
+      - code (必填): 股票代码。A 股为 6 位数字（可带 sh/sz/bj 前缀或
+        .SH/.SZ/.BJ 后缀）；港股个股为 1~5 位数字、hk 前缀或 .HK 后缀
+        （如 hk00700 / 00700.HK）
       - adjust (可选): 复权方式，默认 none
         none=不复权 / qfq=前复权 / hfq=后复权
       - start_date (可选): 起始日期，支持 YYYY-MM-DD 或 YYYYMMDD
@@ -1155,8 +1157,7 @@ tools:
       - 指数代码（sh000300、399001、880xxx、bj899050 等）请用 get_index_kline_local；
         指数传 qfq/hfq 会被强制为 none 并在 warn 说明
       - 北交所股票支持裸码（430/830/870/920 段）或显式 bj 前缀（如 bj920000）
-
-      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/{sh|sz|bj}xxx.day
+      - 港股个股传 qfq/hfq 会被强制为 none 并在 warn 说明（本地日K仅支持不复权）
 
       【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
       成功但有非阻断提示（消歧/无本地文件/截断）时额外带顶层 warn 字段。
@@ -1173,12 +1174,12 @@ tools:
       - name: code
         type: str
         required: true
-        description: 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀；裸 000xxx 按深市股票解析）
+        description: 股票代码。A 股 6 位数字可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀（裸 000xxx 按深市股票解析）；港股个股用 1~5 位数字、hk 前缀或 .HK 后缀，如 hk00700 / 00700.HK
       - name: adjust
         type: str
         required: false
         enum: [none, qfq, hfq]
-        description: 复权方式：none=不复权 / qfq=前复权 / hfq=后复权
+        description: 复权方式：none=不复权 / qfq=前复权 / hfq=后复权（A 股支持复权；港股本地日K仅支持不复权）
       - name: start_date
         type: str
         required: false
@@ -1197,8 +1198,9 @@ tools:
       - 需要同时获取多只股票数据时使用
 
       【参数说明】
-      - codes (必填): 逗号分隔的股票代码（最多20只），如 "sh600036,sh600519"
-      - adjust (可选): 复权方式，默认 none
+      - codes (必填): 逗号分隔的股票代码（最多20只），可混 A 股与港股，
+        如 "sh600036,hk00700,00700.HK"
+      - adjust (可选): 复权方式，默认 none（港股个股仅支持不复权）
         none=不复权 / qfq=前复权 / hfq=后复权
       - start_date (可选): 起始日期 YYYY-MM-DD（兼容 YYYYMMDD；未来日期拒绝）
       - end_date (可选): 结束日期 YYYY-MM-DD（兼容 YYYYMMDD；未来日期拒绝）
@@ -1217,7 +1219,7 @@ tools:
       - name: codes
         type: str
         required: true
-        description: 逗号分隔的股票代码（最多20只），如 "sh600036,sh600519"
+        description: 逗号分隔的股票代码（最多20只），A 股与港股可混用，如 "sh600036,sh600519,hk00700"
       - name: adjust
         type: str
         required: false
@@ -1261,8 +1263,6 @@ tools:
       - 裸 000xxx 歧义码在本入口按深市股票解析（如 000001 返回平安银行日线，
         不报错）；ETF 代码没有 000 段，但本入口不会因此拒绝
       - 股票代码传入本入口也能返回数据；股票日线请优先用 get_daily_local
-
-      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/{sh|sz|bj}xxx.day
 
       【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
       成功: {"success": true, "data": [{"date": "2024-01-02", "open": 10.0, ...}], "source": "mootdx2"}
@@ -1313,10 +1313,6 @@ tools:
       - end_date (可选): 结束日期，支持 YYYY-MM-DD 或 YYYYMMDD
       - start_date/end_date 传未来日期会被 invalid_param 拒绝（网关
         error_kind=invalid_request；本地文件不可能有未来交易日数据）
-
-      【数据源】
-      - suffix='1': {tdxdir}/vipdoc/{sh|sz|bj}/minline/xxx.lc1
-      - suffix='5': {tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
     routing: get_minute_local
     upstream_tool_mapping:
       mootdx2: get_minute
@@ -1360,8 +1356,6 @@ tools:
 
       【参数说明】
       - code (必填): 股票代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀）
-
-      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
     routing: get_fzline_local
     upstream_tool_mapping:
       mootdx2: get_fzline
@@ -1388,13 +1382,14 @@ tools:
           930/931/932xxx（中证新号段，如 932000=中证A500）
         · sz 指数段：399xxx（如 399001 深证成指）
         · bj 指数段：899xxx（北证指数，如 bj899050；裸码 899050 亦可）
+        · 港股 / 中华交易服务指数：用 hk 前缀或 .HK 后缀，token 字母开头，
+          如 hkHSI（恒生指数）、HSI.HK、hkCES120（中华120）、hkHZ5014
         · 裸 000xxx 为歧义码（上证指数 vs 深市股票），本工具按 sh 指数解析
           （如 000001=上证指数、000300=沪深300）；显式前缀始终生效
       - type (可选): day(默认)/week/month；week/month 由本地日线重采样
       - limit (可选): 返回最近 N 条，默认 100，最大 1000；需正整数
         （0/负数/非整数会被 invalid_param 拒绝），超限时截断并在信封 warn 说明
 
-      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/lday/{sh|sz|bj}xxx.day
       【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
       成功但有非阻断提示（本地无文件/截断）时额外带顶层 warn 字段。
       【典型情况】中的 invalid_symbol/invalid_param/no_data 为上游细分诊断名，
@@ -1414,7 +1409,7 @@ tools:
       - name: code
         type: str
         required: true
-        description: 指数代码（6 位数字，可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀；裸 000xxx 按 sh 指数解析）
+        description: 指数代码。A 股 6 位数字可带 sh/sz/bj 前缀或 .SH/.SZ/.BJ 后缀（裸 000xxx 按 sh 指数解析）；港股/中华指数用 hk 前缀或 .HK 后缀，如 hkHSI / HSI.HK / hkCES120
       - name: type
         type: str
         required: false
@@ -1450,9 +1445,6 @@ tools:
         （0/负数/非整数会被 invalid_param 拒绝），超出时截断为最近
         N 条并在信封 warn 中说明（无日期窗时给文件总数，带日期窗时给窗内条数）
 
-      【数据源】
-      - suffix='1': {tdxdir}/vipdoc/{sh|sz|bj}/minline/xxx.lc1
-      - suffix='5': {tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
       【返回信封】统一为 {success, data, error, source, hops, cache_hit}；
       成功但本地无文件时 success=true、data=null，缺失路径在顶层 warn 中给出。
       【典型情况】中的细分 error_type 为上游诊断名，/mcp 网关信封只透出
@@ -1515,7 +1507,6 @@ tools:
         （0/负数/非整数会被 invalid_param 拒绝），超出截断并在
         信封 warn 中说明
 
-      【数据源】{tdxdir}/vipdoc/{sh|sz|bj}/fzline/xxx.lc5
       【返回信封】同 get_index_minute_local（含截断 warn）；股票代码 → invalid_symbol 请改用 get_fzline_local。
     routing: get_index_fzline_local
     upstream_tool_mapping:
