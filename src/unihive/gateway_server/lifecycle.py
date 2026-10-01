@@ -484,7 +484,7 @@ class LifecycleMixin:
             upstreams = getattr(self, "upstreams", None)
             if upstreams is not None:
                 upstreams.clear()
-        if getattr(self, "router", None) is not None or True:
+        if getattr(self, "router", None) is not None:
             # router/mcp 置 None 总是安全的 (属性默认 None, set 一次即可)
             self.router = None
             self.mcp = None
