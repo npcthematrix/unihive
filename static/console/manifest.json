@@ -1,0 +1,30 @@
+{
+  "name": "UniHive Console",
+  "short_name": "UniHive",
+  "description": "金融数据 MCP 聚合网关 — 统一 /mcp 端点, 多源上游路由。",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0e3a8c",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/static/console/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/console/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/console/icon-maskable.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

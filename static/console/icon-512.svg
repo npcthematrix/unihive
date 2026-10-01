@@ -1,0 +1,42 @@
+<!--
+  PWA icon 512x512: 与 192 同几何, 等比缩放。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="UniHive">
+  <title>UniHive</title>
+  <defs>
+    <linearGradient id="pwa-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e3a8c"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="pwa-stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="0.6" stop-color="#14b8a6"/>
+      <stop offset="1" stop-color="#0d9488"/>
+    </linearGradient>
+    <radialGradient id="pwa-node" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#a5f3fc"/>
+      <stop offset="0.55" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#0e3a8c"/>
+    </radialGradient>
+    <radialGradient id="pwa-glass" cx="0.3" cy="0.3" r="0.35">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#pwa-bg)"/>
+  <polygon points="469,256 362.7,92.8 149.3,92.8 43,256 149.3,419.2 362.7,419.2"
+    fill="none" stroke="url(#pwa-stroke)" stroke-width="22" stroke-linejoin="round"/>
+  <g stroke="url(#pwa-stroke)" stroke-width="13" stroke-linecap="round" fill="none" opacity="0.85">
+    <line x1="405" y1="256" x2="320" y2="256"/>
+    <line x1="331" y1="126.6" x2="288" y2="200.5"/>
+    <line x1="181" y1="126.6" x2="224" y2="200.5"/>
+    <line x1="107" y1="256" x2="192" y2="256"/>
+    <line x1="181" y1="385.4" x2="224" y2="311.5"/>
+    <line x1="331" y1="385.4" x2="288" y2="311.5"/>
+  </g>
+  <circle cx="256" cy="256" r="64" fill="url(#pwa-node)"/>
+  <polygon points="256,213 294.4,237 213.6,237 213.6,275 256,299 213.6,299 213.6,275"
+    fill="none" stroke="#ffffff" stroke-width="6" stroke-opacity="0.9" stroke-linejoin="round"
+    points="256,213 294.4,237 294.4,275 256,299 217.6,275 217.6,237"/>
+  <circle cx="256" cy="256" r="64" fill="url(#pwa-glass)"/>
+</svg>

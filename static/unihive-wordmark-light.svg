@@ -1,0 +1,40 @@
+<!--
+  README 用的 wordmark (浅底静态版): 与 web/src/assets/unihive-wordmark-light.svg 同源,
+  放在 static/ 让仓库根 README.md 能直接相对路径访问 (web/src/ 不在仓库根路径下)。
+  改此处同步 web/src/assets/ + dark + favicon + manifest icon。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 96" width="320" height="96" role="img" aria-label="UniHive">
+  <title>UniHive</title>
+  <defs>
+    <linearGradient id="wm-stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e3a8c"/>
+      <stop offset="0.6" stop-color="#0d9488"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+    <radialGradient id="wm-node" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="0.55" stop-color="#14b8a6"/>
+      <stop offset="1" stop-color="#0e3a8c"/>
+    </radialGradient>
+    <radialGradient id="wm-glass" cx="0.3" cy="0.3" r="0.35">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <polygon points="88,48 68,17.4 28,17.4 8,48 28,78.6 68,78.6"
+    fill="#ffffff" fill-opacity="0.04" stroke="url(#wm-stroke)" stroke-width="5" stroke-linejoin="round"/>
+  <g stroke="url(#wm-stroke)" stroke-width="2.6" stroke-linecap="round" fill="none" opacity="0.78">
+    <line x1="76" y1="48" x2="60" y2="48"/>
+    <line x1="62" y1="23.75" x2="54" y2="37.6"/>
+    <line x1="34" y1="23.75" x2="42" y2="37.6"/>
+    <line x1="20" y1="48" x2="36" y2="48"/>
+    <line x1="34" y1="72.25" x2="42" y2="58.4"/>
+    <line x1="62" y1="72.25" x2="54" y2="58.4"/>
+  </g>
+  <circle cx="48" cy="48" r="12" fill="url(#wm-node)"/>
+  <polygon points="48,40 55.6,44.5 55.6,53.5 48,58 40.4,53.5 40.4,44.5"
+    fill="none" stroke="#ffffff" stroke-width="1.2" stroke-opacity="0.85" stroke-linejoin="round"/>
+  <circle cx="48" cy="48" r="12" fill="url(#wm-glass)"/>
+  <text x="108" y="62" font-family="'Space Grotesk', 'Inter', system-ui, sans-serif" font-weight="600" font-size="40" fill="#0e3a8c" letter-spacing="-0.5">UniHive</text>
+  <text x="109" y="80" font-family="'JetBrains Mono', ui-monospace, monospace" font-weight="500" font-size="9" fill="#475569" letter-spacing="2.4">MCP · AGGREGATE</text>
+</svg>
