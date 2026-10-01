@@ -1,22 +1,11 @@
 <template>
   <div class="tools-panel">
     <!-- 搜索框 -->
-    <div class="cfg-search-wrap" :class="{ 'has-value': search }">
-      <input
-        v-model="search"
-        type="text"
-        class="cfg-search"
-        placeholder="按名称 / 描述 / 参数筛选…"
-        aria-label="筛选工具规格"
-      >
-      <button
-        v-if="search"
-        type="button"
-        class="cfg-search-clear"
-        title="清空"
-        @click="search = ''"
-      >×</button>
-    </div>
+    <CfgSearchInput
+      v-model="search"
+      placeholder="按名称 / 描述 / 参数筛选…"
+      aria-label="筛选工具规格"
+    />
 
     <el-table
       :data="filteredTools"
@@ -102,6 +91,7 @@ import { computed, ref } from 'vue'
 import type { ConfigRevision, ConfigTool, GatewayConfig } from '@/api/config'
 import { paramCells, paramsSearchKey } from './format'
 import ToolEditDialog from './ToolEditDialog.vue'
+import CfgSearchInput from './CfgSearchInput.vue'
 
 interface Props {
   config: GatewayConfig | null

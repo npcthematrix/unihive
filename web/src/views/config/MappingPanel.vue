@@ -1,22 +1,11 @@
 <template>
   <div class="map-panel">
     <!-- 搜索框 -->
-    <div class="cfg-search-wrap" :class="{ 'has-value': search }">
-      <input
-        v-model="search"
-        type="text"
-        class="cfg-search"
-        placeholder="按路由键 / 上游 / 上游 tool 筛选…"
-        aria-label="筛选工具映射"
-      >
-      <button
-        v-if="search"
-        type="button"
-        class="cfg-search-clear"
-        title="清空"
-        @click="search = ''"
-      >×</button>
-    </div>
+    <CfgSearchInput
+      v-model="search"
+      placeholder="按路由键 / 上游 / 上游 tool 筛选…"
+      aria-label="筛选工具映射"
+    />
 
     <el-table :data="filteredEntries" :empty-text="emptyText" class="cfg-table map-table">
       <el-table-column label="路由键" min-width="200">
@@ -59,6 +48,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { GatewayConfig } from '@/api/config'
+import CfgSearchInput from './CfgSearchInput.vue'
 
 interface Props {
   config: GatewayConfig | null
