@@ -5,6 +5,7 @@
 模块限定形式 ``registry.register_tool`` 以便 monkeypatch 命中本模块 binding。
 """
 import logging
+from contextlib import contextmanager
 
 from ..api.omni_client import OmniClient
 from ..core import registry
@@ -100,17 +101,16 @@ class HotToggleMixin:
             dangerous_names = {
                 s["name"] for s in self.tool_specs if s.get("dangerous")
             }
-            errors: list[str] = []
-            if disabled:
-                to_remove = dangerous_names & self._published_tools
-                tools_removed = self._unpublish_tools_locked(to_remove, errors)
-                tools_added: list[str] = []
-            else:
-                wanted = {s["name"] for s in self._publishable_specs(self.tool_specs)}
-                to_add = (wanted & dangerous_names) - self._published_tools
-                tools_added = self._publish_tools_locked(to_add, errors)
-                tools_removed = []
-            self._raise_if_toggle_errors("disable-dangerous", errors)
+            with self._toggle_errors("disable-dangerous") as errors:
+                if disabled:
+                    to_remove = dangerous_names & self._published_tools
+                    tools_removed = self._unpublish_tools_locked(to_remove, errors)
+                    tools_added: list[str] = []
+                else:
+                    wanted = {s["name"] for s in self._publishable_specs(self.tool_specs)}
+                    to_add = (wanted & dangerous_names) - self._published_tools
+                    tools_added = self._publish_tools_locked(to_add, errors)
+                    tools_removed = []
             logger.info(
                 "disable_dangerous=%s: dangerous tools added=%d removed=%d",
                 disabled,
@@ -210,13 +210,42 @@ class HotToggleMixin:
             removed.append(tool_name)
         return removed
 
+    @contextmanager
+    def _toggle_errors(self, name: str):
+        """上下文管理器：进入 yield 一个 ``errors: list[str]``；退出时若非空则 raise。
+
+        替换 ``errors: list[str] = []`` + ``self._raise_if_toggle_errors(name, errors)``
+        的样板。block 内失败时把消息 ``errors.append(...)`` 即可, 末尾 raise
+        统一处理。多 errors 源 (如 reconcile 的 add/remove) 也走这个上下文,
+        block 起始 ``errors.extend(add_errors)`` + ``errors.extend(remove_errors)``
+        即可, 退出时一并 raise。
+        """
+        errors: list[str] = []
+        try:
+            yield errors
+        finally:
+            if errors:
+                detail = "; ".join(errors[:5])
+                if len(errors) > 5:
+                    detail += f"; …(+{len(errors) - 5} more)"
+                raise RuntimeError(
+                    f"runtime toggle {name!r} partial failure: {detail}"
+                )
+
     @staticmethod
     def _raise_if_toggle_errors(name: str, errors: list[str]) -> None:
+        """历史 API 兼容: 测试 (test_startup_audit_round9_batch_a 等) 用
+        monkeypatch.setattr 替换本方法为 lambda/None 来压制错误, 或期望它以
+        旧 raise RuntimeError 语义抛出。保留作为 _toggle_errors 的同步等价
+        入口, 内部委托同一错误格式化逻辑。
+        """
         if errors:
             detail = "; ".join(errors[:5])
             if len(errors) > 5:
                 detail += f"; …(+{len(errors) - 5} more)"
-            raise RuntimeError(f"runtime toggle {name!r} partial failure: {detail}")
+            raise RuntimeError(
+                f"runtime toggle {name!r} partial failure: {detail}"
+            )
 
     async def _attach_upstream_client_locked(self, name: str, cfg: dict):
         """用已解析 live 块构造+启动 client 并切换 console_api omni 指针。
@@ -255,11 +284,10 @@ class HotToggleMixin:
             _ca.set_omni_client(None)
 
     async def _enable_upstream_locked(self, name: str, cfg: dict) -> dict:
-        errors: list[str] = []
-        _, connected = await self._attach_upstream_client_locked(name, cfg)
-        to_add, _ = self._toggle_tool_diff_locked(name)
-        tools_added = self._publish_tools_locked(to_add, errors)
-        self._raise_if_toggle_errors(name, errors)
+        with self._toggle_errors(name) as errors:
+            _, connected = await self._attach_upstream_client_locked(name, cfg)
+            to_add, _ = self._toggle_tool_diff_locked(name)
+            tools_added = self._publish_tools_locked(to_add, errors)
         logger.info(
             "Upstream %s enabled: tools_added=%d connected=%s",
             name,
@@ -276,12 +304,11 @@ class HotToggleMixin:
         }
 
     async def _disable_upstream_locked(self, name: str) -> dict:
-        errors: list[str] = []
-        _, to_remove = self._toggle_tool_diff_locked(name)
-        tools_removed = self._unpublish_tools_locked(to_remove, errors)
+        with self._toggle_errors(name) as errors:
+            _, to_remove = self._toggle_tool_diff_locked(name)
+            tools_removed = self._unpublish_tools_locked(to_remove, errors)
         # 有工具没摘下来: raise 先于 detach, 保留 client 让残存发布的工具仍可
         # 服务; 下次同态点击 (reconcile) 重试摘除, 避免半残废状态。
-        self._raise_if_toggle_errors(name, errors)
         await self._detach_upstream_client_locked(name)
         logger.info(
             "Upstream %s disabled: tools_removed=%d", name, len(tools_removed)
@@ -325,14 +352,19 @@ class HotToggleMixin:
             # 属合法补发; to_remove: 失去全部 backer 的工具补摘。
             tools_added = self._publish_tools_locked(to_add, add_errors)
             tools_removed = self._unpublish_tools_locked(to_remove, remove_errors)
-            # detach 只由 unpublish 失败门控: 不相关的补发失败不得永久卡住
-            # 禁用 client 的摘除 (旧实现共用一个 errors 列表会误挡)。
-            if existing is not None and not remove_errors:
-                await self._detach_upstream_client_locked(name)
-                client_changed = True
             connected = False
 
-        self._raise_if_toggle_errors(name, add_errors + remove_errors)
+        # detach 只由 unpublish 失败门控: 不相关的补发失败不得永久卡住
+        # 禁用 client 的摘除 (旧实现共用一个 errors 列表会误挡)。
+        if not enabled and existing is not None and not remove_errors:
+            await self._detach_upstream_client_locked(name)
+            client_changed = True
+
+        # 双 errors 合并 raise: 复用 _toggle_errors 的格式化逻辑 (双 list 合并
+        # 后由 contextmanager 退出时统一抛, 不重复内联 detail + 截断模板)。
+        with self._toggle_errors(name) as errors:
+            errors.extend(add_errors)
+            errors.extend(remove_errors)
         healed = bool(tools_added or tools_removed or client_changed)
         if healed:
             logger.info(

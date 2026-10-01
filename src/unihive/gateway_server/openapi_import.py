@@ -227,20 +227,21 @@ class OpenApiImportMixin:
             )
 
             # 2) provider: 契约变化的先摘, 新增/重注的后发; 无删除语义。
-            errors: list[str] = []
-            removed = self._unpublish_tools_locked(to_remove, errors)
-            added = self._publish_tools_locked(to_add, errors)
-            if errors:
-                await self._rollback_config_upgrade_locked(
-                    old_config=old_config,
-                    old_specs=old_specs,
-                    old_hidden=old_hidden,
-                    to_add=to_add,
-                    to_remove=to_remove,
-                    switched_upstreams=[],
-                    old_blocks={},
-                )
-                self._raise_if_toggle_errors("openapi-import", errors)
+            # rollback 放在 with 块内: contextmanager 退出时非空 errors 自动
+            # raise, 等价原 if errors → rollback → raise 模式。
+            with self._toggle_errors("openapi-import") as errors:
+                removed = self._unpublish_tools_locked(to_remove, errors)
+                added = self._publish_tools_locked(to_add, errors)
+                if errors:
+                    await self._rollback_config_upgrade_locked(
+                        old_config=old_config,
+                        old_specs=old_specs,
+                        old_hidden=old_hidden,
+                        to_add=to_add,
+                        to_remove=to_remove,
+                        switched_upstreams=[],
+                        old_blocks={},
+                    )
 
             # 3) 单事务批量落库 (乐观锁; origin 恒 user, 门控列 store 保留)。
             # expected 缺省钉住 prep 时刻 revision, plan→apply 之间的并发

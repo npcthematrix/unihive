@@ -448,10 +448,9 @@ class ConfigEditsMixin:
                         # 复用 old 还是重建 restored (见 _rollback_upstream_edit_locked)。
                         old_client_stopped = True
                     # 新连接块可能引入新 backer 可发布的工具, 重放一次差集自愈。
-                    errors: list[str] = []
-                    to_add, _ = self._toggle_tool_diff_locked(name)
-                    self._publish_tools_locked(to_add, errors)
-                    self._raise_if_toggle_errors(name, errors)
+                    with self._toggle_errors(name) as errors:
+                        to_add, _ = self._toggle_tool_diff_locked(name)
+                        self._publish_tools_locked(to_add, errors)
                 except BaseException:  # noqa: BLE001 - 含 CancelledError, 回滚后重抛
                     await self._rollback_upstream_edit_locked(
                         name=name,
@@ -549,9 +548,7 @@ class ConfigEditsMixin:
         # old 已停 → 按旧 live 块重建等价 client 接替。
         try:
             restored = self._construct_upstream_client(name, old_live_block)
-            await self._start_upstream_client(
-                name, old_live_block, restored
-            )
+            await self._start_upstream_client(name, old_live_block, restored)
             if isinstance(restored, OmniClient):
                 _ca.set_omni_client(restored)
             logger.warning(

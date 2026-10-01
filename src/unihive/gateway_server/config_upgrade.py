@@ -291,18 +291,20 @@ class ConfigUpgradeMixin:
             # 2) 先摘工具 (M8): 任何 client 断开前, 失去 backer / spec 变更的
             #    工具必须先从 provider 摘除, 杜绝切换窗内新调用被路由到正在
             #    关闭的 client。此时 client 全部未动, 回滚只需补注册。
-            removed = self._unpublish_tools_locked(to_remove, errors)
-            if errors:
-                await self._rollback_config_upgrade_locked(
-                    old_config=old_config,
-                    old_specs=old_specs,
-                    old_hidden=old_hidden,
-                    to_add=set(),
-                    to_remove=to_remove,
-                    switched_upstreams=[],
-                    old_blocks=old_blocks,
-                )
-                self._raise_if_toggle_errors("factory-upgrade", errors)
+            # rollback 放在 with 块内: contextmanager 退出时非空 errors 自动
+            # raise, 等价原 if errors → rollback → raise 模式。
+            with self._toggle_errors("factory-upgrade") as errors:
+                removed = self._unpublish_tools_locked(to_remove, errors)
+                if errors:
+                    await self._rollback_config_upgrade_locked(
+                        old_config=old_config,
+                        old_specs=old_specs,
+                        old_hidden=old_hidden,
+                        to_add=set(),
+                        to_remove=to_remove,
+                        switched_upstreams=[],
+                        old_blocks=old_blocks,
+                    )
 
             # 3) 上游 client 差集收敛 (先断后连; 失败只警告, 不阻断升级)。
             for name in sorted(set(detach_names) | set(reconnect_names)):
@@ -368,18 +370,18 @@ class ConfigUpgradeMixin:
 
             # 4) 新 client 就位后再发布新工具/重发布 (单工具失败收集, 必须全
             #    成功才落库; 失败 → client 与 provider 整体回滚)。
-            added = self._publish_tools_locked(to_add, errors)
-            if errors:
-                await self._rollback_config_upgrade_locked(
-                    old_config=old_config,
-                    old_specs=old_specs,
-                    old_hidden=old_hidden,
-                    to_add=to_add,
-                    to_remove=to_remove,
-                    switched_upstreams=attached + reconnected + detached,
-                    old_blocks=old_blocks,
-                )
-                self._raise_if_toggle_errors("factory-upgrade", errors)
+            with self._toggle_errors("factory-upgrade") as errors:
+                added = self._publish_tools_locked(to_add, errors)
+                if errors:
+                    await self._rollback_config_upgrade_locked(
+                        old_config=old_config,
+                        old_specs=old_specs,
+                        old_hidden=old_hidden,
+                        to_add=to_add,
+                        to_remove=to_remove,
+                        switched_upstreams=attached + reconnected + detached,
+                        old_blocks=old_blocks,
+                    )
 
             # 4) 单事务落库 + 快照前推 (乐观锁)。失败 → 运行态尽力回滚。
             # expected 缺省钉住 plan 时刻 revision: plan→apply 之间若有并发
