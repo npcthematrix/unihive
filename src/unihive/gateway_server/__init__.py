@@ -107,6 +107,9 @@ class GatewayServer(
             raise ValueError(
                 f"UNIHIVE_CONFIG_SOURCE must be 'db' or 'yaml' (got {source!r})"
             )
+        # db_mode 字段保留: 13+ 处现有测试用 server._db_mode = True/False (__new__
+        # 旁路 __init__ 的测试无法走 env), 删除字段会带来大量测试 churn, 与
+        # mcp_tools._uses_db_source 重读 env 行为等价, 低开销兼容保留。
         self._db_mode = source != "yaml"
         # M10: 库路径锚定项目根, 从任意 CWD 启动都指向同一个 config.db,
         # 杜绝在 CWD 下静默生成空库重 seed 的裂脑; 绝对路径原样保留。
@@ -147,7 +150,7 @@ class GatewayServer(
                         + "; ".join(errors)
                     )
         except Exception:
-            if not self._db_mode:
+            if source == "yaml":
                 raise
             logger.warning(
                 "YAML config preflight failed; continuing in db mode — "
@@ -179,15 +182,25 @@ class GatewayServer(
         # None 表示 UNIHIVE_CONFIG_SOURCE=yaml 逃生模式或尚未初始化。
         self.config_store: ConfigStore | None = None
         self._upstream_toggle_lock = asyncio.Lock()
+        # initialize() 互斥锁: 单线程 asyncio 上同实例两次同时 await initialize()
+        # 不会发生, 但显式锁文档化不变量 + 让测试断言 lock 存在。7 处测试 setup
+        # 直接 server._init_lock = asyncio.Lock() 验证并发序列化, 字段删除会带来
+        # 测试 churn。低开销兼容保留。
+        self._init_lock = asyncio.Lock()
         # M2 (round 11): start() 超时后的后台自愈任务 (按上游名分组)。
         # 阻塞型 client (mootdx2/tdx_quant) 的初始化在专用线程池不可中断,
         # wait_for 超时后由这些任务驱动 client 完成延迟启动+健康循环;
         # disable / stop / init 失败清理时按名取消, 不复活已停 client。
+        # 容器为 set[Task]: 测试断言 `_late_start_tasks.get(name) == set()`,
+        # 改为单 Task 容器会带来测试 churn, 低开销兼容保留。
         self._late_start_tasks: dict[str, set[asyncio.Task]] = {}
-        self._running = False
         # initialize() 幂等位 (旧实现在 start/serve_http 各调一次, 部分 client
         # 重入状态混乱) + stop() 取消 health loop 的事件。
         self._initialized = False
+        # _running 字段保留: M5 测试 invariant 直接断言 server._running is False
+        # (init-fail 后必须 False)。与 _initialized 语义等价, 删除字段会让 6+ 处
+        # 测试 setup (server._running = False/True) 引入 churn, 低开销兼容保留。
+        self._running = False
         self._shutdown_event = asyncio.Event()
         # 在途请求计数 + 优雅关闭
         self._active_requests = 0
@@ -198,9 +211,6 @@ class GatewayServer(
         # _execute_cached 的 per-key 单飞 dict (HIGH 1, 2026-09-07):
         # 同 key 并发 miss 只触发一次 router.route()。
         self._in_flight_requests: dict[str, asyncio.Future] = {}
-        # initialize() 并发保护: 两次 await initialize() 必须串行化,
-        # 否则 cache / upstream 会被重复初始化 (HIGH #1)。
-        self._init_lock = asyncio.Lock()
         # 周期 cache 清理任务 (MCP 二次审视 M4): cleanup_expired() 从不调度,
         # 过期条目只能等 LRU; stop() 时取消。
         self._cache_cleanup_task: asyncio.Task | None = None
@@ -230,9 +240,11 @@ class GatewayServer(
             exclusive_min=True,
         )
         from ..core.rate_limiter import get_default_limiter
-        self.limiter = get_default_limiter()
+        # limiter 是模块单例 (Router 也直接调 get_default_limiter()), 同时存 self.limiter
+        # 字段 (L1 回滚: 测试断言 server.limiter is not None, 字段删除会带来 churn)。
+        limiter = self.limiter = get_default_limiter()
         # 清掉旧 per-key: 本次未列出的条目回到默认兜底 (热升级/热编辑重跑关键)
-        self.limiter.reset_configurations()
+        limiter.reset_configurations()
         rate_cfg = gateway_cfg.get("rate_limit", {})
         for upstream_name, params in rate_cfg.items():
             field = f"gateway.rate_limit.{upstream_name}"
@@ -245,23 +257,25 @@ class GatewayServer(
                     params.get("capacity", 40.0), f"{field}.capacity",
                     minimum=0.0, exclusive_min=True,
                 )
-                self.limiter.configure(upstream_name, rate=rate, capacity=capacity)
+                limiter.configure(upstream_name, rate=rate, capacity=capacity)
             elif isinstance(params, (int, float)) and not isinstance(params, bool):
                 rate = coerce_float_field(
                     params, field, minimum=0.0, exclusive_min=True,
                 )
-                self.limiter.configure(upstream_name, rate=rate)
+                limiter.configure(upstream_name, rate=rate)
             else:
                 raise ValueError(
                     f"{field} 必须是正数或含 rate/capacity 的 object, "
                     f"got {params!r} ({type(params).__name__})"
                 )
 
-        # per-source 池容量 + Reader 闸门 (cfg > env > default, 启动期一次性)
+        # per-source 池容量 + Reader 闸门 (cfg > env > default, 启动期一次性)。
+        # 抽成独立方法让 _apply_gateway_tuning 专管 rate_limit + limiter,
+        # 池配置自洽便于 db 模式装配后单独重放。
         self._apply_pool_config()
 
     def _apply_pool_config(self) -> None:
-        """解析 cfg → 注入 blocking_pool 单例 (启动期一次性, 运行时改需重启)。"""
+        """per-source 池容量 + Reader 闸门 (cfg > env > default, 启动期一次性)。"""
         from ..core.pool_config import apply_pool_config
         from ..core.blocking_pool import _mootdx2, _tdx_quant  # type: ignore
         self._pool_config = apply_pool_config(

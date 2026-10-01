@@ -28,11 +28,13 @@ class UpstreamControlMixin:
     async def _start_upstream_client(self, name: str, cfg: dict, client) -> bool:
         """启动已构造的 client 并登记进 self.upstreams, 返回 is_available。
 
-        复刻原启动循环语义: 单 client 超时/异常不抛出 (CancelledError 除外),
-        client 仍登记进 self.upstreams 供健康检查与 stop() 清理; ths_local_gateway
-        保留原特例 (不走 wait_for 超时)。
+        cfg 是历史签名保留 (L7 回滚): 测试 fixture 替换本方法为
+        ``fake_start(name, cfg, client)`` 验证取消/回滚路径, 必须保留 3 参
+        签名。内部已改用 isinstance(client, ThsLocalClient) 判别, cfg 仍
+        接收但不读取。
         """
-        if cfg.get("type") == "ths_local_gateway":
+        del cfg  # noqa: F841  保留 2nd positional 以兼容测试 fixture
+        if isinstance(client, ThsLocalClient):
             try:
                 await client.start()
             except Exception as e:
@@ -77,7 +79,9 @@ class UpstreamControlMixin:
             # "未知"。本次 boot 已等不起又无后台自愈, 诚实落 UNAVAILABLE;
             # 有钩子的 mootdx2/tdx_quant 保留 UNKNOWN, 等阻塞调用返回后由
             # start_after_timeout 重跑 start() 自行定状态, 不提前判死。
-            self._settle_unavailable_if_unknown(client)
+            if not hasattr(client, "start_after_timeout"):
+                if getattr(client, "status", None) is UpstreamStatus.UNKNOWN:
+                    client._status = UpstreamStatus.UNAVAILABLE
             return False
         except Exception as e:
             # 非超时异常 (FileNotFoundError / OSError / 等) 同样登记 client,
@@ -92,7 +96,8 @@ class UpstreamControlMixin:
             # 后续自愈会来定状态 —— 无条件把 UNKNOWN 收敛为 UNAVAILABLE;
             # 否则状态永久残留 UNKNOWN, aggregate_health 把它计入 degraded
             # 而非 unhealthy, 健康结论被乐观化。
-            self._settle_unavailable_if_unknown(client, include_hooked=True)
+            if getattr(client, "status", None) is UpstreamStatus.UNKNOWN:
+                client._status = UpstreamStatus.UNAVAILABLE
             return False
         self.upstreams[name] = client
         connected = bool(client.is_available)
@@ -102,14 +107,19 @@ class UpstreamControlMixin:
     def _spawn_background_start(self, name: str, cfg: dict, client) -> None:
         """boot 期 fire-and-forget: 后台跑 client.start(), 不阻塞网关启动。
 
+        cfg 是历史签名保留 (L7 回滚: 与 _start_upstream_client 对称, 3 参)。
+        内部未读取 (不再依赖 cfg["type"]), 保留仅为 fixture 兼容。
+
         client 已由调用方登记进 self.upstreams (启动中态)。start() 内部自带
         call_timeout, 故这里不再套 wait_for 启动预算; 完成/失败由 client 自行
         标记状态。任务异常必须可见 (done_callback 记录), 不得静默丢失。
         """
+        del cfg  # noqa: F841  保留 2nd positional 以兼容测试 fixture
         task = asyncio.create_task(
             self._background_start_once(name, client),
             name=f"unihive-bg-start-{name}",
         )
+        # 容器为 set[Task] (L4 回滚: 测试断言 _late_start_tasks.get(name) == set())
         self._late_start_tasks.setdefault(name, set()).add(task)
         task.add_done_callback(
             lambda t, n=name: self._late_start_tasks.get(n, set()).discard(t)
@@ -134,27 +144,7 @@ class UpstreamControlMixin:
                 e,
             )
             # start() 抛异常时诚实落 UNAVAILABLE, 不留 UNKNOWN 让健康结论虚高。
-            # 真实 client 的 status 是读 self._status 的 property; 裸测试 double
-            # 可能只有 status 普通属性, 故两种写法都兼容。
             if getattr(client, "status", None) is UpstreamStatus.UNKNOWN:
-                try:
-                    client._status = UpstreamStatus.UNAVAILABLE
-                except Exception:  # noqa: BLE001 - property 只读时退回直接写
-                    client.status = UpstreamStatus.UNAVAILABLE
-
-    @staticmethod
-    def _settle_unavailable_if_unknown(client, *, include_hooked: bool = False) -> None:
-        """start() 超时或异常已让本次 boot 等不起时, 把仍停在初始 UNKNOWN 的
-        client 诚实落 UNAVAILABLE。
-
-        默认跳过带 late-recovery 钩子的 client (mootdx2/tdx_quant): 超时分支里
-        阻塞调用可能仍在线程池跑, start_after_timeout 会在它返回后自行定状态,
-        不提前判死。``include_hooked=True`` 用于异常快失败路径 —— 那时没有
-        在途阻塞线程, 钩子也等不来任何后续事件。
-        """
-        if include_hooked or not hasattr(client, "start_after_timeout"):
-            status = getattr(client, "status", None)
-            if status is UpstreamStatus.UNKNOWN:
                 client._status = UpstreamStatus.UNAVAILABLE
 
     # ------------------------------------------------------------------
@@ -173,6 +163,7 @@ class UpstreamControlMixin:
             self._late_start_once(name, client),
             name=f"unihive-late-start-{name}",
         )
+        # 容器为 set[Task] (L4 回滚: 与 _spawn_background_start 对称)
         self._late_start_tasks.setdefault(name, set()).add(task)
         task.add_done_callback(
             lambda t, n=name: self._late_start_tasks.get(n, set()).discard(t)
@@ -207,9 +198,10 @@ class UpstreamControlMixin:
         if not groups:
             return
         if name is not None:
-            selected: list[asyncio.Task] = list(groups.get(name, set()))
+            selected = list(groups.pop(name)) if name in groups else []
         else:
-            selected = [t for tasks in groups.values() for t in tasks]
+            selected = [t for s in groups.values() for t in s]
+            groups.clear()
         if not selected:
             return
         for task in selected:

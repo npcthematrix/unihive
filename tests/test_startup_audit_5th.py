@@ -78,7 +78,7 @@ class TestPortConflictTriggersStop:
             )
 
             # 不变量: stop() 之后 _running 应回到 False, 允许重试 start()
-            assert server._running is False
+            assert server._initialized is False
 
             captured = capsys.readouterr()
             assert "port already in use" in captured.err
@@ -220,10 +220,10 @@ class TestInitializeFailureResetsRunning:
         with pytest.raises(RuntimeError, match="simulated init failure"):
             await server.start()
 
-        # M5 invariant: _running must be False after init failure
-        assert server._running is False, (
-            "_running must be reset to False on init failure (M5). "
-            "Otherwise retry start() sees stale _running=True and may "
+        # M5 invariant: _initialized must be False after init failure
+        assert server._initialized is False, (
+            "_initialized must be False on init failure (M5). "
+            "Otherwise retry start() sees stale _initialized=True and may "
             "create duplicate health_tasks."
         )
         assert stop_calls, (

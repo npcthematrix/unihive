@@ -25,24 +25,44 @@ logger = logging.getLogger(__name__)
 
 
 async def _await_cleanup(aw, *, timeout: float, what: str) -> None:
-    """init 失败清理工具: 限时、屏蔽外层取消与一切异常。
+    """清理动作工具: 限时、屏蔽外层取消与一切异常。
 
     Round-12 簇H: init 在被取消 (CancelledError) 时也要完成 client/cache/
     config_store 清理。直接 await 的清理协程在外层任务已取消时会立刻再抛
     CancelledError; asyncio.shield 让清理动作不被外层取消打断, wait_for 给
     时限防卡死, 任何异常仅 debug 日志 (清理路径不能再抛)。
+
+    init 失败清理路径 (lifecycle._do_initialize except) 与 stop (约 30 行清理
+    段) 共享同一模式; 但二者顺序细节与独有步骤 (in-flight wait / error_buffer
+    flush / 状态字段复位) 差异明显, 未抽公共方法 (净减行数趋零)。
     """
     try:
         await asyncio.wait_for(asyncio.shield(aw), timeout=timeout)
     except BaseException as e:  # noqa: BLE001 — 清理路径, 记录后继续
-        logger.debug("init cleanup step %s skipped/failed: %s", what, e)
+        logger.debug("teardown step %s skipped/failed: %s", what, e)
+
+
+async def _stdio_signal_watcher(
+    self, main_task: asyncio.Task | None,
+) -> None:
+    """等待 _shutdown_event 触发后取消 main_task, 让 run_stdio_async 抛
+    CancelledError, 走 outer finally 调 stop()。
+
+    模块级 helper (而非 start() 内嵌), 让 start() 主体只剩 watcher 接线。
+    Windows 不走这条路径 (add_signal_handler 不可用, 注释见 start())。
+    """
+    await self._shutdown_event.wait()
+    if main_task is not None and not main_task.done():
+        main_task.cancel()
 
 
 class LifecycleMixin:
     """生命周期方法簇 (GatewayServer 组装时混入)。"""
 
     async def initialize(self):
-        # 双重检查锁: 第二次 fast path 直接返回; 拿到锁后再校验一次防 TOCTOU。
+        # 双检锁: 测试 (test_concurrent_initialize_calls_only_init_cache_once)
+        # 显式断言 _init_lock 序列化两次并发 initialize() 调用, 字段保留 +
+        # 锁使用还原。
         if self._initialized:
             return
         async with self._init_lock:
@@ -73,9 +93,9 @@ class LifecycleMixin:
 
         if not self._uses_db_source():
             logger.info("UNIHIVE_CONFIG_SOURCE=yaml, 配置事实源=YAML 文件 (无 SQLite)")
-            # Round-12 簇H: yaml 逃生模式同样重放 gateway 调参。db 分支在
-            # 装配末尾重放; 旧实现在此直接 return, 控制台/热改写入 YAML 基线
-            # 后经此路径重启时 router timeout / 限流器仍是 __init__ 的旧值。
+            # yaml 逃生模式: 重放 _apply_gateway_tuning 让 _per_upstream_timeout
+            # / limiter 在 __new__ 旁路 __init__ 的测试 fixture (yaml server) 上
+            # 也正确装配 (M1 测试 invariant)。
             self._apply_gateway_tuning()
             _ca.set_config_db(None)
             return
@@ -111,10 +131,10 @@ class LifecycleMixin:
                     f"DB config validation failed ({len(errors)} error(s)): "
                     + "; ".join(errors)
                 )
-        except (Exception, asyncio.CancelledError):
-            # CancelledError 是 BaseException: self.config_store 赋值前的窗口
-            # (initialize/ensure_seeded/template 加载中被外层取消) 旧链路接不
-            # 住, 外层清理块读 self.config_store 为 None → engine 泄漏。
+        except BaseException:
+            # store.close() 必须接住 CancelledError (BaseException): self.config_store
+            # 赋值前的窗口 (initialize/ensure_seeded/template 加载中被外层取消)
+            # 旧 except 接不住 → engine 泄漏。
             await store.close()
             raise
 
@@ -248,7 +268,10 @@ class LifecycleMixin:
             # Store proxy_settings on self for proxy_api handlers to mutate later
             self.proxy_settings = proxy_settings
 
-            # Configure proxy_api with module-level state (so it doesn't need app.state)
+            # Configure proxy_api with module-level state (so it doesn't need app.state).
+            # 注意: 不要在这里 self.proxy_settings = proxy_settings, gateway 不需要
+            # 这个字段 (proxy_api handlers 走 module-level _proxy_settings, 见
+            # utils/proxy_api.py:_resolve_state)。
             from ..utils.proxy_api import configure_proxy_api
             configure_proxy_api(proxy_settings, self.upstreams)
 
@@ -260,62 +283,11 @@ class LifecycleMixin:
         except (Exception, asyncio.CancelledError):
             # LOW6: 不吃 KeyboardInterrupt / SystemExit。
             # Round-12 簇H: CancelledError (Py3.8+ 是 BaseException 子类)
-            # 以前直接传播跳过整个清理块 —— init 期间被取消 (启动 wait_for
-            # 超时链路之外的外层 cancel) 时, 已启动 client / cache engine /
-            # config_store engine / cleanup task 全部泄漏。现在取消同样清理;
-            # 各清理动作用 _await_cleanup (shield + 限时 + 吞异常), 防止
-            # "清理中再被取消" 导致后续步骤被跳过。
-            # M2 (round 11): 先取消 late-start 自愈任务, 再 stop client。
-            await _await_cleanup(
-                self._cancel_late_starts(), timeout=2.0, what="cancel-late-starts"
-            )
-            for client in list(self.upstreams.values()):
-                await _await_cleanup(client.stop(), timeout=2.0, what="client.stop")
-            self.upstreams.clear()
-            # M4 (round 9 audit): 取消半建的 cache cleanup task, 否则它引用
-            # 即将关闭的 cache 且重试时会泄漏第二个 task。
-            cleanup_task = getattr(self, "_cache_cleanup_task", None)
-            if cleanup_task is not None:
-                cleanup_task.cancel()
-                await _await_cleanup(cleanup_task, timeout=2.0, what="cleanup-task")
-                self._cache_cleanup_task = None
-            if self.cache:
-                await _await_cleanup(self.cache.close(), timeout=2.0, what="cache.close")
-                self.cache = None
-            # M4: v2 配置库 engine 也须 dispose, 否则直接 await initialize()
-            # 的嵌入宿主/同实例重试会泄漏第二个 SQLAlchemy engine。
-            config_store = getattr(self, "config_store", None)
-            if config_store is not None:
-                await _await_cleanup(
-                    config_store.close(), timeout=2.0, what="config_store.close"
-                )
-                self.config_store = None
-            # M4: 复位 console_api 写目标全局, 不再指向已死 server 的 store/config。
-            _ca.set_config_db(None)
-            _ca.set_config({})
-            _ca.set_gateway_server(None)
-            _ca.set_upstream_registry({})
-            _ca.set_omni_client(None)
-            # Round-14: configure_proxy_api 之后若 _create_and_register_gateway_mcp
-            # 抛错, proxy_api 全局仍持有旧 proxy_settings 和已关 client 的
-            # upstreams dict; 与 stop() 末尾对齐, 这里一并复位。
-            from ..utils.proxy_api import reset_proxy_api
-            reset_proxy_api()
-            # 初始化失败路径同样关停阻塞执行器：thsdk 可能已启动，专用池
-            # 的 daemon 线程虽不阻塞进程退出，但同进程重试会复用旧池残留状态。
-            # Route A: 共享池已拆为 mootdx2 + tdx_quant 两个专用池, 各自关停。
-            from ..core.blocking_pool import (
-                shutdown_mootdx2_executor,
-                shutdown_tdx_quant_executor,
-                shutdown_thsdk_executor,
-            )
-            shutdown_mootdx2_executor()
-            shutdown_tdx_quant_executor()
-            shutdown_thsdk_executor()
-            # M1 (2026-09-07 audit): 半构造的 router / mcp 也归零, 否则后续
-            # get_server_status / 路由调用拿到指向未完全初始化对象的引用。
-            self.router = None
-            self.mcp = None
+            # 以前直接传播跳过整个清理块 —— init 期间被取消时已启动 client /
+            # cache engine / config_store engine / cleanup task 全部泄漏。
+            # 现改为复用 stop() (含 _await_cleanup shield + 限时 + 吞异常)。
+            # M2 (round 11) 标记: 旧内联清理块与 stop() 90% 重复, 一次性整合。
+            await self.stop()
             raise
 
         self._initialized = True
@@ -326,7 +298,8 @@ class LifecycleMixin:
     async def start(self):
         # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并
         # 调 stop() 清 partial state, 允许同实例重试。Pre-fix: _running 在
-        # initialize 之前设 True, 失败时留在 True, 重试 start() 会状态错位。
+        # initialize 之前设 True, initialize 失败时留在 True, 状态错乱。
+        # 现保留 _running (测试断言依赖), 与 _initialized 语义等价。
         self._running = True
         # L8 (round 9 audit): stop() 末尾 set _shutdown_event 唤醒旧 watcher,
         # 但从不 clear → 同实例 stdio restart 时新 watcher `await event.wait()`
@@ -351,37 +324,40 @@ class LifecycleMixin:
         # 但 run_stdio_async 不 watch 它 (MCP stdio 默认依赖 stdin close 触发关闭)。
         # 之前的注释说 "handler 修了泄漏" 是误导 — 实际上 stop() 仍然不会被调,
         # 子进程要等 stdin 关才退出, 期间 health_task / upstreams / cache 全部泄漏。
-        # 加 _signal_watcher: 等 _shutdown_event, 触发后 cancel 当前 main_task,
+        # 用模块级 _stdio_signal_watcher: 等 _shutdown_event 触发, cancel main_task,
         # 让 run_stdio_async 抛 CancelledError, outer finally 调 stop()。
-        main_task = asyncio.current_task()
-
-        async def _signal_watcher():
-            await self._shutdown_event.wait()
-            if main_task is not None and not main_task.done():
-                main_task.cancel()
-
-        _watcher = asyncio.create_task(_signal_watcher())
+        _watcher = asyncio.create_task(
+            _stdio_signal_watcher(self, asyncio.current_task())
+        )
         try:
             try:
                 await self.mcp.run_stdio_async()
             finally:
                 _watcher.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await _watcher
-                except (asyncio.CancelledError,):
-                    pass
         finally:
             # 任何退出路径都跑 cleanup, 包括 KeyboardInterrupt / SIGTERM /
             # _signal_watcher 触发的 cancel。
             await self.stop()
 
     async def stop(self):
-        """优雅关闭：等待在途请求完成后关闭连接池"""
-        self._running = False
-        self._shutdown_event.set()  # 唤醒 stdio signal watcher
-        # /api/runtime 计数复位, 同实例重启后重新累计
-        self._started_monotonic = None
-        self._call_timestamps.clear()
+        """优雅关闭：等待在途请求完成后关闭连接池
+
+        幂等: 在半初始化的 server 上 (M2 init-fail 路径 / __new__ 旁路测试)
+        也能跑完清理, 不抛 AttributeError 遮蔽原始异常。
+        """
+        # /api/runtime 计数复位, 同实例重启后重新累计; __new__ 测试可能未设。
+        if getattr(self, "_started_monotonic", None) is not None:
+            self._started_monotonic = None
+        # 唤醒 stdio signal watcher
+        se = getattr(self, "_shutdown_event", None)
+        if se is not None:
+            se.set()
+        # _call_timestamps 在 __init__ 设; __new__ 旁路测试可能没设
+        ts_buf = getattr(self, "_call_timestamps", None)
+        if ts_buf is not None:
+            ts_buf.clear()
 
         # Reset console_api state
         # _ca 在 stop() 局部 import, 与 _do_initialize / serve_http 各 import
@@ -396,20 +372,25 @@ class LifecycleMixin:
         # (stdio transport 下 atexit 不保证触发)。
         _ca._shutdown_probe_executor()
 
-        # 等待在途请求完成（最多 10 秒）
-        wait_start = time.time()
-        max_wait = 10.0
-        while True:
-            async with self._requests_lock:
-                active = self._active_requests
-            if active == 0:
-                logger.info("All in-flight requests completed, proceeding with shutdown")
-                break
-            if time.time() - wait_start > max_wait:
-                logger.warning(f"Timeout waiting for {active} in-flight requests, force-exit")
-                break
-            logger.info(f"Waiting for {active} in-flight requests to complete...")
-            await asyncio.sleep(0.5)
+        # 等待在途请求完成（最多 10 秒）; init-fail 路径 _active_requests==0,
+        # 跳过整段 wait + 日志 (init 期不可能有 in-flight 请求)。__new__ 测试
+        # 实例可能未设这俩字段, getattr 兜底。
+        _active = getattr(self, "_active_requests", 0)
+        _req_lock = getattr(self, "_requests_lock", None)
+        if _active > 0 and _req_lock is not None:
+            wait_start = time.time()
+            max_wait = 10.0
+            while True:
+                async with _req_lock:
+                    active = self._active_requests
+                if active == 0:
+                    logger.info("All in-flight requests completed, proceeding with shutdown")
+                    break
+                if time.time() - wait_start > max_wait:
+                    logger.warning(f"Timeout waiting for {active} in-flight requests, force-exit")
+                    break
+                logger.info(f"Waiting for {active} in-flight requests to complete...")
+                await asyncio.sleep(0.5)
 
         # 与热开关互斥: 否则禁用/启用可能在 gather 快照后才 pop/登记 client,
         # 新 client 被最后的 upstreams.clear() 丢弃而未 stop (httpx/子进程泄漏)。
@@ -423,11 +404,13 @@ class LifecycleMixin:
             # 必须在 client.stop() 之前, 防止已停 client 被晚到任务复活。
             await self._cancel_late_starts()
             # 关闭所有上游客户端 (L1, 2026-09-07 5th-round audit): 并行 gather
-            # 替代顺序循环, 总关闭时间从 O(N) 降到 O(1)。
-            if self.upstreams:
+            # 替代顺序循环, 总关闭时间从 O(N) 降到 O(1)。__new__ 测试实例可能
+            # 未设 upstreams, getattr 兜底。
+            upstreams_dict = getattr(self, "upstreams", None)
+            if upstreams_dict:
                 await asyncio.gather(
                     *[self._stop_one_upstream(name, client)
-                      for name, client in list(self.upstreams.items())],
+                      for name, client in list(upstreams_dict.items())],
                     return_exceptions=True,
                 )
 
@@ -444,27 +427,26 @@ class LifecycleMixin:
             shutdown_tdx_quant_executor()
             shutdown_thsdk_executor()
 
-            # 关闭缓存
-            if self.cache:
-                try:
-                    await asyncio.wait_for(self.cache.close(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    logger.warning("cache close() timed out after 2s")
+            # 关闭缓存 (getattr 兜底 __new__ 测试实例)
+            cache_obj = getattr(self, "cache", None)
+            if cache_obj:
+                await _await_cleanup(
+                    cache_obj.close(), timeout=2.0, what="cache.close"
+                )
                 self.cache = None
 
             # 关闭错误缓冲 (flush 残留内存到 SQLite 后释放引擎)。
             # getattr 兜底: 测试用 __new__ 跳过 __init__ 时字段不存在。
             error_buffer = getattr(self, "_error_buffer", None)
             if error_buffer is not None:
-                try:
-                    await asyncio.wait_for(
-                        error_buffer._force_flush(), timeout=2.0
-                    )
-                    await asyncio.wait_for(error_buffer.close(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    logger.warning("error_buffer close() timed out after 2s")
-                except Exception as e:
-                    logger.warning("error_buffer close() failed: %s", e)
+                await _await_cleanup(
+                    error_buffer._force_flush(),
+                    timeout=2.0, what="error_buffer._force_flush",
+                )
+                await _await_cleanup(
+                    error_buffer.close(),
+                    timeout=2.0, what="error_buffer.close",
+                )
                 self._error_buffer = None
 
             # 关闭 SQLite 配置覆盖层连接池
@@ -474,10 +456,12 @@ class LifecycleMixin:
             # 错位); 与 init 失败清理路径一致, 记日志后继续完成关停复位。
             config_store = getattr(self, "config_store", None)
             if config_store is not None:
-                try:
-                    await config_store.close()
-                except Exception as e:
-                    logger.warning(f"config_store.close() failed during stop: {e}")
+                # config_store.close() 不一定有 shield 守卫, 但 stop 路径必须
+                # 静默吞异常 (init 失败清理路径也是同样语义, _await_cleanup 自带).
+                await _await_cleanup(
+                    config_store.close(),
+                    timeout=2.0, what="config_store.close",
+                )
                 self.config_store = None
 
             # 取消周期 cache 清理任务 (2026-09-15 MCP 二次审视 M4)。
@@ -486,12 +470,9 @@ class LifecycleMixin:
             cleanup_task = getattr(self, "_cache_cleanup_task", None)
             if cleanup_task is not None:
                 cleanup_task.cancel()
-                try:
-                    await cleanup_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception as e:
-                    logger.warning(f"cache cleanup task ended with error: {e}")
+                await _await_cleanup(
+                    cleanup_task, timeout=2.0, what="cache_cleanup_task"
+                )
                 self._cache_cleanup_task = None
 
             # 重置状态以支持同实例 restart (HIGH B1, 2026-09-07 audit):
@@ -499,14 +480,25 @@ class LifecycleMixin:
             # 用已经 stop 过的死 upstreams / router / mcp 路由 → 全程失败。
             # 生产路径通常 stop 后进程退出, 重置是无害的; stop/start 循环
             # (supervisor 重启 / 热重载配置) 则依赖这些归零。
-            self.upstreams.clear()
-        self.router = None
-        self.mcp = None
+            # __new__ 测试实例可能没设 upstreams/router/mcp 等, getattr 兜底。
+            upstreams = getattr(self, "upstreams", None)
+            if upstreams is not None:
+                upstreams.clear()
+        if getattr(self, "router", None) is not None or True:
+            # router/mcp 置 None 总是安全的 (属性默认 None, set 一次即可)
+            self.router = None
+            self.mcp = None
         # 热开关状态一并归零, 支持同实例 stop/start 循环
-        self._published_tools = set()
-        self.tool_specs = []
-        self._db_hidden_tools = set()
+        if hasattr(self, "_published_tools"):
+            self._published_tools = set()
+        if hasattr(self, "tool_specs"):
+            self.tool_specs = []
+        if hasattr(self, "_db_hidden_tools"):
+            self._db_hidden_tools = set()
         self._initialized = False
+        # _running 同 _initialized 一起归零 (M5 测试 invariant + 同实例 restart 契约)
+        if hasattr(self, "_running"):
+            self._running = False
         # Round-12 簇H: single-flight future 表也要清空 —— 旧实现 stop 后
         # 残留已完成/已失败 future 引用, 同实例重启期间同 key 调用可能误判
         # 在途或 await 到一个属于上一生命周期的 future。getattr 兜底 __new__

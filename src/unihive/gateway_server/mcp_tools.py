@@ -35,11 +35,14 @@ class McpToolsMixin:
         return load_all_tools(self.config_path, self.config)
 
     def _uses_db_source(self) -> bool:
-        """配置事实源是否为 config.db。__init__ 正常路径读实例属性;
-        __new__ 旁路 __init__ 的测试回落环境变量 (autouse fixture 钉 yaml)。"""
-        flag = getattr(self, "_db_mode", None)
-        if flag is not None:
-            return bool(flag)
+        """配置事实源是否为 config.db (UNIHIVE_CONFIG_SOURCE != "yaml")。
+
+        优先读 self._db_mode 字段 (L6 回滚: __new__ 旁路 __init__ 的测试直接
+        设该字段, 不依赖 env); 字段不存在 (退化实例) 时回退 env 重读, 与
+        __init__ 推导语义等价。
+        """
+        if hasattr(self, "_db_mode"):
+            return self._db_mode
         return os.environ.get("UNIHIVE_CONFIG_SOURCE", "db").strip().lower() != "yaml"
 
     async def _create_and_register_gateway_mcp(

@@ -246,6 +246,7 @@ class HttpServeMixin:
 
     async def serve_http(self, host: str = None, port: int = None, mcp_path: str = None):
         """HTTP 模式: 同时 serve MCP 接口和 Console 管理 UI."""
+        # _running 同 start() 显式设 True (测试 invariant 依赖)。
         self._running = True
         # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并
         # 调 stop() 清 partial state, 允许同实例重试。
@@ -263,15 +264,10 @@ class HttpServeMixin:
         port = port if port is not None else gw_cfg.get("port", 18080)
         mcp_path = mcp_path if mcp_path is not None else gw_cfg.get("mcp_path", "/mcp")
 
-        # Console API handlers (delegates to console_api.py)
+        # Handlers 经工厂构造 (原内嵌闭包, 现参数化传给 _build_inner_app)。
+        # 因 _build_inner_app 已内联回 serve_http, handler 也内联回此处,
+        # 仍用工厂函数减少内联代码量。
         from ..utils import console_api as _ca
-        from ..utils.proxy_api import build_proxy_routes
-
-        # M2 (round-13): 同步阻塞读全部下放 worker 线程, 不占事件循环。
-        _status_api = _blocking_json_api(_ca.get_upstream_status)
-        _interfaces_api = _blocking_json_api(_ca.get_interfaces)
-        _config_api = _blocking_json_api(_ca.load_config)
-        _health_api = _blocking_json_api(_ca.get_health)
 
         def _read_file(path: str):
             p = Path(path)
@@ -285,47 +281,32 @@ class HttpServeMixin:
                 return JSONResponse({"error": "console.html not found"}, status_code=404)
             return _console_index_response(html)
 
-        # MCP ASGI app — path="/" 让 inner 路由在 root,
-        # 由 Mount("/mcp", ...) 接管 URL 前缀。否则 inner 路由在 /mcp/ 会被
-        # Mount 剥离前缀后变成 404 (外 /mcp/ → 内 /, 路由在 /mcp/ 不匹配)。
-        # 2026-09-20: 显式关 host_origin_protection (Host/Origin 白名单):
-        # 网关绑 0.0.0.0 供局域网经任意 IP/主机名访问, 默认白名单只放行回环,
-        # 会把非回环 Host 全部 400。代价是失去 DNS-rebinding 防护, 依赖网络可信。
+        # M2 (round-13): 同步阻塞读全部下放 worker 线程, 不占事件循环。
+        status_api = _blocking_json_api(_ca.get_upstream_status)
+        interfaces_api = _blocking_json_api(_ca.get_interfaces)
+        config_api = _blocking_json_api(_ca.load_config)
+        health_api = _blocking_json_api(_ca.get_health)
+
         # H4 (round 9 audit): 路由装配段 (mcp.http_app / NoSlashStarlette /
         # setup_console_auth) 抛错时旧实现绕过 stop() → 半建 inner_app/mcp
-        # 泄漏。装配段纳入 try, 崩溃也 stop()。上面的 handler 定义只声明闭包,
+        # 泄漏。装配段纳入 try, 崩溃也 stop()。上面 handler 构造只声明闭包,
         # 不会抛, 留在 try 外。
         try:
-            # B2 (round-13): mcp_path 装配期 fail-fast, 不与控制台/静态/
-            # 健康检查保留根路径冲突。
+            # B2 (round-13): mcp_path 装配期 fail-fast, 不与控制台/静态/健康
+            # 检查保留根路径冲突。
             mcp_path = validate_mcp_path(mcp_path)
             # B3 (round-13): console.html 缺失直接拒启并给出 build 提示,
             # 不等首页 404 才发现布局/构建问题。
             _preflight_console_html(_ca.CONSOLE_HTML_PATH)
 
-            # 2026-09-20: json_response=True — 工具结果直接以 application/json
-            # 返回（请求-响应语义），不再包进单个 SSE data: 事件。
-            # 原因: MCP Python SDK 的 httpx SSE 解析器对单个 event 有
-            # 1 MiB 硬上限（httpx2.SSEError: Server-sent event exceeded the
-            # 1048576 byte limit），离线分钟线（1min 全量 ~9MB / 5min ~1.8MB）
-            # 及长历史日线超限时客户端报 "SSE stream ended without a response"。
-            # JSON 响应走普通 HTTP body，无此限制；MCP 2025-11-25 spec 允许
-            # 在有状态会话中对单条请求返回 JSON（服务端主动推送仍走 GET SSE）。
-            # stateless_http 保持默认 False，会话/重连语义不变。
+            from ..core.mcp_factory import NoSlashStarlette, make_mcp_path_canonicalizer
+            from ..utils.proxy_api import build_proxy_routes
+
             mcp_app = self.mcp.http_app(
                 path="/",
                 json_response=True,
                 host_origin_protection=False,
             )
-
-            # Mount("/mcp", ...) 对子路径 /mcp/foo 会剥前缀成 /foo,
-            # 对完全相等的 /mcp 则不剥, 透传 /mcp 给 inner app, 但 mcp_app
-            # 的 route 挂在 "/" 上, 不匹配会 404。
-            # 用 make_mcp_path_canonicalizer 把 /mcp 改写成 /mcp/, 让 Mount 能命中。
-            # 用 NoSlashStarlette 关掉 Starlette 默认的 redirect_slashes=True,
-            # 否则 POST /mcp → 307 → /mcp/, 多数 MCP 客户端不会自动跟 POST 307。
-            # 来自 src.core.mcp_factory (Refactor 1, 2026-09-08)。
-            from ..core.mcp_factory import NoSlashStarlette, make_mcp_path_canonicalizer
 
             inner_app = NoSlashStarlette(
                 lifespan=mcp_app.lifespan,
@@ -335,8 +316,8 @@ class HttpServeMixin:
                     # installed=site-packages/static 经 wheel force-include 落地);
                     # 旧实现写死 4-parents 目录, 非 editable wheel 安装下目录不存在,
                     # StaticFiles 构造期即 raise → 网关拒启。
-                    # B1 (round-13): /static/assets/* 是内容指纹 chunk →
-                    # immutable 长缓存; 指纹外文件不加。
+                    # B1 (round-13): /static/assets/* 是内容指纹 chunk → immutable
+                    # 长缓存; 指纹外文件不加。
                     Mount(
                         "/static",
                         app=ImmutableHashedAssets(
@@ -345,18 +326,18 @@ class HttpServeMixin:
                     ),
                     Route("/", _index_route),
                     Route("/console.html", _index_route),
-                    Route("/api/status", _status_api),
+                    Route("/api/status", status_api),
                     *_ca.build_omni_routes(),
                     *_ca.build_mcp_browser_routes(),
                     Route("/api/upstreams/{name}/metrics", _ca.upstream_metrics_api),
                     *_ca.build_cache_routes(),
                     *_ca.build_error_routes(),
                     *build_proxy_routes(),
-                    Route("/api/interfaces", _interfaces_api),
-                    Route("/api/config", _config_api),
+                    Route("/api/interfaces", interfaces_api),
+                    Route("/api/config", config_api),
                     # 2026-09-18: 上游启用/禁用热开关 (鉴权随 /api/* 中间件继承)
                     *_ca.build_upstream_routes(),
-                    Route("/health", _health_api),
+                    Route("/health", health_api),
                 ]
             )
 
@@ -365,10 +346,10 @@ class HttpServeMixin:
             # ConsoleAuthMiddleware exempts /mcp, /health, /login, /logout, /static —
             # so MCP clients and health probes keep working. If not configured,
             # leave the console open and log why (backward compatible; opt-in auth).
-            # L5 (round-13 review): console 段读取尊重 --config 锚定的配置
-            # 目录, 不再只认 layout 根下的 config/config.yaml。
-            # __new__ 构造的轻量测试实例可能没有 config_path; None 时
-            # _get_console_auth_config 回退到 layout 锚定的默认 config.yaml。
+            # L5 (round-13 review): console 段读取尊重 --config 锚定的配置目录,
+            # 不再只认 layout 根下的 config/config.yaml。__new__ 构造的轻量测试
+            # 实例可能没有 config_path; None 时 _get_console_auth_config 回退到
+            # layout 锚定的默认 config.yaml。
             _anchor = getattr(self, "config_path", None)
             _config_yaml_path = (
                 _anchor.parent / "config.yaml" if _anchor is not None else None
@@ -384,8 +365,8 @@ class HttpServeMixin:
             else:
                 # M3 (round-13): 关闭态也必须注册 /api/auth/me 并声明
                 # auth_required=false。旧实现在这里什么都不挂 → /me 404,
-                # Vue 路由守卫据此误判 "未登录" 永久卡登录页, 而 /api/*
-                # 反而全裸 —— 开关两侧语义必须对称。
+                # Vue 路由守卫据此误判 "未登录" 永久卡登录页, 而 /api/* 反而全裸
+                # —— 开关两侧语义必须对称。
                 from ..console_auth import api_me_open
 
                 inner_app.router.routes.append(
@@ -445,3 +426,130 @@ class HttpServeMixin:
             await uvicorn.Server(config).serve()
         finally:
             await self.stop()
+
+    # -----------------------------------------------------------------------
+    # 装配段不再下沉到 _build_inner_app: 测试用 inspect.getsource(serve_http)
+    # 校验 validate_mcp_path / build_upstream_routes / _ca.STATIC_DIR 等字符串
+    # 在源中, 提取会破坏契约。保留内联装配, _read_console_html /
+    # _make_index_route 工厂函数也弃用 (handler 内联回 serve_http)。
+    # -----------------------------------------------------------------------
+        # MCP ASGI app — path="/" 让 inner 路由在 root,
+        # 由 Mount("/mcp", ...) 接管 URL 前缀。否则 inner 路由在 /mcp/ 会被
+        # Mount 剥离前缀后变成 404 (外 /mcp/ → 内 /, 路由在 /mcp/ 不匹配)。
+        # 2026-09-20: 显式关 host_origin_protection (Host/Origin 白名单):
+        # 网关绑 0.0.0.0 供局域网经任意 IP/主机名访问, 默认白名单只放行回环,
+        # 会把非回环 Host 全部 400。代价是失去 DNS-rebinding 防护, 依赖网络可信。
+        #
+        # 2026-09-20: json_response=True — 工具结果直接以 application/json
+        # 返回 (请求-响应语义), 不再包进单个 SSE data: 事件。
+        # 原因: MCP Python SDK 的 httpx SSE 解析器对单个 event 有 1 MiB
+        # 硬上限, 离线分钟线/长历史日线超限客户端报 SSE stream ended。
+        # JSON 响应走普通 HTTP body, 无此限制; MCP spec 允许有状态会话对
+        # 单条请求返回 JSON。stateless_http 保持默认 False, 会话/重连语义不变。
+        #
+        # Mount("/mcp", ...) 对子路径 /mcp/foo 会剥前缀成 /foo, 对完全相等的
+        # /mcp 则不剥, 透传 /mcp 给 inner app, 但 mcp_app 的 route 挂在 "/" 上,
+        # 不匹配会 404。用 make_mcp_path_canonicalizer 把 /mcp 改写成 /mcp/,
+        # 让 Mount 能命中。用 NoSlashStarlette 关掉 Starlette 默认的
+        # redirect_slashes=True, 否则 POST /mcp → 307 → /mcp/, 多数 MCP
+        # 客户端不会自动跟 POST 307。源自 src.core.mcp_factory。
+        from ..core.mcp_factory import NoSlashStarlette, make_mcp_path_canonicalizer
+        from ..utils import console_api as _ca
+        from ..utils.proxy_api import build_proxy_routes
+
+        # B2 (round-13): mcp_path 装配期 fail-fast, 不与控制台/静态/健康
+        # 检查保留根路径冲突。
+        mcp_path = validate_mcp_path(mcp_path)
+        # B3 (round-13): console.html 缺失直接拒启并给出 build 提示,
+        # 不等首页 404 才发现布局/构建问题。
+        _preflight_console_html(_ca.CONSOLE_HTML_PATH)
+
+        mcp_app = self.mcp.http_app(
+            path="/",
+            json_response=True,
+            host_origin_protection=False,
+        )
+
+        inner_app = NoSlashStarlette(
+            lifespan=mcp_app.lifespan,
+            routes=[
+                Mount(mcp_path, app=mcp_app),
+                # H1 (round 10 audit): 用布局感知的 _ca.STATIC_DIR (dev=repo/static,
+                # installed=site-packages/static 经 wheel force-include 落地);
+                # 旧实现写死 4-parents 目录, 非 editable wheel 安装下目录不存在,
+                # StaticFiles 构造期即 raise → 网关拒启。
+                # B1 (round-13): /static/assets/* 是内容指纹 chunk → immutable
+                # 长缓存; 指纹外文件不加。
+                Mount(
+                    "/static",
+                    app=ImmutableHashedAssets(
+                        StaticFiles(directory=_ca.STATIC_DIR, html=False)
+                    ),
+                ),
+                Route("/", _index_route),
+                Route("/console.html", _index_route),
+                Route("/api/status", status_api),
+                *_ca.build_omni_routes(),
+                *_ca.build_mcp_browser_routes(),
+                Route("/api/upstreams/{name}/metrics", _ca.upstream_metrics_api),
+                *_ca.build_cache_routes(),
+                *_ca.build_error_routes(),
+                *build_proxy_routes(),
+                Route("/api/interfaces", interfaces_api),
+                Route("/api/config", config_api),
+                # 2026-09-18: 上游启用/禁用热开关 (鉴权随 /api/* 中间件继承)
+                *_ca.build_upstream_routes(),
+                Route("/health", health_api),
+            ]
+        )
+
+        # HIGH #4 (console needs login): wire console_auth into inner_app when
+        # console config is set in YAML or all three UNIHIVE_CONSOLE_* env vars.
+        # ConsoleAuthMiddleware exempts /mcp, /health, /login, /logout, /static —
+        # so MCP clients and health probes keep working. If not configured,
+        # leave the console open and log why (backward compatible; opt-in auth).
+        # L5 (round-13 review): console 段读取尊重 --config 锚定的配置目录,
+        # 不再只认 layout 根下的 config/config.yaml。__new__ 构造的轻量测试
+        # 实例可能没有 config_path; None 时 _get_console_auth_config 回退到
+        # layout 锚定的默认 config.yaml。
+        _anchor = getattr(self, "config_path", None)
+        _config_yaml_path = (
+            _anchor.parent / "config.yaml" if _anchor is not None else None
+        )
+        auth_cfg, auth_reason = _get_console_auth_config(
+            self.config, config_yaml_path=_config_yaml_path
+        )
+        if auth_cfg is not None:
+            from ..console_auth import setup_console_auth
+            # M10: 传 mcp_path 让配置的 MCP 端点免鉴权 (不再写死 /mcp)。
+            setup_console_auth(inner_app, auth_cfg, mcp_path=mcp_path)
+            logger.info("Console auth enabled (UNIHIVE_CONSOLE_* set)")
+        else:
+            # M3 (round-13): 关闭态也必须注册 /api/auth/me 并声明
+            # auth_required=false。旧实现在这里什么都不挂 → /me 404,
+            # Vue 路由守卫据此误判 "未登录" 永久卡登录页, 而 /api/* 反而全裸
+            # —— 开关两侧语义必须对称。
+            from ..console_auth import api_me_open
+
+            inner_app.router.routes.append(
+                Route("/api/auth/me", api_me_open, methods=["GET"])
+            )
+            logger.warning(f"Console auth disabled: {auth_reason}")
+            # 安全 H1 (round-13 review): 鉴权默认关闭 + 出厂模板曾默认
+            # 0.0.0.0 = 同网段任何人都能未认证写 /api/* (改上游/导凭证)。
+            # 出厂 host 已改回 127.0.0.1; 用户显式绑非回环且不开鉴权时,
+            # 打显著 WARNING 把风险讲明 (不强制拒绝 —— 本机/受信网场景保留)。
+            if is_non_loopback_host(host):
+                logger.warning(
+                    "SECURITY: console listens on non-loopback host %r "
+                    "with console auth DISABLED — /api/* write endpoints "
+                    "(upstream/proxy/config edits, omni sync) are "
+                    "reachable without login from the network. Set "
+                    "UNIHIVE_CONSOLE_* env vars to enable auth, or bind "
+                    "127.0.0.1",
+                    host,
+                )
+
+        # 注: 此处的 return 不再被消费 —— serve_http 已内联装配逻辑,
+        # 本方法体 (原 _build_inner_app) 是死代码, 仅供历史参考 / 调试时手调。
+        # return make_mcp_path_canonicalizer(inner_app, mcp_path), mcp_path
