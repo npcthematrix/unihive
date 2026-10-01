@@ -148,9 +148,7 @@ async def test_l8_stale_shutdown_event_cleared_on_stdio_restart(monkeypatch):
     cancel 当前 main_task → boot 自杀, run_stdio_async 根本没跑。
     修复后 start() 在建 watcher 前 clear, 残留 set 不影响重启。"""
     server = GatewayServer.__new__(GatewayServer)
-    server._running = False
     server._initialized = True
-    server._init_lock = asyncio.Lock()
     server._shutdown_event = asyncio.Event()
     server._shutdown_event.set()  # 模拟上次 stop 留下的残留
     server.upstreams = {}
@@ -177,7 +175,7 @@ async def test_l8_stale_shutdown_event_cleared_on_stdio_restart(monkeypatch):
     server.mcp = _FakeMCP()  # type: ignore[assignment]
 
     async def fake_stop(self):
-        self._running = False
+        pass
 
     monkeypatch.setattr(GatewayServer, "stop", fake_stop)
 
@@ -331,9 +329,7 @@ async def test_h2_construct_failure_degrades_upstream_not_boot(beta_store, monke
     server.config_store = None
     server._db_hidden_tools = set()
     server._upstream_toggle_lock = asyncio.Lock()
-    server._init_lock = asyncio.Lock()
     server._initialized = False
-    server._running = False
     server._cache_cleanup_task = None
     server.cache = None
     server.router = None
@@ -426,7 +422,6 @@ async def test_h4_route_assembly_failure_runs_stop(monkeypatch):
         "gateway": {"host": "127.0.0.1", "port": 19090, "mcp_path": "/mcp"},
         "logging": {"level": "info"},
     }
-    server._running = False
     server._initialized = False
     server.upstreams = {}
     server._cache_cleanup_task = None

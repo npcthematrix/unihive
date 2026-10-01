@@ -502,6 +502,13 @@ class TestYamlModeTuningReplay:
         reset_default_limiter()
         server = gateway_server_minimal
         server._db_mode = False
+        # 先按基线调一次 _apply_gateway_tuning, 让 fixture 状态与生产 __init__
+        # 走 yaml 模式后一致 (DEFAULT_REQUEST_TIMEOUT, 空 limiter)。
+        server.config = {"gateway": {}}
+        server._apply_gateway_tuning()
+        assert server._per_upstream_timeout == 30.0
+
+        # 模拟用户装了非基线 yaml 调参 → 再次调 (与 __init__ 单一来源同效)。
         server.config = {
             "gateway": {
                 "per_upstream_timeout": 12.5,
@@ -510,11 +517,10 @@ class TestYamlModeTuningReplay:
                 },
             }
         }
-        # yaml 逃生模式不再重放 _apply_gateway_tuning: 装配完成后调参应仍是
-        # fixture 默认基线 (DEFAULT_REQUEST_TIMEOUT=30, limiter 空)。
+        # yaml 逃生模式不再在 _load_db_config 内重放: 装配完成后调参应仍是
+        # fixture 默认基线, 不被 yaml 配置文件覆盖。
         await server._load_db_config()
         assert server._per_upstream_timeout == 30.0
-        assert server.limiter is not None
         assert server.limiter._configs.get("fuyao_a") is None
 
         # __init__ 单一基线: 手动跑一次 _apply_gateway_tuning, 验证 yaml 配置

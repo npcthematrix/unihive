@@ -313,7 +313,6 @@ async def test_m5_listen_args_read_from_post_init_config(monkeypatch, tmp_path):
     # 构造 server, config 为空 (模拟 M9 预检空 dict)
     server = GatewayServer.__new__(GatewayServer)
     server.config = {}  # pre-init 空态
-    server._running = False
     server._initialized = False
     server.upstreams = {}
     server._cache_cleanup_task = None
@@ -368,7 +367,7 @@ async def test_m5_listen_args_read_from_post_init_config(monkeypatch, tmp_path):
 
     # 屏蔽 stop (会碰未初始化字段)
     async def fake_stop(self):
-        self._running = False
+        pass
 
     monkeypatch.setattr(GatewayServer, "stop", fake_stop)
 

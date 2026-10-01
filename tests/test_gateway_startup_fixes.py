@@ -37,7 +37,6 @@ class TestInitializeConcurrent:
         server.upstreams = {}
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
         server._init_lock = asyncio.Lock()
         server._upstream_start_timeout = 30.0
 
@@ -80,7 +79,6 @@ class TestNullUpstreams:
         server.upstreams = {}
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
         server._init_lock = asyncio.Lock()
         server._upstream_start_timeout = 30.0
 
@@ -117,7 +115,6 @@ class TestUpstreamBackgroundStart:
         server.upstreams = {}
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
         server._init_lock = asyncio.Lock()
         server._upstream_start_timeout = 0.2
         server._late_start_tasks = {}
@@ -217,7 +214,6 @@ class TestGetHealthAggregation:
         server.config = {"upstreams": {}}
         server.upstreams = {}
         server.cache = None
-        server._running = False
         server._shutdown_event = asyncio.Event()
 
         from src.unihive.api.upstream_client import UpstreamStatus

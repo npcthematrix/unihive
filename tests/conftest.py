@@ -56,6 +56,9 @@ def gateway_server_minimal():
     server._requests_lock = asyncio.Lock()
     server._in_flight_requests = {}
     server._initialized = False
+    # 生产 __init__ 会建 _init_lock 串行化并发 initialize(); __new__ 旁路
+    # fixture 必须补上, 否则 initialize() 进入第一行就 AttributeError。
+    server._init_lock = asyncio.Lock()
     # /api/runtime 运行态字段 (见 gateway_server __init__)
     server._started_monotonic = None
     server._call_timestamps = deque()

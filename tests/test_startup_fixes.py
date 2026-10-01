@@ -36,7 +36,6 @@ class TestGatewayInitializeIdempotent:
         server.upstreams = {}
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
         server._init_lock = asyncio.Lock()
         server._upstream_start_timeout = 30.0
 
@@ -240,7 +239,6 @@ class TestGatewayShutdownChain:
         server.cache = None
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
         server.mcp = None  # serve_http 不应触达 mcp 的真实初始化
 
         # 用假的 uvicorn.Server 替身, 让 serve() 立刻返回
@@ -303,7 +301,6 @@ class TestGatewayShutdownChain:
         server.cache = None
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
 
         class FakeServer:
             def __init__(self, *a, **kw): pass
@@ -361,7 +358,6 @@ class TestGatewayShutdownChain:
         server.cache = None
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
 
         async def fake_init():
             server._initialized = True
@@ -408,7 +404,6 @@ class TestCreateAndRegisterGatewayMcp:
         server.mcp = None
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
 
         register_calls = []
 
@@ -444,7 +439,6 @@ class TestCreateAndRegisterGatewayMcp:
         server.mcp = None
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
         server._register_tools = lambda specs=None: None  # type: ignore[assignment]
 
         mcp = await server._create_and_register_gateway_mcp()
@@ -481,8 +475,6 @@ class TestInitializeFailureResetsRouterMcp:
         server.mcp = object()
         server._initialized = False
         server._shutdown_event = asyncio.Event()
-        server._running = False
-        server._init_lock = asyncio.Lock()
         server._upstream_start_timeout = 30.0
 
         # 让 _load_all_tools 在 router/mcp 构造之前抛, 走 cleanup 块
@@ -522,7 +514,6 @@ class TestStopResetsStateForRestart:
         server._active_requests = 0
         server._started_monotonic = None
         server._call_timestamps = deque()
-        server._running = True
 
         stopped_clients = []
 
@@ -555,7 +546,6 @@ class TestStopResetsStateForRestart:
         server._active_requests = 0
         server._started_monotonic = None
         server._call_timestamps = deque()
-        server._running = True
         server.router = object()
         server.mcp = object()
 
@@ -578,7 +568,6 @@ class TestStopResetsStateForRestart:
         server._active_requests = 0
         server._started_monotonic = None
         server._call_timestamps = deque()
-        server._running = True
         server._initialized = True
 
         await server.stop()

@@ -67,18 +67,6 @@ const searchInputRef = ref()
 const expandedNames = ref<Set<string>>(new Set())
 const copiedName = ref('')
 
-/** OpenAPI 实时导入对话框 (仅 ThsLocalClient 类上游具备 fetch_openapi)。 */
-const importVisible = ref(false)
-
-function openImport(): void {
-  importVisible.value = true
-}
-
-function onImportApplied(_result: OpenapiImportApplyResult): void {
-  // 工具已热注册, 原始台账也刷新一下 (新增工具此刻应出现在上游 tools/list)。
-  if (selected.value) void fetchTools(selected.value)
-}
-
 let debounceTimer: ReturnType<typeof setTimeout> | undefined
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 /**

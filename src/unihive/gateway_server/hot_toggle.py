@@ -237,19 +237,6 @@ class HotToggleMixin:
         if errors:
             raise _format_toggle_errors(name, errors)
 
-
-def _format_toggle_errors(name: str, errors: list[str]) -> RuntimeError:
-    """统一错误格式化: 前 5 条 + "…(+N more)" 截断。
-
-    模块级 helper, 让 _toggle_errors contextmanager 与同步 shim
-    ``_raise_if_toggle_errors`` 共用同一文本 (一处定义两处用)。返回
-    RuntimeError 实例而非直接抛, 便于测试在断言中抓取实例。
-    """
-    detail = "; ".join(errors[:5])
-    if len(errors) > 5:
-        detail += f"; …(+{len(errors) - 5} more)"
-    return RuntimeError(f"runtime toggle {name!r} partial failure: {detail}")
-
     async def _attach_upstream_client_locked(self, name: str, cfg: dict):
         """用已解析 live 块构造+启动 client 并切换 console_api omni 指针。
 
@@ -385,3 +372,16 @@ def _format_toggle_errors(name: str, errors: list[str]) -> RuntimeError:
             "tools_removed": tools_removed,
             "changed": False if not healed else True,
         }
+
+
+def _format_toggle_errors(name: str, errors: list[str]) -> RuntimeError:
+    """统一错误格式化: 前 5 条 + "…(+N more)" 截断。
+
+    模块级 helper, 让 HotToggleMixin._toggle_errors contextmanager 与同步 shim
+    ``_raise_if_toggle_errors`` 共用同一文本 (一处定义两处用)。返回
+    RuntimeError 实例而非直接抛, 便于测试在断言中抓取实例。
+    """
+    detail = "; ".join(errors[:5])
+    if len(errors) > 5:
+        detail += f"; …(+{len(errors) - 5} more)"
+    return RuntimeError(f"runtime toggle {name!r} partial failure: {detail}")
