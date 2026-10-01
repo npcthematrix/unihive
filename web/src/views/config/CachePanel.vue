@@ -5,7 +5,7 @@
       <span v-if="isDbMode">
         此处为当前生效的 <code>cache</code> 全局配置 — 存于配置库
         <code>data/config.db</code> 的 <code>config_section</code>
-        (空库由出厂 YAML 模板 seed; 与"上游数据PROVIDERs"标签页的运行时缓存是不同概念)。
+        (空库由出厂 YAML 模板 seed; 与「网关运行监控」页的运行时缓存是不同概念)。
         只读展示, <strong>修改后需重启网关</strong>生效。
       </span>
       <span v-else>

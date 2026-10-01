@@ -19,13 +19,8 @@ export const UPSTREAM_ORDER = [
   'THS-LOCAL-GATEWAY',
 ] as const
 
-export const UPSTREAM_TITLE: Record<string, string> = {
-  fuyao_ashare: '同花顺 a-share',
-  fuyao_index: '同花顺 a-share-index',
-  fuyao_meta: '同花顺 meta',
-  fuyao_fund: '同花顺 fund',
-  'THS-LOCAL-GATEWAY': 'FQGate 本地网关',
-}
+/** 上游展示名; 事实源见 @/constants/upstreams。 */
+export { UPSTREAM_DISPLAY_NAME as UPSTREAM_TITLE } from '@/constants/upstreams'
 
 /** 界面专门渲染过的字段; 之外的字段靠 extraKeys 提示 + 原始 JSON 兜底。 */
 export const KNOWN_TOOL_KEYS = [

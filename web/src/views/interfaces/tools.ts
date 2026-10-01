@@ -3,6 +3,7 @@
  * 不依赖 Vue, 便于单测和在组件间复用。
  */
 import type { DataSourceType, ToolParam, ToolSpec } from '@/api/interfaces'
+import { UPSTREAM_DISPLAY_NAME } from '@/constants/upstreams'
 
 export const ALL_KEY = '__all__'
 
@@ -16,17 +17,10 @@ export const KNOWN_GROUP_ORDER = [
   'fuyao_fund',
 ] as const
 
-/** 分组展示名; 未收录的分组回退原始 key。 */
+/** 分组展示名 (事实源见 @/constants/upstreams); 未收录的分组回退原始 key。 */
 export const GROUP_TITLE: Record<string, string> = {
   [ALL_KEY]: '全部',
-  tdx_quant: '通达信-量化终端',
-  mootdx2: 'MooTDX2',
-  fuyao_ashare: '同花顺-a-share',
-  fuyao_index: '同花顺-a-share-index',
-  fuyao_meta: '同花顺-meta',
-  fuyao_fund: '同花顺-fund',
-  thsdk: 'THSDK 本地终端',
-  omni: 'OMNIDATA 本地库',
+  ...UPSTREAM_DISPLAY_NAME,
 }
 
 export interface ToolToggles {

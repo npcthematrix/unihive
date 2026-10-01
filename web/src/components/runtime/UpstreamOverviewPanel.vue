@@ -2,7 +2,7 @@
   <el-card shadow="never" class="panel-card">
     <template #header>
       <div class="card-toolbar">
-        <h2 class="card-title">上游数据PROVIDERs</h2>
+        <h2 class="card-title">上游数据源</h2>
         <div class="toolbar-actions">
           <el-button
             :icon="Refresh"
@@ -112,6 +112,7 @@
 import { computed, ref } from 'vue'
 import { Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { copyText } from '@/utils/clipboard'
+import { upstreamDisplayName } from '@/constants/upstreams'
 import type {
   StatusSummary,
   UpstreamStatus,
@@ -152,14 +153,6 @@ const STATUS_ORDER: Record<string, number> = {
   unknown: 5,
 }
 const TYPE_TEXT: Record<string, string> = { http: 'HTTP', stdio: 'Stdio', npx: 'NPX' }
-const UPSTREAM_DISPLAY_NAME: Record<string, string> = {
-  tdx_quant: '通达信-量化终端',
-  mootdx2: 'MooTDX2',
-  fuyao_ashare: '同花顺-a-share',
-  fuyao_index: '同花顺-a-share-index',
-  fuyao_meta: '同花顺-meta',
-  fuyao_fund: '同花顺-fund',
-}
 
 const filter = ref<'all' | 'healthy' | 'unhealthy'>('all')
 const ALLOWED_SORT_KEYS = ['name', 'status', 'latency'] as const
@@ -211,9 +204,7 @@ const sortedRows = computed(() => {
   })
 })
 
-function displayName(name: string): string {
-  return UPSTREAM_DISPLAY_NAME[name] ?? name
-}
+const displayName = upstreamDisplayName
 
 function typeText(type: string): string {
   return TYPE_TEXT[type] || type || '-'
