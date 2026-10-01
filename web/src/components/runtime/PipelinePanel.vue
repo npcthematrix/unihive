@@ -13,6 +13,11 @@
       </div>
     </template>
 
+    <p class="pipeline-scope-hint">
+      仅展示进程内阻塞调用组件 (MooTDX2 / TDX 量化终端 / THSDK) 的线程池与闸门；
+      fuyao (HTTP) 与 omni (SQLite) 为异步 I/O, 无线程池, 不在此列。
+    </p>
+
     <div class="pipeline-list">
       <div v-for="p in pipelines" :key="p.component" class="pipeline-block" :class="{ 'is-primary': p.isPrimary }">
         <div class="pipeline-head">
@@ -243,6 +248,13 @@ const pipelines = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.pipeline-scope-hint {
+  margin: 0 2px 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
 }
 
 .pipeline-head {
