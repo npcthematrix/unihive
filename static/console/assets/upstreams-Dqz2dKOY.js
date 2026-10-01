@@ -1,0 +1,1 @@
+const o={mootdx2:"通达信 MooTDX2",tdx_quant:"通达信量化终端",fuyao_ashare:"同花顺 Fuyao a-share",fuyao_index:"同花顺 Fuyao a-share-index",fuyao_meta:"同花顺 Fuyao meta",fuyao_fund:"同花顺 Fuyao fund",omni:"OMNIDATA 本地库",thsdk:"THSDK 本地终端","THS-LOCAL-GATEWAY":"FQGate 本地网关"};function u(a){return o[a]??a}export{o as U,u};

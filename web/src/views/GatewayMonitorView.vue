@@ -81,49 +81,77 @@
           <span class="tab-label">缓存与存储</span>
         </template>
 
-        <!-- 两层缓存定位: 上层 SQLite 持久化, 下层进程内内存 -->
-        <p class="cache-layers-hint">
-          本标签含两层缓存：<strong>响应缓存</strong> 为 SQLite 持久化（重启保留，下方第一张卡）；
-          <strong>MooTDX2 L1</strong> 为进程内内存缓存（重启清空，最后一张卡）。
-        </p>
-
-        <!-- 市场时段条: 短档此刻的生效语义, 随缓存页展示 -->
-        <SessionBar :session="session" class="cache-session" />
-
-        <!-- 通用缓存模型装不下的两个特例, 随缓存页展示, 避免误读 -->
-        <p class="cache-note">
-          特例：集合竞价快照 9:15–9:25 走 60s 档、9:25 定格；龙虎榜盘后发布，18:00 前缓存的是前一交易日数据。特殊工具以工具说明为准。
-        </p>
-
-        <RespCacheCard
-          :cache="respCache"
-          :foreign="statsFromForeignProcess"
-          :initial-loading="initialLoading"
-          :load-error="respLoadError"
-          :rate-series="respRateSeries"
-          :entries-series="liveEntriesSeries"
-          :breakdown-rows="breakdownRows"
-          :breakdown-loading="breakdownTableLoading"
+        <!-- 顶部 summary: 两层缓存 · 总览 (一眼可见健康度) -->
+        <CacheSummaryCard
+          :resp-cache="respCache"
+          :resp-foreign="statsFromForeignProcess"
           :breakdown-total-tools="breakdownTotalTools"
-          :breakdown-error="breakdownLoadError"
-          :cleanup-loading="cleanupLoading"
-          :vacuum-loading="vacuumLoading"
-          :clear-loading="clearLoading"
-          @cleanup="onCleanup"
-          @vacuum="onVacuum"
-          @clear="onClear"
+          :metrics="metrics"
         />
 
-        <Mootdx2L1Card
-          :metrics="metrics"
-          :initial-loading="initialLoading"
-          :load-error="l1LoadError"
-          :rate-series="l1RateSeries"
-          :size-series="l1SizeSeries"
-          :reset-loading="resetL1Loading"
-          class="tab-card-gap"
-          @reset="onResetL1"
-        />
+        <!-- sub-tab 导航: 复用 .cfg-subtabs 文字下划线样式 -->
+        <nav class="cfg-subtabs" role="tablist" aria-label="缓存子标签">
+          <button
+            type="button"
+            class="cfg-subtab"
+            :class="{ active: activeCacheSub === 'resp' }"
+            role="tab"
+            :aria-selected="activeCacheSub === 'resp'"
+            @click="selectCacheSub('resp')"
+          >响应缓存</button>
+          <button
+            type="button"
+            class="cfg-subtab"
+            :class="{ active: activeCacheSub === 'l1' }"
+            role="tab"
+            :aria-selected="activeCacheSub === 'l1'"
+            @click="selectCacheSub('l1')"
+          >MooTDX2 L1缓存</button>
+        </nav>
+
+        <!-- 响应缓存 sub-tab: SessionBar + 例外说明 + RespCacheCard -->
+        <section v-show="activeCacheSub === 'resp'" class="cache-pane">
+          <!-- 市场时段条: 短档此刻的生效语义, 仅响应缓存走交易时段感知 -->
+          <SessionBar :session="session" class="cache-session" />
+
+          <!-- 通用缓存模型装不下的两个特例, 避免误读 -->
+          <p class="cache-note">
+            特例：集合竞价快照 9:15–9:25 走 60s 档、9:25 定格；龙虎榜盘后发布，18:00 前缓存的是前一交易日数据。特殊工具以工具说明为准。
+          </p>
+
+          <RespCacheCard
+            :cache="respCache"
+            :foreign="statsFromForeignProcess"
+            :initial-loading="initialLoading"
+            :load-error="respLoadError"
+            :rate-series="respRateSeries"
+            :entries-series="liveEntriesSeries"
+            :breakdown-rows="breakdownRows"
+            :breakdown-loading="breakdownTableLoading"
+            :breakdown-total-tools="breakdownTotalTools"
+            :breakdown-error="breakdownLoadError"
+            :cleanup-loading="cleanupLoading"
+            :vacuum-loading="vacuumLoading"
+            :clear-loading="clearLoading"
+            @cleanup="onCleanup"
+            @vacuum="onVacuum"
+            @clear="onClear"
+          />
+        </section>
+
+        <!-- MooTDX2 L1 sub-tab: 进程内缓存, 无 SessionBar (L1 不走交易时段感知) -->
+        <section v-show="activeCacheSub === 'l1'" class="cache-pane">
+          <Mootdx2L1Card
+            :metrics="metrics"
+            :initial-loading="initialLoading"
+            :load-error="l1LoadError"
+            :rate-series="l1RateSeries"
+            :size-series="l1SizeSeries"
+            :reset-loading="resetL1Loading"
+            class="tab-card-gap"
+            @reset="onResetL1"
+          />
+        </section>
       </el-tab-pane>
 
       <!-- ===== 错误跟踪 ===== -->
@@ -151,6 +179,7 @@ import { useGatewayRuntime } from '@/composables/useGatewayRuntime'
 import SessionBar from '@/components/SessionBar.vue'
 import RuntimeStrip from '@/components/RuntimeStrip.vue'
 import UpstreamOverviewPanel, { type UpstreamRow } from '@/components/runtime/UpstreamOverviewPanel.vue'
+import CacheSummaryCard from '@/components/runtime/CacheSummaryCard.vue'
 import RespCacheCard from '@/components/runtime/RespCacheCard.vue'
 import Mootdx2L1Card from '@/components/runtime/Mootdx2L1Card.vue'
 import PipelinePanel from '@/components/runtime/PipelinePanel.vue'
@@ -216,6 +245,29 @@ watch(
     if (tab !== activeTab.value) activeTab.value = tab
   },
 )
+
+// ===== 缓存 sub-tab (?cacheSub=) 双向同步 =====
+// 仅当 activeTab==='cache' 时此 ref 才有视觉意义, 但始终同步 URL 以便
+// 切到 cache 标签时直接定位到上次的 sub-tab。
+const CACHE_SUBTAB_KEYS = ['resp', 'l1'] as const
+type CacheSubTab = (typeof CACHE_SUBTAB_KEYS)[number]
+
+const activeCacheSub = ref<CacheSubTab>(
+  parseHashTab(route.query.cacheSub, CACHE_SUBTAB_KEYS, 'resp'),
+)
+
+watch(
+  () => route.query.cacheSub,
+  (q: LocationQueryValue | LocationQueryValue[]) => {
+    activeCacheSub.value = parseHashTab(q, CACHE_SUBTAB_KEYS, 'resp')
+  },
+)
+
+function selectCacheSub(tab: CacheSubTab): void {
+  if (activeCacheSub.value === tab) return
+  activeCacheSub.value = tab
+  void router.replace({ query: { ...route.query, cacheSub: tab } })
+}
 
 // ---- 上游总览: 独立快照, 不随自动刷新更新 ----
 // gatewayStatus 是自动刷新数据 (供 网关摘要 用), 总览表用自己这份冻结副本,
@@ -297,6 +349,7 @@ const gatewaySummary = computed<SummaryItem[]>(() => {
   const upstreams = gatewayStatus.value?.upstreams ?? {}
   const entries = Object.values(upstreams)
   const online = entries.filter((u) => u.status === 'online').length
+  const configured = entries.filter((u) => u.status === 'configured').length
   const problem = entries.filter((u) => u.status === 'offline').length
   const degraded = entries.filter((u) => u.status === 'degraded').length
   // unknown = 启动早期未探测; 不计入异常, 但要显式告知用户网关正在收敛
@@ -315,9 +368,12 @@ const gatewaySummary = computed<SummaryItem[]>(() => {
     overallText = `${unknown} 个未知 (启动中)`
   }
 
+  // M1: 「可用上游」口径 = online + configured (configured 已启用但该类型不发探测,
+  // 同样可用); disabled 不计入分子。旧码分母含 disabled/configured 却只算 online, 偏小。
+  const usable = online + configured
   return [
     { label: '整体状态', value: overallText, tone: overallTone, dot: true },
-    { label: '在线上游', value: `${online} / ${entries.length}`, tone: 'good' },
+    { label: '可用上游', value: `${usable} / ${entries.length}`, tone: 'good' },
     { label: '在途请求', value: String(runtime.value?.active_requests ?? 0) },
     { label: '近 5 分钟调用', value: String(runtime.value?.calls_last_5m ?? 0) },
   ]
@@ -405,6 +461,7 @@ const totalQueued = computed(() => {
 .gs-label {
   font-size: 11px;
   color: var(--el-text-color-secondary);
+  white-space: nowrap;
 }
 
 .gs-value {
@@ -439,17 +496,6 @@ const totalQueued = computed(() => {
   .gateway-summary {
     grid-template-columns: 1fr;
   }
-}
-
-/* 两层缓存定位说明 */
-.cache-layers-hint {
-  margin: 0 2px 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--el-fill-color-light);
-  font-size: 12px;
-  color: var(--el-text-color-regular);
-  line-height: 1.6;
 }
 
 /* 缓存标签内的市场时段条 */
