@@ -3,7 +3,7 @@
     <template #header>
       <div class="error-toolbar">
         <h2 class="card-title">错误跟踪
-          <small class="sub">MCP 工具调用失败记录 (不含入参)</small>
+          <small class="sub">MCP 工具调用失败记录 (含入参, 已截断)</small>
         </h2>
         <div class="error-actions">
           <el-radio-group v-model="scope" size="small">
@@ -152,7 +152,7 @@
     </el-table>
 
     <p class="error-hint">
-      记录由网关在工具调用失败时自动写入；仅近期内存 ({{ inMemory }}/{{ memoryCap }}),
+      记录由网关在工具调用失败时自动写入 (含已截断的入参, 便于复现)；仅近期内存 ({{ inMemory }}/{{ memoryCap }}),
       满 {{ flushThreshold }} 条批量溢写 SQLite；库内上限 {{ dbCap }} 条自动 LRU 淘汰。
     </p>
   </el-card>
@@ -360,6 +360,15 @@ onBeforeUnmount(() => {
 
 .kind-filter {
   width: 150px;
+}
+
+/* L1: 窄屏工具栏控件收缩, 避免换行后独占整行 */
+@media (max-width: 768px) {
+  .tool-filter,
+  .kind-filter {
+    width: auto;
+    flex: 1 1 120px;
+  }
 }
 
 .error-summary {
