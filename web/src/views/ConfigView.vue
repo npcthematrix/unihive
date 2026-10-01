@@ -72,6 +72,7 @@
           @connection-saved="onUpstreamConnectionSaved"
           @kill-switch-changed="onKillSwitchChanged"
           @pool-config-saved="onPoolConfigSaved"
+          @openapi-imported="onOpenapiImported"
         />
       </section>
 
@@ -122,7 +123,7 @@
         v-show="activeTab === 'updateCenter'"
         class="cfg-panel"
       >
-        <UpdateCenterPanel :entities="entities" @applied="onFactoryUpgradeApplied" />
+        <UpdateCenterPanel :entities="entities" :active="activeTab === 'updateCenter'" @applied="onFactoryUpgradeApplied" />
       </section>
     </div>
     </el-card>
@@ -326,6 +327,15 @@ function onFactoryUpgradeApplied(payload: { revision: number }) {
   void load(false)
 }
 
+/** FQGate OpenAPI 热导入成功 (上游 tab): 工具契约/发布集已变, 刷新同上。 */
+function onOpenapiImported(payload: { revision: number }) {
+  if (config.value) {
+    config.value = { ...config.value, version: payload.revision }
+  }
+  void loadEntities()
+  void loadInterfaceTools()
+}
+
 /**
  * 全局池参数 PUT 成功: revision bump, 跑一次实体摘要刷新让变更被记录。
  * running 值未变 (Semaphore/ThreadPool 不可运行时扩缩, 等用户重启);
@@ -356,13 +366,16 @@ const proxyRefreshSuffix = computed(() => {
 async function copyJson() {
   // 防抖: 复制动作有 ElMessage 反馈, 连点会刷屏, 用 inFlight 串行化
   if (copyInFlight.value) return
-  if (!config.value) {
+  // M1: 复制与屏幕一致的配置 — displayConfig 在原始快照缺 tools 时
+  // 已用 /api/interfaces 合成清单补齐, 与「工具」tab 展示同源。
+  const cfg = displayConfig.value
+  if (!cfg) {
     ElMessage.error('暂无配置数据')
     return
   }
   copyInFlight.value = true
   try {
-    const text = JSON.stringify(config.value, null, 2)
+    const text = JSON.stringify(cfg, null, 2)
     await copyText(text, '')
     ElMessage.success('配置 JSON 已复制到剪贴板')
   } catch {

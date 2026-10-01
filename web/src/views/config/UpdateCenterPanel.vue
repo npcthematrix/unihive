@@ -350,7 +350,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
@@ -389,9 +389,11 @@ import LedgerTable from './UpgradeLedgerTable.vue'
 
 interface Props {
   entities: ConfigEntities | null
+  /** 该 tab 是否激活 (ConfigView 传入); 激活时才拉取模板状态, 避免进入配置页即自发请求。 */
+  active?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { active: false })
 const emit = defineEmits<{
   applied: [payload: { revision: number }]
 }>()
@@ -580,9 +582,21 @@ const appliedImpactGroups = computed<ImpactGroup[]>(() => {
   return impactGroups(impact)
 })
 
-onMounted(() => {
-  void loadStatus()
-})
+/**
+ * M2: 模板状态 (构建+hash 比对) 只在本 tab 激活时拉取, 不在进入配置页即自发请求。
+ * 首次激活拉一次, 离开不重复; 同 ErrorTrackingPanel 的 active 模式。
+ */
+const statusLoadedOnce = ref(false)
+watch(
+  () => props.active,
+  (active) => {
+    if (active && isDb.value && !statusLoadedOnce.value && !status.value && !statusLoading.value) {
+      statusLoadedOnce.value = true
+      void loadStatus()
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <style scoped>
