@@ -93,10 +93,8 @@ class LifecycleMixin:
 
         if not self._uses_db_source():
             logger.info("UNIHIVE_CONFIG_SOURCE=yaml, 配置事实源=YAML 文件 (无 SQLite)")
-            # yaml 逃生模式: 重放 _apply_gateway_tuning 让 _per_upstream_timeout
-            # / limiter 在 __new__ 旁路 __init__ 的测试 fixture (yaml server) 上
-            # 也正确装配 (M1 测试 invariant)。
-            self._apply_gateway_tuning()
+            # yaml 逃生模式: __init__ 已按 YAML 基线调过 _apply_gateway_tuning,
+            # 这里只清 config.db 指针, 不再重复跑调参。
             _ca.set_config_db(None)
             return
 
@@ -265,13 +263,8 @@ class LifecycleMixin:
                 tool_specs=tool_specs,
             )
 
-            # Store proxy_settings on self for proxy_api handlers to mutate later
-            self.proxy_settings = proxy_settings
-
-            # Configure proxy_api with module-level state (so it doesn't need app.state).
-            # 注意: 不要在这里 self.proxy_settings = proxy_settings, gateway 不需要
-            # 这个字段 (proxy_api handlers 走 module-level _proxy_settings, 见
-            # utils/proxy_api.py:_resolve_state)。
+            # proxy_api handlers 走 module-level _proxy_settings 单例
+            # (见 utils/proxy_api.py:_resolve_state), gateway 自身不持有该字段。
             from ..utils.proxy_api import configure_proxy_api
             configure_proxy_api(proxy_settings, self.upstreams)
 
@@ -280,13 +273,10 @@ class LifecycleMixin:
             # 注册 + capability filter 安装一气呵成, 防止未来 refactor 跳过 filter。
             await self._create_and_register_gateway_mcp(tool_specs)
 
-        except (Exception, asyncio.CancelledError):
-            # LOW6: 不吃 KeyboardInterrupt / SystemExit。
-            # Round-12 簇H: CancelledError (Py3.8+ 是 BaseException 子类)
-            # 以前直接传播跳过整个清理块 —— init 期间被取消时已启动 client /
-            # cache engine / config_store engine / cleanup task 全部泄漏。
-            # 现改为复用 stop() (含 _await_cleanup shield + 限时 + 吞异常)。
-            # M2 (round 11) 标记: 旧内联清理块与 stop() 90% 重复, 一次性整合。
+        except BaseException:
+            # Round-12 簇H: init 期间被取消 (CancelledError 属 BaseException) 时
+            # 也必须跑 stop() 清已启动的 client/cache/config_store/cleanup task。
+            # stop() 内部全部吞异常, 不掩盖 KeyboardInterrupt/SystemExit 传播。
             await self.stop()
             raise
 
@@ -296,21 +286,14 @@ class LifecycleMixin:
         logger.info(f"Gateway initialized with {len(self.upstreams)} upstreams")
 
     async def start(self):
-        # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并
-        # 调 stop() 清 partial state, 允许同实例重试。Pre-fix: _running 在
-        # initialize 之前设 True, initialize 失败时留在 True, 状态错乱。
-        # 现保留 _running (测试断言依赖), 与 _initialized 语义等价。
-        self._running = True
         # L8 (round 9 audit): stop() 末尾 set _shutdown_event 唤醒旧 watcher,
         # 但从不 clear → 同实例 stdio restart 时新 watcher `await event.wait()`
         # 立即返回, cancel 当前 main_task → run_stdio_async 没跑就被杀。
         # 建 watcher 前清掉, 让残留 set 不影响重启。
         self._shutdown_event.clear()
-        try:
-            await self.initialize()
-        except BaseException:
-            await self.stop()
-            raise
+        # initialize() 内部 (_do_initialize except) 已自清理 + 调 stop();
+        # 起 start() 时若 initialize 失败由 outer finally 兜底 stop, 不重复 try。
+        await self.initialize()
         # 注册 SIGINT/SIGTERM handler: stdio transport 模式下, 父进程 (Claude
         # Desktop 等) 关停会发 SIGTERM, Python 默认 handler 不通知 asyncio,
         # 我们的 stop() 不会被调用, stdio MCP 子进程泄漏。
@@ -496,9 +479,6 @@ class LifecycleMixin:
         if hasattr(self, "_db_hidden_tools"):
             self._db_hidden_tools = set()
         self._initialized = False
-        # _running 同 _initialized 一起归零 (M5 测试 invariant + 同实例 restart 契约)
-        if hasattr(self, "_running"):
-            self._running = False
         # Round-12 簇H: single-flight future 表也要清空 —— 旧实现 stop 后
         # 残留已完成/已失败 future 引用, 同实例重启期间同 key 调用可能误判
         # 在途或 await 到一个属于上一生命周期的 future。getattr 兜底 __new__

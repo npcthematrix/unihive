@@ -246,15 +246,9 @@ class HttpServeMixin:
 
     async def serve_http(self, host: str = None, port: int = None, mcp_path: str = None):
         """HTTP 模式: 同时 serve MCP 接口和 Console 管理 UI."""
-        # _running 同 start() 显式设 True (测试 invariant 依赖)。
-        self._running = True
-        # M5 (2026-09-07 5th-round audit): initialize() 失败时重置 _running 并
-        # 调 stop() 清 partial state, 允许同实例重试。
-        try:
-            await self.initialize()
-        except BaseException:
-            await self.stop()
-            raise
+        # initialize() 内部 (_do_initialize except) 已自清理 + 调 stop();
+        # 失败由 outer try/finally (_precheck_bind + uvicorn.Serve 块) 兜底 stop。
+        await self.initialize()
         # M5 (round 9 audit): host/port/mcp_path 默认值必须在 initialize() 之后
         # 从 self.config 取。M9 路径下 __init__ 预检失败时 self.config={} (或无
         # gateway 段); 旧实现在 init 前快照 → 静默回落 127.0.0.1:18080/mcp,

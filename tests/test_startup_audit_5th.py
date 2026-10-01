@@ -197,11 +197,16 @@ class TestInitializeFailureResetsRunning:
         cfg.write_text("upstreams: {}", encoding="utf-8")
 
         async def fake_init_raises(self):
+            # 模拟真实 _do_initialize except 路径: 抛异常前已 stop() 清 partial。
+            # 这样外层 start() 不必再包 try/except (cleanup 由 outer finally 兜底)。
             self._initialized = False
             self.upstreams = {"x": object()}  # partial state
+            await self.stop()
             raise RuntimeError("simulated init failure (M5 test)")
 
-        monkeypatch.setattr(GatewayServer, "initialize", fake_init_raises)
+        # 替换 _do_initialize (不是 initialize) — 双检锁仍跑, 外层 try 块已删,
+        # 由 fake_init_raises 内部 stop() + outer finally stop 兜底两次清理。
+        monkeypatch.setattr(GatewayServer, "_do_initialize", fake_init_raises)
 
         stop_calls = []
         real_stop = GatewayServer.stop
@@ -247,9 +252,10 @@ class TestInitializeFailureResetsRunning:
 
         async def fake_init_raises(self):
             self._initialized = False
+            await self.stop()
             raise RuntimeError("simulated init failure (serve_http M5)")
 
-        monkeypatch.setattr(GatewayServer, "initialize", fake_init_raises)
+        monkeypatch.setattr(GatewayServer, "_do_initialize", fake_init_raises)
 
         stop_calls = []
         real_stop = GatewayServer.stop
@@ -268,7 +274,7 @@ class TestInitializeFailureResetsRunning:
         with pytest.raises(RuntimeError, match="simulated init failure"):
             await server.serve_http(host="127.0.0.1", port=18099)
 
-        assert server._running is False
+        assert server._initialized is False
         assert stop_calls
 
 

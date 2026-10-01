@@ -24,8 +24,6 @@ import { errorMessage } from '@/api/client'
 import { copyText } from '@/utils/clipboard'
 import HighlightText from '@/components/HighlightText.vue'
 import RawSchemaPanel from './mcp-browser/RawSchemaPanel.vue'
-import OpenapiImportDialog from './mcp-browser/OpenapiImportDialog.vue'
-import type { OpenapiImportApplyResult } from '@/api/config'
 import {
   UPSTREAM_ORDER,
   UPSTREAM_TITLE,
@@ -116,9 +114,6 @@ const filtersActive = computed(() => hasActiveFilters(appliedQuery.value, toggle
 const metaText = computed(() => (payload.value ? summarizePayload(payload.value) : ''))
 
 const currentUpstream = computed(() => upstreams.value.find((u) => u.name === selected.value))
-
-/** 只有 ThsLocalClient 暴露 openapi.json + 原始 tools/list, 按钮不对其他上游显示。 */
-const importSupported = computed(() => currentUpstream.value?.type === 'ThsLocalClient')
 
 // ---- 搜索 ----
 watch(rawQuery, (value) => {
@@ -298,15 +293,6 @@ onUnmounted(() => {
       </h1>
       <div class="view-actions">
         <span v-if="metaText" class="mcp-meta">{{ metaText }}</span>
-        <el-button
-          v-if="importSupported"
-          size="small"
-          type="warning"
-          plain
-          @click="openImport"
-        >
-          OpenAPI 导入
-        </el-button>
         <el-button size="small" @click="copyAll">复制全部 tool 名</el-button>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="refresh">
           刷新
@@ -497,12 +483,6 @@ onUnmounted(() => {
         </div>
       </section>
     </div>
-
-      <OpenapiImportDialog
-        v-model="importVisible"
-        :upstream="selected"
-        @applied="onImportApplied"
-      />
     </el-card>
   </div>
 </template>

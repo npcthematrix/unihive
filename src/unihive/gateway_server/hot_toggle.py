@@ -225,12 +225,7 @@ class HotToggleMixin:
             yield errors
         finally:
             if errors:
-                detail = "; ".join(errors[:5])
-                if len(errors) > 5:
-                    detail += f"; …(+{len(errors) - 5} more)"
-                raise RuntimeError(
-                    f"runtime toggle {name!r} partial failure: {detail}"
-                )
+                raise _format_toggle_errors(name, errors)
 
     @staticmethod
     def _raise_if_toggle_errors(name: str, errors: list[str]) -> None:
@@ -240,12 +235,20 @@ class HotToggleMixin:
         入口, 内部委托同一错误格式化逻辑。
         """
         if errors:
-            detail = "; ".join(errors[:5])
-            if len(errors) > 5:
-                detail += f"; …(+{len(errors) - 5} more)"
-            raise RuntimeError(
-                f"runtime toggle {name!r} partial failure: {detail}"
-            )
+            raise _format_toggle_errors(name, errors)
+
+
+def _format_toggle_errors(name: str, errors: list[str]) -> RuntimeError:
+    """统一错误格式化: 前 5 条 + "…(+N more)" 截断。
+
+    模块级 helper, 让 _toggle_errors contextmanager 与同步 shim
+    ``_raise_if_toggle_errors`` 共用同一文本 (一处定义两处用)。返回
+    RuntimeError 实例而非直接抛, 便于测试在断言中抓取实例。
+    """
+    detail = "; ".join(errors[:5])
+    if len(errors) > 5:
+        detail += f"; …(+{len(errors) - 5} more)"
+    return RuntimeError(f"runtime toggle {name!r} partial failure: {detail}")
 
     async def _attach_upstream_client_locked(self, name: str, cfg: dict):
         """用已解析 live 块构造+启动 client 并切换 console_api omni 指针。

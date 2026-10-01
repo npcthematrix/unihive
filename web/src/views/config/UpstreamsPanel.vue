@@ -1,17 +1,12 @@
 <template>
   <div class="ups-panel">
-    <!-- 搜索框 + OpenAPI 导入入口 -->
+    <!-- 搜索框 -->
     <div class="ups-toolbar">
       <CfgSearchInput
         v-model="search"
         placeholder="搜索上游... (名称/类型/URL)"
         aria-label="搜索上游"
       />
-      <el-button
-        v-if="hasThsLocal"
-        size="small"
-        @click="importDialogOpen = true"
-      >OpenAPI 导入</el-button>
     </div>
 
     <!-- 上游表 -->
@@ -262,13 +257,6 @@
       :upstream-name="editingName"
       @saved="onConnectionSaved"
     />
-
-    <!-- FQGate OpenAPI 实时导入 (手动触发, 网关启动从不活拉); 复用 MCP 浏览器同款对话框 -->
-    <OpenapiImportDialog
-      v-model="importDialogOpen"
-      upstream="THS-LOCAL-GATEWAY"
-      @applied="onOpenapiImported"
-    />
   </div>
 </template>
 
@@ -299,7 +287,6 @@ import { isUsableRevision } from './revisions'
 import { describeEntityEditError } from './entityErrors'
 import UpstreamEditDialog from './UpstreamEditDialog.vue'
 import CfgSearchInput from './CfgSearchInput.vue'
-import OpenapiImportDialog from '@/views/mcp-browser/OpenapiImportDialog.vue'
 
 interface Props {
   config: GatewayConfig | null
@@ -331,14 +318,6 @@ const emit = defineEmits<{
 /** 连接块编辑弹窗状态。 */
 const editDialogOpen = ref(false)
 const editingName = ref<string | null>(null)
-
-/** OpenAPI 导入对话框状态; 仅当上游表里存在 FQGate 时展示入口。 */
-const importDialogOpen = ref(false)
-const hasThsLocal = computed(() => Boolean(props.config?.upstreams?.['THS-LOCAL-GATEWAY']))
-
-function onOpenapiImported(payload: { revision: number }): void {
-  emit('openapiImported', payload)
-}
 
 function openEdit(name: string): void {
   editingName.value = name

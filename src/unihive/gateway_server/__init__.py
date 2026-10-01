@@ -58,7 +58,6 @@ from .hot_toggle import HotToggleMixin
 from .http import HttpServeMixin
 from .lifecycle import LifecycleMixin
 from .mcp_tools import McpToolsMixin
-from .openapi_import import OpenApiImportMixin
 from .upstreams import UpstreamControlMixin
 
 
@@ -69,7 +68,6 @@ class GatewayServer(
     HotToggleMixin,
     ConfigEditsMixin,
     ConfigUpgradeMixin,
-    OpenApiImportMixin,
     CachedExecutionMixin,
     McpToolsMixin,
 ):
@@ -107,9 +105,9 @@ class GatewayServer(
             raise ValueError(
                 f"UNIHIVE_CONFIG_SOURCE must be 'db' or 'yaml' (got {source!r})"
             )
-        # db_mode 字段保留: 13+ 处现有测试用 server._db_mode = True/False (__new__
-        # 旁路 __init__ 的测试无法走 env), 删除字段会带来大量测试 churn, 与
-        # mcp_tools._uses_db_source 重读 env 行为等价, 低开销兼容保留。
+        # db_mode 字段保留: 6+ 处现有测试用 server._db_mode = True/False (__new__
+        # 旁路 __init__ 的测试无法走 env)。mcp_tools._uses_db_source 优先读字段,
+        # 字段缺失时回退到 env (与 __init__ 推导语义等价)。
         self._db_mode = source != "yaml"
         # M10: 库路径锚定项目根, 从任意 CWD 启动都指向同一个 config.db,
         # 杜绝在 CWD 下静默生成空库重 seed 的裂脑; 绝对路径原样保留。
@@ -187,20 +185,16 @@ class GatewayServer(
         # 直接 server._init_lock = asyncio.Lock() 验证并发序列化, 字段删除会带来
         # 测试 churn。低开销兼容保留。
         self._init_lock = asyncio.Lock()
-        # M2 (round 11): start() 超时后的后台自愈任务 (按上游名分组)。
+        # M2 (round 11): start() 超时后的后台自愈任务 (按上游名)。
         # 阻塞型 client (mootdx2/tdx_quant) 的初始化在专用线程池不可中断,
         # wait_for 超时后由这些任务驱动 client 完成延迟启动+健康循环;
         # disable / stop / init 失败清理时按名取消, 不复活已停 client。
-        # 容器为 set[Task]: 测试断言 `_late_start_tasks.get(name) == set()`,
-        # 改为单 Task 容器会带来测试 churn, 低开销兼容保留。
-        self._late_start_tasks: dict[str, set[asyncio.Task]] = {}
+        # 单 task 容器: 同名重启时新 task 覆盖旧 task, 旧 task 在 stop 时取消。
+        self._late_start_tasks: dict[str, asyncio.Task] = {}
         # initialize() 幂等位 (旧实现在 start/serve_http 各调一次, 部分 client
         # 重入状态混乱) + stop() 取消 health loop 的事件。
+        # _initialized 同时承担原 _running 语义: init-fail 后必 False, stop 末尾归零。
         self._initialized = False
-        # _running 字段保留: M5 测试 invariant 直接断言 server._running is False
-        # (init-fail 后必须 False)。与 _initialized 语义等价, 删除字段会让 6+ 处
-        # 测试 setup (server._running = False/True) 引入 churn, 低开销兼容保留。
-        self._running = False
         self._shutdown_event = asyncio.Event()
         # 在途请求计数 + 优雅关闭
         self._active_requests = 0

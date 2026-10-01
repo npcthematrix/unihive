@@ -210,7 +210,7 @@
     - `_disable_upstream_locked` (line 292): `with self._toggle_errors(name)`
     - `_reconcile_upstream_locked` (line 350): 双 errors 路径 —
       `errors.extend(add_errors); errors.extend(remove_errors)` 后 with 块退出 raise
-  - `openapi_import.py:232`: rollback 留在 with 块内 (有特殊 rollback 需求)
+  - ~~`openapi_import.py:232`~~ (2026-10-01 该 mixin 已删): rollback 留 with 内
   - `config_edits.py:451`: with 块内 publish
   - `config_upgrade.py:296, 373`: 两处 (unpublish 阶段 + publish 阶段)
 - **删除** 静态方法 `_raise_if_toggle_errors` — 全文 grep 0 处残留
@@ -251,7 +251,7 @@
 | `src/unihive/gateway_server/http.py` | H1 删 _running + B2 _build_inner_app / _make_index_route / _read_console_html |
 | `src/unihive/gateway_server/mcp_tools.py` | L6 _uses_db_source 简化 |
 | `src/unihive/gateway_server/hot_toggle.py` | L7 caller 改 + B1 _toggle_errors 4 处 |
-| `src/unihive/gateway_server/openapi_import.py` | B1 _toggle_errors (rollback 在 with 内) |
+| ~~`src/unihive/gateway_server/openapi_import.py`~~ | (2026-10-01 mixin 已删) |
 | `src/unihive/gateway_server/config_edits.py` | L7 caller 改 + B1 _toggle_errors |
 | `src/unihive/gateway_server/config_upgrade.py` | B1 _toggle_errors 2 处 |
 

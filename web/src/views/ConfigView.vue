@@ -72,7 +72,6 @@
           @connection-saved="onUpstreamConnectionSaved"
           @kill-switch-changed="onKillSwitchChanged"
           @pool-config-saved="onPoolConfigSaved"
-          @openapi-imported="onOpenapiImported"
         />
       </section>
 
@@ -325,15 +324,6 @@ function onFactoryUpgradeApplied(payload: { revision: number }) {
     config.value = { ...config.value, version: payload.revision }
   }
   void load(false)
-}
-
-/** FQGate OpenAPI 热导入成功 (上游 tab): 工具契约/发布集已变, 刷新同上。 */
-function onOpenapiImported(payload: { revision: number }) {
-  if (config.value) {
-    config.value = { ...config.value, version: payload.revision }
-  }
-  void loadEntities()
-  void loadInterfaceTools()
 }
 
 /**

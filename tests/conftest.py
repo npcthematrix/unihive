@@ -55,8 +55,6 @@ def gateway_server_minimal():
     server._active_requests = 0
     server._requests_lock = asyncio.Lock()
     server._in_flight_requests = {}
-    server._health_task = None
-    server._running = False
     server._initialized = False
     # /api/runtime 运行态字段 (见 gateway_server __init__)
     server._started_monotonic = None

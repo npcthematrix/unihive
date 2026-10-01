@@ -26,13 +26,13 @@ src/unihive/gateway_server/         3535 行总计 (旧 3327 + 208 各文件 hea
 ├── hot_toggle.py        266  HotToggleMixin: set_upstream_enabled + 摘挂/差量/reconcile 11 件
 ├── config_edits.py      603  ConfigEditsMixin: tool/upstream 热编辑 + 回滚 + canonical 6 件
 ├── config_upgrade.py    494  ConfigUpgradeMixin: 三方合并升级 + 回滚 7 件
-├── openapi_import.py    307  OpenApiImportMixin: FQGate OpenAPI 活拉热导入 3 件
+├── ~~openapi_import.py  307~~  (2026-10-01 mixin 已删, FQGate OpenAPI 活拉导入功能下线)
 ├── cached_calls.py      189  CachedExecutionMixin: _execute_cached
 └── mcp_tools.py         178  McpToolsMixin: 工具加载/注册/健康聚合 9 件
 ```
 
-MRO: `GatewayServer(LifecycleMixin, HttpServeMixin, UpstreamControlMixin,
-HotToggleMixin, ConfigEditsMixin, ConfigUpgradeMixin, OpenApiImportMixin,
+MRO (2026-10-01 后): `GatewayServer(LifecycleMixin, HttpServeMixin, UpstreamControlMixin,
+HotToggleMixin, ConfigEditsMixin, ConfigUpgradeMixin,
 CachedExecutionMixin, McpToolsMixin)`。各 mixin 方法名两两不相交 (有测试强制),
 跨簇调用一律经 `self`, 零行为变更。
 
@@ -41,9 +41,10 @@ CachedExecutionMixin, McpToolsMixin)`。各 mixin 方法名两两不相交 (有�
 1. **monkeypatch binding 分叉**: 子模块内一律模块限定调用 ——
    `from ..core import registry; registry.register_tool(...)`、
    `from ..storage import cache as cache_mod; cache_mod.Cache(...)`。
-   测试 patch 点随之改: 5 处 register_tool 改 patch `src.unihive.core.registry.
+   测试 patch 点随之改: 4 处 register_tool 改 patch `src.unihive.core.registry.
    register_tool` (test_tool_edit_hot / test_upstream_edit_hot / test_config_upgrade_hot /
-   test_openapi_import_hot / test_upstream_enabled_toggle); 1 处 Cache 改 patch
+   test_upstream_enabled_toggle; ~~test_openapi_import_hot~~ 已随 mixin 删除);
+   1 处 Cache 改 patch
    `src.unihive.storage.cache.Cache` (test_startup_audit_round9_batch_b)。
    facade 保留 `register_tool` re-export —— 部分测试 setup 直调并先存真函数。
 2. **facade 兼容垫片**: `socket` / `uvicorn` 以 `# noqa: F401` 留在 facade
@@ -122,7 +123,7 @@ CachedExecutionMixin, McpToolsMixin)`。各 mixin 方法名两两不相交 (有�
   test_startup_audit_round9_batch_d.py (M9 + L13 加固), test_startup_audit_round10_batch1.py (H1),
   test_startup_audit_round9_batch_b.py (Cache patch 点),
   test_tool_edit_hot.py / test_upstream_edit_hot.py / test_config_upgrade_hot.py /
-  test_openapi_import_hot.py / test_upstream_enabled_toggle.py (register_tool patch 点)
+  test_openapi_import_hot.py / test_upstream_enabled_toggle.py (register_tool patch 点) [2026-10-01: test_openapi_import_hot 已随 mixin 删除]
 - 修改配置: `pyproject.toml` (hatch 表名修复)
 - 修改文档: `CLAUDE.md` (项目结构条目)
 - scratch (gitignored, 勿提交): `logs/_wheelcheck/`, `logs/_refactor_gate*.txt`

@@ -69,10 +69,6 @@ EXPECTED_METHODS = [
     "preview_config_upgrade",
     "apply_config_upgrade",
     "_rollback_config_upgrade_locked",
-    # openapi import
-    "_prepare_openapi_import",
-    "preview_openapi_import",
-    "apply_openapi_import",
     # cached execution
     "_execute_cached",
     # mcp tools
@@ -122,7 +118,6 @@ def test_defining_modules_are_submodules():
         "aggregate_health": "mcp_tools",
         "apply_config_upgrade": "config_upgrade",
         "apply_tool_edit": "config_edits",
-        "apply_openapi_import": "openapi_import",
         "set_upstream_enabled": "hot_toggle",
         "_spawn_late_start": "upstreams",
     }
@@ -178,7 +173,6 @@ EXPECTED_MODULES = {
     "http.py",
     "lifecycle.py",
     "mcp_tools.py",
-    "openapi_import.py",
     "upstreams.py",
 }
 

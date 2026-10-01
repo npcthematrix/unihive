@@ -492,8 +492,13 @@ class TestLifecycleStopHardening:
 
 
 class TestYamlModeTuningReplay:
+    """yaml 模式 gateway 调参契约 (__init__ 基线调一次, 不再在 _load_db_config
+    重放 — 2026-10-01 启动精简: 重放冗余, 由 __init__ 单一来源负责)。"""
+
     @pytest.mark.asyncio
-    async def test_yaml_load_replays_gateway_tuning(self, gateway_server_minimal):
+    async def test_yaml_load_skips_replay_and_init_applies_baseline(
+        self, gateway_server_minimal
+    ):
         reset_default_limiter()
         server = gateway_server_minimal
         server._db_mode = False
@@ -505,9 +510,17 @@ class TestYamlModeTuningReplay:
                 },
             }
         }
+        # yaml 逃生模式不再重放 _apply_gateway_tuning: 装配完成后调参应仍是
+        # fixture 默认基线 (DEFAULT_REQUEST_TIMEOUT=30, limiter 空)。
         await server._load_db_config()
-        assert server._per_upstream_timeout == 12.5
+        assert server._per_upstream_timeout == 30.0
         assert server.limiter is not None
+        assert server.limiter._configs.get("fuyao_a") is None
+
+        # __init__ 单一基线: 手动跑一次 _apply_gateway_tuning, 验证 yaml 配置
+        # 真能被装入 (与原 M1 invariant 同等覆盖)。
+        server._apply_gateway_tuning()
+        assert server._per_upstream_timeout == 12.5
         assert server.limiter._configs.get("fuyao_a") == (5.0, 10.0)
 
 

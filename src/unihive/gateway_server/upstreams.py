@@ -104,6 +104,31 @@ class UpstreamControlMixin:
         logger.info(f"[{name}] {'Connected' if connected else 'Failed'}")
         return connected
 
+    def _schedule_background(
+        self,
+        name: str,
+        coro,
+        *,
+        task_name_prefix: str,
+        guard=None,
+    ) -> asyncio.Task | None:
+        """统一后台任务调度: 创建 + 登记 + done 自清理, _spawn_background_start
+        与 _spawn_late_start 共用。
+
+        guard 可选: 返回 False 时不创建任务 (用于 late-start 的
+        hasattr(client, "start_after_timeout") 守卫)。
+
+        单 task 容器: 同名重启时新 task 覆盖旧 task, 旧 task 在 stop 时取消。
+        """
+        if guard is not None and not guard():
+            return None
+        task = asyncio.create_task(coro, name=f"{task_name_prefix}{name}")
+        self._late_start_tasks[name] = task
+        task.add_done_callback(
+            lambda t, n=name: self._late_start_tasks.pop(n, None)
+        )
+        return task
+
     def _spawn_background_start(self, name: str, cfg: dict, client) -> None:
         """boot 期 fire-and-forget: 后台跑 client.start(), 不阻塞网关启动。
 
@@ -115,14 +140,10 @@ class UpstreamControlMixin:
         标记状态。任务异常必须可见 (done_callback 记录), 不得静默丢失。
         """
         del cfg  # noqa: F841  保留 2nd positional 以兼容测试 fixture
-        task = asyncio.create_task(
+        self._schedule_background(
+            name,
             self._background_start_once(name, client),
-            name=f"unihive-bg-start-{name}",
-        )
-        # 容器为 set[Task] (L4 回滚: 测试断言 _late_start_tasks.get(name) == set())
-        self._late_start_tasks.setdefault(name, set()).add(task)
-        task.add_done_callback(
-            lambda t, n=name: self._late_start_tasks.get(n, set()).discard(t)
+            task_name_prefix="unihive-bg-start-",
         )
 
     async def _background_start_once(self, name: str, client) -> None:
@@ -155,18 +176,14 @@ class UpstreamControlMixin:
         """为支持 start_after_timeout 的阻塞型 client 挂后台自愈任务。
 
         无该钩子的 client (fuyao/omni/stdio/ths_local 等, 启动探测本身
-        有界或不走 wait_for 特例) 不挂。
+        有界或不走 wait_for 特例) 不挂。同名 task 会被新 task 覆盖 (旧 task
+        在 stop() 时一并取消即可)。
         """
-        if not hasattr(client, "start_after_timeout"):
-            return
-        task = asyncio.create_task(
+        self._schedule_background(
+            name,
             self._late_start_once(name, client),
-            name=f"unihive-late-start-{name}",
-        )
-        # 容器为 set[Task] (L4 回滚: 与 _spawn_background_start 对称)
-        self._late_start_tasks.setdefault(name, set()).add(task)
-        task.add_done_callback(
-            lambda t, n=name: self._late_start_tasks.get(n, set()).discard(t)
+            task_name_prefix="unihive-late-start-",
+            guard=lambda: hasattr(client, "start_after_timeout"),
         )
 
     async def _late_start_once(self, name: str, client) -> None:
@@ -198,9 +215,9 @@ class UpstreamControlMixin:
         if not groups:
             return
         if name is not None:
-            selected = list(groups.pop(name)) if name in groups else []
+            selected = [groups.pop(name)] if name in groups else []
         else:
-            selected = [t for s in groups.values() for t in s]
+            selected = list(groups.values())
             groups.clear()
         if not selected:
             return

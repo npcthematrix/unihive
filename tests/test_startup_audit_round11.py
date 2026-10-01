@@ -197,7 +197,7 @@ async def test_m2_timeout_registers_and_late_start_recovers():
         await asyncio.sleep(0)
     assert client.recovered is True
     assert client.is_available is True
-    assert server._late_start_tasks.get("mootdx2_x") == set()  # 完成后自清
+    assert server._late_start_tasks.get("mootdx2_x") is None  # 完成后自清
 
 
 async def test_m2_no_late_task_for_client_without_recovery_hook():
@@ -220,14 +220,14 @@ async def test_m2_detach_cancels_late_start_and_stops_client():
     await server._start_upstream_client(
         "mootdx2_x", {"type": "mootdx2"}, client
     )
-    tasks = server._late_start_tasks.get("mootdx2_x") or set()
-    assert tasks and all(not t.done() for t in tasks)
+    task = server._late_start_tasks.get("mootdx2_x")
+    assert task is not None and not task.done()
 
     await server._detach_upstream_client_locked("mootdx2_x")
 
     assert "mootdx2_x" not in server.upstreams
     assert client.stopped is True
-    assert all(t.done() for t in tasks)
+    assert task.done()
 
 
 async def test_m2_cancel_all_late_starts_for_shutdown():
@@ -242,10 +242,10 @@ async def test_m2_cancel_all_late_starts_for_shutdown():
     await server._start_upstream_client(
         "mootdx2_x", {"type": "mootdx2"}, client
     )
-    pending = list((server._late_start_tasks.get("mootdx2_x") or set()))
-    assert pending
+    pending = server._late_start_tasks.get("mootdx2_x")
+    assert pending is not None
     await server._cancel_late_starts()
-    assert all(t.done() for t in pending)
+    assert pending.done()
 
 
 # ---------------------------------------------------------------------------
