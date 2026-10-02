@@ -17,7 +17,7 @@ export interface RuntimeStats {
 }
 
 /** GET /api/runtime — 网关 PID / 运行时长 / 在途 / 工具数 / 近期调用。 */
-export async function getRuntimeStats(): Promise<RuntimeStats> {
-  const { data } = await http.get<RuntimeStats>('/api/runtime')
+export async function getRuntimeStats(options?: { signal?: AbortSignal }): Promise<RuntimeStats> {
+  const { data } = await http.get<RuntimeStats>('/api/runtime', options)
   return data
 }

@@ -96,12 +96,16 @@ export interface UpstreamMetricsResponse {
   timestamp: number
 }
 
-/** GET /api/upstreams/<name>/metrics — 拉某个上游的运行时指标 */
-export async function getUpstreamMetrics(
+/** GET /api/upstreams/<name>/metrics — 拉某个上游的运行时指标。
+ * 泛型参数 T 用来指定返回值里 metrics 字段的真实类型 (thsdk 等结构不同的上游),
+ * 避免调用方写 `as unknown as ThsdkMetrics` (M6)。 */
+export async function getUpstreamMetrics<T = UpstreamMetrics>(
   name: string,
-): Promise<UpstreamMetricsResponse> {
+  options?: { signal?: AbortSignal },
+): Promise<UpstreamMetricsResponse & { metrics: T }> {
   const { data } = await http.get<UpstreamMetricsResponse>(
     `/api/upstreams/${encodeURIComponent(name)}/metrics`,
+    options,
   )
-  return data
+  return data as UpstreamMetricsResponse & { metrics: T }
 }

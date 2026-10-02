@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { errorMessage } from '@/api/client'
+import { errorMessage, isCanceledError } from '@/api/client'
 import { getUpstreamMetrics } from '@/api/upstream-metrics'
 import type { UpstreamMetrics, ThsdkMetrics } from '@/api/upstream-metrics'
 import { getStatus, type CacheStats, type GatewayStatus } from '@/api/status'
@@ -84,10 +84,15 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   const tdxQuantMetrics = ref<UpstreamMetrics | null>(null)
   const initialLoading = ref(false)
   const manualLoading = ref(false)
-  const loadError = ref('')
-  const l1LoadError = ref('')
+  // H3: 聚合所有关键源 (网关主状态 / MooTDX2 / THSDK) 的失败。
+  // 顶层 banner (last-refresh 红/黄) 反映"任意关键源失败", 不再仅看 status。
+  // 各子卡仍保留自己的 *LoadError, 不丢上下文。
   const respLoadError = ref('')
+  const l1LoadError = ref('')
   const thsdkLoadError = ref('')
+  const loadError = computed<string>(
+    () => respLoadError.value || l1LoadError.value || thsdkLoadError.value,
+  )
 
   // 时间戳/时钟: 默认挂生命周期 (1s 时钟 + 轮询 + visibility 重拉); 单测可走本地兜底。
   const autoRefresh = ref(true)
@@ -199,18 +204,21 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     const firstLoad = !everLoaded
     if (firstLoad) initialLoading.value = true
     if (manual) manualLoading.value = true
-    loadError.value = ''
+    // loadError 现在是 computed 聚合, 不再手动 reset。
 
     // 五源独立结算: 单源失败不拖垮其余卡片
     // 管线快采在跑时, 三个组件 metrics 跳过 (返回哨兵, 下方 handler 识别后不更新)。
     const skip = Promise.resolve({ skipped: true })
     const fetchComponents = !fastPollActive.value
+    // M2: 全部 fetch 挂 abortSignal, 组件 unmount 时 abort() 取消在途请求。
+    const signal = ac.signal
     const [metricsResult, statusResult, runtimeResult, thsdkResult, tdxQuantResult] = await Promise.allSettled([
-      fetchComponents ? getUpstreamMetrics('mootdx2') : skip,
-      getStatus(),
-      getRuntimeStats(),
-      fetchComponents ? getUpstreamMetrics('thsdk') : skip,
-      fetchComponents ? getUpstreamMetrics('tdx_quant') : skip,
+      fetchComponents ? getUpstreamMetrics('mootdx2', { signal }) : skip,
+      getStatus({ signal }),
+      getRuntimeStats({ signal }),
+      // M6: 显式指定 thsdk 的 metrics 真实类型。
+      fetchComponents ? getUpstreamMetrics<ThsdkMetrics>('thsdk', { signal }) : skip,
+      fetchComponents ? getUpstreamMetrics('tdx_quant', { signal }) : skip,
     ])
 
     const sample: TrendSample = {
@@ -227,15 +235,20 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       sample.l1Rate = m.daily_l1?.hit_rate ?? null
       sample.l1Size = m.daily_l1?.size ?? null
     } else if (metricsResult.status === 'rejected') {
-      l1LoadError.value = errorMessage(metricsResult.reason, '无法加载 MooTDX2 指标')
+      // M2: 主动取消 (unmount) 不当作失败, 不污染 loadError。
+      if (!isCanceledError(metricsResult.reason)) {
+        l1LoadError.value = errorMessage(metricsResult.reason, '无法加载 MooTDX2 指标')
+      }
     }
 
     if (thsdkResult.status === 'fulfilled' && !('skipped' in thsdkResult.value)) {
-      thsdkMetrics.value = thsdkResult.value.metrics as unknown as ThsdkMetrics
+      thsdkMetrics.value = thsdkResult.value.metrics
       thsdkLoadError.value = ''
     } else if (thsdkResult.status === 'rejected') {
-      thsdkMetrics.value = null
-      thsdkLoadError.value = errorMessage(thsdkResult.reason, 'THSDK 状态不可用')
+      if (!isCanceledError(thsdkResult.reason)) {
+        thsdkMetrics.value = null
+        thsdkLoadError.value = errorMessage(thsdkResult.reason, 'THSDK 状态不可用')
+      }
     }
 
     // tdx_quant 指标: 阻塞线程池快照 (Route A: 与 mootdx2 拆开独立显示)。
@@ -243,7 +256,9 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     if (tdxQuantResult.status === 'fulfilled' && !('skipped' in tdxQuantResult.value)) {
       tdxQuantMetrics.value = tdxQuantResult.value.metrics
     } else if (tdxQuantResult.status === 'rejected') {
-      tdxQuantMetrics.value = null
+      if (!isCanceledError(tdxQuantResult.reason)) {
+        tdxQuantMetrics.value = null
+      }
     }
 
     if (statusResult.status === 'fulfilled') {
@@ -261,9 +276,10 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       sample.liveEntries = c.live_entries ?? null
       markFetched()
     } else {
-      respLoadError.value = errorMessage(statusResult.reason, '请检查网关是否运行')
-      loadError.value = respLoadError.value
-      resetFetched()
+      if (!isCanceledError(statusResult.reason)) {
+        respLoadError.value = errorMessage(statusResult.reason, '请检查网关是否运行')
+        resetFetched()
+      }
     }
 
     // runtime 源失败保留上一次数据, 不挂告警
@@ -308,7 +324,7 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     if (shouldFetchBreakdown) {
       breakdownLoading.value = true
       try {
-        const resp = await getCacheToolBreakdown()
+        const resp = await getCacheToolBreakdown(20, { signal: ac.signal })
         breakdownRows.value = resp.tools
         breakdownTotalTools.value = resp.total_tools
         breakdownFirstSucceeded = true
@@ -379,29 +395,48 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
         clearInterval(pollTimer)
         pollTimer = null
       }
+      // M2: 取消所有在途轮询 fetch, 不留 mount 后端口连接悬挂。
+      ac.abort()
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisibility)
       }
     })
   }
 
+  /** 快采专用 inFlight: 2.5s 间隔下若上一次未返回, 跳过本轮 (H2)。
+   * 与主 load 的 inFlight 独立 —— 快采不应阻塞主轮询, 主轮询也不应阻塞快采。 */
+  let fastInFlight = false
+
+  // M2: 轮询 AbortController — 组件 unmount 时一次性取消所有在途请求,
+  // 避免 setInterval 触发的请求在 unmount 后继续跑完、占后端连接。
+  const ac = new AbortController()
+
   /** 只刷新组件 metrics (管线标签快速采样用, 不拉 status/cache)。
    * mootdx2 / tdx_quant / thsdk 三源线程池快照都在这里高频更新。 */
   async function loadComponentMetrics(): Promise<void> {
-    const [mootdxResult, thsdkResult, tdxQuantResult] = await Promise.allSettled([
-      getUpstreamMetrics('mootdx2'),
-      getUpstreamMetrics('thsdk'),
-      getUpstreamMetrics('tdx_quant'),
-    ])
-    // M6: 快采偶发失败保留旧值, 不置 null 闪空 (与主 load() 的失败策略一致)。
-    if (mootdxResult.status === 'fulfilled') {
-      metrics.value = mootdxResult.value.metrics
-    }
-    if (thsdkResult.status === 'fulfilled') {
-      thsdkMetrics.value = thsdkResult.value.metrics as unknown as ThsdkMetrics
-    }
-    if (tdxQuantResult.status === 'fulfilled') {
-      tdxQuantMetrics.value = tdxQuantResult.value.metrics
+    // H2: 快采并发守卫。返回中的请求未结束则跳过本轮, 避免堆积 N 个
+    // 并发任务 + 前端 last-known 抖动。
+    if (fastInFlight) return
+    fastInFlight = true
+    try {
+      const [mootdxResult, thsdkResult, tdxQuantResult] = await Promise.allSettled([
+        getUpstreamMetrics('mootdx2', { signal: ac.signal }),
+        // M6: 显式指定 thsdk 的 metrics 真实类型, 不再需要 `as unknown as ThsdkMetrics`。
+        getUpstreamMetrics<ThsdkMetrics>('thsdk', { signal: ac.signal }),
+        getUpstreamMetrics('tdx_quant', { signal: ac.signal }),
+      ])
+      // M6: 快采偶发失败保留旧值, 不置 null 闪空 (与主 load() 的失败策略一致)。
+      if (mootdxResult.status === 'fulfilled') {
+        metrics.value = mootdxResult.value.metrics
+      }
+      if (thsdkResult.status === 'fulfilled') {
+        thsdkMetrics.value = thsdkResult.value.metrics
+      }
+      if (tdxQuantResult.status === 'fulfilled') {
+        tdxQuantMetrics.value = tdxQuantResult.value.metrics
+      }
+    } finally {
+      fastInFlight = false
     }
   }
 

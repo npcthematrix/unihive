@@ -2,7 +2,16 @@
   <div class="hitrate-card">
     <div class="hitrate-head">
       <span class="mini-label">命中率</span>
-      <span class="hitrate-value">{{ text }}</span>
+      <span class="hitrate-head-right">
+        <span class="hitrate-value">{{ text }}</span>
+        <!-- H1: 非颜色 fallback (色盲/灰度) -->
+        <span
+          v-if="tierLabel"
+          class="hitrate-tier"
+          :class="`tier-${tier}`"
+          :aria-label="`${tierLabel} (${text})`"
+        >{{ tierLabel }}</span>
+      </span>
     </div>
     <el-progress
       v-if="pct !== null"
@@ -27,11 +36,14 @@ withDefaults(
     pct: number | null
     text: string
     color?: string
+    /** H1: 文字 tier (良好/一般/较低) — 非颜色 fallback, 色盲/灰度可读 */
+    tier?: 'good' | 'mid' | 'low' | null
+    tierLabel?: string | null
     hits: number | string
     misses: number | string
     hint: string
   }>(),
-  { color: undefined },
+  { color: undefined, tier: undefined, tierLabel: null },
 )
 </script>
 
@@ -53,11 +65,31 @@ withDefaults(
   justify-content: space-between;
 }
 
+.hitrate-head-right {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .hitrate-value {
   font-size: 22px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+
+/* H1: tier 文字徽标 — 颜色与 rate 类同色, 兼顾视觉一致与非颜色 fallback */
+.hitrate-tier {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  line-height: 1.4;
+}
+
+.hitrate-tier.tier-good { color: var(--el-color-success); }
+.hitrate-tier.tier-mid  { color: var(--el-color-warning); }
+.hitrate-tier.tier-low  { color: var(--el-color-danger); }
 
 .hitrate-bar-empty {
   height: 10px;

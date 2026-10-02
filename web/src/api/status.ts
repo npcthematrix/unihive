@@ -70,7 +70,7 @@ export interface GatewayStatus {
 }
 
 /** GET /api/status — 网关/上游状态 + 缓存运行时统计。 */
-export async function getStatus(): Promise<GatewayStatus> {
-  const { data } = await http.get<GatewayStatus>('/api/status')
+export async function getStatus(options?: { signal?: AbortSignal }): Promise<GatewayStatus> {
+  const { data } = await http.get<GatewayStatus>('/api/status', options)
   return data
 }

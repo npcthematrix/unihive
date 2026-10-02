@@ -44,10 +44,11 @@ export interface UpstreamL1ResetResponse {
 /** GET /api/cache/tool-breakdown — 各工具缓存条目 Top N */
 export async function getCacheToolBreakdown(
   limit = 20,
+  options?: { signal?: AbortSignal },
 ): Promise<CacheBreakdownResponse> {
   const { data } = await http.get<CacheBreakdownResponse>(
     '/api/cache/tool-breakdown',
-    { params: { limit } },
+    { ...options, params: { limit } },
   )
   return data
 }

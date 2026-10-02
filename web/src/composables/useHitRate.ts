@@ -32,10 +32,30 @@ export function useHitRate(
   const color = computed(() => {
     const value = pct.value
     if (value === null) return undefined
-    if (value > 70) return 'var(--el-color-success)'
-    if (value > 40) return 'var(--el-color-warning)'
+    // M1: 与 CacheSummaryCard / Mootdx2L1Card 的 rate-good/mid/low 同阈值
+    // (80/50), 三卡对同一份命中率展示同一档颜色。
+    if (value >= 80) return 'var(--el-color-success)'
+    if (value >= 50) return 'var(--el-color-warning)'
     return 'var(--el-color-danger)'
   })
 
-  return { pct, text, color }
+  // H1: 命中率 tier (良好 / 一般 / 较低), 给色盲/灰度屏的非颜色 fallback。
+  const tier = computed<'good' | 'mid' | 'low' | null>(() => {
+    const value = pct.value
+    if (value === null) return null
+    if (value >= 80) return 'good'
+    if (value >= 50) return 'mid'
+    return 'low'
+  })
+
+  // H1: 徽标显示文字 (良好 / 一般 / 较低), 与 tier 同步; pct 为 null 不显示。
+  const tierLabel = computed(() => {
+    const t = tier.value
+    if (t === 'good') return '良好'
+    if (t === 'mid') return '一般'
+    if (t === 'low') return '较低'
+    return null
+  })
+
+  return { pct, text, color, tier, tierLabel }
 }
