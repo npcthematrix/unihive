@@ -57,7 +57,8 @@
           <div v-for="s in gatewaySummary" :key="s.label" class="gs-item">
             <span class="gs-label">{{ s.label }}</span>
             <span class="gs-value" :class="s.tone ? `tone-${s.tone}` : ''">
-              <span v-if="s.dot" class="gs-dot" :class="`dot-${s.tone}`" />
+              <!-- M4: 装饰点 aria-hidden -->
+              <span v-if="s.dot" class="gs-dot" :class="`dot-${s.tone}`" aria-hidden="true" />
               {{ s.value }}
             </span>
           </div>
