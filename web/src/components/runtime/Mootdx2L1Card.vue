@@ -26,6 +26,8 @@
         :pct="hr.pct.value"
         :text="hr.text.value"
         :color="hr.color.value"
+        :tier="hr.tier.value"
+        :tier-label="hr.tierLabel.value"
         :hits="dailyL1?.hits ?? '—'"
         :misses="dailyL1?.misses ?? '—'"
         :hint="hitRateHint"
@@ -33,7 +35,8 @@
 
       <MiniStat label="状态">
         <template #value>
-          <span class="status-dot" :class="statusDotClass" />
+          <!-- M4: 装饰点 aria-hidden -->
+          <span class="status-dot" :class="statusDotClass" aria-hidden="true" />
           <span :class="statusValueClass">{{ statusText }}</span>
         </template>
       </MiniStat>
@@ -54,16 +57,17 @@
     </div>
 
     <div class="trend-grid">
+      <!-- M5: 命中率统一 success 绿 (与 RespCacheCard 同), 计数类用 primary 蓝 / warning 橙 -->
       <TrendRow
         label="命中率趋势"
         :points="rateSeries"
-        color="var(--el-color-primary)"
+        color="var(--el-color-success)"
         :chart-aria-label="rateAria('L1 命中率', rateSeries)"
       />
       <TrendRow
         label="缓存 size"
         :points="sizeSeries"
-        color="var(--el-color-warning)"
+        color="var(--el-color-primary)"
         :chart-aria-label="countAria('L1 缓存条目', sizeSeries)"
       />
     </div>
@@ -309,12 +313,15 @@ function blockSub(prefix: string, stats?: L1CacheStats): string {
   font-size: 13px;
 }
 
-/* 不设 3 列断点 (同响应卡: 8 单位在 3 列下末尾缺格)。 */
-@media (max-width: 860px) {
+/* M3: 三档断点 (1024 / 768 / 560), 替代原 (860 / 560)。
+   平板横屏 768-1024 仍可读为 2 列 + 双 trend。 */
+@media (max-width: 1024px) {
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
+@media (max-width: 768px) {
   .trend-grid,
   .l1-extra-grid {
     grid-template-columns: 1fr;

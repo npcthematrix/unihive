@@ -52,6 +52,8 @@
         :pct="hr.pct.value"
         :text="hr.text.value"
         :color="hr.color.value"
+        :tier="hr.tier.value"
+        :tier-label="hr.tierLabel.value"
         :hits="hitsDisplay"
         :misses="missesDisplay"
         :hint="hitRateHint"
@@ -59,7 +61,8 @@
 
       <MiniStat label="状态">
         <template #value>
-          <span class="status-dot" :class="statusDotClass" />
+          <!-- M4: 装饰点 aria-hidden -->
+          <span class="status-dot" :class="statusDotClass" aria-hidden="true" />
           <span :class="statusValueClass">
             {{ statusText }}
           </span>
@@ -113,7 +116,7 @@
 import { computed, toRef } from 'vue'
 import type { CacheStats } from '@/api/status'
 import type { CacheToolBreakdownRow } from '@/api/cache'
-import { rateAria, countAria } from '@/utils/number'
+import { numOrDash, rateAria, countAria } from '@/utils/number'
 import { useHitRate } from '@/composables/useHitRate'
 import HitRateCard from '@/components/HitRateCard.vue'
 import MiniStat from '@/components/MiniStat.vue'
@@ -188,10 +191,6 @@ const hitRateHint = computed(() => {
     ? `共 ${total} 次请求 · 同 key 并发只计一次`
     : '网关启动后累计 (尚未请求)'
 })
-
-function numOrDash(value: number | null | undefined): number | string {
-  return value == null ? '—' : value
-}
 
 const liveEntriesText = computed(() =>
   props.cache?.enabled ? numOrDash(props.cache.live_entries) : '—',
@@ -327,13 +326,15 @@ const breakdownNote = computed(() => {
   color: var(--el-text-color-secondary);
 }
 
-/* 不设 3 列断点: 8 个网格单位在 3 列下末尾必缺一格;
-   4 列保持到 860px 直接降 2 列。 */
-@media (max-width: 860px) {
+/* M3: 三档断点 (1024 / 768 / 560), 替代原 (860 / 560)。
+   平板横屏 768-1024 仍可读为 2 列 + 双 trend。 */
+@media (max-width: 1024px) {
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
+@media (max-width: 768px) {
   .trend-grid {
     grid-template-columns: 1fr;
   }

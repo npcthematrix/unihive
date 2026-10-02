@@ -23,7 +23,8 @@
         <div class="tile-head">
           <span class="tile-title">响应缓存</span>
           <span class="tile-status">
-            <span class="status-dot" :class="respStatusDotClass" />
+            <!-- M4: 装饰点 aria-hidden, 屏读不读 "绿点"; 旁边文字给真实状态 -->
+            <span class="status-dot" :class="respStatusDotClass" aria-hidden="true" />
             <span :class="respStatusValueClass">{{ respStatusText }}</span>
           </span>
           <span class="tile-sub">SQLite · logs/cache.db</span>
@@ -38,7 +39,16 @@
           </div>
           <div class="stat-cell">
             <div class="stat-label">命中率</div>
-            <div class="stat-value" :class="respRateClass">{{ respRateText }}</div>
+            <!-- H1: 颜色 + 文字徽标双通道, 色盲/灰度仍可读 -->
+            <div class="stat-value-row">
+              <span class="stat-value" :class="respRateClass">{{ respRateText }}</span>
+              <span
+                v-if="respRateTierLabel"
+                class="rate-tier"
+                :class="respRateTierClass"
+                :aria-label="`${respRateTierLabel} (${respRateText})`"
+              >{{ respRateTierLabel }}</span>
+            </div>
             <div v-if="respHitHint" class="stat-hint">{{ respHitHint }}</div>
             <div v-else class="stat-hint">尚无请求</div>
           </div>
@@ -55,7 +65,8 @@
         <div class="tile-head">
           <span class="tile-title">MooTDX2 L1</span>
           <span class="tile-status">
-            <span class="status-dot" :class="l1StatusDotClass" />
+            <!-- M4: 装饰点 aria-hidden -->
+            <span class="status-dot" :class="l1StatusDotClass" aria-hidden="true" />
             <span :class="l1StatusValueClass">{{ l1StatusText }}</span>
           </span>
           <span class="tile-sub">进程内 · 日K / 板块扫描 / 异动扫描</span>
@@ -69,7 +80,16 @@
           </div>
           <div class="stat-cell">
             <div class="stat-label">命中率</div>
-            <div class="stat-value" :class="l1RateClass">{{ l1RateText }}</div>
+            <!-- H1: 颜色 + 文字徽标双通道 -->
+            <div class="stat-value-row">
+              <span class="stat-value" :class="l1RateClass">{{ l1RateText }}</span>
+              <span
+                v-if="l1RateTierLabel"
+                class="rate-tier"
+                :class="l1RateTierClass"
+                :aria-label="`${l1RateTierLabel} (${l1RateText})`"
+              >{{ l1RateTierLabel }}</span>
+            </div>
             <div v-if="l1HitHint" class="stat-hint">{{ l1HitHint }}</div>
             <div v-else class="stat-hint">尚无请求</div>
           </div>
@@ -88,6 +108,7 @@
 import { computed } from 'vue'
 import type { CacheStats } from '@/api/status'
 import type { UpstreamMetrics, L1CacheStats } from '@/api/upstream-metrics'
+import { numOrDash } from '@/utils/number'
 
 /**
  * 两层缓存 summary tile: 复用 useGatewayRuntime 的同一批 props 派生,
@@ -101,10 +122,6 @@ const props = defineProps<{
   breakdownTotalTools: number
   metrics: UpstreamMetrics | null
 }>()
-
-function numOrDash(value: number | null | undefined): string {
-  return value == null ? '—' : String(value)
-}
 
 // ============ 响应缓存派生 ============
 
@@ -156,6 +173,20 @@ const respRateClass = computed(() => {
   if (pct >= 80) return 'rate-good'
   if (pct >= 50) return 'rate-mid'
   return 'rate-low'
+})
+// H1: 文字 tier 徽标 (色盲/灰度 fallback)
+const respRateTierLabel = computed(() => {
+  if (respRateText.value === '—') return null
+  const pct = parseFloat(respRateText.value)
+  if (pct >= 80) return '良好'
+  if (pct >= 50) return '一般'
+  return '较低'
+})
+const respRateTierClass = computed(() => {
+  if (!respRateTierLabel.value) return ''
+  if (respRateTierLabel.value === '良好') return 'tier-good'
+  if (respRateTierLabel.value === '一般') return 'tier-mid'
+  return 'tier-low'
 })
 const respHitHint = computed(() => {
   const c = props.respCache
@@ -210,6 +241,20 @@ const l1RateClass = computed(() => {
   if (pct >= 80) return 'rate-good'
   if (pct >= 50) return 'rate-mid'
   return 'rate-low'
+})
+// H1: 文字 tier 徽标
+const l1RateTierLabel = computed(() => {
+  if (l1RateText.value === '—') return null
+  const pct = parseFloat(l1RateText.value)
+  if (pct >= 80) return '良好'
+  if (pct >= 50) return '一般'
+  return '较低'
+})
+const l1RateTierClass = computed(() => {
+  if (!l1RateTierLabel.value) return ''
+  if (l1RateTierLabel.value === '良好') return 'tier-good'
+  if (l1RateTierLabel.value === '一般') return 'tier-mid'
+  return 'tier-low'
 })
 const l1HitHint = computed(() => {
   const l1 = dailyL1.value
@@ -360,12 +405,35 @@ const l1ScanSizeText = computed<string>(() => {
 .stat-value.rate-mid { color: var(--el-color-warning); }
 .stat-value.rate-low { color: var(--el-color-danger); }
 
+/* H1: stat-value + tier 徽标同行 (避免 tier 把大字挤换行) */
+.stat-value-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rate-tier {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  line-height: 1.4;
+}
+
+.rate-tier.tier-good { color: var(--el-color-success); }
+.rate-tier.tier-mid  { color: var(--el-color-warning); }
+.rate-tier.tier-low  { color: var(--el-color-danger); }
+
 .stat-hint {
   font-size: 11px;
   color: var(--el-text-color-regular);
 }
 
-@media (max-width: 860px) {
+/* M3: 768px 中间断点替代原 860px。
+   原 860px 在平板横屏 (768-1024) 把 tile 降单列过早; 改为 768px 才降。 */
+@media (max-width: 768px) {
   .tile-grid {
     grid-template-columns: 1fr;
   }
