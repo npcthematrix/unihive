@@ -487,10 +487,6 @@ class LifecycleMixin:
         if in_flight is not None:
             in_flight.clear()
 
-        # M1 (2026-09-15 MCP 二次审视): 重置全局限流器单例，支持 stop/start 循环
-        from ..core.rate_limiter import reset_default_limiter
-        reset_default_limiter()
-
         # L1: 重置 proxy_api 模块级全局状态
         from ..utils.proxy_api import reset_proxy_api
         reset_proxy_api()

@@ -205,8 +205,8 @@ def _extract_sections(config: dict[str, Any]) -> dict[str, Any]:
         if key in ENTITY_TOP_KEYS:
             continue
         if key == "gateway":
-            # gateway 混合段: 仅剥离 bootstrap 监听键, 调参部分 (per_upstream_timeout /
-            # rate_limit ...) 入库; 剥空则该段不入库。
+            # gateway 混合段: 仅剥离 bootstrap 监听键, 调参部分 (per_upstream_timeout ...)
+            # 入库; 剥空则该段不入库。
             if isinstance(value, dict):
                 rest = {k: v for k, v in value.items() if k not in BOOTSTRAP_GATEWAY_KEYS}
                 if rest:

@@ -277,8 +277,8 @@ class ConfigUpgradeMixin:
             switch_runtime_locked(
                 self, candidate, candidate_specs, candidate_hidden
             )
-            # gateway 调参 (per_upstream_timeout / rate_limit) 也要热生效:
-            # 旧链路换了 config 却不重跑 _apply_gateway_tuning, 改超时/限流
+            # gateway 调参 (per_upstream_timeout) 也要热生效:
+            # 旧链路换了 config 却不重跑 _apply_gateway_tuning, 改超时
             # 要重启才生效, 与其 docstring 矛盾。回滚路径同样重跑一次复原。
             self._apply_gateway_tuning()
 
@@ -506,5 +506,5 @@ class ConfigUpgradeMixin:
                 self._published_tools.discard(name)
 
         switch_runtime_locked(self, old_config, old_specs, old_hidden)
-        # 复原 gateway 调参 (per_upstream_timeout / rate_limit)。
+        # 复原 gateway 调参 (per_upstream_timeout)。
         self._apply_gateway_tuning()

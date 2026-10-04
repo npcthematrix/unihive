@@ -1,31 +1,49 @@
-<!-- UniHive favicon (浅底版)。几何与 web/src/assets/unihive-mark-light.svg 一致, 改一处记得同步。 -->
+<!-- UniHive favicon: 与 web/src/assets/unihive-mark-light.svg 同几何 (纯蜂巢+6入1汇聚)。
+  改此处同步 static/console/favicon.svg / icon-192 / icon-512 / mark-light/dark / wordmark。 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="UniHive">
   <title>UniHive</title>
   <defs>
-    <linearGradient id="uh-hex" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4d94ff"/>
-      <stop offset="0.55" stop-color="#1a6ff5"/>
-      <stop offset="1" stop-color="#0a4fc4"/>
+    <linearGradient id="uh-stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e3a8c"/>
+      <stop offset="0.6" stop-color="#0d9488"/>
+      <stop offset="1" stop-color="#14b8a6"/>
     </linearGradient>
-    <linearGradient id="uh-red" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f5564f"/>
-      <stop offset="1" stop-color="#cf1f1f"/>
-    </linearGradient>
+    <radialGradient id="uh-node" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="0.55" stop-color="#14b8a6"/>
+      <stop offset="1" stop-color="#0e3a8c"/>
+    </radialGradient>
+    <radialGradient id="uh-glass" cx="0.3" cy="0.3" r="0.35">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <!-- hive cell: six-source aggregation — bare mark, no app tile -->
+
+  <!-- 蜂巢外轮廓 (六边形, 平顶朝右) — 渐变描边 -->
   <polygon
-    points="57,32 44.5,54.2 19.5,54.2 7,32 19.5,9.8 44.5,9.8"
-    fill="#0d6efd" fill-opacity="0.07"
-    stroke="url(#uh-hex)" stroke-width="5"
+    points="58.67,32 45.33,11.6 18.67,11.6 5.33,32 18.67,52.4 45.33,52.4"
+    fill="#ffffff" fill-opacity="0.04"
+    stroke="url(#uh-stroke)" stroke-width="3.3"
     stroke-linejoin="round"/>
-  <!-- three ascending candlesticks: 红涨绿跌 (A 股配色), 中间红柱为视觉焦点
-       线 bbox 宽为 0, 竖渐变不渲染 (SVG 规范坑) —— 柱体用渐变, 影线用实色 -->
-  <g stroke-linecap="round">
-    <line x1="24.5" y1="25.5" x2="24.5" y2="44.5" stroke="#2b9e5f" stroke-width="2.8"/>
-    <rect x="21.7" y="30.5" width="5.6" height="9" rx="1.4" fill="#2b9e5f"/>
-    <line x1="32" y1="21.5" x2="32" y2="45.5" stroke="#cf1f1f" stroke-width="3"/>
-    <rect x="29.3" y="26" width="5.6" height="13.5" rx="1.4" fill="url(#uh-red)"/>
-    <line x1="39.5" y1="25.5" x2="39.5" y2="43" stroke="#147a44" stroke-width="2.8"/>
-    <rect x="36.7" y="29.5" width="5.6" height="10" rx="1.4" fill="#147a44"/>
+
+  <!-- 6 条入线 (60° 间隔), 从六边形内角缩进 → 中心节点边缘 -->
+  <g stroke="url(#uh-stroke)" stroke-width="1.7" stroke-linecap="round" fill="none" opacity="0.78">
+    <line x1="50.67" y1="32" x2="40" y2="32"/>    <!-- 右 -->
+    <line x1="41.33" y1="15.83" x2="36" y2="25.07"/>  <!-- 右上 -->
+    <line x1="22.67" y1="15.83" x2="28" y2="25.07"/>  <!-- 左上 -->
+    <line x1="13.33" y1="32" x2="24" y2="32"/>    <!-- 左 -->
+    <line x1="22.67" y1="48.17" x2="28" y2="38.93"/>  <!-- 左下 -->
+    <line x1="41.33" y1="48.17" x2="36" y2="38.93"/>  <!-- 右下 -->
   </g>
+
+  <!-- 中心节点圆环 (径向渐变填色) -->
+  <circle cx="32" cy="32" r="8" fill="url(#uh-node)"/>
+
+  <!-- 节点内嵌微缩蜂巢描边 -->
+  <polygon
+    points="32,26.67 37.07,29.67 37.07,35.33 32,38.67 26.93,35.33 26.93,29.67"
+    fill="none" stroke="#ffffff" stroke-width="0.8" stroke-opacity="0.85" stroke-linejoin="round"/>
+
+  <!-- 玻璃高光 (左上偏淡) -->
+  <circle cx="32" cy="32" r="8" fill="url(#uh-glass)"/>
 </svg>

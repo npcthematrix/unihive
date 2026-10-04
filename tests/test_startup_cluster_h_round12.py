@@ -36,7 +36,6 @@ from src.unihive.core.blocking_pool import (
     get_tdx_quant_executor,
     shutdown_mootdx2_executor,
 )
-from src.unihive.core.rate_limiter import reset_default_limiter
 from src.unihive.gateway_server import GatewayServer
 from src.unihive.models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
 
@@ -499,35 +498,30 @@ class TestYamlModeTuningReplay:
     async def test_yaml_load_skips_replay_and_init_applies_baseline(
         self, gateway_server_minimal
     ):
-        reset_default_limiter()
         server = gateway_server_minimal
         server._db_mode = False
         # 先按基线调一次 _apply_gateway_tuning, 让 fixture 状态与生产 __init__
-        # 走 yaml 模式后一致 (DEFAULT_REQUEST_TIMEOUT, 空 limiter)。
+        # 走 yaml 模式后一致 (DEFAULT_REQUEST_TIMEOUT)。
         server.config = {"gateway": {}}
         server._apply_gateway_tuning()
         assert server._per_upstream_timeout == 30.0
 
         # 模拟用户装了非基线 yaml 调参 → 再次调 (与 __init__ 单一来源同效)。
+        # 2026-10-05 移除 rate_limit 段: gateway 不再读/写 limiter 配置。
         server.config = {
             "gateway": {
                 "per_upstream_timeout": 12.5,
-                "rate_limit": {
-                    "fuyao_a": {"rate": 5.0, "capacity": 10.0},
-                },
             }
         }
         # yaml 逃生模式不再在 _load_db_config 内重放: 装配完成后调参应仍是
         # fixture 默认基线, 不被 yaml 配置文件覆盖。
         await server._load_db_config()
         assert server._per_upstream_timeout == 30.0
-        assert server.limiter._configs.get("fuyao_a") is None
 
         # __init__ 单一基线: 手动跑一次 _apply_gateway_tuning, 验证 yaml 配置
-        # 真能被装入 (与原 M1 invariant 同等覆盖)。
+        # 真能被装入。
         server._apply_gateway_tuning()
         assert server._per_upstream_timeout == 12.5
-        assert server.limiter._configs.get("fuyao_a") == (5.0, 10.0)
 
 
 # ---------------------------------------------------------------------------

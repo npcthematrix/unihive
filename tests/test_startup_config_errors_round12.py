@@ -2,13 +2,17 @@
 
 - 未知 upstream.type 以前静默退化成空 command 的 stdio 客户端, 延迟到
   调用时才以费解错误爆炸 → 构造期 ValueError + 合法类型表;
-- cache.max_entries / operation_timeout / gateway.rate_limit 数值强转
+- cache.max_entries / operation_timeout / gateway.per_upstream_timeout 数值强转
   以前裸 int()/float(), 坏值抛无名 ValueError/TypeError → 助手函数带
   字段路径;
 - fuyao_cache.tools 非数值 (YAML 模板可能绕过 PUT pydantic 门) →
   fuyao_ttl_for 带字段名 ValueError, _execute_cached 降级不缓存;
 - main() 捕 yaml.YAMLError / KeyError → 干净消息 + 退出码 2 (配置错),
   不裸奔 traceback。
+
+2026-10-05: 移除 gateway.rate_limit 段 (rate_limiter 整套下线), 相关 bad-value
+用例随之删除; 余下用例覆盖未知 upstream.type / coerce_* / fuyao_cache /
+main exit code 四类。
 """
 from __future__ import annotations
 
@@ -71,7 +75,8 @@ class TestCoerceNumericFields:
 
 
 # ---------------------------------------------------------------------------
-# _apply_gateway_tuning: rate_limit 坏值带字段名
+# _apply_gateway_tuning: per_upstream_timeout 坏值带字段名
+# 2026-10-05: rate_limit 段已移除, 仅保留 per_upstream_timeout 用例。
 # ---------------------------------------------------------------------------
 
 
@@ -80,30 +85,6 @@ class TestGatewayTuningValidation:
         server = gateway_server_minimal
         server.config = {"gateway": gateway_cfg}
         return server
-
-    def test_bad_rate_named(self, gateway_server_minimal):
-        server = self._server(
-            {"rate_limit": {"fuyao_a": {"rate": "fast", "capacity": 40}}},
-            gateway_server_minimal,
-        )
-        with pytest.raises(ValueError, match=r"gateway\.rate_limit\.fuyao_a\.rate"):
-            server._apply_gateway_tuning()
-
-    def test_bad_capacity_named(self, gateway_server_minimal):
-        server = self._server(
-            {"rate_limit": {"fuyao_a": {"rate": 20, "capacity": -1}}},
-            gateway_server_minimal,
-        )
-        with pytest.raises(ValueError, match=r"gateway\.rate_limit\.fuyao_a\.capacity"):
-            server._apply_gateway_tuning()
-
-    def test_bad_shorthand_named(self, gateway_server_minimal):
-        server = self._server(
-            {"rate_limit": {"fuyao_a": "twenty"}},
-            gateway_server_minimal,
-        )
-        with pytest.raises(ValueError, match=r"gateway\.rate_limit\.fuyao_a"):
-            server._apply_gateway_tuning()
 
     def test_per_upstream_timeout_validated(self, gateway_server_minimal):
         server = self._server({"per_upstream_timeout": "soon"}, gateway_server_minimal)

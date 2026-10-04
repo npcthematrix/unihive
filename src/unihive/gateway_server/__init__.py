@@ -219,10 +219,13 @@ class GatewayServer(
         self._apply_gateway_tuning()
 
     def _apply_gateway_tuning(self) -> None:
-        """从 self.config 应用 gateway 调参 (per_upstream_timeout + QPS)。
+        """从 self.config 应用 gateway 调参 (per_upstream_timeout)。
 
         __init__ 按 YAML 基线跑一次; db 模式下库内实体装配完成后再跑一次,
-        让控制台对 gateway 调参段的修改无需重启即可被 router/limiter 读到。
+        让控制台对 gateway 调参段的修改无需重启即可被 router 读到。
+
+        2026-10-05 去掉 rate_limiter 整段: 远程上游 (含 fuyao 系列) 也不限流,
+        不再读 gateway.rate_limit / 不持有 limiter。
         """
         gateway_cfg = self.config.get("gateway", {})
         # Round-12 簇E: 裸强转坏值以前抛无名错误, coerce_* 助手带点路径
@@ -233,39 +236,10 @@ class GatewayServer(
             minimum=0.0,
             exclusive_min=True,
         )
-        from ..core.rate_limiter import get_default_limiter
-        # limiter 是模块单例 (Router 也直接调 get_default_limiter()), 同时存 self.limiter
-        # 字段 (L1 回滚: 测试断言 server.limiter is not None, 字段删除会带来 churn)。
-        limiter = self.limiter = get_default_limiter()
-        # 清掉旧 per-key: 本次未列出的条目回到默认兜底 (热升级/热编辑重跑关键)
-        limiter.reset_configurations()
-        rate_cfg = gateway_cfg.get("rate_limit", {})
-        for upstream_name, params in rate_cfg.items():
-            field = f"gateway.rate_limit.{upstream_name}"
-            if isinstance(params, dict):
-                rate = coerce_float_field(
-                    params.get("rate", 20.0), f"{field}.rate",
-                    minimum=0.0, exclusive_min=True,
-                )
-                capacity = coerce_float_field(
-                    params.get("capacity", 40.0), f"{field}.capacity",
-                    minimum=0.0, exclusive_min=True,
-                )
-                limiter.configure(upstream_name, rate=rate, capacity=capacity)
-            elif isinstance(params, (int, float)) and not isinstance(params, bool):
-                rate = coerce_float_field(
-                    params, field, minimum=0.0, exclusive_min=True,
-                )
-                limiter.configure(upstream_name, rate=rate)
-            else:
-                raise ValueError(
-                    f"{field} 必须是正数或含 rate/capacity 的 object, "
-                    f"got {params!r} ({type(params).__name__})"
-                )
 
         # per-source 池容量 + Reader 闸门 (cfg > env > default, 启动期一次性)。
-        # 抽成独立方法让 _apply_gateway_tuning 专管 rate_limit + limiter,
-        # 池配置自洽便于 db 模式装配后单独重放。
+        # 抽成独立方法让 _apply_gateway_tuning 专管 timeout, 池配置自洽
+        # 便于 db 模式装配后单独重放。
         self._apply_pool_config()
 
     def _apply_pool_config(self) -> None:
@@ -294,8 +268,8 @@ async def async_main(transport: str = "stdio", host: str | None = None, port: in
                 host, port,
             )
     server = GatewayServer(config_path=cfg_path)
-    # 启动横幅直接写 stderr 而非 logger.info：configure_logging 默认级别
-    # WARNING，走 logger 会被静默吞掉；横幅是每次启动都应可见的一次性信息
+    # 启动信息直接写 stderr 而非 logger.info：configure_logging 默认级别
+    # WARNING，走 logger 会被静默吞掉；启动信息每次都应可见
     # (stdio 模式 stdout 留给 JSON-RPC，stderr 不受影响)。
     print(
         f"unihive starting: transport={transport} config={cfg_path} "
@@ -303,6 +277,7 @@ async def async_main(transport: str = "stdio", host: str | None = None, port: in
         file=sys.stderr,
         flush=True,
     )
+
     if transport == "stdio":
         await server.start()
     elif transport == "http":
@@ -311,7 +286,7 @@ async def async_main(transport: str = "stdio", host: str | None = None, port: in
         raise ValueError(f"Unknown transport: {transport}")
 
 
-def _build_arg_parser() -> "argparse.ArgumentParser":
+def main():
     parser = argparse.ArgumentParser(description="UniHive MCP Gateway")
     parser.add_argument(
         "--transport", choices=["stdio", "http"], default="http",
@@ -323,11 +298,6 @@ def _build_arg_parser() -> "argparse.ArgumentParser":
         "--config", default=None,
         help="Path to upstreams.yaml (default: config/upstreams.yaml)",
     )
-    return parser
-
-
-def main():
-    parser = _build_arg_parser()
     args = parser.parse_args()
     try:
         asyncio.run(async_main(
@@ -351,9 +321,6 @@ def main():
             file=sys.stderr,
         )
         sys.exit(1)
-    except KeyboardInterrupt:
-        # stdio 模式父进程关停时正常路径, 不打 traceback
-        sys.exit(0)
 
 
 if __name__ == "__main__":

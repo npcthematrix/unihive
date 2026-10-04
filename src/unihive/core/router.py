@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 from ..api.upstream_client import ErrorKind, ToolResult, UpstreamClient
 from .proxy_adapter import Mootdx2ToTdxQuantAdapter, ProxyAdapterError
 from .proxy_settings import ProxySettings
-from .rate_limiter import AsyncTokenBucketLimiter, get_default_limiter
 
 if TYPE_CHECKING:
     from ..api.fuyao_client import FuyaoClient
@@ -20,23 +19,6 @@ if TYPE_CHECKING:
     from ..api.tdx_quant_client import TdxQuantClient
 
 logger = logging.getLogger(__name__)
-
-
-# 限流白名单: 只对**有上游配额**的远程 HTTP upstream 生效, 避免触发
-# 429/QPD。fail-closed: 不在白名单的全部默认豁免 (本地 + 未来新增的本地
-# upstream 自动跳过)。新加远程 upstream 必须显式列入才会被限流。
-#
-# 历史背景: 早期实现对**所有** upstream 无差别走 limiter, 本意是兜底
-# (默认 20 QPS / 桶 40 对本地上游"无害"), 但实测偶发会让本地的
-# mootdx2 等被误踢 (2026-10-04 get_daily_local 4-in-22ms 全失败事件),
-# 因为本地工具之间的突发会瞬时打空共享桶。结构性修复: 本地根本不参与
-# 令牌桶算法, 限流器只保护真正会触发上游 429 的远程接口。
-_REQUIRES_RATE_LIMIT: frozenset[str] = frozenset({
-    "fuyao_ashare",
-    "fuyao_index",
-    "fuyao_meta",
-    "fuyao_fund",
-})
 
 
 @dataclass
@@ -113,7 +95,6 @@ class Router:
         routing_config: dict[str, dict],
         upstream_tool_mapping: dict[str, dict[str, str]] | None = None,
         per_upstream_timeout: float | None = None,
-        limiter: AsyncTokenBucketLimiter | None = None,
         proxy_settings: ProxySettings | None = None,
         tool_specs: list[dict] | None = None,
     ):
@@ -136,10 +117,6 @@ class Router:
             if per_upstream_timeout is not None
             else self.DEFAULT_PER_UPSTREAM_TIMEOUT
         )
-        # 限流器：保护 fuyao/thsdk 等互联网上游，避免触发上游 429/QPD 限制。
-        # 不传则用进程默认单例 (20 QPS / 桶 40)。本地上游 (mootdx2/tdx_quant/
-        # omni) 不需要限流，但走同一接口也无害（桶大从不阻塞）。
-        self.limiter = limiter or get_default_limiter()
         # Proxy: when enabled, route 7 行情类 mootdx2 tools through tdx_quant
         # first, falling back to mootdx2 on tdx failure. Optional — when not
         # provided, proxy is disabled and routing behavior is unchanged.
@@ -355,23 +332,6 @@ class Router:
                     f"[{gateway_tool}] {source} still starting, trying next..."
                 )
                 continue
-
-            # 限流: 只对需要保护上游配额的白名单 upstream 生效
-            # (fuyao 系列)。本地上游 (mootdx2/tdx_quant/omni/thsdk/
-            # ths_local_gateway) 默认豁免, 不进令牌桶, 杜绝偶发误伤。
-            # wait=False: 桶空直接跳过该 upstream 试下一个。
-            if source in _REQUIRES_RATE_LIMIT:
-                if not await self.limiter.acquire(source, wait=False):
-                    hop = RouteHop(
-                        source=source,
-                        tool_name=tool_name,
-                        duration_ms=0,
-                        success=False,
-                        error=f"rate limited (qps cap reached for {source})"
-                    )
-                    hops.append(hop)
-                    logger.info(f"[{gateway_tool}] {source} rate limited, trying next...")
-                    continue
 
             # 调用上游
             # H2 (2026-09-08 6th-round audit): wrap call_tool in

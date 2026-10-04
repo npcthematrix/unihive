@@ -1,8 +1,9 @@
 <template>
   <article class="onboarding">
-    <!-- 顶部卡片: 跳转 MCP APIs -->
+    <!-- 顶部卡片: 跳转 MCP APIs / 网关运行监控 -->
     <div class="onboarding-toolbar">
-      <el-button type="primary" @click="jumpToInterfaces">→ MCP APIs</el-button>
+      <el-button @click="jumpToInterfaces">→ MCP APIs</el-button>
+      <el-button @click="jumpToMonitor">→ 网关运行监控</el-button>
     </div>
 
     <!-- 锚点导航 (随滚动自动高亮) -->
@@ -22,78 +23,57 @@
       <p>UniHive MCP 是一个统一的金融数据网关, 把通达信、同花顺等数据源聚合在同一个 MCP 接口后面。</p>
       <h4>1.1 启动网关</h4>
       <p>网关默认以 <strong>HTTP 模式</strong>启动 (推荐), 同时也支持 STDIO 模式。在项目根目录下运行:</p>
-      <div class="onboarding-toolbox">
-        <el-button @click="copyCommand(START_HTTP, '已复制 HTTP 启动命令')">复制 HTTP 启动命令</el-button>
-        <el-button @click="copyCommand(START_STDIO, '已复制 STDIO 启动命令')">复制 STDIO 启动命令</el-button>
-      </div>
       <CodeBlock :code="START_HTTP" />
       <p>启动后, 控制台和 HTTP 网关共用端口 <code>http://127.0.0.1:18080</code> (MCP 接口在 <code>/mcp</code> 子路径下)。</p>
       <h4>1.2 配置管理</h4>
       <p>日常配置在控制台<strong>「配置信息」</strong>页维护, 事实源是配置库 <code>data/config.db</code> — 上游启停、工具契约、FUYAO TTL 等改动<strong>热生效, 无需重启</strong>。空库首次启动时自动从出厂 YAML 模板 (<code>config/upstreams.yaml</code> + <code>config/tools_*.yaml</code>) seed; 监听端口、控制台账号等 bootstrap 配置仍在 <code>config/config.yaml</code>。</p>
     </section>
 
-    <!-- 2. 接入方式 -->
+    <!-- 2. 数据源与路由 -->
     <section :id="SECTIONS[1].id" class="onboarding-section">
       <h3>{{ SECTIONS[1].title }}</h3>
-      <h4>2.1 HTTP 模式 (推荐)</h4>
-      <p>网关以 <strong>Streamable HTTP</strong> 模式对外提供 MCP 接口, 监听 <code>http://127.0.0.1:18080/mcp</code>。运行 <code>.\scripts\start_gateway.ps1</code> 会同时启动控制台和 HTTP 网关。</p>
-      <p><strong>Claude Desktop / Cursor 配置:</strong></p>
-      <CodeBlock :code="HTTP_CONFIG_JSON" />
-      <p><strong>Python SDK 示例:</strong></p>
-      <CodeBlock :code="HTTP_PY_SDK" />
-      <h4>2.2 STDIO 模式 (备选)</h4>
-      <p>用于不支持 HTTP MCP 的旧客户端, 或本地脚本场景。需要单独启动 gateway 进程:</p>
-      <CodeBlock :code="STDIO_CONFIG_JSON" />
-      <p>或命令行单独启动 STDIO 模式:</p>
-      <CodeBlock :code="START_STDIO" />
+      <p>网关背后是 <strong>5 套上游</strong> (合计 <strong>{{ toolCountText }}</strong> 个 MCP 工具), 按工具路由优先级链分发, 失败自动降级:</p>
+      <ul>
+        <li><strong>mootdx2</strong>: 通达信本地 TCP — 行情 / K 线 / 板块 (含离线指数 / ETF)</li>
+        <li><strong>tdx_quant</strong>: 通达信量化终端 — 行情 / 板块 / 交易日 / 财务 / 公式 / 预警</li>
+        <li><strong>fuyao</strong>: 同花顺 aicubes.cn — A 股 / 指数 / 基金 (需 internet)</li>
+        <li><strong>omni</strong>: OMNIDATA 本地 SQLite — 行业/概念/地域/风格板块 (THS/TDX 双源, 需先 sync <code>board.db</code>)</li>
+        <li><strong>ths_local</strong>: FQGate 本地网关 (17281) — 行情 / K 线 / 资讯 / wencai_nlp / IPO / 期权</li>
+      </ul>
+      <h4>2.1 路由优先级</h4>
+      <p>每个 gateway 工具可在 <code>config/upstreams.yaml</code> 的 <code>routing</code> 段配置<strong>降级链</strong>: 上游 A 失败 → 自动试 B → 一直到最后。控制台「配置信息 → 工具详情」可查看和热编辑每条链。</p>
+      <h4>2.2 缓存策略</h4>
+      <p>按 <code>cache_ttl_key</code> 区分 TTL 档 (realtime_quote / historical / fundamentals / index_data / fund_data / ...), <strong>时段感知</strong>: 短档在交易时段刷新, 非交易时段自动缓存到下一变化边界 (9:30 开盘 / 13:00 午后开盘 / 收盘后到次日零点)。本地端 (mootdx2 / tdx_quant / thsdk) 完全不缓存 (混合链含 fuyao 时远程响应仍缓存)。</p>
     </section>
 
     <!-- 3. MCP APIs -->
     <section :id="SECTIONS[2].id" class="onboarding-section">
       <h3>{{ SECTIONS[2].title }}</h3>
-      <p>当前网关对外暴露约 <strong>290</strong> 个 MCP 接口 (5 套上游, 精确数量以 <strong>"MCP APIs"</strong> 标签页运行时列表为准), 按上游自动分组、路由与缓存。完整列表 (含每个 tool 的描述、参数、缓存策略) 都在该标签页。</p>
+      <p>当前网关对外暴露 <strong>{{ toolCountText }}</strong> 个 MCP 工具 (5 套上游, 精确数量以 <strong>"MCP APIs"</strong> 标签页运行时列表为准), 按上游自动分组、路由与缓存。完整列表 (含每个 tool 的描述、参数、缓存策略) 都在该标签页。</p>
     </section>
 
-    <!-- 4. 常用示例 -->
+    <!-- 4. 故障排查 -->
     <section :id="SECTIONS[3].id" class="onboarding-section">
       <h3>{{ SECTIONS[3].title }}</h3>
-      <h4>4.1 Python SDK (推荐)</h4>
-      <p>通过 <a href="https://github.com/jlowin/fastmcp" target="_blank" rel="noopener">FastMCP</a> 客户端连接 HTTP 网关 (默认 <code>http://127.0.0.1:18080/mcp</code>)。所有 tool 名、参数和返回结构以 <strong>"MCP APIs"</strong> 标签页为准。</p>
-      <CodeBlock :code="EXAMPLE_PY_SDK" />
-      <h4>4.2 日 K 线 (含日期范围)</h4>
-      <CodeBlock :code="EXAMPLE_KLINE" />
-      <h4>4.3 搜索股票</h4>
-      <CodeBlock :code="EXAMPLE_SEARCH" />
-      <div class="onboarding-section-meta">
-        <strong>提示:</strong> 如果你的客户端只支持 stdio, 启动 STDIO 模式:
-        <code>python -m src.unihive.gateway_server --transport stdio</code>。
-        调试可用 MCP Inspector (<code>npx -y @modelcontextprotocol/inspector</code>), Python 可用官方 SDK。
-        Windows 下 <code>cwd</code> 用项目绝对路径。
-      </div>
-    </section>
-
-    <!-- 5. 故障排查 -->
-    <section :id="SECTIONS[4].id" class="onboarding-section">
-      <h3>{{ SECTIONS[4].title }}</h3>
-      <h4>5.1 连接失败</h4>
+      <h4>4.1 连接失败</h4>
       <ul>
         <li>检查网关是否已启动: 访问 <code>http://127.0.0.1:18080</code></li>
         <li>检查客户端配置中的 <code>cwd</code> 路径是否正确</li>
         <li>Windows 下确认 Python 已加入 PATH</li>
       </ul>
-      <h4>5.2 接口返回错误</h4>
+      <h4>4.2 接口返回错误</h4>
       <ul>
         <li>查看控制台「网关运行监控 → 上游总览」, 确认对应上游是否在线</li>
         <li>查看返回的 <code>last_error</code> 字段</li>
         <li>对应上游若被禁用, 可在控制台"配置信息 → 上游"标签页直接热切换启用 (实时生效并持久化到配置库 <code>data/config.db</code>), 无需重启</li>
       </ul>
-      <h4>5.3 参数错误</h4>
+      <h4>4.3 参数错误</h4>
       <ul>
         <li>股票代码由网关自动标准化 (<code>000001</code>、<code>sh600519</code>、<code>600519.SH</code>、<code>sz000001</code> 都能识别)</li>
         <li>日期统一使用 <code>YYYYMMDD</code> (如 <code>20260301</code>)</li>
         <li>具体参数以 <strong>"MCP APIs"</strong> 标签页每个 tool 行的"详情"展开为准</li>
       </ul>
-      <h4>5.4 反馈渠道</h4>
+      <h4>4.4 反馈渠道</h4>
       <p>遇到问题请提交 Issue 到
         <a href="https://github.com/unihive/unihive" target="_blank" rel="noopener">github.com/unihive/unihive</a>,
         并附上控制台截图与接口返回内容。点击 <strong>"MCP APIs"</strong> → 对应 tool 行 → 详情按钮即可拿到完整 tool 名与参数。</p>
@@ -102,11 +82,14 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { copyText } from '@/utils/clipboard'
 import CodeBlock from './CodeBlock.vue'
+import { useToolCount } from '@/composables/useToolCount'
+import { useScrollSpy } from '@/composables/useScrollSpy'
+
+const router = useRouter()
+const { toolCount } = useToolCount()
 
 interface SectionDef {
   id: string
@@ -115,131 +98,28 @@ interface SectionDef {
 
 const SECTIONS: readonly SectionDef[] = [
   { id: 'sec-quickstart', title: '快速开始' },
-  { id: 'sec-integration', title: '接入方式' },
+  { id: 'sec-architecture', title: '数据源与路由' },
   { id: 'sec-interfaces', title: 'MCP APIs' },
-  { id: 'sec-examples', title: '常用示例' },
   { id: 'sec-troubleshoot', title: '故障排查' },
 ] as const
 
-const router = useRouter()
-const activeId = ref<string>(SECTIONS[0].id)
+const { activeId, scrollTo } = useScrollSpy(SECTIONS)
 
 const START_HTTP = '.\\scripts\\start_gateway.ps1'
-const START_STDIO = 'python -m src.unihive.gateway_server --transport stdio'
 
-const HTTP_CONFIG_JSON = `{
-  "mcpServers": {
-    "unihive": {
-      "url": "http://127.0.0.1:18080/mcp"
-    }
-  }
-}`
-
-const HTTP_PY_SDK = `import asyncio
-from fastmcp.client import Client
-
-async def main():
-    async with Client("http://127.0.0.1:18080/mcp") as client:
-        tools = await client.list_tools()
-        result = await client.call_tool("get_realtime_quote", {"symbol": "600000"})
-        print(result.data)
-
-asyncio.run(main())`
-
-const STDIO_CONFIG_JSON = `{
-  "mcpServers": {
-    "unihive": {
-      "command": "python",
-      "args": ["-m", "src.unihive.gateway_server", "--transport", "stdio"],
-      "cwd": "D:/fintech_workspace/unihive"
-    }
-  }
-}`
-
-const EXAMPLE_PY_SDK = `import asyncio
-from fastmcp.client import Client
-
-GATEWAY_URL = "http://127.0.0.1:18080/mcp"
-
-async def main():
-    async with Client(GATEWAY_URL) as client:
-        # 1) 列工具名
-        tools = await client.list_tools()
-        print("available tools:", [t.name for t in tools])
-
-        # 2) 调用实时行情 (任意上游的 tool 都能这样调)
-        quote = await client.call_tool(
-            "a_share_prices_snapshot",
-            {"thscodes": "600519.SH"}
-        )
-        print(quote.data)
-
-asyncio.run(main())`
-
-const EXAMPLE_KLINE = `bar = await client.call_tool(
-    "a_share_prices_historical",
-    {"thscode": "600519.SH", "start_date": "2026-01-01", "end_date": "2026-03-01"}
+/** 工具数显示: 拿到用数字, 未拿到给"约 N"兜底 (CLAUDE.md 当前实测值) */
+const TOOL_COUNT_FALLBACK = 302
+const toolCountText = computed(() =>
+  toolCount.value == null ? `约 ${TOOL_COUNT_FALLBACK}` : `${toolCount.value}`,
 )
-print(bar.data)`
-
-const EXAMPLE_SEARCH = `match = await client.call_tool(
-    "search_stock_local",
-    {"keyword": "茅台"}
-)
-print(match.data)`
-
-async function copyCommand(text: string, successMsg: string) {
-  try {
-    await copyText(text, '')
-    ElMessage.success(successMsg)
-  } catch {
-    ElMessage.error('复制失败, 请手动复制')
-  }
-}
 
 function jumpToInterfaces() {
   void router.push({ name: 'interfaces' })
 }
 
-function scrollTo(id: string) {
-  const el = document.getElementById(id)
-  if (!el) return
-  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  activeId.value = id
+function jumpToMonitor() {
+  void router.push({ name: 'gateway-monitor', query: { tab: 'overview' } })
 }
-
-// ===== scroll-spy: 跟随滚动自动高亮 =====
-let observer: IntersectionObserver | null = null
-
-function setupObserver() {
-  const sections = SECTIONS
-    .map((s) => document.getElementById(s.id))
-    .filter((el): el is HTMLElement => Boolean(el))
-  if (sections.length === 0) return
-
-  observer = new IntersectionObserver(
-    (entries) => {
-      // 取第一个仍可见的 (rootMargin 让顶部 20% 视口内才算)
-      const visible = entries
-        .filter((e) => e.isIntersecting)
-        .sort((a, b) => a.target.getBoundingClientRect().top - b.target.getBoundingClientRect().top)
-      if (visible.length > 0) {
-        activeId.value = visible[0].target.id
-      }
-    },
-    { rootMargin: '-20% 0px -70% 0px', threshold: 0 },
-  )
-  sections.forEach((s) => observer!.observe(s))
-}
-
-onMounted(() => {
-  setupObserver()
-})
-
-onBeforeUnmount(() => {
-  observer?.disconnect()
-  observer = null
-})
 </script>
 
 <style scoped>
@@ -253,6 +133,7 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .onboarding-nav {

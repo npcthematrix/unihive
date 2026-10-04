@@ -29,6 +29,7 @@ from ..storage.config_store import (
     RevisionConflict as _StoreRevisionConflict,
     validate_path as _validate_overlay_path,
 )
+from ..api.upstream_client import UpstreamStatus
 
 logger = logging.getLogger(__name__)
 
@@ -1095,10 +1096,21 @@ def get_upstream_status() -> dict:
             }
         # 2026-09-17: 覆盖运行时 client 状态 (mootdx2/tdx_quant 等非 HTTP 上游)
         client = _get_upstream_client(name)
+        # 刷新时对本地客户端做端口实时检测，避免状态滞后最多 60 秒
+        if client is not None and hasattr(client, "_probe_port_sync"):
+            try:
+                port_reachable = client._probe_port_sync()
+                if not port_reachable:
+                    # 端口不可达，强制更新状态为 offline
+                    if hasattr(client, "_status"):
+                        client._status = UpstreamStatus.UNAVAILABLE
+            except Exception:
+                pass  # 检测失败时跳过，不影响原有状态逻辑
         if client is not None and hasattr(client, "is_available"):
             # 读真实状态枚举而非 is_available 二值折叠:
             # tdx_quant 的 is_available 对 DEGRADED 也返回 True, 旧逻辑会把
             # 「终端在但 TQ 接口未激活」的降级态误报成 online。
+            client_status = getattr(client, "status", None)
             info["status"] = _client_status_bucket(client)
         upstreams_status[name] = info
         summary["total"] += 1

@@ -1,6 +1,6 @@
 <!--
-  PWA icon 192x192: 同 favicon 几何 (蜂巢 + 6 入 1 汇聚), 放大约 3x。
-  改此处同步 512/maskable/favicon。
+  PWA icon 192x192: 与 web/src/assets/unihive-mark-light.svg 同几何 (纯蜂巢+6入1汇聚)。
+  改此处同步 favicon / icon-512 / mark-light/dark / wordmark。
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192" role="img" aria-label="UniHive">
   <title>UniHive</title>
@@ -24,9 +24,14 @@
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
   </defs>
+  <!-- 深色背景 -->
   <rect width="192" height="192" rx="36" fill="url(#pwa-bg)"/>
+
+  <!-- 蜂巢外轮廓 (六边形, 平顶朝右) — 渐变描边 -->
   <polygon points="176,96 136,34.8 56,34.8 16,96 56,157.2 136,157.2"
-    fill="none" stroke="url(#pwa-stroke)" stroke-width="9" stroke-linejoin="round"/>
+    fill="none" stroke="url(#pwa-stroke)" stroke-width="10" stroke-linejoin="round"/>
+
+  <!-- 6 条入线 (60° 间隔), 从六边形内角缩进 → 中心节点边缘 -->
   <g stroke="url(#pwa-stroke)" stroke-width="5" stroke-linecap="round" fill="none" opacity="0.85">
     <line x1="152" y1="96" x2="120" y2="96"/>
     <line x1="124" y1="47.5" x2="108" y2="75.2"/>
@@ -35,8 +40,14 @@
     <line x1="68" y1="144.5" x2="84" y2="116.8"/>
     <line x1="124" y1="144.5" x2="108" y2="116.8"/>
   </g>
+
+  <!-- 中心节点圆环 -->
   <circle cx="96" cy="96" r="24" fill="url(#pwa-node)"/>
+
+  <!-- 节点内嵌微缩蜂巢描边 -->
   <polygon points="96,80 110.4,89 110.4,103 96,112 81.6,103 81.6,89"
     fill="none" stroke="#ffffff" stroke-width="2.4" stroke-opacity="0.9" stroke-linejoin="round"/>
+
+  <!-- 玻璃高光 -->
   <circle cx="96" cy="96" r="24" fill="url(#pwa-glass)"/>
 </svg>

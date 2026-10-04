@@ -392,6 +392,7 @@ class HttpServeMixin:
                 host=host,
                 port=port,
                 log_level=log_level,
+                access_log=False,  # 禁用 uvicorn 访问日志
                 timeout_graceful_shutdown=10,
             )
         except BaseException:
