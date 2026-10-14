@@ -22,6 +22,11 @@ from .tool_loader import backing_upstreams, enabled_upstream_names
 ERROR = "error"
 WARNING = "warning"
 
+#: 故意不进 cache.ttl 的 cache_ttl_key: 声明它是为了自解释「这类响应不缓存」,
+#: 不是拼写错误。cache.ttl 里以注释形式记录同样的决定
+#: (config/upstreams.yaml: "# realtime_quote: 故意不配置 —— 实时行情不缓存")。
+UNCACHED_TTL_KEYS = frozenset({"realtime_quote"})
+
 
 @dataclass(frozen=True)
 class LintIssue:
@@ -173,10 +178,17 @@ def lint_config(config: dict, specs: list[dict]) -> list[LintIssue]:
 
     # 6b. cache_ttl_key 交叉引用: 指向 cache.ttl 里不存在的档时,
     # effective_ttl 静默回落"不缓存", 拼写错误不会有任何报错。
+    # 例外: UNCACHED_TTL_KEYS 是「故意不缓存」的标记 (cache.ttl 里也只留注释),
+    # 不报 W003 —— 否则实时行情类工具会永远挂一条无意义的告警。
     ttl_tiers = set((config.get("cache", {}) or {}).get("ttl", {}).keys())
     for spec in specs:
         ttl_key = spec.get("cache_ttl_key")
-        if isinstance(ttl_key, str) and ttl_key and ttl_key not in ttl_tiers:
+        if (
+            isinstance(ttl_key, str)
+            and ttl_key
+            and ttl_key not in ttl_tiers
+            and ttl_key not in UNCACHED_TTL_KEYS
+        ):
             issues.append(LintIssue(
                 WARNING, "W003",
                 f"Tool {spec.get('name')!r} cache_ttl_key={ttl_key!r} is not "

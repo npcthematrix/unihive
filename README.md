@@ -38,7 +38,7 @@ pip install -e .
 - **请求/响应 only**, 无 SSE 流; `/mcp` 保持开放,**不**做鉴权。
 - **鉴权范围**: `/api/*` + `console.html` 用 cookie session。
 - **代码标准化**:`600519.SH` / `000001.SZ` (fuyao 格式) 与 `sh600519` (TDX 格式) 互转。
-- **缓存**: SQLite (`logs/cache.db`),按 `cache_ttl_key` 区分 TTL 档 (realtime_quote / historical / fundamentals / ...); TTL 是**日期/时段感知**的 (历史 immutable 与交易时段双轨)。
+- **缓存**: SQLite (`logs/cache.db`),按 `cache_ttl_key` 区分 TTL 档 (historical / fundamentals / valuation / ... 见 `config/upstreams.yaml` 的 `cache.ttl`); 标 `realtime_quote` 的是**故意不缓存** (实时行情要最新); TTL 是**日期/时段感知**的 (历史 immutable 与交易时段双轨)。
 - **板块数据**: OMNI 离线使用,先 `python -m src.unihive.sync.board_sync` 同步 `data/board.db`,再调 `omni_*` 工具。
 
 ## 技术栈

@@ -268,3 +268,21 @@ def test_search_stock_name_is_allowed() -> None:
     specs = [_spec(name="search_stock", routing="search_stock", backer=None)]
     issues = lint_config(config, specs)
     assert not [i for i in issues if i.code == "T001" and "search_stock" in i.message]
+
+
+def test_realtime_quote_is_known_uncached_marker() -> None:
+    """realtime_quote 是「故意不缓存」标记 (cache.ttl 里只留注释), 不报 W003。
+
+    否则每个实时行情类工具都会永远挂一条无意义告警 (2026-10-14)。
+    """
+    config = _clean_config()
+    specs = [_spec(ttl_key="realtime_quote")]
+    assert [i for i in lint_config(config, specs) if i.code == "W003"] == []
+
+
+def test_unknown_ttl_key_still_warns() -> None:
+    """真拼错的 ttl_key 仍必须报 W003 (别把例外放宽成"所有未知档都放过")。"""
+    config = _clean_config()
+    specs = [_spec(ttl_key="realtime_quot")]
+    w = [i for i in lint_config(config, specs) if i.code == "W003"]
+    assert len(w) == 1 and "realtime_quot" in w[0].message
