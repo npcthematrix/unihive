@@ -31,6 +31,7 @@ Mapping caveat (2026-09-14 audit):
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any, Callable
 
 ResponseNormalizer = Callable[[Any], Any]
@@ -113,6 +114,178 @@ def _normalize_stock_code_for_tdxquant(code: str | None) -> str | None:
     return raw
 
 
+def _field_series(value: Any) -> Any:
+    """从 tdx_quant 的字段值里取出单列序列 (DataFrame → 第 0 列; Series/dict 原样)。
+
+    tqcenter ``get_market_data`` 返回 ``{字段: DataFrame}``: 每张表是
+    DatetimeIndex × 股票列 (本次只查一只票 → 单列)。单列 DataFrame 与
+    Series 都走 ``.items()`` 迭代 (时间, 值), 所以这里统一收敛成可迭代对象。
+    """
+    if value is None:
+        return None
+    if hasattr(value, "columns"):  # pandas DataFrame
+        if not len(value.columns):
+            return None
+        return value.iloc[:, 0]
+    if hasattr(value, "items"):  # pandas Series / dict
+        return value
+    return None
+
+
+def _normalize_minute_records(payload: Any) -> Any:
+    """tdx_quant ``get_market_data`` 的 ``{字段: DataFrame}`` → 分时记录列表。
+
+    网关 ``get_minute_data`` 的对外合同是
+    ``[{"time": "09:30:00", "price": 10.5, "volume": 1000}, ...]``
+    (见 config/tools_mootdx2.yaml), 而 tqcenter 返回的是按字段分列的 DataFrame
+    字典。这里逐分钟取最新价 (Close) 与该分钟成交量 (Volume), 时间只留
+    HH:MM:SS —— 取数窗口已钉死为当日, 无需带日期。
+
+    - 已是记录列表 → 幂等透传 (形状变了也不会二次转换);
+    - 缺 Close 列 / 空字典 → ``[]``, 上层按 no_data 业务态处理;
+    - Close 为 NaN 的点跳过 (tqcenter 用 NaN 填充无成交的分钟);
+    - 成交量 ÷100: tqcenter 给「股」, 而分时的另一条源 (mootdx2/tdxpy 兜底)
+      与日线口径都是「手」(2026-10-14 实测: TQ 1 分钟 1,063,000 == 本地
+      .lc1 1,063,000 = 股; 全天合计必须与日线 436,815 手 对得上)。
+    """
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return payload
+
+    fields = {str(key).lower(): value for key, value in payload.items()}
+    prices = _field_series(fields.get("close"))
+    if prices is None:
+        return []
+
+    volumes = _field_series(fields.get("volume"))
+    volume_map: dict[Any, Any] = dict(volumes.items()) if volumes is not None else {}
+
+    records = []
+    for ts, price in prices.items():
+        if price is None or price != price:  # NaN != NaN
+            continue
+        vol = volume_map.get(ts)
+        records.append({
+            "time": ts.strftime("%H:%M:%S") if hasattr(ts, "strftime") else str(ts),
+            "price": float(price),
+            "volume": (
+                None
+                if vol is None or vol != vol
+                else float(vol) / _TQ_VOL_SHARES_PER_LOT
+            ),
+        })
+    return records
+
+
+#: K 线字段别名: 网关合同字段 → tqcenter 可能给的列名 (小写比较)。
+#: vol 优先取 tqcenter 的 Volume (mootdx2 的 to_data 也会补一个 volume 别名)。
+_KLINE_FIELD_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("open", ("open",)),
+    ("high", ("high",)),
+    ("low", ("low",)),
+    ("close", ("close",)),
+    ("vol", ("volume", "vol")),
+    ("amount", ("amount",)),
+)
+
+#: tqcenter 与 mootdx2 的量纲差异 (2026-10-14 实测, 比值精确):
+#:   - 成交量: tqcenter 一律「股」; mootdx2 日线及以上是「手」(比值 100:
+#:     002273 43,681,520 vs 436,815 / 000001 99,493,688 vs 994,936 /
+#:     600519 2,657,276 vs 26,572), 而分钟线是「股」(×1: 002273 9/18
+#:     09:31 两边都是 1,063,000);
+#:   - 成交额: tqcenter 是「万元」(×10000 得元: 91,615.2 vs 916,152,064),
+#:     mootdx2 是「元」。
+#: 网关内既有消费方 (以及 fuyao/快照) 都按 mootdx2 的日线口径 (手/元) 理解,
+#: 故代理侧统一换算成 mootdx2 口径, 避免同一工具换源后数值差 100 倍。
+_TQ_DAILY_PERIODS = frozenset({"1d", "1w", "1mon", "45d", "1q", "1y"})
+_TQ_VOL_SHARES_PER_LOT = 100.0
+_TQ_AMOUNT_WAN_PER_YUAN = 10000.0
+
+
+def _normalize_kline_records(payload: Any, period: str = "") -> Any:
+    """tdx_quant ``get_market_data`` 的 ``{字段: DataFrame}`` → K线记录列表。
+
+    网关 K 线类工具 (get_kline / get_index_kline / get_index_all /
+    get_index_bars) 的对外合同是
+    ``[{"date", "open", "high", "low", "close", "volume"}, ...]``。
+    tqcenter 返回按字段分列的 DataFrame 字典, 这里按时间索引逐根拼回记录。
+
+    - 时间给 ``date`` (YYYY-MM-DD), 有完整时间戳时附 ``datetime``
+      (分钟级 K 线需要它区分同一天的多根);
+    - **量纲换算**: 成交量按周期换算成 mootdx2 口径 (日线及以上 ÷100 股→手,
+      分钟线保持股), 成交额一律 ×10000 (万元→元); 详见 ``_TQ_DAILY_PERIODS``
+      上方注释;
+    - 同时补 ``year/month/day/hour/minute``, 与 mootdx2 在线 bars 路径的
+      字段集对齐 (回落到 mootdx2 时字段不会变);
+    - 缺 Close 列 / 空字典 → ``[]`` (上层按 no_data 业务态处理);
+    - 任一根 close 为 NaN (无成交) 时跳过该根。
+    """
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return payload
+
+    series_by_field = {
+        str(key).lower(): _field_series(value) for key, value in payload.items()
+    }
+    close_series = series_by_field.get("close")
+    if close_series is None:
+        return []
+
+    columns: dict[str, dict[Any, Any]] = {}
+    for field, aliases in _KLINE_FIELD_ALIASES:
+        source = next(
+            (series_by_field[a] for a in aliases if series_by_field.get(a) is not None),
+            None,
+        )
+        if source is not None:
+            columns[field] = dict(source.items())
+
+    vol_divisor = (
+        _TQ_VOL_SHARES_PER_LOT if period in _TQ_DAILY_PERIODS else 1.0
+    )
+    records = []
+    for ts, close in close_series.items():
+        if close is None or close != close:  # NaN != NaN
+            continue
+        record: dict[str, Any] = {}
+        if hasattr(ts, "strftime"):
+            record["date"] = ts.strftime("%Y-%m-%d")
+            record["datetime"] = ts.strftime("%Y-%m-%d %H:%M:%S")
+            record["year"] = ts.year
+            record["month"] = ts.month
+            record["day"] = ts.day
+            record["hour"] = ts.hour
+            record["minute"] = ts.minute
+        else:
+            record["date"] = str(ts)[:10]
+        for field, column in columns.items():
+            value = column.get(ts)
+            if value is None or value != value:
+                continue
+            if field == "vol":
+                record[field] = float(value) / vol_divisor
+            elif field == "amount":
+                record[field] = float(value) * _TQ_AMOUNT_WAN_PER_YUAN
+            else:
+                record[field] = float(value)
+        # mootdx2 的 to_data 由 vol 派生 volume 别名, 两条路径保持一致
+        if "vol" in record:
+            record.setdefault("volume", record["vol"])
+        records.append(record)
+    return records
+
+
+def _kline_normalizer(period: str) -> ResponseNormalizer:
+    """按周期绑定量纲换算的 K 线归一化器 (日线手 / 分钟线股)。"""
+    return lambda payload: _normalize_kline_records(payload, period)
+
+
 class Mootdx2ToTdxQuantAdapter:
     """Adapter that translates mootdx2 行情类 tool calls to tdx_quant equivalents.
 
@@ -171,19 +344,22 @@ class Mootdx2ToTdxQuantAdapter:
         # source tool name, not just target.
         if tdx_tool == "get_market_snapshot":
             tdx_params = self._adapt_get_quote(params)
+            normalizer = _identity
         elif tdx_tool == "get_market_data" and mootdx2_tool == "get_minute_data":
             tdx_params = self._adapt_get_minute_data_to_market_data(params)
+            normalizer = _normalize_minute_records
         elif tdx_tool == "get_market_data" and mootdx2_tool == "get_index_bars":
             tdx_params = self._adapt_get_index_bars(params)
+            normalizer = _kline_normalizer(tdx_params["period"])
         elif tdx_tool == "get_market_data":
             tdx_params = self._adapt_get_kline(mootdx2_tool, params)
+            normalizer = _kline_normalizer(tdx_params["period"])
         else:
             raise ProxyAdapterError(
                 f"internal: unknown (mootdx2_tool, tdx_tool)="
                 f"({mootdx2_tool!r}, {tdx_tool!r})"
             )
 
-        normalizer = _identity
         return tdx_tool, tdx_params, normalizer
 
     # --- private param transformers ---
@@ -251,20 +427,27 @@ class Mootdx2ToTdxQuantAdapter:
         }
 
     def _adapt_get_minute_data_to_market_data(self, params: dict) -> dict:
-        """get_minute_data(code) → get_market_data(stock_list=[code], period='1m', count=N).
+        """get_minute_data(code) → get_market_data(stock_list, period='1m', 当日窗口)。
 
-        mootdx2's get_minute_data defaults to ~240 1-minute bars per trading
-        day (4 hours × 60 minutes), so count=240 is the natural default.
-        tdx_quant's count semantics: "距 end_time 最近 n 条"; without a count
-        the server may return the full historical minute series.
+        2026-10-13 修: 旧实现只传 ``count=240``, 那是「截止 end_time 的最近 240
+        根 1 分钟K线」—— 盘前/盘中会跨到前一交易日, 拿到的并不是今日分时。
+        本工具的语义是**今日分时**, 所以改用 start_time/end_time 钉死当天
+        (``count<=0`` 才走区间模式), 当日无分钟数据时返回空 → 上层转 no_data
+        业务态, 而不是悄悄给出别的日期的数据。
+
+        tqcenter 的 ``_convert_time_format`` 按**字符串长度**判定格式, 只认
+        ``YYYYMMDD`` / ``YYYYMMDDHHMMSS`` 两种, 传 "YYYY-MM-DD HH:MM:SS"
+        会 ValueError, 故此处传紧凑串。
         """
         code = params["code"]
         stock_code = _normalize_stock_code_for_tdxquant(code)
-        count = int(params.get("count", 240))
+        day = datetime.now().strftime("%Y%m%d")
         return {
             "stock_list": [stock_code],
             "period": "1m",
-            "count": count,
+            "start_time": f"{day}000000",
+            "end_time": f"{day}235959",
+            "count": 0,  # <=0 → 区间模式 (count>0 是「最近 n 根」, 会跨日)
         }
 
 

@@ -143,21 +143,25 @@ class TestAdaptParams:
         # limit 应改名为 count (tdx_quant 用 count, sign 表示方向)
         assert params["count"] == 10
 
-    def test_adapt_get_minute_data_keeps_today_window(self):
-        """mootdx2 get_minute_data(code) → tdx_quant get_market_data(stock_list=[code], period='1m', count=240)."""
+    def test_adapt_get_minute_data_pins_today_window(self):
+        """mootdx2 get_minute_data(code) → tdx_quant get_market_data(当日窗口)。
+
+        分时 = 今日, 不能是「最近 240 根」(会跨到前一交易日)。count<=0 才走
+        区间模式; 时间串必须是 tqcenter 只认的紧凑格式 (YYYYMMDDHHMMSS),
+        传 "YYYY-MM-DD HH:MM:SS" 会 ValueError。
+        """
+        import datetime as dt
+
         tool, params, _normalizer = self.adapter.adapt(
             "get_minute_data", {"code": "600519.SH"}
         )
+        day = dt.datetime.now().strftime("%Y%m%d")
         assert tool == "get_market_data"
         assert params["stock_list"] == ["600519.SH"]
         assert params["period"] == "1m"
-        assert params["count"] == 240
-
-    def test_adapt_get_minute_data_respects_explicit_count(self):
-        tool, params, _normalizer = self.adapter.adapt(
-            "get_minute_data", {"code": "600519.SH", "count": 60}
-        )
-        assert params["count"] == 60
+        assert params["start_time"] == f"{day}000000"
+        assert params["end_time"] == f"{day}235959"
+        assert params["count"] <= 0
 
     def test_adapt_unknown_tool_raises(self):
         with pytest.raises(ProxyAdapterError) as exc:
@@ -203,3 +207,118 @@ class TestResponseNormalize:
         )
         out = normalizer(tdx_result)
         assert out == tdx_result
+
+    def test_normalize_get_minute_data_converts_field_frames_to_records(self):
+        """tdx_quant 的 {字段: DataFrame} 必须转成分时合同 [{time, price, volume}]。
+
+        成交量按 tqcenter 的「股」→ 合同「手」换算 (÷100), 与 mootdx2/tdxpy
+        兜底路径同口径。
+        """
+        pd = pytest.importorskip("pandas")
+        idx = pd.DatetimeIndex(["2026-10-13 09:31:00", "2026-10-13 09:32:00"])
+        payload = {
+            "Open": pd.DataFrame({"002273.SZ": [25.0, 25.1]}, index=idx),
+            "Close": pd.DataFrame({"002273.SZ": [25.03, 25.11]}, index=idx),
+            "Volume": pd.DataFrame({"002273.SZ": [1337700, 658900]}, index=idx),
+        }
+        _tool, _params, normalizer = self.adapter.adapt(
+            "get_minute_data", {"code": "002273.SZ"}
+        )
+        assert normalizer(payload) == [
+            {"time": "09:31:00", "price": 25.03, "volume": 13377.0},
+            {"time": "09:32:00", "price": 25.11, "volume": 6589.0},
+        ]
+
+    def test_normalize_get_minute_data_accepts_series_and_skips_nan(self):
+        """Series 形态同样吃; Close=NaN 的分钟跳过; 空/None → []。"""
+        pd = pytest.importorskip("pandas")
+        idx = pd.DatetimeIndex(["2026-10-13 09:31:00", "2026-10-13 09:32:00"])
+        payload = {
+            "Close": pd.Series([25.03, float("nan")], index=idx),
+            "Volume": pd.Series([1337700, 0], index=idx),
+        }
+        _tool, _params, normalizer = self.adapter.adapt(
+            "get_minute_data", {"code": "002273.SZ"}
+        )
+        assert normalizer(payload) == [
+            {"time": "09:31:00", "price": 25.03, "volume": 13377.0},
+        ]
+        assert normalizer({}) == []
+        assert normalizer(None) == []
+
+    def test_normalize_get_minute_data_is_idempotent_for_records(self):
+        """形状变化 (已归一化成记录列表) 时不得二次转换。"""
+        records = [{"time": "09:31:00", "price": 25.03, "volume": 13377.0}]
+        _tool, _params, normalizer = self.adapter.adapt(
+            "get_minute_data", {"code": "002273.SZ"}
+        )
+        assert normalizer(records) == records
+
+    @pytest.mark.parametrize(
+        "mootdx2_tool,params",
+        [
+            ("get_kline", {"code": "600519.SH", "type": "day", "limit": 2}),
+            ("get_index_kline", {"code": "sh000001", "type": "day", "limit": 2}),
+            ("get_index_all", {"code": "sh000001", "type": "day", "limit": 2}),
+            ("get_index_bars", {"symbol": "sh000001", "frequency": 9, "offset": 2}),
+        ],
+    )
+    def test_normalize_kline_tools_convert_field_frames(self, mootdx2_tool, params):
+        """4 个 K线工具的 {字段: DataFrame} 必须转成 [{date, open, ..., volume}]。
+
+        日线周期按 tqcenter 口径换算: 成交量 股→手 (÷100), 成交额 万元→元
+        (×10000), 与 mootdx2 在线 bars 路径对齐。
+        """
+        pd = pytest.importorskip("pandas")
+        idx = pd.DatetimeIndex(["2026-10-13 00:00:00", "2026-10-14 00:00:00"])
+        payload = {
+            "Open": pd.DataFrame({"X": [21.0, 21.1]}, index=idx),
+            "High": pd.DataFrame({"X": [21.5, 21.4]}, index=idx),
+            "Low": pd.DataFrame({"X": [20.8, 21.0]}, index=idx),
+            "Close": pd.DataFrame({"X": [21.04, 21.2]}, index=idx),
+            "Volume": pd.DataFrame({"X": [43681500, 100]}, index=idx),
+            "Amount": pd.DataFrame({"X": [91615.2, 2.1]}, index=idx),
+        }
+        _tool, _params, normalizer = self.adapter.adapt(mootdx2_tool, params)
+
+        assert normalizer(payload) == [
+            {"date": "2026-10-13", "datetime": "2026-10-13 00:00:00", "open": 21.0,
+             "year": 2026, "month": 10, "day": 13, "hour": 0, "minute": 0,
+             "high": 21.5, "low": 20.8, "close": 21.04, "vol": 436815.0,
+             "amount": 916152000.0, "volume": 436815.0},
+            {"date": "2026-10-14", "datetime": "2026-10-14 00:00:00", "open": 21.1,
+             "year": 2026, "month": 10, "day": 14, "hour": 0, "minute": 0,
+             "high": 21.4, "low": 21.0, "close": 21.2, "vol": 1.0,
+             "amount": 21000.0, "volume": 1.0},
+        ]
+
+    def test_normalize_kline_minute_period_keeps_shares(self):
+        """分钟线不换算成交量 (mootdx2 分钟线也是「股」), 只换算成交额。"""
+        pd = pytest.importorskip("pandas")
+        idx = pd.DatetimeIndex(["2026-09-18 09:31:00"])
+        payload = {
+            "Close": pd.DataFrame({"X": [24.91]}, index=idx),
+            "Volume": pd.DataFrame({"X": [1063000]}, index=idx),
+            "Amount": pd.DataFrame({"X": [2648.25]}, index=idx),
+        }
+        _tool, params, normalizer = self.adapter.adapt(
+            "get_kline", {"code": "002273.SZ", "type": "minute1", "limit": 1}
+        )
+        assert params["period"] == "1m"
+        assert normalizer(payload) == [
+            {"date": "2026-09-18", "datetime": "2026-09-18 09:31:00",
+             "year": 2026, "month": 9, "day": 18, "hour": 9, "minute": 31,
+             "close": 24.91, "vol": 1063000.0, "amount": 26482500.0,
+             "volume": 1063000.0},
+        ]
+
+    def test_normalize_kline_skips_nan_and_empty(self):
+        """close=NaN 的根跳过; 空/None → [] (上层转 no_data 业务态)。"""
+        pd = pytest.importorskip("pandas")
+        idx = pd.DatetimeIndex(["2026-10-13"])
+        _tool, _params, normalizer = self.adapter.adapt(
+            "get_kline", {"code": "600519.SH", "type": "day", "limit": 1}
+        )
+        assert normalizer({"Close": pd.Series([float("nan")], index=idx)}) == []
+        assert normalizer({}) == []
+        assert normalizer(None) == []

@@ -471,9 +471,21 @@ class Router:
                 f"[{gateway_tool}] proxy Success via tdx_quant in "
                 f"{total_duration}ms"
             )
+            payload = normalizer(result.data)
+            # 归一化后为空 = TQ 这条源在本次范围里没数据 → 当作 miss 继续走原
+            # chain, 而不是就此终结 (分时: TQ 本地分钟数据缺失时由
+            # mootdx2/tdxpy 兜底)。所有源都空时, 由链尾源自己的 no_data
+            # 业务态收尾。
+            if payload is None or (
+                isinstance(payload, (list, dict)) and len(payload) == 0
+            ):
+                logger.info(
+                    f"[{gateway_tool}] proxy tdx_quant 返回空结果, 回落原 chain"
+                )
+                return None
             return RouteResult(
                 success=True,
-                data=normalizer(result.data),
+                data=payload,
                 source="tdx_quant",
                 hops=[hop],
                 warn=_warn_from_tool_result(result),
