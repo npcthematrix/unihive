@@ -298,6 +298,29 @@ def _annotate_quote_records(records: list[dict]) -> None:
         rec["amplitude"] = _quote_amplitude(rec)
 
 
+def _quote_server_time(rec: dict) -> str:
+    """该股行情的更新时间 (``HH:MM:SS.mmm``), 无有效值时返回空串。
+
+    mootdx2 ``SecurityQuote.server_time`` 原样透传进 DataFrame 的
+    ``server_time`` 列。它是**逐股**字段: 2026-10-12 实测同一批请求里
+    5 只票拿到 5 个不同值, 且可能落后于本机时钟 (停牌/无成交的票会停在
+    最后一笔行情时刻 —— 例如 price=0 的 -100% 记录停在 09:18)。所以它
+    既不是整批快照时刻, 也不是该股异动的发生时刻, 只是"这条报价的行情
+    时间", 对外可当数据新鲜度线索用。
+
+    非交易时段报文本字段为全 0, mootdx2 会格式化成 ``00:00:00.000``:
+    这种"看起来像时间"的假值归一成空串 (语义: 无有效时间), 与旧版
+    ``time`` 恒空的行为保持兼容。缺列 / NaN / 非字符串同样回空串。
+    """
+    value = rec.get("server_time")
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value or value == "00:00:00.000":
+        return ""
+    return value
+
+
 def _drop_internal_quote_columns(df: "pd.DataFrame") -> "pd.DataFrame":
     """剔除 tdxpy 行情报文里的内部列。
 
@@ -357,6 +380,65 @@ def _classify_bare_market(code: str) -> str:
     if code[:1] in ("5", "6", "7", "9"):
         return "sh"
     return "sz"
+
+
+def _minute_time_grid() -> tuple[str, ...]:
+    """A 股分时 240 点的时间栅格 (上午 09:31-11:30 / 下午 13:01-15:00)。
+
+    通达信分时序列本身不带逐点时间戳 (只给 price/vol 两个数组), 时间轴由位置
+    隐含, 故按位置补 HH:MM:SS; 盘中不足 240 点时按前缀取用。
+    """
+    grid = []
+    for start_minute, count in ((9 * 60 + 31, 120), (13 * 60 + 1, 120)):
+        for offset in range(count):
+            total = start_minute + offset
+            grid.append(f"{total // 60:02d}:{total % 60:02d}:00")
+    return tuple(grid)
+
+
+_MINUTE_TIME_GRID = _minute_time_grid()
+
+
+def _minute_records_from_series(prices, volumes, times=None) -> list[dict]:
+    """分时价格/成交量序列 → 网关合同 ``[{time, price, volume}, ...]``。
+
+    价格为 0 / None / NaN 的点 (无成交) 跳过; 位置索引照旧, 所以后面各点的
+    时间轴不会错位。
+    """
+    records = []
+    for index, price in enumerate(prices or []):
+        if price is None or price != price or float(price) <= 0:
+            continue
+        if times is not None and index < len(times):
+            label = times[index]
+        elif index < len(_MINUTE_TIME_GRID):
+            label = _MINUTE_TIME_GRID[index]
+        else:
+            label = str(index)
+        vol = volumes[index] if volumes is not None and index < len(volumes) else None
+        records.append({
+            "time": label,
+            "price": float(price),
+            "volume": None if vol is None or vol != vol else float(vol),
+        })
+    return records
+
+
+def _minute_records_from_mootdx2_df(df) -> list[dict]:
+    """mootdx2 ``Quotes.minute()`` 的 DataFrame → 分时记录 (兼容路径)。"""
+    if df is None or len(df) == 0:
+        return []
+    columns = list(getattr(df, "columns", []))
+    if "price" not in columns:
+        return []
+    volumes = df["vol"].tolist() if "vol" in columns else None
+    index = getattr(df, "index", None)
+    times = (
+        [ts.strftime("%H:%M:%S") for ts in index]
+        if index is not None and hasattr(index, "strftime")
+        else None
+    )
+    return _minute_records_from_series(df["price"].tolist(), volumes, times)
 
 
 def _parse_quote_symbol(code: str) -> tuple[str, str, str]:
@@ -1718,13 +1800,65 @@ class MooTDX2Client:
 
     # ========== 今日分时 ==========
     def _get_minute_data_sync(self, code: str):
-        """同步今日分时"""
+        """同步今日分时 → ``[{time, price, volume}, ...]``。
+
+        2026-10-14: mootdx2 的 native API 没实现分时方法 —— ``StdQuotes.minute``
+        只是 ``minutes(date=today)`` 的壳, 最终调 ``client.get_history_minute_time_data``,
+        而 tdxpy 版 NativeTdxHqApi 里没有这个方法, 所以 ``q.minute()`` 必抛
+        AttributeError。此时回退到 tdxpy 直连行情服务器取当日分时, 两条路径
+        输出同一合同形状 (旧实现直接把 DataFrame 记录透出, 形状与分时合同不符)。
+        """
+        sym = _strip_market_prefix(code)
         q = self._get_quotes()
-        sym = code.lower().replace("sh", "").replace("sz", "").replace("bj", "")
-        df = q.minute(symbol=sym)
-        if df is not None and len(df) > 0:
-            return df.to_dict(orient="records")
-        return None
+        try:
+            df = q.minute(symbol=sym)
+        except AttributeError:
+            # 仅兜底 mootdx2 缺方法这一种 AttributeError
+            return self._minute_time_via_tdxpy(
+                sym, datetime.date.today().strftime("%Y%m%d")
+            )
+        return _minute_records_from_mootdx2_df(df)
+
+    def _minute_time_via_tdxpy(self, bare_code: str, date: str) -> list[dict]:
+        """tdxpy 直连行情服务器取分时 (mootdx2 native API 缺该方法时的兜底)。
+
+        用 ``get_history_minute_time_data(date=当天)`` 而**不是**
+        ``get_minute_time_data``: 后者实测返回错位值 (茅台给 3985/0.01),
+        前者与日线对得上 (收价/成交量逐日一致)。
+        """
+        try:
+            from tdxpy.hq import TdxHq_API
+        except ImportError:
+            # 该库缺分时方法时才需要 tdxpy; 未安装则退化为 no_data, 不要
+            # 把依赖缺失变成整工具失败。
+            logger.warning(
+                f"{self.name}: 分时兜底需要 tdxpy (mootdx2 native API 未实现 "
+                f"get_history_minute_time_data); 未安装 → 本次按无数据处理"
+            )
+            return []
+
+        market = {"sh": 1, "sz": 0, "bj": 2}.get(_classify_bare_market(bare_code))
+        if market is None:
+            return []
+        servers = getattr(getattr(self.config, "settings", None), "servers", None) or []
+        for server in servers:
+            api = TdxHq_API()
+            try:
+                with api.connect(server.host, int(server.port), time_out=5):
+                    raw = api.get_history_minute_time_data(
+                        market=market, code=bare_code, date=date
+                    )
+            except Exception as e:  # noqa: BLE001 - 单台失败换下一台
+                logger.warning(
+                    f"{self.name}: tdxpy 分时兜底失败 {server.host}:{server.port}: {e}"
+                )
+                continue
+            if raw:
+                return _minute_records_from_series(
+                    [row.get("price") for row in raw],
+                    [row.get("vol") for row in raw],
+                )
+        return []
 
     async def get_minute_data(self, code: str) -> ToolResult:
         """获取今日分时"""
@@ -3978,6 +4112,13 @@ class MooTDX2Client:
         if df.empty or "pct_chg" not in df.columns:
             return []
 
+        # 无报价行先剔除: price=0 (停牌 / 当日未成交) 会被 _quote_pct_chg 算成
+        # -100% 并冒充"跌停"污染异动列表 (2026-10-12 实测: 深市 000016 的
+        # 停牌记录以 -100% 混进跌停; 它的 time 也停在 09:18 开盘前)。
+        df = df[df["close"] > 0]
+        if df.empty:
+            return []
+
         # 异动宇宙: |涨跌幅| >= 5% 才算异动, 所有事件过滤 (含 涨/跌) 都在
         # 宇宙内进行 — 否则 +0.5% 的票会以 "上涨异动" 名义漏出。
         df = df[df["pct_chg"].abs() >= 5]
@@ -4027,7 +4168,8 @@ class MooTDX2Client:
             result.append({
                 "code": code,
                 "market": mkt,
-                "time": "",
+                # 快照时刻 (非个股异动时刻): 报价包 server_time, 见 _quote_server_time
+                "time": _quote_server_time(row),
                 "event": event,
                 "change_pct": pct,
             })

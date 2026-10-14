@@ -340,6 +340,71 @@ class TestH2UnusualFlatBlock:
         down = client._stock_unusual_sync(event_type="跌")
         assert [r["code"] for r in down] == ["600016"]
 
+    def test_time_filled_from_quote_server_time(self):
+        """time 接报价包 server_time (快照时刻), 不再是恒空占位符。"""
+        rows = [
+            {"market": 1, "code": "600000", "price": 10.99, "last_close": 10.0,
+             "high": 11.0, "low": 10.0, "vol": 1_000_000, "amount": 11_000_000,
+             "server_time": "14:23:05.123"},
+            {"market": 1, "code": "600016", "price": 8.00, "last_close": 8.88,
+             "high": 8.9, "low": 7.99, "vol": 100_000, "amount": 800_000,
+             "server_time": "14:23:05.123"},
+        ]
+        q = FakeStdQuotes(block_df=_flat_block_df(), quote_rows=rows)
+        client = make_client()
+        client._quotes = q
+
+        result = client._stock_unusual_sync(event_type="all")
+
+        assert {r["code"]: r["time"] for r in result} == {
+            "600000": "14:23:05.123",
+            "600016": "14:23:05.123",
+        }
+
+    def test_time_blank_when_server_time_all_zero(self):
+        """非交易时段报文全 0 (mootdx2 格式化成 00:00:00.000) → 空串, 不给假时间。"""
+        rows = [
+            {"market": 1, "code": "600000", "price": 10.99, "last_close": 10.0,
+             "high": 11.0, "low": 10.0, "vol": 1_000_000, "amount": 11_000_000,
+             "server_time": "00:00:00.000"},
+        ]
+        q = FakeStdQuotes(block_df=_flat_block_df(), quote_rows=rows)
+        client = make_client()
+        client._quotes = q
+
+        result = client._stock_unusual_sync(event_type="all")
+
+        assert [r["time"] for r in result] == [""]
+
+    def test_time_blank_when_server_time_column_absent(self):
+        """旧报文无 server_time 列时保持空串 (向后兼容)。"""
+        q = FakeStdQuotes(block_df=_flat_block_df(), quote_rows=_unusual_quote_rows())
+        client = make_client()
+        client._quotes = q
+
+        result = client._stock_unusual_sync(event_type="all")
+
+        assert {r["time"] for r in result} == {""}
+
+    def test_zero_price_rows_excluded(self):
+        """停牌/无报价行 (price=0 → -100%) 不得冒充跌停混进异动列表。"""
+        rows = [
+            {"market": 1, "code": "600000", "price": 0.0, "last_close": 10.0,
+             "high": 0.0, "low": 0.0, "vol": 0, "amount": 0,
+             "server_time": "09:18:00.003"},
+            {"market": 1, "code": "600016", "price": 8.00, "last_close": 8.88,
+             "high": 8.9, "low": 7.99, "vol": 100_000, "amount": 800_000,
+             "server_time": "10:33:52.923"},
+        ]
+        q = FakeStdQuotes(block_df=_flat_block_df(), quote_rows=rows)
+        client = make_client()
+        client._quotes = q
+
+        result = client._stock_unusual_sync(event_type="all")
+
+        # 600000 是 -100% 的假跌停, 必须整条消失; 600016 的真跌停保留
+        assert [(r["code"], r["event"]) for r in result] == [("600016", "跌停")]
+
     def test_empty_block_returns_empty_list(self):
         q = FakeStdQuotes(block_df=pd.DataFrame(), quote_rows=[])
         client = make_client()
@@ -513,3 +578,78 @@ class TestQuoteRawFields:
 
         assert data is not None
         assert data["close"] == 1650.0
+
+
+# ---------------------------------------------------------------------------
+# 今日分时: mootdx2 native API 缺方法 → tdxpy 兜底 (2026-10-14)
+# ---------------------------------------------------------------------------
+
+
+class TestMinuteDataTdxpyFallback:
+    """`StdQuotes.minute` 最终调 `client.get_history_minute_time_data`, 而
+    NativeTdxHqApi 没有实现它 → 必然 AttributeError。兜底走 tdxpy 直连,
+    并把两条路径都归一成 `[{time, price, volume}]`。
+    """
+
+    @staticmethod
+    def _client():
+        from types import SimpleNamespace
+
+        client = make_client()
+        # 兜底需要配置里的行情服务器列表
+        client.config.settings = SimpleNamespace(
+            servers=[SimpleNamespace(host="1.2.3.4", port=7709)]
+        )
+        client._quotes = FakeStdQuotes()  # 无 minute 方法 → AttributeError
+        return client
+
+    def test_falls_back_to_tdxpy_and_normalizes(self, monkeypatch):
+        import datetime as dt
+        import tdxpy.hq as hq
+
+        calls: dict = {}
+
+        class FakeApi:
+            def connect(self, host, port, time_out=None):
+                calls["connect"] = (host, port)
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_history_minute_time_data(self, market, code, date):
+                calls["args"] = (market, code, date)
+                return [
+                    {"price": 25.03, "vol": 13377},
+                    {"price": 0.0, "vol": 0},      # 无成交 → 跳过, 但位置保留
+                    {"price": 25.11, "vol": 6589},
+                ]
+
+        monkeypatch.setattr(hq, "TdxHq_API", FakeApi)
+
+        records = self._client()._get_minute_data_sync("002273")
+
+        assert calls["connect"] == ("1.2.3.4", 7709)
+        assert calls["args"] == (
+            0,
+            "002273",
+            dt.date.today().strftime("%Y%m%d"),
+        )
+        assert records == [
+            {"time": "09:31:00", "price": 25.03, "volume": 13377.0},
+            {"time": "09:33:00", "price": 25.11, "volume": 6589.0},
+        ]
+
+    def test_all_servers_failing_returns_empty(self, monkeypatch):
+        import tdxpy.hq as hq
+
+        class BoomApi:
+            def connect(self, host, port, time_out=None):
+                raise OSError("connection refused")
+
+        monkeypatch.setattr(hq, "TdxHq_API", BoomApi)
+
+        assert self._client()._get_minute_data_sync("002273") == []

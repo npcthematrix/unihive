@@ -181,7 +181,10 @@ tools:
       - no_data: 非交易时段或停牌股票无分时数据
     routing: get_minute_data
     upstream_tool_mapping:
-      mootdx2: get_minute
+      # 分时 = 在线「今日分时」方法; 旧的 get_minute 是本地 Reader (读
+      # minline/*.lc1 的 1 分钟K线), 映射到它会让回落路径返回本地陈旧
+      # 分钟K线而不是分时 (2026-10-14 实测: 回落到 17280 根本地K线)。
+      mootdx2: get_minute_data
     cache_ttl_key: realtime_quote
     data_source_type: online
     dangerous: false
@@ -1082,8 +1085,17 @@ tools:
       - event_type (可选): 异动类型，默认 all
         all=全部 / 涨=上涨 / 跌=下跌 / 放量=放量 / 缩量=缩量 / 炸板=炸板 / 天地板=天地板
 
+      【返回字段】
+      - code / market: 6 位裸码 + 交易所前缀 (sh/sz)
+      - time: 该股行情的更新时间 (上游报价记录自带, HH:MM:SS.mmm)。
+        逐股不同, 可能落后于本机时钟 (停牌/无成交的票会停在最后一笔行情
+        时刻); 它既不是整批快照时刻, 也不是该股异动的发生时刻。非交易
+        时段等无有效时间时该字段为空串
+      - event: 涨停/跌停优先, 其次 上涨/下跌; 放量/缩量事件带方向
+      - change_pct: 涨跌幅 (%)
+
       【返回示例】
-      成功: {"success": true, "data": [{"code": "600000", "event": "涨停", "change_pct": 9.9}, ...], "source": "mootdx2"}
+      成功: {"success": true, "data": [{"code": "600000", "market": "sh", "time": "14:23:05.123", "event": "涨停", "change_pct": 9.9}, ...], "source": "mootdx2"}
     routing: stock_unusual
     upstream_tool_mapping:
       mootdx2: stock_unusual

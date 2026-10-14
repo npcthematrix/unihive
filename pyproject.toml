@@ -16,6 +16,9 @@ dependencies = [
     "itsdangerous>=2.0,<3.0",
     "thsdk>=2.0,<3.0",
     "mootdx2>=1.4,<2.0",
+    # mootdx2 的 native API 未实现分时 (get_history_minute_time_data), 今日分时
+    # 走 tdxpy 直连兜底; 见 src/unihive/api/mootdx2_client.py 的 _minute_time_via_tdxpy
+    "tdxpy>=0.2,<1.0",
     "orjson>=3.9,<4.0",
     "cachetools>=5.3,<6.0",
 ]
