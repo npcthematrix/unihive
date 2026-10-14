@@ -300,6 +300,21 @@ class TestConfigCLI:
         args = parser.parse_args([])
         assert args.config is None
 
+    def test_keyboard_interrupt_exits_cleanly(self, monkeypatch):
+        """stdio 模式父进程关停 → KeyboardInterrupt 干净退出 (码 0), 不裸打 traceback."""
+        from src.unihive import gateway_server as gs
+
+        def _interrupt(*args, **kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(gs.asyncio, "run", _interrupt)
+        monkeypatch.setattr(gs.sys, "argv", ["unihive"])
+
+        with pytest.raises(SystemExit) as excinfo:
+            gs.main()
+
+        assert excinfo.value.code == 0
+
     def test_async_main_accepts_config_path(self, tmp_path):
         """async_main 必须能把 config_path 传给 GatewayServer — 通过 monkeypatch 验证."""
         cfg_file = tmp_path / "upstreams.yaml"

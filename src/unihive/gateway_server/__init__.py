@@ -286,7 +286,13 @@ async def async_main(transport: str = "stdio", host: str | None = None, port: in
         raise ValueError(f"Unknown transport: {transport}")
 
 
-def main():
+def _build_arg_parser() -> "argparse.ArgumentParser":
+    """构造 CLI 参数解析器。
+
+    历史 facade: 外部脚本与测试按名字从 ``src.unihive.gateway_server``
+    导入 (见 tests/test_gateway_package_layout.py 的 facade 导入契约),
+    保持定义在本模块, 不要内联回 main() 或挪进子模块。
+    """
     parser = argparse.ArgumentParser(description="UniHive MCP Gateway")
     parser.add_argument(
         "--transport", choices=["stdio", "http"], default="http",
@@ -298,7 +304,11 @@ def main():
         "--config", default=None,
         help="Path to upstreams.yaml (default: config/upstreams.yaml)",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = _build_arg_parser().parse_args()
     try:
         asyncio.run(async_main(
             transport=args.transport,
@@ -321,6 +331,9 @@ def main():
             file=sys.stderr,
         )
         sys.exit(1)
+    except KeyboardInterrupt:
+        # stdio 模式父进程关停时正常路径, 不打 traceback
+        sys.exit(0)
 
 
 if __name__ == "__main__":
