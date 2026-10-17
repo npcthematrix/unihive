@@ -7,10 +7,18 @@
       aria-label="筛选工具规格"
     />
 
+    <!-- 口径说明: 本页数据源是 /api/interfaces (装配后 + env 过滤后的可发布集),
+         不是 config.db 的工具实体表。两者计数天然不同, 必须说清楚,
+         否则用户会以为「配置库」少算了工具。 -->
+    <div v-if="editable" class="tools-scope-note">
+      此处为<strong>装配后可发布</strong>的工具集 (已按上游启用态与 env 门控过滤),
+      与「配置库」的实体总数口径不同; 需补环境变量才会出现的工具不会列在此处。
+    </div>
+
     <el-table
       :data="filteredTools"
       :empty-text="emptyText"
-      class="cfg-table tools-table"
+      class="tools-table"
       row-key="name"
     >
       <el-table-column label="名称" min-width="180">
@@ -193,6 +201,16 @@ const emptyText = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.tools-scope-note {
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--cfg-text-secondary);
+  padding: 8px 12px;
+  background: var(--cfg-bg-soft);
+  border: 1px solid var(--cfg-border);
+  border-radius: 6px;
 }
 
 .tools-desc {

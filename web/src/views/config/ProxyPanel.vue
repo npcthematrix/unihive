@@ -61,7 +61,9 @@
       </div>
     </div>
 
-    <!-- 未代理的行情类工具 (静态说明, 无 JS 数据) -->
+    <!-- 未代理的行情类工具 (静态说明, 无 JS 数据)
+         注意: 这份清单是前端硬编码的, 后端 TOOL_MAP / 代理覆盖范围变更时
+         不会自动同步。改动代理范围时请一并更新此处。 -->
     <div class="proxy-section-non-proxied">
       <h4 class="proxy-section-title">未代理的 mootdx2 行情类工具</h4>
       <p class="proxy-section-hint">以下工具属于行情类但不在代理范围内, 继续走原 mootdx2 链路</p>

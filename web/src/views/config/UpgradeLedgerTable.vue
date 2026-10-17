@@ -1,5 +1,5 @@
 <template>
-  <el-table :data="rows" class="cfg-table" size="small">
+  <el-table :data="rows" size="small">
     <el-table-column label="名称" min-width="200">
       <template #default="{ row }">
         <span class="tool-name">{{ row.name }}</span>

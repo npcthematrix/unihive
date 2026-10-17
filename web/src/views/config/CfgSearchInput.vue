@@ -5,7 +5,7 @@
   控制宽度; 默认 max-width 由全局样式提供。
 -->
 <template>
-  <div class="cfg-search-wrap" :class="{ 'has-value': modelValue }">
+  <div class="cfg-search-wrap">
     <input
       :value="modelValue"
       type="text"

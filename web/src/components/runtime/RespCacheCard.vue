@@ -228,9 +228,8 @@ const breakdownNote = computed(() => {
 </script>
 
 <style scoped>
-.panel-card {
-  border-radius: 8px;
-}
+/* .panel-card 圆角 / .card-toolbar / .card-title / .sub / .stat-grid /
+   .trend-grid / .status-dot 系列 已收敛到 styles/main.css (全局)。 */
 
 .card-alert {
   margin-bottom: 12px;
@@ -238,27 +237,6 @@ const breakdownNote = computed(() => {
 
 .breakdown-error {
   margin-bottom: 12px;
-}
-
-.card-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.card-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--el-text-color-secondary);
-  margin-left: 6px;
 }
 
 .mgmt-actions {
@@ -273,41 +251,7 @@ const breakdownNote = computed(() => {
   margin-left: auto;
 }
 
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  min-height: 96px;
-}
-
-.trend-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.status-online {
-  background: var(--el-color-success);
-  box-shadow: 0 0 0 3px var(--el-color-success-light-9);
-}
-
-.status-disabled {
-  background: var(--el-text-color-placeholder);
-}
-
-/* M2: 未知 = 空心虚框 (未决), 区别于停用的实心灰点。 */
-.status-unknown {
-  background: transparent;
-  border: 1px dashed var(--el-border-color);
-}
+/* .stat-grid / .trend-grid / .status-dot 系列 已上提全局 */
 
 /* .on/.off 着色必须用 :slotted: 父 scope 的 .mini-value 在 MiniStat 内部, 跨组件 scope 隔离让普通后代选择器失效 */
 :slotted(.on) { color: var(--el-color-success); }
@@ -324,25 +268,5 @@ const breakdownNote = computed(() => {
   margin: 10px 2px 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
-}
-
-/* M3: 三档断点 (1024 / 768 / 560), 替代原 (860 / 560)。
-   平板横屏 768-1024 仍可读为 2 列 + 双 trend。 */
-@media (max-width: 1024px) {
-  .stat-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 768px) {
-  .trend-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 560px) {
-  .stat-grid {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

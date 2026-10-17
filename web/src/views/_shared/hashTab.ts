@@ -23,3 +23,27 @@ export function parseHashTab<T extends string>(
   const value = typeof candidate === 'string' ? candidate : ''
   return (valid as readonly string[]).includes(value) ? (value as T) : fallback
 }
+
+/**
+ * WAI-ARIA Tabs 的 roving tabindex 方向键导航: 给定当前 key 与按键, 返回应聚焦 /
+ * 激活的目标 key。Left/Right 循环切换, Home/End 跳首尾; 非导航键返回 null
+ * (调用方据此决定是否 preventDefault + 移动焦点)。
+ *
+ * 抽到共享: ConfigView 的顶层 tablist 与 GatewayMonitorView 的缓存子 tablist
+ * 是同一套交互, 原先只在 ConfigView 内联实现, 现两处共用避免逻辑漂移。
+ */
+export function nextTabKey<T extends string>(
+  keys: readonly T[],
+  current: T,
+  key: string,
+): T | null {
+  const idx = keys.indexOf(current)
+  if (idx < 0) return null
+  let next = idx
+  if (key === 'ArrowRight') next = (idx + 1) % keys.length
+  else if (key === 'ArrowLeft') next = (idx - 1 + keys.length) % keys.length
+  else if (key === 'Home') next = 0
+  else if (key === 'End') next = keys.length - 1
+  else return null
+  return keys[next]
+}

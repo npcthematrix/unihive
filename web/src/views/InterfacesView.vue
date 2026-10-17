@@ -527,9 +527,7 @@ onUnmounted(() => {
   color: var(--el-text-color-secondary);
 }
 
-.panel-card {
-  border-radius: 8px;
-}
+/* .panel-card 圆角已收敛到 styles/main.css (全局) */
 
 .ifs-meta {
   font-size: 12px;

@@ -391,3 +391,56 @@ describe('createConfigPageLoader — 失败保留上次可用数据', () => {
     expect(loader.interfaceTools.value).toHaveLength(1)
   })
 })
+
+describe('createConfigPageLoader — 通道状态 (entitiesError / toolsSettled)', () => {
+  it('entities 失败: entitiesError 置位且 entities 保持 null; 重试成功后清空', async () => {
+    const ent = [
+      deferred<Record<string, unknown>>(),
+      deferred<Record<string, unknown>>(),
+    ]
+    const { loader } = setup({ getEntities: queued(ent) })
+
+    const first = loader.load()
+    ent[0].reject(new Error('ent-down'))
+    await first
+    // 这是「请求失败」而非「yaml 逃生模式」—— 上层据此区分错误面与正常说明
+    expect(loader.entitiesError.value).toBe('ent-down')
+    expect(loader.entities.value).toBeNull()
+
+    const retry = loader.loadEntities()
+    ent[1].resolve({ source: 'db' } as never)
+    await retry
+    expect(loader.entitiesError.value).toBe('')
+    expect(loader.entities.value).toEqual({ source: 'db' })
+  })
+
+  it('interfaces 成功或失败都标记 toolsSettled (复制 JSON 就绪判定)', async () => {
+    const ok = setup({ getInterfaces: () => Promise.resolve({ tools: [] }) })
+    expect(ok.loader.toolsSettled.value).toBe(false)
+    await ok.loader.load()
+    expect(ok.loader.toolsSettled.value).toBe(true)
+
+    const bad = setup({ getInterfaces: () => Promise.reject(new Error('ifs-down')) })
+    await bad.loader.load()
+    expect(bad.loader.toolsSettled.value).toBe(true)
+  })
+
+  it('旧一轮 entities 失败不得污染新一轮的成功态', async () => {
+    const ent = [
+      deferred<Record<string, unknown>>(),
+      deferred<Record<string, unknown>>(),
+    ]
+    const { loader } = setup({ getEntities: queued(ent) })
+
+    const first = loader.load()
+    const second = loader.load()
+    ent[1].resolve({ source: 'db' } as never)
+    await flush()
+    ent[0].reject(new Error('stale-entities'))
+    await Promise.allSettled([first, second])
+    await flush()
+
+    expect(loader.entities.value).toEqual({ source: 'db' })
+    expect(loader.entitiesError.value).toBe('')
+  })
+})

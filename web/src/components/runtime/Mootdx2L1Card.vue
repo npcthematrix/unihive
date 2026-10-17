@@ -199,47 +199,11 @@ function blockSub(prefix: string, stats?: L1CacheStats): string {
 </script>
 
 <style scoped>
-.panel-card {
-  border-radius: 8px;
-}
+/* .panel-card 圆角 / .card-toolbar / .card-title / .sub / .stat-grid /
+   .trend-grid / .status-dot 系列 已收敛到 styles/main.css (全局)。 */
 
 .card-alert {
   margin-bottom: 12px;
-}
-
-.card-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.card-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--el-text-color-secondary);
-  margin-left: 6px;
-}
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  min-height: 96px;
-}
-
-.trend-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 12px;
 }
 
 .l1-extra-grid {
@@ -249,27 +213,7 @@ function blockSub(prefix: string, stats?: L1CacheStats): string {
   margin-top: 12px;
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.status-online {
-  background: var(--el-color-success);
-  box-shadow: 0 0 0 3px var(--el-color-success-light-9);
-}
-
-.status-disabled {
-  background: var(--el-text-color-placeholder);
-}
-
-/* M2: 未知 = 空心虚框, 区别于停用实心灰。 */
-.status-unknown {
-  background: transparent;
-  border: 1px dashed var(--el-border-color);
-}
+/* .status-dot 系列 已上提全局 */
 
 /* .on/.off 着色必须用 :slotted: 父 scope 的 .mini-value 在 MiniStat 内部, 跨组件 scope 隔离让普通后代选择器失效 */
 :slotted(.on) { color: var(--el-color-success); }
@@ -313,23 +257,9 @@ function blockSub(prefix: string, stats?: L1CacheStats): string {
   font-size: 13px;
 }
 
-/* M3: 三档断点 (1024 / 768 / 560), 替代原 (860 / 560)。
-   平板横屏 768-1024 仍可读为 2 列 + 双 trend。 */
-@media (max-width: 1024px) {
-  .stat-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
+/* .stat-grid / .trend-grid 的断点已随全局定义上提; 此处只保留本卡独有的 .l1-extra-grid */
 @media (max-width: 768px) {
-  .trend-grid,
   .l1-extra-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 560px) {
-  .stat-grid {
     grid-template-columns: 1fr;
   }
 }

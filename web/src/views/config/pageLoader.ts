@@ -56,6 +56,14 @@ export interface ConfigPageLoader {
   proxyLoading: Ref<boolean>
   loadError: Ref<string>
   proxyError: Ref<string>
+  /**
+   * 实体摘要通道的最近一次错误。与 loadError 不同, 它不清空 entities ——
+   * 用于区分「yaml 逃生模式」与「请求失败」: 两者都会让 entities 不可用,
+   * 但只有后者需要给用户一个可重试的错误面 (否则热编辑入口会静默消失)。
+   */
+  entitiesError: Ref<string>
+  /** /api/interfaces 通道是否已结束过一轮 (成功或失败); 复制 JSON 的就绪判定用。 */
+  toolsSettled: Ref<boolean>
   lastRefresh: Ref<number | null>
   proxyLastRefresh: Ref<number | null>
   /** 全量加载; isManual=true 时只驱动按钮 loading 态。 */
@@ -94,6 +102,8 @@ export function createConfigPageLoader(
   const proxyLoading = ref(false)
   const loadError = ref('')
   const proxyError = ref('')
+  const entitiesError = ref('')
+  const toolsSettled = ref(false)
   const lastRefresh = ref<number | null>(null)
   const proxyLastRefresh = ref<number | null>(null)
 
@@ -143,11 +153,18 @@ export function createConfigPageLoader(
     const gen = ++entitiesGen
     try {
       const value = await promise
-      if (gen === entitiesGen) entities.value = value
+      if (gen === entitiesGen) {
+        entities.value = value
+        entitiesError.value = ''
+      }
     } catch (error) {
       // 瞬时失败不阻塞配置渲染, 也不清空上次数据; 面板下次整体刷新时重试。
+      // 错误额外记到 entitiesError —— 上层据此区分「yaml 逃生模式」(预期)
+      // 与「请求失败」(非预期, 需给出可重试的错误面)。
       if (gen === entitiesGen) {
-        notify(`加载配置库实体失败: ${errorMessage(error, '未知错误')}`)
+        const message = errorMessage(error, '未知错误')
+        entitiesError.value = message
+        notify(`加载配置库实体失败: ${message}`)
       }
     }
   }
@@ -170,6 +187,10 @@ export function createConfigPageLoader(
       if (gen === toolsGen) {
         notify(`加载工具清单失败: ${errorMessage(error, '未知错误')}`)
       }
+    } finally {
+      // 无论成功/失败/契约漂移, 都标记该通道已结束过一轮 ——
+      // ConfigView 的「复制 JSON」据此判断 displayConfig 是否已补齐 tools。
+      if (gen === toolsGen) toolsSettled.value = true
     }
   }
 
@@ -214,6 +235,8 @@ export function createConfigPageLoader(
     proxyLoading,
     loadError,
     proxyError,
+    entitiesError,
+    toolsSettled,
     lastRefresh,
     proxyLastRefresh,
     load,

@@ -7,7 +7,7 @@
       aria-label="筛选工具映射"
     />
 
-    <el-table :data="filteredEntries" :empty-text="emptyText" class="cfg-table map-table">
+    <el-table :data="filteredEntries" :empty-text="emptyText" class="map-table">
       <el-table-column label="路由键" min-width="200">
         <template #default="{ row }">
           <span class="tool-name">{{ row.toolName }}</span>

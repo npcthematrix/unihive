@@ -322,30 +322,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.panel-card {
-  border-radius: 8px;
-}
-
-.error-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.card-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--el-text-color-secondary);
-  margin-left: 6px;
-}
+/* .panel-card 圆角 / .error-toolbar / .card-title / .sub 已收敛到
+   styles/main.css (全局)。 */
 
 .error-actions {
   display: flex;

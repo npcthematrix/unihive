@@ -234,6 +234,14 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       l1LoadError.value = ''
       sample.l1Rate = m.daily_l1?.hit_rate ?? null
       sample.l1Size = m.daily_l1?.size ?? null
+    } else if (metricsResult.status === 'fulfilled') {
+      // M2: 快采在跑 (fastPollActive) 时本轮跳过 mootdx metrics, 但 2.5s 快采
+      // 已在更新 metrics.value。旧码此处直接留 null → 管线标签激活期间, 每 10s
+      // 主轮询都往 L1 趋势序列塞一个假缺口 (Sparkline 断点), 与"快采更密"相悖。
+      // 回填当前已知值, 趋势连续。
+      const m = metrics.value
+      sample.l1Rate = m?.daily_l1?.hit_rate ?? null
+      sample.l1Size = m?.daily_l1?.size ?? null
     } else if (metricsResult.status === 'rejected') {
       // M2: 主动取消 (unmount) 不当作失败, 不污染 loadError。
       if (!isCanceledError(metricsResult.reason)) {

@@ -188,30 +188,8 @@ const pipelines = computed(() => {
 </script>
 
 <style scoped>
-.panel-card {
-  border-radius: 8px;
-}
-
-.pipeline-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.card-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--el-text-color-secondary);
-  margin-left: 6px;
-}
+/* .panel-card 圆角 / .pipeline-toolbar / .card-title / .sub 已收敛到
+   styles/main.css (全局)。 */
 
 .pipeline-legend {
   display: inline-flex;
@@ -346,7 +324,8 @@ const pipelines = computed(() => {
 }
 
 .layer-cumul {
-  font-size: 10px;
+  /* 11px = 本仓可读下限 (原 10px 过小) */
+  font-size: 11px;
   font-weight: 400;
   color: var(--el-text-color-placeholder);
 }

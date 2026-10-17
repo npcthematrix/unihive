@@ -1,7 +1,7 @@
 <template>
   <div class="uc-panel">
     <!-- yaml 逃生模式 -->
-    <div v-if="entities && !isDb" class="cfg-banner db-banner db-banner-yaml">
+    <div v-if="entities && !isDb" class="cfg-banner cfg-banner-warn">
       <span class="cfg-info-icon" aria-hidden="true">i</span>
       <span>
         网关以 <code>UNIHIVE_CONFIG_SOURCE=yaml</code> 启动,出厂更新中心不可用:

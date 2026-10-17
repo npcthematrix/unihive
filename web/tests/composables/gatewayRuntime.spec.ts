@@ -223,6 +223,22 @@ describe('useGatewayRuntime — 趋势采样环', () => {
     // 每点都是当前 mock 的值, 截断不改变内容
     expect(rt.l1RateSeries.value[0]).toBe(0.5)
   })
+
+  test('快采在跑时主轮询跳过 metrics: L1 趋势回填当前值, 不留假缺口', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    await rt.load() // 首轮: 正常拉到 metrics (hit_rate=0.5, size=3)
+    expect(rt.l1RateSeries.value.at(-1)).toBe(0.5)
+    expect(rt.l1SizeSeries.value.at(-1)).toBe(3)
+
+    // 模拟管线标签激活: 快采接管 metrics 更新, 主轮询跳过 mootdx 源
+    rt.fastPollActive.value = true
+    await rt.loadComponentMetrics() // 快采刷新 metrics.value
+    await rt.load() // 主轮询: metricsResult = { skipped: true }
+
+    // 旧码此处为 null (Sparkline 断点); 现应回填当前已知值
+    expect(rt.l1RateSeries.value.at(-1)).toBe(0.5)
+    expect(rt.l1SizeSeries.value.at(-1)).toBe(3)
+  })
 })
 
 describe('useGatewayRuntime — breakdown 降频与静默', () => {

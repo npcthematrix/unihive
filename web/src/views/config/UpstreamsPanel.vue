@@ -15,7 +15,7 @@
       ref="tableRef"
       :data="filteredEntries"
       :empty-text="emptyText"
-      class="cfg-table ups-table"
+      class="ups-table"
       row-key="name"
       @expand-change="onExpandChange"
     >
@@ -102,7 +102,7 @@
         <template #default="{ row }">
           <div v-if="envEntries(row.cfg).length" class="ups-detail-block">
             <div class="ups-detail-label">环境变量 (env)</div>
-            <el-table :data="envEntries(row.cfg)" class="cfg-table ups-env-table">
+            <el-table :data="envEntries(row.cfg)" class="ups-env-table">
               <el-table-column label="变量" width="160">
                 <template #default="{ row: envRow }">
                   <span class="tool-name">{{ envRow.key }}</span>

@@ -18,6 +18,25 @@ body {
 }
 
 /* ============================================================================
+   Element Plus 主题覆写 — 把 EP 默认的紫蓝 (#409EFF) 全部映射到 Tailwind blue 系
+   现代 SaaS 钻石蓝 (#2563EB / blue-600), 主内容区所有按钮 / 链接 / Tag / 激活态
+   自动跟随。slate 灰阶走 EP 默认 token 即可 (--el-text-color-* / --el-border-color-*)。
+   ============================================================================ */
+:root {
+  /* 主色 — Tailwind blue-500 (#3B82F6): 比 blue-600 轻一档, 不再"色彩稍重";
+     业界 (Linear / Vercel / Stripe) 现代 SaaS 钻石蓝的柔和档。 */
+  --el-color-primary: #3B82F6;
+  /* light-3/5/7/8/9 全部跟随 Tailwind blue 同档, 保证色相一致 */
+  --el-color-primary-light-3: #93C5FD; /* blue-300 */
+  --el-color-primary-light-5: #BFDBFE; /* blue-200 */
+  --el-color-primary-light-7: #DBEAFE; /* blue-100 */
+  --el-color-primary-light-8: #EFF6FF; /* blue-50 */
+  --el-color-primary-light-9: #F5F9FF; /* blue-50 进一步淡化 */
+  /* dark-2: hover / 按下态主色 */
+  --el-color-primary-dark-2: #2563EB; /* blue-600 */
+}
+
+/* ============================================================================
    Subtabs — ConfigView / OmniView / GuidesView 共享
    原 <button> 元素若不重置浏览器默认, 会渲染成带灰底/边框的原生按钮。
    这里强制 transparent + 2px 底部 active 下划线, 视觉上才是 tabs。
@@ -132,7 +151,9 @@ body {
 .cfg-search-wrap {
   position: relative;
   max-width: 360px;
-  margin-bottom: 12px;
+  /* 不再带 margin-bottom: 消费方 (Upstreams/Mapping/Tools panel) 都是
+     display:flex + gap:12px 的纵向容器, 会与 gap 叠加成 24px; 在
+     .ups-toolbar 这种横向 flex 行里还会把基线顶歪。间距交给容器管。 */
 }
 
 .cfg-search {
@@ -401,6 +422,24 @@ details[open] .cfg-section-toggle {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* 受限模式横幅 — 左侧 warning 竖条, 把「配置库不可用 / 逃生模式」这类
+   需要用户注意的状态从普通蓝色信息条里区分出来。
+   原先只在 DatabasePanel 的 <style scoped> 里叫 .db-banner-yaml, 但
+   UpdateCenterPanel 也引用了它 —— scoped 不外溢, 那边实际没生效。
+   2026-10-17 提到全局并改用语义化命名。 */
+.cfg-banner-warn {
+  border-left: 3px solid var(--el-color-warning);
+}
+
+/* ============================================================================
+   面板卡片 — el-card 的统一圆角。原先 7 个组件各自 scoped 重复定义了
+   完全相同的 border-radius: 8px (ConfigView 反而漏了), 收敛到全局。
+   ============================================================================ */
+
+.panel-card {
+  border-radius: 8px;
+}
+
 /* ============================================================================
    通用计数条 — MappingPanel / ToolsPanel 共用 "显示 N / M" 提示
    ============================================================================ */
@@ -410,3 +449,94 @@ details[open] .cfg-section-toggle {
   color: var(--cfg-text-secondary);
   margin-top: 4px;
 }
+
+/* ============================================================================
+   运行监控 runtime 卡片 — 头部 / 标题 / 副标题 / 状态点 / 指标网格
+   原先在 6 个 runtime 组件里各自 scoped 重复定义 (card-title ×6, sub ×5,
+   card-toolbar ×4, status-dot 系列 ×3, stat-grid / trend-grid 各 ×2)。
+   scoped 不外溢 → 同一套视觉散落 6 处, 改一处要改六处且易漂移。统一上提。
+   ============================================================================ */
+
+/* 卡片头 (标题 + 右侧操作): 类名因组件语义而异, 声明完全相同, 合并一条规则 */
+.card-toolbar,
+.pipeline-toolbar,
+.error-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 标题内联副标题 (card-title 里的 <small class="sub">) */
+.sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+  margin-left: 6px;
+}
+
+/* 状态语义点: 实心绿=启用 / 实心灰=停用 / 虚框=未知。
+   与 RespCacheCard / Mootdx2L1Card / CacheSummaryCard 同款 (M4: 点本身 aria-hidden) */
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-online {
+  background: var(--el-color-success);
+  box-shadow: 0 0 0 3px var(--el-color-success-light-9);
+}
+
+.status-disabled {
+  background: var(--el-text-color-placeholder);
+}
+
+/* 未知 = 空心虚框 (未决), 区别于停用的实心灰点 */
+.status-unknown {
+  background: transparent;
+  border: 1px dashed var(--el-border-color);
+}
+
+/* 指标网格 — RespCacheCard / Mootdx2L1Card 共用 (4 列 MiniStat + 双 trend) */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  min-height: 96px;
+}
+
+.trend-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* 三档断点 (1024 / 768 / 560): 平板横屏仍可读为 2 列 + 双 trend */
+@media (max-width: 1024px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .trend-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .stat-grid {
+    grid-template-columns: 1fr;
+  }
+}
+

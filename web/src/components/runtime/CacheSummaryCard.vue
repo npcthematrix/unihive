@@ -109,6 +109,7 @@ import { computed } from 'vue'
 import type { CacheStats } from '@/api/status'
 import type { UpstreamMetrics, L1CacheStats } from '@/api/upstream-metrics'
 import { numOrDash } from '@/utils/number'
+import { useHitRate } from '@/composables/useHitRate'
 
 /**
  * 两层缓存 summary tile: 复用 useGatewayRuntime 的同一批 props 派生,
@@ -155,39 +156,24 @@ const respToolCoverageText = computed(() => {
   return props.breakdownTotalTools > 0 ? String(props.breakdownTotalTools) : '0'
 })
 
-// 命中率: 异进程 / 缓存停用 → 抑制成 "—"; 否则走 hits/(hits+misses) 兜底
-// (hit_rate 字段偶尔因四舍五入到 0 时还展示 0%, 与真实数据漂 1 位)。
-const respRateText = computed(() => {
-  const c = props.respCache
-  if (!c?.enabled) return '—'
-  if (props.respForeign) return '—'
-  const hits = c.hits ?? 0
-  const misses = c.misses ?? 0
-  const total = hits + misses
-  if (total === 0) return '—'
-  return `${((hits / total) * 100).toFixed(1)}%`
-})
-const respRateClass = computed(() => {
-  if (respRateText.value === '—') return ''
-  const pct = parseFloat(respRateText.value)
-  if (pct >= 80) return 'rate-good'
-  if (pct >= 50) return 'rate-mid'
-  return 'rate-low'
-})
-// H1: 文字 tier 徽标 (色盲/灰度 fallback)
-const respRateTierLabel = computed(() => {
-  if (respRateText.value === '—') return null
-  const pct = parseFloat(respRateText.value)
-  if (pct >= 80) return '良好'
-  if (pct >= 50) return '一般'
-  return '较低'
-})
-const respRateTierClass = computed(() => {
-  if (!respRateTierLabel.value) return ''
-  if (respRateTierLabel.value === '良好') return 'tier-good'
-  if (respRateTierLabel.value === '一般') return 'tier-mid'
-  return 'tier-low'
-})
+// 命中率: 单一来源 useHitRate (直读后端 hit_rate)。异进程 / 缓存停用 → 抑制成 "—"。
+// 核对后端 console_api.py:815 与 cache.py:87: total>0 时 hit_rate = hits/(hits+misses),
+// total=0 时返回 None —— 与卡片原先自行 hits/(hits+misses) 的算法逐位一致。故统一到
+// useHitRate, 消除重复实现与未来漂移风险 (原注释称"hit_rate 四舍五入漂 1 位", 前提不成立)。
+const respRate = useHitRate(
+  computed(() => props.respCache),
+  {
+    suppressed: computed(() => props.respForeign || !props.respCache?.enabled),
+  },
+)
+const respRateText = respRate.text
+const respRateClass = computed(() =>
+  respRate.tier.value ? `rate-${respRate.tier.value}` : '',
+)
+const respRateTierLabel = respRate.tierLabel
+const respRateTierClass = computed(() =>
+  respRate.tier.value ? `tier-${respRate.tier.value}` : '',
+)
 const respHitHint = computed(() => {
   const c = props.respCache
   if (!c?.enabled) return c?.error || '缓存数据库未创建'
@@ -226,36 +212,21 @@ const l1SizeHint = computed(() => {
   return maxsize != null ? `上限 ${maxsize}` : '进程内, 重启清空'
 })
 
-const l1RateText = computed(() => {
-  const l1 = dailyL1.value
-  if (!l1?.enabled) return '—'
-  const hits = l1.hits ?? 0
-  const misses = l1.misses ?? 0
-  const total = hits + misses
-  if (total === 0) return '—'
-  return `${((hits / total) * 100).toFixed(1)}%`
-})
-const l1RateClass = computed(() => {
-  if (l1RateText.value === '—') return ''
-  const pct = parseFloat(l1RateText.value)
-  if (pct >= 80) return 'rate-good'
-  if (pct >= 50) return 'rate-mid'
-  return 'rate-low'
-})
-// H1: 文字 tier 徽标
-const l1RateTierLabel = computed(() => {
-  if (l1RateText.value === '—') return null
-  const pct = parseFloat(l1RateText.value)
-  if (pct >= 80) return '良好'
-  if (pct >= 50) return '一般'
-  return '较低'
-})
-const l1RateTierClass = computed(() => {
-  if (!l1RateTierLabel.value) return ''
-  if (l1RateTierLabel.value === '良好') return 'tier-good'
-  if (l1RateTierLabel.value === '一般') return 'tier-mid'
-  return 'tier-low'
-})
+// 命中率: 同响应缓存, 复用 useHitRate (单一来源); 停用 / 无指标 → 抑制成 "—"。
+const l1Rate = useHitRate(
+  computed(() => props.metrics?.daily_l1 ?? null),
+  {
+    suppressed: computed(() => !props.metrics?.daily_l1?.enabled),
+  },
+)
+const l1RateText = l1Rate.text
+const l1RateClass = computed(() =>
+  l1Rate.tier.value ? `rate-${l1Rate.tier.value}` : '',
+)
+const l1RateTierLabel = l1Rate.tierLabel
+const l1RateTierClass = computed(() =>
+  l1Rate.tier.value ? `tier-${l1Rate.tier.value}` : '',
+)
 const l1HitHint = computed(() => {
   const l1 = dailyL1.value
   if (!l1?.enabled) return l1 ? '缓存已停用' : '尚未拉到指标'
@@ -274,30 +245,8 @@ const l1ScanSizeText = computed<string>(() => {
 </script>
 
 <style scoped>
-.panel-card {
-  border-radius: 8px;
-}
-
-.card-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.card-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--el-text-color-secondary);
-  margin-left: 6px;
-}
+/* .panel-card 圆角 / .card-toolbar / .card-title / .sub / .status-dot 系列
+   已收敛到 styles/main.css (全局, 6 个 runtime 组件共用)。 */
 
 .card-meta {
   font-size: 11px;
@@ -348,27 +297,7 @@ const l1ScanSizeText = computed<string>(() => {
   white-space: nowrap;
 }
 
-/* 与 RespCacheCard / Mootdx2L1Card 同款语义点: 实心绿=启用, 实心灰=停用, 虚框=未知 */
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.status-online {
-  background: var(--el-color-success);
-  box-shadow: 0 0 0 3px var(--el-color-success-light-9);
-}
-
-.status-disabled {
-  background: var(--el-text-color-placeholder);
-}
-
-.status-unknown {
-  background: transparent;
-  border: 1px dashed var(--el-border-color);
-}
+/* .status-dot / .status-online / .status-disabled / .status-unknown 已上提全局 */
 
 .tile-status .on { color: var(--el-color-success); font-weight: 600; }
 .tile-status .off { color: var(--el-text-color-secondary); }

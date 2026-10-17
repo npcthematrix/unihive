@@ -1,7 +1,7 @@
 <template>
   <div class="db-panel">
     <!-- yaml 逃生模式 (entities 已加载但 source!=db; 加载中不渲染横幅) -->
-    <div v-if="entities && !isDb" class="cfg-banner db-banner db-banner-yaml">
+    <div v-if="entities && !isDb" class="cfg-banner cfg-banner-warn">
       <span class="cfg-info-icon" aria-hidden="true">i</span>
       <span>
         网关以 <code>UNIHIVE_CONFIG_SOURCE=yaml</code> 启动,当前配置事实源是
@@ -11,7 +11,7 @@
     </div>
 
     <template v-else-if="entities">
-      <div class="cfg-banner db-banner">
+      <div class="cfg-banner">
         <span class="cfg-info-icon" aria-hidden="true">i</span>
         <span>
           配置事实源为 <code>data/config.db</code> 实体表;出厂 YAML 仅作模板保留。
@@ -35,9 +35,10 @@
               <span class="num">{{ entities.revision }}</span>
               <span class="cfg-sub">每次净变更 +1,乐观锁版本</span>
             </div>
-            <div class="cfg-kv-key">出厂模板版本</div>
+            <div class="cfg-kv-key">库内模板版本</div>
             <div class="cfg-kv-val">
               <code>{{ shortTemplateVersion(entities.template_version) }}</code>
+              <span class="cfg-sub">出厂更新三方合并的基线</span>
             </div>
             <div class="cfg-kv-key">模板导入时间</div>
             <div class="cfg-kv-val">{{ formatUpdatedAt(entities.template_imported_at) }}</div>
@@ -59,7 +60,7 @@
           </span>
         </summary>
         <div class="cfg-section-body">
-          <el-table :data="entities.upstreams" class="cfg-table" size="small">
+          <el-table :data="entities.upstreams" size="small">
             <el-table-column label="名称" min-width="200">
               <template #default="{ row }">
                 <span class="tool-name">{{ row.name }}</span>
@@ -100,7 +101,7 @@
           </span>
         </summary>
         <div class="cfg-section-body">
-          <el-table :data="entities.sections" class="cfg-table" size="small">
+          <el-table :data="entities.sections" size="small">
             <el-table-column label="配置段" min-width="200">
               <template #default="{ row }">
                 <span class="tool-name">{{ row.section }}</span>
@@ -185,22 +186,9 @@ const toolOriginRows = computed<Array<[ConfigEntityOrigin, number]>>(() => {
   gap: 12px;
 }
 
-.db-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.db-banner code {
-  background: var(--cfg-bg-soft);
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 0.78rem;
-}
-
-.db-banner-yaml {
-  border-left: 3px solid var(--el-color-warning);
-}
+/* banner 的 flex 布局 / code 样式 / warning 竖条全部由全局
+   .cfg-banner / .cfg-banner code / .cfg-banner-warn 提供 (styles/main.css),
+   原先这里的 .db-banner* 是 scoped 的, UpdateCenterPanel 引用同名类却不生效。 */
 
 .cfg-sub {
   margin-left: 8px;

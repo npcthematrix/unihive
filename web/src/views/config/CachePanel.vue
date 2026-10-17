@@ -1,6 +1,6 @@
 <template>
   <div class="cache-panel">
-    <div class="cfg-banner cache-banner">
+    <div class="cfg-banner cache-banner" :class="{ 'cfg-banner-warn': !isDbMode }">
       <span class="cfg-info-icon" aria-hidden="true">i</span>
       <span v-if="isDbMode">
         此处为当前生效的 <code>cache</code> 全局配置 — 存于配置库
@@ -113,7 +113,7 @@
         </span>
       </summary>
       <div class="cfg-section-body">
-        <el-table :data="ttlEntries" class="cfg-table cache-ttl-table" :empty-text="ttlEmptyText">
+        <el-table :data="ttlEntries" class="cache-ttl-table" :empty-text="ttlEmptyText">
           <el-table-column label="键" min-width="190">
             <template #default="{ row }">
               <span class="tool-name">{{ row.key }}</span>
@@ -171,6 +171,9 @@ interface TtlRow {
 /**
  * TTL 档 → 含义 / 数据可变性 / 代表工具 / 取该时长的依据。
  * 与 config 的 cache.ttl 各键一一对应。
+ *
+ * 注意: 本表是前端硬编码的说明文案, 后端新增 TTL 键时不会自动出现
+ * (未知键在表格里显示为 "—")。改后端 cache 档位时请同步补此处。
  */
 const TTL_KEY_HINTS: Record<string, string> = {
   index_data:

@@ -1,5 +1,8 @@
 <template>
   <div class="view-page">
+    <!-- 页头 + 告警 + subtab 共用一个 sticky 容器: 长页滚动时标题与
+         标签一起吸顶, 不必回到顶部才能切 tab。原先只有 .view-header 吸顶。 -->
+    <div class="cfg-sticky-head">
     <header class="view-header">
       <h1 class="view-h1">配置信息</h1>
       <div class="view-actions">
@@ -7,7 +10,7 @@
           class="last-refresh"
           :class="{ failed: loadError }"
         >{{ refreshLabel }}<template v-if="proxyRefreshSuffix"> · {{ proxyRefreshSuffix }}</template></span>
-        <el-button size="small" :icon="DocumentCopy" @click="copyJson" :disabled="!config || copyInFlight" :loading="copyInFlight">复制 JSON</el-button>
+        <el-button size="small" :icon="DocumentCopy" @click="copyJson" :disabled="!copyReady || copyInFlight" :loading="copyInFlight">复制 JSON</el-button>
         <el-button
           size="small"
           :icon="Refresh"
@@ -17,8 +20,7 @@
       </div>
     </header>
 
-    <el-card shadow="never" class="panel-card">
-    <div class="alert-stack">
+    <div v-if="loadError || proxyError || entitiesFailed" class="alert-stack">
       <el-alert
         v-if="loadError"
         type="error"
@@ -40,30 +42,59 @@
       >
         <el-button size="small" @click="loadProxy">重试</el-button>
       </el-alert>
+
+      <!-- 实体摘要失败会让「可编辑」判定一并失效 (isDbMode 无法确认),
+           此处必须显式说明, 否则上游/工具/池参数三处热编辑入口会静默消失。 -->
+      <el-alert
+        v-if="entitiesFailed"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="load-error"
+        title="配置库实体加载失败, 热编辑入口已暂时隐藏"
+      >
+        <div class="entities-failed-hint">
+          无法确认配置事实源 ({{ entitiesError }})。上游连接块 / 工具规格 /
+          全局池参数的编辑入口依赖该接口, 请重试或点击右上角「立即刷新」。
+        </div>
+        <el-button size="small" @click="loadEntities">重试</el-button>
+      </el-alert>
     </div>
 
-    <!-- subtab 导航 -->
-    <nav class="cfg-subtabs" role="tablist" aria-label="配置子标签">
+    <!-- subtab 导航 — WAI-ARIA Tabs 模式: roving tabindex + 方向键 -->
+    <nav
+      class="cfg-subtabs"
+      role="tablist"
+      aria-label="配置子标签"
+      @keydown="onTablistKeydown"
+    >
       <button
         v-for="tab in TABS"
+        :id="`cfg-tab-${tab.key}`"
         :key="tab.key"
         type="button"
         class="cfg-subtab"
         :class="{ active: activeTab === tab.key }"
         role="tab"
         :aria-selected="activeTab === tab.key"
+        :aria-controls="`cfg-panel-${tab.key}`"
+        :tabindex="activeTab === tab.key ? 0 : -1"
         @click="selectTab(tab.key)"
       >
         {{ tab.title }}
         <span v-if="tab.count !== ''" class="cfg-subtab-count">{{ tab.count }}</span>
       </button>
     </nav>
+    </div>
 
     <!-- 7 个 panel, 切换只显示 active -->
     <div v-loading="loading && !config" class="cfg-panel-stack">
       <section
         v-show="activeTab === 'upstreams'"
+        id="cfg-panel-upstreams"
         class="cfg-panel"
+        role="tabpanel"
+        aria-labelledby="cfg-tab-upstreams"
       >
         <UpstreamsPanel
           :config="displayConfig"
@@ -77,14 +108,20 @@
 
       <section
         v-show="activeTab === 'mapping'"
+        id="cfg-panel-mapping"
         class="cfg-panel"
+        role="tabpanel"
+        aria-labelledby="cfg-tab-mapping"
       >
         <MappingPanel :config="displayConfig" />
       </section>
 
       <section
         v-show="activeTab === 'tools'"
+        id="cfg-panel-tools"
         class="cfg-panel"
+        role="tabpanel"
+        aria-labelledby="cfg-tab-tools"
       >
         <ToolsPanel
           :config="displayConfig"
@@ -95,7 +132,10 @@
 
       <section
         v-show="activeTab === 'cache'"
+        id="cfg-panel-cache"
         class="cfg-panel"
+        role="tabpanel"
+        aria-labelledby="cfg-tab-cache"
       >
         <!-- entities 未加载完时默认按 db 措辞, 避免逃生模式 banner 闪烁 -->
         <CachePanel
@@ -106,31 +146,39 @@
 
       <section
         v-show="activeTab === 'proxy'"
+        id="cfg-panel-proxy"
         class="cfg-panel"
+        role="tabpanel"
+        aria-labelledby="cfg-tab-proxy"
       >
         <ProxyPanel :proxy="proxy" @change="onProxyChange" />
       </section>
 
       <section
         v-show="activeTab === 'database'"
+        id="cfg-panel-database"
         class="cfg-panel"
+        role="tabpanel"
+        aria-labelledby="cfg-tab-database"
       >
         <DatabasePanel :entities="entities" />
       </section>
 
       <section
         v-show="activeTab === 'updateCenter'"
+        id="cfg-panel-updateCenter"
         class="cfg-panel"
+        role="tabpanel"
+        aria-labelledby="cfg-tab-updateCenter"
       >
         <UpdateCenterPanel :entities="entities" :active="activeTab === 'updateCenter'" @applied="onFactoryUpgradeApplied" />
       </section>
     </div>
-    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -142,7 +190,7 @@ import { formatHMS, formatLastRefreshLabel } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type TabKey } from './config/format'
 import type { UpstreamEnabledChanged } from './config/upstreams'
 import { userModifiedCount } from './config/entities'
-import { parseHashTab } from './_shared/hashTab'
+import { parseHashTab, nextTabKey } from './_shared/hashTab'
 import { createConfigPageLoader } from './config/pageLoader'
 import UpstreamsPanel from './config/UpstreamsPanel.vue'
 import MappingPanel from './config/MappingPanel.vue'
@@ -171,6 +219,8 @@ const {
   manualLoading,
   loadError,
   proxyError,
+  entitiesError,
+  toolsSettled,
   lastRefresh,
   proxyLastRefresh,
   load: loaderLoad,
@@ -220,6 +270,21 @@ function selectTab(tab: TabKey): void {
   void router.replace({ query: { ...route.query, tab } })
 }
 
+/**
+ * tablist 方向键导航 (WAI-ARIA Tabs 的 roving tabindex 模式):
+ * Left/Right 循环切换并激活, Home/End 跳首尾。
+ * 只有当前 tab 是 tabindex=0, 其余为 -1, 所以焦点必须跟着 activeTab 走。
+ */
+function onTablistKeydown(e: KeyboardEvent): void {
+  const target = nextTabKey(TAB_KEYS, activeTab.value, e.key)
+  if (!target) return
+  e.preventDefault()
+  selectTab(target)
+  void nextTick(() => {
+    document.getElementById(`cfg-tab-${target}`)?.focus()
+  })
+}
+
 const upstreamsCount = computed(() => Object.keys(config.value?.upstreams || {}).length)
 const mappingCount = computed(() => Object.keys(config.value?.upstream_tool_mapping || {}).length)
 const toolsCount = computed(() => (displayConfig.value?.tools || []).length)
@@ -230,6 +295,25 @@ const userModifiedEntitiesCount = computed(() => userModifiedCount(entities.valu
 
 /** db 实体模式才允许热编辑 (yaml 逃生模式隐藏编辑入口)。 */
 const isDbMode = computed(() => entities.value?.source === 'db')
+
+/**
+ * 实体摘要请求失败 (且没有任何可用数据) —— 与「yaml 逃生模式」是两回事:
+ * 前者是异常, 需要显式错误面 + 重试; 后者是预期状态, 只需说明即可。
+ * 两者都会让 isDbMode 变成 false, 所以必须分开呈现, 否则上游 / 工具规格 /
+ * 全局池参数三处热编辑入口会在一次瞬时失败后静默消失, 用户只看到一个 toast。
+ */
+const entitiesFailed = computed(() => Boolean(entitiesError.value) && !entities.value)
+
+/**
+ * 「复制 JSON」就绪判定。displayConfig 在快照缺 tools 时用 /api/interfaces
+ * 合成清单补齐, 所以必须等该通道结束过一轮 (成功或失败), 否则首屏 config
+ * 先落地时立即复制会得到一份缺 tools 的 JSON, 与屏幕所见不一致。
+ */
+const copyReady = computed(() => {
+  if (!config.value) return false
+  if (config.value.tools && config.value.tools.length) return true
+  return toolsSettled.value
+})
 
 const TABS = computed(() => [
   { key: 'upstreams' as const, title: TAB_TITLES.upstreams, count: upstreamsCount.value },
@@ -384,11 +468,43 @@ defineExpose({ load })
 </script>
 
 <style scoped>
+/* 页头 + 告警 + subtab 的统一吸顶容器。
+   原先是 .view-header 单独 sticky, subtab 会随内容滚走 —— 7 个 tab 里
+   「上游」「出厂更新」都很长, 滚到下半屏想切 tab 必须回到顶部。
+   这里把 .view-header 的 sticky 降级为 static, 由本容器整体承担,
+   从而不必硬编码页头高度。 */
+.cfg-sticky-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 8px;
+  background: var(--el-bg-color-page);
+}
+
+.cfg-sticky-head .view-header {
+  position: static;
+  padding-bottom: 0;
+}
+
+/* 全局 .cfg-subtabs 的 margin-bottom 让位给容器 gap, 避免双倍间距 */
+.cfg-sticky-head .cfg-subtabs {
+  margin-bottom: 0;
+}
+
+/* 只在有告警时渲染 (模板已加 v-if), 不再靠 margin-bottom 制造幽灵间距 */
 .alert-stack {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-bottom: 4px;
+}
+
+.entities-failed-hint {
+  margin: 4px 0 8px;
+  font-size: 0.82rem;
+  line-height: 1.6;
 }
 
 .cfg-panel-stack {
