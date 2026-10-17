@@ -16,17 +16,22 @@ const projectRoot = resolve(webRoot, '..')
 
 const distIndex = resolve(webRoot, 'dist/index.html')
 const distAssets = resolve(webRoot, 'dist/assets')
-const distFavicon = resolve(webRoot, 'dist/favicon.svg')
+const distFaviconSvg = resolve(webRoot, 'dist/favicon.svg')
+const distFaviconPng = resolve(webRoot, 'dist/favicon.png')
 const targetHtml = resolve(projectRoot, 'console.html')
 const targetAssets = resolve(projectRoot, 'static/console/assets')
-const targetFavicon = resolve(projectRoot, 'static/console/favicon.svg')
+const targetFaviconSvg = resolve(projectRoot, 'static/console/favicon.svg')
+const targetFaviconPng = resolve(projectRoot, 'static/console/favicon.png')
 
 rmSync(targetAssets, { recursive: true, force: true })
 cpSync(distAssets, targetAssets, { recursive: true })
 copyFileSync(distIndex, targetHtml)
 // public/ 下的散列无关静态文件 (favicon) 单独拷, 缺失不阻断构建。
-if (existsSync(distFavicon)) {
-  copyFileSync(distFavicon, targetFavicon)
+if (existsSync(distFaviconSvg)) {
+  copyFileSync(distFaviconSvg, targetFaviconSvg)
+}
+if (existsSync(distFaviconPng)) {
+  copyFileSync(distFaviconPng, targetFaviconPng)
 }
 
 console.log('[finalize-build] console.html + static/console/assets updated')

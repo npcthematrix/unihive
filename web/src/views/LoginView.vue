@@ -158,7 +158,7 @@ async function retryProbe(): Promise<void> {
   align-items: center;
   justify-content: center;
   min-height: 100%;
-  background: linear-gradient(135deg, #1d2733 0%, #2c3e55 55%, #3a506b 100%);
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 55%, #d8dde4 100%);
   padding: 24px;
 }
 

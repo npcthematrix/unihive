@@ -5,9 +5,15 @@
       :width="isCollapsed ? '64px' : '220px'"
       class="sidebar"
     >
-      <div class="brand">
+      <div class="brand" :class="{ collapsed: isCollapsed }">
         <img class="brand-mark" :src="brandMark" alt="UniHive" />
-        <span v-show="!isCollapsed" class="brand-name">UniHive</span>
+        <transition name="brand-fade">
+          <span v-if="!isCollapsed" class="brand-text">
+            <span class="brand-name">
+              <span class="brand-uni">Uni</span><span class="brand-hive">Hive</span>
+            </span>
+          </span>
+        </transition>
       </div>
       <el-menu
         router
@@ -15,8 +21,8 @@
         :collapse="isCollapsed"
         class="nav-menu"
         background-color="transparent"
-        text-color="rgba(255,255,255,0.72)"
-        active-text-color="#ffffff"
+        text-color="#475569"
+        active-text-color="#2563EB"
       >
         <el-menu-item
           v-for="item in MENU"
@@ -33,13 +39,13 @@
       <!-- 侧栏脚区: 模式/用户 + 退出 + 折叠钮 (顶栏已移除) -->
       <div class="sidebar-footer" :class="{ collapsed: isCollapsed }">
         <template v-if="!isCollapsed">
-          <div class="sf-mode" :title="isOpenMode ? '未启用登录鉴权' : ''">
+          <div class="sf-mode" :class="{ open: isOpenMode }" :title="isOpenMode ? '未启用登录鉴权' : ''">
             <el-icon class="sf-mode-icon">
               <Unlock v-if="isOpenMode" />
               <UserFilled v-else />
             </el-icon>
             <span class="sf-mode-text">
-              {{ isOpenMode ? '开放模式 · 未启用登录' : auth.username }}
+              {{ isOpenMode ? '开放模式' : auth.username }}
             </span>
           </div>
           <el-button
@@ -52,17 +58,22 @@
           >退出登录</el-button>
         </template>
 
-        <el-button
-          text
-          class="sf-collapse"
-          :aria-label="isCollapsed ? '展开侧栏' : '折叠侧栏'"
-          @click="toggleCollapsed"
+        <el-tooltip
+          :content="isCollapsed ? '展开侧栏' : '折叠侧栏'"
+          placement="right"
         >
-          <el-icon :size="18">
-            <Expand v-if="isCollapsed" />
-            <Fold v-else />
-          </el-icon>
-        </el-button>
+          <el-button
+            text
+            class="sf-collapse"
+            :aria-label="isCollapsed ? '展开侧栏' : '折叠侧栏'"
+            @click="toggleCollapsed"
+          >
+            <el-icon :size="18">
+              <Expand v-if="isCollapsed" />
+              <Fold v-else />
+            </el-icon>
+          </el-button>
+        </el-tooltip>
       </div>
     </el-aside>
 
@@ -80,7 +91,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, Connection, Setting, Grid, Files, Fold, Expand, DataLine, UserFilled, Unlock } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
-import brandMark from '@/assets/unihive-mark-dark.svg'
+import brandMark from '@/assets/unihive-logo.png'
 
 const route = useRoute()
 const router = useRouter()
@@ -185,40 +196,72 @@ onBeforeUnmount(() => {
 .sidebar {
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, #1d2733 0%, #141c26 100%);
-  color: #fff;
+  /* 现代化浅色: 单一底色, 不再 180deg 渐变 (差异肉眼不可见, 纯冗余);
+     与主内容区仅靠 1px slate 右边分隔; 品牌区下沿/脚区上沿的两道横线也减掉
+     (2026-10-06 侧栏审视 M1 + L3), 整张侧栏作为一块面板出现。 */
+  background: #FAFBFC;
+  color: #0F172A;
   overflow-x: hidden;
   transition: width 0.2s ease;
+  border-right: 1px solid #E2E8F0;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 52px;
-  padding: 0 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  gap: 12px;
+  height: 56px;
+  padding: 0 20px;
+}
+
+/* H3 折叠态: brand 区只剩 logo, 需居中, padding 也归零让 logo 真正垂直/水平居中 */
+.brand.collapsed {
+  justify-content: center;
+  padding: 0;
 }
 
 .brand-mark {
-  width: 26px;
-  height: 26px;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
-  /* 深色侧栏上给一点投影, 标体更浮出来 */
-  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
+}
+
+.brand-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  /* L6 折叠态过渡: v-if 配合 <transition name="brand-fade">, 150ms ease */
+  transition: opacity 150ms ease;
+}
+
+.brand-fade-enter-active,
+.brand-fade-leave-active {
+  transition: opacity 150ms ease;
+}
+
+.brand-fade-enter-from,
+.brand-fade-leave-to {
+  opacity: 0;
 }
 
 .brand-name {
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 600;
-  letter-spacing: -0.2px;
+  letter-spacing: -0.3px;
   white-space: nowrap;
   /* 优先 Space Grotesk, 本机未装则 fallback sans-serif (无需网络字体)。 */
   font-family: 'Space Grotesk', 'Inter', system-ui, -apple-system, sans-serif;
-  background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+}
+
+.brand-uni {
+  /* 紫色 — H2 复用点: 与侧栏脚"开放模式"徽章同色, 形成"无鉴权警示"语义对 */
+  color: #7c3aed;
+}
+
+.brand-hive {
+  /* "Hive" 蜂巢系统 — 蓝系 */
+  color: #2563EB;
 }
 
 .nav-menu {
@@ -228,17 +271,34 @@ onBeforeUnmount(() => {
 }
 
 .nav-menu :deep(.el-menu-item) {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-start !important;
+  padding: 0 20px !important;
+  margin: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box;
   border-radius: 6px;
-  margin: 2px 0;
-  height: 42px;
+  height: 38px;
+}
+
+/* L1 图标统一: 显式 18px + svg 占位, 消除 EP 不同 icon 内部 padding 引起的视觉差 */
+.nav-menu :deep(.el-menu-item .el-icon) {
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
+  margin-right: 10px !important;
 }
 
 .nav-menu :deep(.el-menu-item.is-active) {
-  background: rgba(64, 158, 255, 0.18);
+  /* 现代 SaaS: 极浅蓝底 + 主蓝文字, 不再叠两层不同蓝 */
+  background: #EFF6FF;
+  color: #2563EB;
+  font-weight: 600;
 }
 
 .nav-menu :deep(.el-menu-item:hover) {
-  background: rgba(255, 255, 255, 0.06);
+  background: #F1F5F9;
 }
 
 /* 侧栏脚区: 模式/用户 + 退出 + 折叠钮 */
@@ -247,7 +307,6 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .sidebar-footer.collapsed {
@@ -264,34 +323,41 @@ onBeforeUnmount(() => {
 }
 
 .sf-mode-icon {
-  color: rgba(255, 255, 255, 0.55);
+  color: #64748B;
   flex-shrink: 0;
 }
 
 .sf-mode-text {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.72);
+  color: #64748B;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* H2 紫色复用: 开放模式 (无鉴权) 用品牌紫与品牌区"Uni"前缀同色,
+   在 220px 窄侧栏里形成"未鉴权 — 警示"语义。已登录态保持中性灰。 */
+.sf-mode.open .sf-mode-icon,
+.sf-mode.open .sf-mode-text {
+  color: #7c3aed;
+}
+
 .sf-logout {
-  color: rgba(255, 255, 255, 0.72);
+  color: #64748B;
   flex-shrink: 0;
 }
 
 .sf-logout:hover {
-  color: #fff;
+  color: #3B82F6;
 }
 
 .sf-collapse {
-  color: rgba(255, 255, 255, 0.72);
+  color: #64748B;
   flex-shrink: 0;
 }
 
 .sf-collapse:hover {
-  color: #fff;
+  color: #3B82F6;
 }
 
 .main {
