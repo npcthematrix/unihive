@@ -57,6 +57,41 @@ export function statusIcon(status: string | undefined): string {
 }
 
 /**
+ * sync status → 中文展示名。原先模板直接渲染后端英文枚举
+ * (success/failed/running), 与页面其余中文标签不一致。
+ * 未知值原样返回, 不吞掉后端将来新增的状态。
+ */
+const STATUS_DISPLAY: Record<string, string> = {
+  success: '成功',
+  failed: '失败',
+  running: '进行中',
+}
+
+export function displayStatus(status: string | undefined | null): string {
+  if (!status) return '-'
+  return STATUS_DISPLAY[status] || status
+}
+
+/**
+ * 由**已提交**的筛选条件生成结果描述, 供结果头 / 空态回显。
+ *
+ * 必须读已提交值而不是输入框草稿: 用户改了关键词但没回车时, 描述若读草稿
+ * 就会与实际展示的数据不一致 (2026-10-17 审视 HIGH-2)。
+ */
+export function buildQueryDesc(filters: {
+  source?: string
+  boardType?: string
+  keyword?: string
+}): string {
+  const parts: string[] = []
+  if (filters.source) parts.push(`数据源=${displaySource(filters.source)}`)
+  if (filters.boardType) parts.push(`类型=${displayBoardType(filters.boardType)}`)
+  const kw = (filters.keyword || '').trim()
+  if (kw) parts.push(`关键词="${kw}"`)
+  return parts.join(', ') || '(无筛选)'
+}
+
+/**
  * 解析后端时间字符串。后端 datetime('now')/CURRENT_TIMESTAMP 存的是 UTC
  * 'YYYY-MM-DD HH:MM:SS'（无 Z、无 T）；这里显式按 UTC 解析后转本地。
  * 已带时区/ISO 完整信息的输入则原样交给 Date。

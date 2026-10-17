@@ -1,97 +1,111 @@
 <template>
   <div class="view-page">
-    <header class="view-header">
-      <h1 class="view-h1">OMNI板块管理</h1>
-      <div class="view-actions">
-        <span
-          class="last-refresh"
-          :class="{ failed: loadError }"
-        >{{ refreshLabel }}</span>
-        <el-button :icon="Refresh" @click="refreshAll" :loading="manualLoading">
-          立即刷新
-        </el-button>
-      </div>
-    </header>
+    <!-- 标题 + 子标签整体吸顶: 面板内容很长, 滚到下半屏仍可直接切 tab -->
+    <div class="cfg-sticky-head">
+      <header class="view-header">
+        <h1 class="view-h1">OMNI板块管理</h1>
+        <div class="view-actions">
+          <span
+            class="last-refresh"
+            :class="{ failed: loadError }"
+          >{{ refreshLabel }}</span>
+          <el-button :icon="Refresh" @click="refreshAll" :loading="manualLoading">
+            立即刷新
+          </el-button>
+        </div>
+      </header>
+
+      <!-- 子标签导航 — WAI-ARIA Tabs: roving tabindex + 方向键 -->
+      <nav
+        class="cfg-subtabs"
+        role="tablist"
+        aria-label="OMNI 子标签"
+        @keydown="onTablistKeydown"
+      >
+        <button
+          v-for="tab in TABS"
+          :id="`omni-tab-${tab.key}`"
+          :key="tab.key"
+          type="button"
+          class="cfg-subtab"
+          :class="{ active: activeTab === tab.key }"
+          role="tab"
+          :aria-selected="activeTab === tab.key"
+          :aria-controls="`omni-panel-${tab.key}`"
+          :tabindex="activeTab === tab.key ? 0 : -1"
+          @click="selectTab(tab.key)"
+        >{{ tab.title }}</button>
+      </nav>
+    </div>
 
     <el-card shadow="never" class="panel-card">
+      <!-- 3 个 panel, 切换只显示 active -->
+      <!-- 首屏加载由各 panel 内部 skeleton 承担, 不套外层遮罩 (避免 mask + skeleton 同屏) -->
+      <div class="cfg-panel-stack">
+        <section
+          v-show="activeTab === 'stats'"
+          id="omni-panel-stats"
+          role="tabpanel"
+          aria-labelledby="omni-tab-stats"
+        >
+          <StatsPanel
+            :stats="stats"
+            :recent-logs="recentLogs"
+            :loading="loading"
+            :load-error="loadError"
+            @reload="loadStats(true)"
+          />
+        </section>
 
-    <!-- 子标签导航 -->
-    <nav class="cfg-subtabs" role="tablist" aria-label="OMNI 子标签">
-      <button
-        v-for="tab in TABS"
-        :key="tab.key"
-        type="button"
-        class="cfg-subtab"
-        :class="{ active: activeTab === tab.key }"
-        role="tab"
-        :aria-selected="activeTab === tab.key"
-        @click="selectTab(tab.key)"
-      >{{ tab.title }}</button>
-    </nav>
+        <section
+          v-show="activeTab === 'query'"
+          id="omni-panel-query"
+          role="tabpanel"
+          aria-labelledby="omni-tab-query"
+        >
+          <QueryPanel
+            ref="queryPanelRef"
+            :sectors="sectors"
+            :total-count="totalCount"
+            :page="queryPage"
+            :page-size="queryPageSize"
+            :loading="queryLoading"
+            :load-error="queryError"
+            :has-searched="hasSearched"
+            :query-filters="queryFilters"
+            @search="onSearch"
+            @page-change="onPageChange"
+          />
+        </section>
 
-    <!-- 3 个 panel, 切换只显示 active -->
-    <!-- 首屏加载由各 panel 内部 skeleton 承担, 不套外层遮罩 (避免 mask + skeleton 同屏) -->
-    <div class="omni-panel-stack">
-      <section
-        v-show="activeTab === 'stats'"
-        class="cfg-panel"
-        aria-label="数据统计"
-      >
-        <StatsPanel
-          :stats="stats"
-          :recent-logs="recentLogs"
-          :loading="loading"
-          :load-error="loadError"
-          @reload="loadStats(true)"
-        />
-      </section>
-
-      <section
-        v-show="activeTab === 'query'"
-        class="cfg-panel"
-        aria-label="板块查询"
-      >
-        <QueryPanel
-          ref="queryPanelRef"
-          :sectors="sectors"
-          :total-count="totalCount"
-          :page="queryPage"
-          :page-size="queryPageSize"
-          :loading="queryLoading"
-          :load-error="queryError"
-          :has-searched="hasSearched"
-          :query-filters="queryFilters"
-          @search="onSearch"
-          @page-change="onPageChange"
-        />
-      </section>
-
-      <section
-        v-show="activeTab === 'sync'"
-        class="cfg-panel"
-        aria-label="同步管理"
-      >
-        <SyncPanel
-          ref="syncPanelRef"
-          :recent-logs="recentLogs"
-          :loading="loading"
-          @synced="onSyncCompleted"
-          @poll="onPoll"
-        />
-      </section>
-    </div>
+        <section
+          v-show="activeTab === 'sync'"
+          id="omni-panel-sync"
+          role="tabpanel"
+          aria-labelledby="omni-tab-sync"
+        >
+          <SyncPanel
+            ref="syncPanelRef"
+            :recent-logs="recentLogs"
+            :loading="loading"
+            @synced="onSyncCompleted"
+            @poll="onPoll"
+          />
+        </section>
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import type {
   OmniSector,
   OmniSource,
   OmniStatRow,
+  OmniStatsResponse,
   OmniSyncLog,
 } from '@/api/omni'
 import {
@@ -102,7 +116,7 @@ import {
 import { errorMessage, isCanceledError } from '@/api/client'
 import { formatLastRefreshLabel } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type OmniTabKey } from './omni/format'
-import { parseHashTab } from './_shared/hashTab'
+import { nextTabKey, parseHashTab } from './_shared/hashTab'
 import StatsPanel from './omni/StatsPanel.vue'
 import QueryPanel from './omni/QueryPanel.vue'
 import SyncPanel from './omni/SyncPanel.vue'
@@ -118,6 +132,9 @@ const loading = ref(false)
 const manualLoading = ref(false)
 const loadError = ref('')
 const lastRefresh = ref<number | null>(null)
+/** 是否已经成功落过一次 stats —— 不能用 stats.length 判定 (空库时永远为 false,
+ *  导致每次切 tab 都重拉)。 */
+const statsLoaded = ref(false)
 
 const sectors = ref<OmniSector[]>([])
 const totalCount = ref(0)
@@ -132,36 +149,55 @@ const queryFilters = ref<{ source: OmniSource; boardType: string; keyword: strin
   keyword: '',
 })
 
-const hasData = computed(
-  () => stats.value.length > 0 || recentLogs.value.length > 0,
-)
-
-// ===== single-flight: stats 多个 tab 共享同一个 in-flight =====
+// ===== stats 加载 =====
+// single-flight: 非 force 调用共享同一个 in-flight; force 走独立请求, 用
+// generation 计数做归属守卫 —— 否则并发 force 时旧响应可能覆盖新响应、
+// 并提前把 loading 复位。
 let statsInflight: Promise<void> | null = null
+let statsGeneration = 0
+
+/**
+ * 落盘 stats 响应。
+ * @param keepOnFailure 失败时保留上一次的有效数据 (轮询路径用), 避免一次
+ *   瞬时失败把已展示的统计清空。
+ */
+function applyStats(d: OmniStatsResponse, keepOnFailure = false): void {
+  if (d.status === 'failed') {
+    loadError.value = d.message || 'OMNI 后端返回失败'
+    if (!keepOnFailure) {
+      stats.value = []
+      recentLogs.value = []
+    }
+    return
+  }
+  loadError.value = ''
+  stats.value = d.stats || []
+  recentLogs.value = d.recent_logs || []
+  lastRefresh.value = Date.now()
+  // 只有真正拿到数据才算「拉过」; 失败时保持 false, 让下次切 tab 再试一次。
+  statsLoaded.value = true
+}
 
 async function loadStats(force = false) {
   if (statsInflight && !force) return statsInflight
+  const gen = ++statsGeneration
   const promise = (async () => {
     if (force) manualLoading.value = true
     else loading.value = true
-    loadError.value = ''
+    if (force) loadError.value = ''
     try {
       const d = await getOmniStats()
-      if (d.status === 'failed') {
-        loadError.value = d.message || 'OMNI 后端返回失败'
-        stats.value = []
-        recentLogs.value = []
-      } else {
-        stats.value = d.stats || []
-        recentLogs.value = d.recent_logs || []
-        lastRefresh.value = Date.now()
-      }
+      if (gen !== statsGeneration) return // 已被更新的请求取代
+      applyStats(d)
     } catch (e) {
+      if (gen !== statsGeneration) return
       loadError.value = errorMessage(e, '加载 OMNI 状态失败')
     } finally {
-      loading.value = false
-      manualLoading.value = false
-      statsInflight = null
+      if (gen === statsGeneration) {
+        loading.value = false
+        manualLoading.value = false
+        statsInflight = null
+      }
     }
   })()
   statsInflight = promise
@@ -251,9 +287,9 @@ async function onSyncCompleted() {
   await loadStats(true)
 }
 
-function onPoll() {
-  // 轮询刷新：非 force，不触发顶栏按钮 loading
-  void loadStats(false)
+/** 轮询已带回 payload: 直接落盘, 不再重复 GET, 也不点亮顶栏 loading。 */
+function onPoll(payload: OmniStatsResponse): void {
+  applyStats(payload, true)
 }
 
 const queryPanelRef = ref<InstanceType<typeof QueryPanel> | null>(null)
@@ -276,16 +312,29 @@ const TABS = computed(() =>
   })),
 )
 
+function onTablistKeydown(e: KeyboardEvent): void {
+  const target = nextTabKey(TAB_KEYS, activeTab.value, e.key)
+  if (!target) return
+  e.preventDefault()
+  void selectTab(target)
+  void nextTick(() => {
+    document.getElementById(`omni-tab-${target}`)?.focus()
+  })
+}
+
 async function selectTab(tab: OmniTabKey): Promise<void> {
   if (activeTab.value === tab) return
   activeTab.value = tab
   void router.replace({ query: { ...route.query, tab } })
 
+  // 离开查询页时收起成分股弹窗 —— 弹窗 teleport 到 body, v-show 藏不住它。
+  // 注意不要在这里取消同步: v-show 下 SyncPanel 保持挂载, 轮询要继续跑
+  // 才能让「中止等待 / 接管」态收敛。
+  if (tab !== 'query') queryPanelRef.value?.closeModal()
+
   if (tab === 'stats' || tab === 'sync') {
     // 共享 stats 数据, 切换 tab 不重新拉 (除非从未拉过)
-    if (!hasData.value) await loadStats()
-  } else if (tab === 'query') {
-    // query tab 默认显示空状态, 不主动拉 (用户点查询才拉)
+    if (!statsLoaded.value) await loadStats()
   }
 }
 
@@ -305,9 +354,3 @@ onBeforeUnmount(() => {
   queryPanelRef.value?.closeModal()
 })
 </script>
-
-<style scoped>
-.omni-panel-stack {
-  min-height: 240px;
-}
-</style>

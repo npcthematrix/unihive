@@ -92,7 +92,6 @@
       <section
         v-show="activeTab === 'upstreams'"
         id="cfg-panel-upstreams"
-        class="cfg-panel"
         role="tabpanel"
         aria-labelledby="cfg-tab-upstreams"
       >
@@ -109,7 +108,6 @@
       <section
         v-show="activeTab === 'mapping'"
         id="cfg-panel-mapping"
-        class="cfg-panel"
         role="tabpanel"
         aria-labelledby="cfg-tab-mapping"
       >
@@ -119,7 +117,6 @@
       <section
         v-show="activeTab === 'tools'"
         id="cfg-panel-tools"
-        class="cfg-panel"
         role="tabpanel"
         aria-labelledby="cfg-tab-tools"
       >
@@ -133,7 +130,6 @@
       <section
         v-show="activeTab === 'cache'"
         id="cfg-panel-cache"
-        class="cfg-panel"
         role="tabpanel"
         aria-labelledby="cfg-tab-cache"
       >
@@ -147,7 +143,6 @@
       <section
         v-show="activeTab === 'proxy'"
         id="cfg-panel-proxy"
-        class="cfg-panel"
         role="tabpanel"
         aria-labelledby="cfg-tab-proxy"
       >
@@ -157,7 +152,6 @@
       <section
         v-show="activeTab === 'database'"
         id="cfg-panel-database"
-        class="cfg-panel"
         role="tabpanel"
         aria-labelledby="cfg-tab-database"
       >
@@ -167,7 +161,6 @@
       <section
         v-show="activeTab === 'updateCenter'"
         id="cfg-panel-updateCenter"
-        class="cfg-panel"
         role="tabpanel"
         aria-labelledby="cfg-tab-updateCenter"
       >
@@ -468,31 +461,9 @@ defineExpose({ load })
 </script>
 
 <style scoped>
-/* 页头 + 告警 + subtab 的统一吸顶容器。
-   原先是 .view-header 单独 sticky, subtab 会随内容滚走 —— 7 个 tab 里
-   「上游」「出厂更新」都很长, 滚到下半屏想切 tab 必须回到顶部。
-   这里把 .view-header 的 sticky 降级为 static, 由本容器整体承担,
-   从而不必硬编码页头高度。 */
-.cfg-sticky-head {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-bottom: 8px;
-  background: var(--el-bg-color-page);
-}
-
-.cfg-sticky-head .view-header {
-  position: static;
-  padding-bottom: 0;
-}
-
-/* 全局 .cfg-subtabs 的 margin-bottom 让位给容器 gap, 避免双倍间距 */
-.cfg-sticky-head .cfg-subtabs {
-  margin-bottom: 0;
-}
+/* 页头 + 告警 + subtab 的统一吸顶容器 .cfg-sticky-head, 以及 .cfg-panel-stack
+   已于 2026-10-17 上提到 main.css (OmniView 引用了同名类但 scoped 不外溢,
+   那边实际没生效)。此处只保留本页特有的样式。 */
 
 /* 只在有告警时渲染 (模板已加 v-if), 不再靠 margin-bottom 制造幽灵间距 */
 .alert-stack {
@@ -505,9 +476,5 @@ defineExpose({ load })
   margin: 4px 0 8px;
   font-size: 0.82rem;
   line-height: 1.6;
-}
-
-.cfg-panel-stack {
-  min-height: 240px;
 }
 </style>

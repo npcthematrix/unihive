@@ -20,17 +20,15 @@
       >{{ tab.title }}</button>
     </nav>
 
-    <div class="guides-panel-stack">
+    <div class="cfg-panel-stack">
       <section
         v-show="activeTab === 'human'"
-        class="cfg-panel"
         aria-label="人工接入指南"
       >
         <OnboardingPanel />
       </section>
       <section
         v-show="activeTab === 'ai'"
-        class="cfg-panel"
         aria-label="AI 接入指南"
       >
         <AiOnboardingPanel />
@@ -84,9 +82,3 @@ const TABS = computed(() =>
   })),
 )
 </script>
-
-<style scoped>
-.guides-panel-stack {
-  min-height: 200px;
-}
-</style>

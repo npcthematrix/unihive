@@ -14,9 +14,9 @@
         :type="statusTagType(l.status)"
         size="small"
         effect="light"
-        :aria-label="`同步状态: ${l.status}`"
+        :aria-label="`同步状态: ${displayStatus(l.status)}`"
       >
-        {{ statusIcon(l.status) }}{{ l.status }}
+        {{ statusIcon(l.status) }}{{ displayStatus(l.status) }}
       </el-tag>
       <span class="log-count">{{ l.record_count || 0 }} 条</span>
     </li>
@@ -28,6 +28,7 @@ import type { OmniSyncLog } from '@/api/omni'
 import {
   displayBoardType,
   displaySource,
+  displayStatus,
   formatTime,
   statusIcon,
   statusTagType,
@@ -58,12 +59,12 @@ defineProps<{
   background: var(--card-bg);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
-  font-size: 0.82rem;
+  font-size: 13px;
 }
 
 .log-time {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.78rem;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
   min-width: 140px;
 }

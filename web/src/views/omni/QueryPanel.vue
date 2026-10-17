@@ -10,7 +10,7 @@
         @keydown.enter="onSearch"
         @clear="onSearch"
       />
-      <el-select v-model="source" placeholder="全部数据源" clearable style="width: 160px" @change="onSearch">
+      <el-select v-model="source" class="query-select" placeholder="全部数据源" clearable @change="onSearch">
         <el-option
           v-for="key in SOURCE_KEYS"
           :key="key"
@@ -18,7 +18,7 @@
           :value="key"
         />
       </el-select>
-      <el-select v-model="boardType" placeholder="全部类型" clearable style="width: 160px" @change="onSearch">
+      <el-select v-model="boardType" class="query-select" placeholder="全部类型" clearable @change="onSearch">
         <el-option
           v-for="key in BOARD_TYPE_KEYS"
           :key="key"
@@ -58,7 +58,7 @@
         <div class="results-header">
           找到 <strong>{{ totalCount }}</strong> 个板块
           <span class="feedback-meta">[{{ queryDesc }}]</span>
-          <span class="results-hint">点击板块行查看成分股</span>
+          <span class="results-hint">点击板块名称查看成分股</span>
         </div>
 
         <el-table
@@ -69,7 +69,15 @@
         >
           <el-table-column label="板块名称" min-width="180">
             <template #default="{ row }">
-              <span class="sector-name" :title="row.name">{{ row.name }}</span>
+              <!-- 用真实 button 提供键盘等价入口: el-table 的行不可聚焦,
+                   只靠 @row-click 时键盘用户无法打开成分股弹窗 -->
+              <button
+                type="button"
+                class="sector-link"
+                :title="row.name"
+                :aria-label="`查看 ${row.name} 的成分股`"
+                @click.stop="openSectorModal(row)"
+              >{{ row.name }}</button>
             </template>
           </el-table-column>
           <el-table-column label="代码" width="120">
@@ -174,6 +182,7 @@ import { errorMessage, isCanceledError } from '@/api/client'
 import {
   BOARD_TYPE_KEYS,
   SOURCE_KEYS,
+  buildQueryDesc,
   displayBoardType,
   displaySource,
   formatDate,
@@ -214,13 +223,17 @@ watch(
 
 const totalPages = computed(() => Math.ceil(props.totalCount / props.pageSize))
 
-const queryDesc = computed(() => {
-  const parts: string[] = []
-  if (source.value) parts.push(`数据源=${displaySource(source.value)}`)
-  if (boardType.value) parts.push(`类型=${displayBoardType(boardType.value)}`)
-  if (keyword.value.trim()) parts.push(`关键词="${keyword.value.trim()}"`)
-  return parts.join(', ') || '(无筛选)'
-})
+/**
+ * 结果描述必须读**已提交**的 props.queryFilters, 而不是上面的输入框草稿:
+ * 用户改了关键词但没回车时, 读草稿会让描述与实际展示的数据不一致。
+ */
+const queryDesc = computed(() =>
+  buildQueryDesc({
+    source: props.queryFilters.source,
+    boardType: props.queryFilters.boardType,
+    keyword: props.queryFilters.keyword,
+  }),
+)
 
 function onSearch() {
   emit('search', {
@@ -340,6 +353,10 @@ defineExpose({
   min-width: 200px;
 }
 
+.query-select {
+  width: 160px;
+}
+
 /* 窄屏: keyword 撑满一行, 两个 select 紧跟其后; 避免 640-768px 区间
    320+160+160 = 640 与 padding/gap 叠加撑爆 query-bar 的尴尬换行。 */
 @media (max-width: 768px) {
@@ -358,7 +375,7 @@ defineExpose({
   gap: 8px;
   padding: 20px 16px;
   border-radius: 6px;
-  font-size: 0.85rem;
+  font-size: 13px;
 }
 
 .feedback-info {
@@ -383,11 +400,11 @@ defineExpose({
 .feedback-meta {
   margin-left: 4px;
   color: var(--el-text-color-secondary);
-  font-size: 0.78rem;
+  font-size: 12px;
 }
 
 .results-header {
-  font-size: 0.85rem;
+  font-size: 13px;
   margin-bottom: 8px;
 }
 
@@ -395,7 +412,7 @@ defineExpose({
   margin-left: 12px;
   color: var(--el-text-color-placeholder);
   font-weight: 400;
-  font-size: 0.78rem;
+  font-size: 12px;
   font-style: italic;
 }
 
@@ -403,8 +420,28 @@ defineExpose({
   cursor: pointer;
 }
 
-.sector-name {
+/* 板块名 = 可聚焦按钮 (键盘等价入口), 外观保持链接感 */
+.sector-link {
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
   font-weight: 500;
+  color: var(--el-color-primary);
+  text-align: left;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.sector-link:hover {
+  text-decoration: underline;
+}
+
+.sector-link:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
 }
 
 .pagination {
@@ -416,19 +453,19 @@ defineExpose({
 }
 
 .page-info {
-  font-size: 0.78rem;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
 .modal-meta {
-  font-size: 0.82rem;
+  font-size: 13px;
   color: var(--el-text-color-secondary);
   margin-bottom: 12px;
 }
 
 .stocks-table code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.78rem;
+  font-size: 12px;
 }
 
 .status-icon {
@@ -438,11 +475,13 @@ defineExpose({
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  font-size: 0.7rem;
+  font-size: 11px;
 }
 
+/* 用 Element Plus danger 语义色, 浅/暗主题自动适配
+   (旧硬编码 #b91c1c 在暗色主题下与浅底容器对比度过低) */
 .status-icon-error {
-  color: #b91c1c;
+  color: var(--el-color-danger);
 }
 
 .status-icon-empty {

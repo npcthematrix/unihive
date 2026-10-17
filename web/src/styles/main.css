@@ -441,6 +441,47 @@ details[open] .cfg-section-toggle {
 }
 
 /* ============================================================================
+   页面级布局 — 子标签吸顶容器 / panel 栈 / 小节标题
+   ConfigView 与 OmniView 是同一套「标题 + 子标签 + panel 栈」结构:
+   - .cfg-sticky-head 把 .view-header 的 sticky 降级为 static, 由容器整体承担,
+     从而不必硬编码页头高度 (原先只写在 ConfigView 的 scoped 里, OmniView
+     引用了同名类却完全不生效 —— scoped 不外溢)
+   - .cfg-panel-stack 给 v-show 面板留最小高度, 避免切换时页面高度跳变
+   - .panel-section-title 是面板内小节标题, 原先 SyncPanel / StatsPanel 各写一份
+   ============================================================================ */
+
+.cfg-sticky-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 8px;
+  background: var(--el-bg-color-page);
+}
+
+.cfg-sticky-head .view-header {
+  position: static;
+  padding-bottom: 0;
+}
+
+/* 全局 .cfg-subtabs 的 margin-bottom 让位给容器 gap, 避免双倍间距 */
+.cfg-sticky-head .cfg-subtabs {
+  margin-bottom: 0;
+}
+
+.cfg-panel-stack {
+  min-height: 240px;
+}
+
+.panel-section-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* ============================================================================
    通用计数条 — MappingPanel / ToolsPanel 共用 "显示 N / M" 提示
    ============================================================================ */
 

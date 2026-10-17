@@ -1,11 +1,29 @@
 <template>
   <div class="stats-panel">
+    <!-- 刷新失败但已有可用数据: 保留网格, 只在上方加一条提示 ——
+         原先 v-else-if="loadError" 排在网格分支之前, 一次瞬时失败会把
+         已展示的统计整块换成告警。 -->
+    <el-alert
+      v-if="loadError && stats.length"
+      type="warning"
+      :closable="false"
+      show-icon
+      :title="`刷新失败, 以下为上次结果: ${loadError}`"
+    />
+
     <el-skeleton v-if="loading && !stats.length" :rows="3" animated />
 
-    <el-empty
-      v-else-if="!stats.length && !loadError"
-      description="暂无数据, 请先同步"
-    />
+    <div v-else-if="stats.length" class="stats-grid">
+      <div v-for="s in stats" :key="`${s.source}-${s.board_type}`" class="stat-card">
+        <div class="stat-label">
+          {{ displaySource(s.source) }} / {{ displayBoardType(s.board_type) }}
+        </div>
+        <div class="stat-value stat-value--big">{{ s.sector_count }}</div>
+        <div class="stat-unit">板块</div>
+        <div class="stat-value">{{ s.total_stocks }}</div>
+        <div class="stat-unit">股票</div>
+      </div>
+    </div>
 
     <el-alert
       v-else-if="loadError"
@@ -19,21 +37,11 @@
       </template>
     </el-alert>
 
-    <div v-else class="stats-grid">
-      <div v-for="s in stats" :key="`${s.source}-${s.board_type}`" class="stat-card">
-        <div class="stat-label">
-          {{ displaySource(s.source) }} / {{ displayBoardType(s.board_type) }}
-        </div>
-        <div class="stat-value stat-value--big">{{ s.sector_count }}</div>
-        <div class="stat-unit">板块</div>
-        <div class="stat-value">{{ s.total_stocks }}</div>
-        <div class="stat-unit">股票</div>
-      </div>
-    </div>
+    <el-empty v-else description="暂无数据, 请先同步" />
 
     <!-- 同步日志 -->
     <section class="sync-logs">
-      <h3>同步日志</h3>
+      <h3 class="panel-section-title">同步日志</h3>
       <SyncLogList :logs="recentLogs" :loading="loading" />
     </section>
   </div>
@@ -81,36 +89,30 @@ defineEmits<{
 }
 
 .stat-label {
-  font-size: 0.78rem;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-bottom: 4px;
 }
 
 .stat-value {
-  font-size: 1.4rem;
+  font-size: 22px;
   font-weight: 600;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }
 
 .stat-value--big {
-  font-size: 1.8rem;
+  font-size: 28px;
   color: var(--el-color-primary);
 }
 
 .stat-unit {
-  font-size: 0.72rem;
+  font-size: 11px;
   color: var(--el-text-color-secondary);
   margin-bottom: 8px;
 }
 
 .stat-card .stat-value + .stat-unit {
   margin-bottom: 0;
-}
-
-.sync-logs h3 {
-  margin: 4px 0 8px;
-  font-size: 0.92rem;
-  font-weight: 600;
 }
 </style>
