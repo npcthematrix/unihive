@@ -1,0 +1,1 @@
+function i(n,l,r){const e=Array.isArray(n)?n[0]:n,t=typeof e=="string"?e:"";return l.includes(t)?t:r}function a(n,l,r){const e=n.indexOf(l);if(e<0)return null;let t=e;if(r==="ArrowRight")t=(e+1)%n.length;else if(r==="ArrowLeft")t=(e-1+n.length)%n.length;else if(r==="Home")t=0;else if(r==="End")t=n.length-1;else return null;return n[t]}export{a as n,i as p};

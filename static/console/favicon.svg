@@ -1,49 +1,34 @@
-<!-- UniHive favicon: 与 web/src/assets/unihive-mark-light.svg 同几何 (纯蜂巢+6入1汇聚)。
-  改此处同步 static/console/favicon.svg / icon-192 / icon-512 / mark-light/dark / wordmark。 -->
+<!--
+  UniHive favicon: 基于 logo.png
+-->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="UniHive">
   <title>UniHive</title>
   <defs>
     <linearGradient id="uh-stroke" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0e3a8c"/>
-      <stop offset="0.6" stop-color="#0d9488"/>
-      <stop offset="1" stop-color="#14b8a6"/>
+      <stop offset="0" stop-color="#7C3AED"/>
+      <stop offset="0.5" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#A78BFA"/>
     </linearGradient>
-    <radialGradient id="uh-node" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#5eead4"/>
-      <stop offset="0.55" stop-color="#14b8a6"/>
-      <stop offset="1" stop-color="#0e3a8c"/>
-    </radialGradient>
-    <radialGradient id="uh-glass" cx="0.3" cy="0.3" r="0.35">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.75"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
   </defs>
 
-  <!-- 蜂巢外轮廓 (六边形, 平顶朝右) — 渐变描边 -->
+  <!-- 蜂巢外轮廓 (六边形) -->
   <polygon
     points="58.67,32 45.33,11.6 18.67,11.6 5.33,32 18.67,52.4 45.33,52.4"
-    fill="#ffffff" fill-opacity="0.04"
-    stroke="url(#uh-stroke)" stroke-width="3.3"
+    fill="#7C3AED" fill-opacity="0.12"
+    stroke="url(#uh-stroke)" stroke-width="3"
     stroke-linejoin="round"/>
 
-  <!-- 6 条入线 (60° 间隔), 从六边形内角缩进 → 中心节点边缘 -->
-  <g stroke="url(#uh-stroke)" stroke-width="1.7" stroke-linecap="round" fill="none" opacity="0.78">
-    <line x1="50.67" y1="32" x2="40" y2="32"/>    <!-- 右 -->
-    <line x1="41.33" y1="15.83" x2="36" y2="25.07"/>  <!-- 右上 -->
-    <line x1="22.67" y1="15.83" x2="28" y2="25.07"/>  <!-- 左上 -->
-    <line x1="13.33" y1="32" x2="24" y2="32"/>    <!-- 左 -->
-    <line x1="22.67" y1="48.17" x2="28" y2="38.93"/>  <!-- 左下 -->
-    <line x1="41.33" y1="48.17" x2="36" y2="38.93"/>  <!-- 右下 -->
+  <!-- 太极图案 -->
+  <g transform="translate(32, 32)">
+    <!-- 外圈 -->
+    <circle cx="0" cy="0" r="11" fill="none" stroke="#7C3AED" stroke-width="1.2"/>
+    <!-- 阴鱼 (紫色) -->
+    <path d="M0,-9 A9,9 0 0,1 0,9 A4.5,4.5 0 0,1 0,0 A4.5,4.5 0 0,0 0,-9" fill="#7C3AED"/>
+    <!-- 阳鱼 (白色) -->
+    <path d="M0,9 A9,9 0 0,1 0,-9 A4.5,4.5 0 0,1 0,0 A4.5,4.5 0 0,0 0,9" fill="#FFFFFF"/>
+    <!-- 阴眼 (白色) -->
+    <circle cx="0" cy="-4.5" r="2" fill="#FFFFFF"/>
+    <!-- 阳眼 (紫色) -->
+    <circle cx="0" cy="4.5" r="2" fill="#7C3AED"/>
   </g>
-
-  <!-- 中心节点圆环 (径向渐变填色) -->
-  <circle cx="32" cy="32" r="8" fill="url(#uh-node)"/>
-
-  <!-- 节点内嵌微缩蜂巢描边 -->
-  <polygon
-    points="32,26.67 37.07,29.67 37.07,35.33 32,38.67 26.93,35.33 26.93,29.67"
-    fill="none" stroke="#ffffff" stroke-width="0.8" stroke-opacity="0.85" stroke-linejoin="round"/>
-
-  <!-- 玻璃高光 (左上偏淡) -->
-  <circle cx="32" cy="32" r="8" fill="url(#uh-glass)"/>
 </svg>
