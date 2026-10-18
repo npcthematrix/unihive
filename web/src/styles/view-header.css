@@ -70,12 +70,16 @@
 }
 
 /* ============================================================================
-   「上次刷新」时间戳 — 跨 view 共享 (.last-refresh)
-   原先只在 GatewayMonitorView 的 <style scoped> 里定义, 但 ConfigView / OmniView
-   也引用了同一个类名 —— scoped 样式不外溢, 那两个页面实际走浏览器默认字号,
-   且 .failed 红字完全失效。2026-10-17 提到全局, 三个 view 视觉归一。
+   页头元信息 — 跨 view 共享 (.view-meta / .last-refresh)
+   数据摘要用 .view-meta; 带新鲜度的时戳用 .last-refresh (多出 failed / stale
+   两态)。原先 .last-refresh 只在 GatewayMonitorView 的 scoped 里定义, 而
+   ConfigView / OmniView 也引用同名类 —— scoped 不外溢, 那两个页面走浏览器
+   默认字号、.failed 红字完全失效 (2026-10-17 提到全局)。
+   同理 InterfacesView / McpBrowserView 各自写了 .ifs-meta / .mcp-meta /
+   .view-time 三份**完全相同**的 12px 次级灰, 本次一并收敛到这里。
    ============================================================================ */
 
+.view-meta,
 .last-refresh {
   font-size: 12px;
   color: var(--el-text-color-secondary);

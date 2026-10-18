@@ -26,7 +26,6 @@
         type="error"
         :closable="false"
         show-icon
-        class="load-error"
         :title="`加载失败：${loadError}`"
       >
         <el-button size="small" @click="load(false)">重试</el-button>
@@ -37,7 +36,6 @@
         type="warning"
         :closable="false"
         show-icon
-        class="load-error"
         :title="`代理设置加载失败：${proxyError}`"
       >
         <el-button size="small" @click="loadProxy">重试</el-button>
@@ -50,7 +48,6 @@
         type="warning"
         :closable="false"
         show-icon
-        class="load-error"
         title="配置库实体加载失败, 热编辑入口已暂时隐藏"
       >
         <div class="entities-failed-hint">
@@ -179,6 +176,7 @@ import { getConfig, getConfigEntities, getProxySettings } from '@/api/config'
 import type { ConfigRevision, GatewayConfig, ProxySettings } from '@/api/config'
 import { getInterfaces } from '@/api/interfaces'
 import { copyText } from '@/utils/clipboard'
+import { scrollPageTop } from '@/utils/scrollTop'
 import { formatHMS, formatLastRefreshLabel } from '@/utils/time'
 import { TAB_KEYS, TAB_TITLES, type TabKey } from './config/format'
 import type { UpstreamEnabledChanged } from './config/upstreams'
@@ -261,6 +259,8 @@ function selectTab(tab: TabKey): void {
   activeTab.value = tab
   // 只替换目标 slot, 保留其他 query 参数 (与阶段 3 深链经验一致)
   void router.replace({ query: { ...route.query, tab } })
+  // 各 panel 长短差异很大: 在长表格滚到一半切 tab 会落在新面板中段。
+  scrollPageTop()
 }
 
 /**

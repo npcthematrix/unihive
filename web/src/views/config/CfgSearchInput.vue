@@ -1,31 +1,30 @@
 <!--
-  统一配置页 (UpstreamsPanel / ToolsPanel / MappingPanel) 的搜索框。
-  视觉与 .cfg-search-wrap / .cfg-search / .cfg-search-clear 全局样式绑定,
-  本地无 scoped CSS。父级可用 flex 容器通过 .ups-toolbar .cfg-search-wrap { flex:1 }
-  控制宽度; 默认 max-width 由全局样式提供。
+  配置页三个面板 (Upstreams / Tools / Mapping) 共用的搜索框。
+
+  统一为 Element Plus 的 el-input: 与「MCP APIs」「MCP 浏览器」的搜索框是同一个
+  控件 —— 同一套放大镜图标、清除按钮、聚焦外环。此前这里是手写的 <input> +
+  自绘 "×", 三个页面的搜索框长得不一样, 而且重复实现了 EP 已有的清除逻辑。
+
+  组件 API 保持不变 (modelValue / placeholder / ariaLabel), 三个面板无需改动。
+  宽度由 .cfg-search-wrap (全局) 与父级 flex 控制。
 -->
 <template>
   <div class="cfg-search-wrap">
-    <input
-      :value="modelValue"
-      type="text"
-      class="cfg-search"
+    <el-input
+      :model-value="modelValue"
       :placeholder="placeholder"
       :aria-label="ariaLabel ?? placeholder"
-      @input="onInput"
-    >
-    <button
-      v-if="modelValue"
-      type="button"
-      class="cfg-search-clear"
-      title="清空"
-      aria-label="清空搜索"
-      @click="onClear"
-    >×</button>
+      :prefix-icon="Search"
+      autocomplete="off"
+      clearable
+      @update:model-value="onInput"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
+import { Search } from '@element-plus/icons-vue'
+
 interface Props {
   modelValue: string
   placeholder: string
@@ -36,12 +35,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
-function onInput(e: Event): void {
-  const target = e.target as HTMLInputElement
-  emit('update:modelValue', target.value)
-}
-
-function onClear(): void {
-  emit('update:modelValue', '')
+function onInput(value: string): void {
+  emit('update:modelValue', value)
 }
 </script>

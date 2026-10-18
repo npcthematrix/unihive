@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { pageTitle } from '@/utils/pageTitle'
 import { resolveAuthRoute } from './authGuard'
 
 // hash 模式: Starlette 服务端零改动, 现有 cookie 中间件/静态挂载不变。
@@ -80,3 +81,12 @@ export const router = createRouter({
 // 唯一的鉴权规则: 无会话 → 登录页; 登录后所有页面可访问。无角色/按钮权限。
 // 决策逻辑抽到 authGuard (纯函数, 单测覆盖 redirect 回跳与开放重定向防护)。
 router.beforeEach((to) => resolveAuthRoute(to, useAuthStore()))
+
+/**
+ * 每条路由都声明了 meta.title, 但此前没有任何地方消费它 —— 六个页面的浏览器
+ * 标签标题全是 "UniHive Console", 多开标签时无法区分, 历史记录也一样。
+ * 统一在此落标题 (afterEach 拿到的是重定向后的最终路由)。
+ */
+router.afterEach((to) => {
+  document.title = pageTitle(to.meta.title)
+})

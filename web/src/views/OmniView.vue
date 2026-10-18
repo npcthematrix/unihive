@@ -9,7 +9,7 @@
             class="last-refresh"
             :class="{ failed: loadError }"
           >{{ refreshLabel }}</span>
-          <el-button :icon="Refresh" @click="refreshAll" :loading="manualLoading">
+          <el-button size="small" :icon="Refresh" @click="refreshAll" :loading="manualLoading">
             立即刷新
           </el-button>
         </div>
@@ -38,62 +38,64 @@
       </nav>
     </div>
 
-    <el-card shadow="never" class="panel-card">
+    <!-- 面板直接铺在页面底色上, 不再套一层 el-card —— 与「配置信息」「网关
+         运行监控」同构。外壳卡片会把面板内容整体内缩 20px (另两页为 0),
+         切换页面时内容左缘对不齐; 且 StatsPanel 自己的 stat-card 本就是白底
+         描边卡, 套在白色外壳里等于白压白。 -->
+    <div class="cfg-panel-stack">
       <!-- 3 个 panel, 切换只显示 active -->
       <!-- 首屏加载由各 panel 内部 skeleton 承担, 不套外层遮罩 (避免 mask + skeleton 同屏) -->
-      <div class="cfg-panel-stack">
-        <section
-          v-show="activeTab === 'stats'"
-          id="omni-panel-stats"
-          role="tabpanel"
-          aria-labelledby="omni-tab-stats"
-        >
-          <StatsPanel
-            :stats="stats"
-            :recent-logs="recentLogs"
-            :loading="loading"
-            :load-error="loadError"
-            @reload="loadStats(true)"
-          />
-        </section>
+      <section
+        v-show="activeTab === 'stats'"
+        id="omni-panel-stats"
+        role="tabpanel"
+        aria-labelledby="omni-tab-stats"
+      >
+        <StatsPanel
+          :stats="stats"
+          :recent-logs="recentLogs"
+          :loading="loading"
+          :load-error="loadError"
+          @reload="loadStats(true)"
+        />
+      </section>
 
-        <section
-          v-show="activeTab === 'query'"
-          id="omni-panel-query"
-          role="tabpanel"
-          aria-labelledby="omni-tab-query"
-        >
-          <QueryPanel
-            ref="queryPanelRef"
-            :sectors="sectors"
-            :total-count="totalCount"
-            :page="queryPage"
-            :page-size="queryPageSize"
-            :loading="queryLoading"
-            :load-error="queryError"
-            :has-searched="hasSearched"
-            :query-filters="queryFilters"
-            @search="onSearch"
-            @page-change="onPageChange"
-          />
-        </section>
+      <section
+        v-show="activeTab === 'query'"
+        id="omni-panel-query"
+        role="tabpanel"
+        aria-labelledby="omni-tab-query"
+      >
+        <QueryPanel
+          ref="queryPanelRef"
+          :sectors="sectors"
+          :total-count="totalCount"
+          :page="queryPage"
+          :page-size="queryPageSize"
+          :loading="queryLoading"
+          :load-error="queryError"
+          :has-searched="hasSearched"
+          :query-filters="queryFilters"
+          @search="onSearch"
+          @page-change="onPageChange"
+        />
+      </section>
 
-        <section
-          v-show="activeTab === 'sync'"
-          id="omni-panel-sync"
-          role="tabpanel"
-          aria-labelledby="omni-tab-sync"
-        >
-          <SyncPanel
-            ref="syncPanelRef"
-            :recent-logs="recentLogs"
-            :loading="loading"
-            @synced="onSyncCompleted"
-            @poll="onPoll"
-          />
-        </section>
-      </div>
-    </el-card>
+      <section
+        v-show="activeTab === 'sync'"
+        id="omni-panel-sync"
+        role="tabpanel"
+        aria-labelledby="omni-tab-sync"
+      >
+        <SyncPanel
+          ref="syncPanelRef"
+          :recent-logs="recentLogs"
+          :loading="loading"
+          @synced="onSyncCompleted"
+          @poll="onPoll"
+        />
+      </section>
+    </div>
   </div>
 </template>
 
@@ -115,6 +117,7 @@ import {
 } from '@/api/omni'
 import { errorMessage, isCanceledError } from '@/api/client'
 import { formatLastRefreshLabel } from '@/utils/time'
+import { scrollPageTop } from '@/utils/scrollTop'
 import { TAB_KEYS, TAB_TITLES, type OmniTabKey } from './omni/format'
 import { nextTabKey, parseHashTab } from './_shared/hashTab'
 import StatsPanel from './omni/StatsPanel.vue'
@@ -326,6 +329,9 @@ async function selectTab(tab: OmniTabKey): Promise<void> {
   if (activeTab.value === tab) return
   activeTab.value = tab
   void router.replace({ query: { ...route.query, tab } })
+  // 三个 panel 长短差异大 (统计网格 / 查询表 / 同步表单), 不重置滚动会落到
+  // 新面板中段; 与配置信息 / 接入指南一致。
+  scrollPageTop()
 
   // 离开查询页时收起成分股弹窗 —— 弹窗 teleport 到 body, v-show 藏不住它。
   // 注意不要在这里取消同步: v-show 下 SyncPanel 保持挂载, 轮询要继续跑

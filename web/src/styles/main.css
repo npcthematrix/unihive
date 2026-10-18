@@ -144,8 +144,10 @@ body {
 }
 
 /* ============================================================================
-   搜索框 — UpstreamsPanel / MappingPanel / ToolsPanel 复用
-   原 3 个 panel 都复制了同一份 HTML + 响应式逻辑, 抽公共 class。
+   搜索框容器 — UpstreamsPanel / MappingPanel / ToolsPanel 复用
+   原先 3 个 panel 都复制了同一份 HTML + 响应式逻辑, 抽公共 class。
+   控件本身已统一为 Element Plus 的 el-input (与 MCP APIs / MCP 浏览器同款),
+   这里只负责宽度: 面板内默认 360px, 工具栏里由父级 flex 撑开。
    ============================================================================ */
 
 .cfg-search-wrap {
@@ -154,59 +156,6 @@ body {
   /* 不再带 margin-bottom: 消费方 (Upstreams/Mapping/Tools panel) 都是
      display:flex + gap:12px 的纵向容器, 会与 gap 叠加成 24px; 在
      .ups-toolbar 这种横向 flex 行里还会把基线顶歪。间距交给容器管。 */
-}
-
-.cfg-search {
-  width: 100%;
-  height: 32px;
-  /* 右侧 24px 清除按钮 (right:4px) + 4px 间距 */
-  padding: 0 32px 0 12px;
-  border: 1px solid var(--cfg-border);
-  border-radius: 4px;
-  background: var(--cfg-bg);
-  color: var(--el-text-color-regular);
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-  transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
-}
-
-.cfg-search::placeholder {
-  color: var(--cfg-text-secondary);
-}
-
-.cfg-search:focus {
-  border-color: var(--el-color-primary);
-  /* 与 EP input focus 同强度的外环, 仅换边框色在浅灰边框上太弱 */
-  box-shadow: 0 0 0 2px var(--el-color-primary-light-8, #d9ecff);
-}
-
-.cfg-search-clear {
-  /* 触达目标 24px (WCAG 2.5.8), 输入框高 32px 内垂直居中 */
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--cfg-text-secondary);
-  font-size: 14px;
-  line-height: 1;
-  border-radius: 50%;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.cfg-search-clear:hover {
-  background: var(--cfg-bg-soft);
-  color: var(--el-text-color-regular);
 }
 
 /* ============================================================================
@@ -478,6 +427,121 @@ details[open] .cfg-section-toggle {
 .panel-section-title {
   margin: 0 0 8px;
   font-size: 15px;
+  font-weight: 600;
+}
+
+/* ============================================================================
+   接入指南 — 两个面板 (人工 / AI) 共享的正文版式
+   原先 .onboarding-* 与 .ai-* 两套 scoped 规则近乎逐字重复 (章节导航 4 条、
+   章节 5 条、code 各 1 条, 合计约 90 行), 改一处要改两处, 且已经漂移:
+   p 边距 8px vs 8px 0 12px、word-break 只加在 AI 面板。
+   另: --guide-anchor-offset 由 GuidesView 按吸顶条实际高度写入, 供
+   scroll-margin-top 使用 —— 否则锚点跳转后章节标题正好藏在吸顶条下面。
+   ============================================================================ */
+
+.guide-article {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--el-text-color-primary);
+}
+
+.guide-section {
+  padding: 16px 0 24px;
+  border-bottom: 1px dashed var(--el-border-color-lighter);
+  scroll-margin-top: var(--guide-anchor-offset, 0px);
+}
+
+.guide-section:last-child {
+  border-bottom: none;
+}
+
+/* 标题层级: h1 22px → h2 17px → h3 15px。h3 与全站 .card-title /
+   .panel-section-title 同字号, 不再出现「卡片内小节标题比页面级卡片标题还大」。 */
+.guide-section h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.guide-section h3 {
+  margin: 16px 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.guide-section p,
+.guide-section ul,
+.guide-section ol {
+  margin: 8px 0;
+}
+
+.guide-section ul,
+.guide-section ol {
+  padding-left: 22px;
+}
+
+.guide-section code {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--el-fill-color-light);
+  font-family: var(--el-font-family-monospace, 'Consolas', 'Monaco', monospace);
+  font-size: 13px;
+  /* 长路径 / 长 URL 在窄屏不撑破卡片 */
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.guide-muted {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.guide-callout {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--el-color-warning);
+  border-radius: 4px;
+  background: var(--el-color-warning-light-9);
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+/* 章节导航: 与上方 .cfg-subtabs 明确分级 —— 胶囊形内联按钮, 不再叠一个
+   带边框的整条, 避免「子标签条 + 章节条」两条框线上下贴死。 */
+.guide-chapters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+}
+
+.guide-chapters button {
+  /* kill native button look */
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.guide-chapters button:hover {
+  background: var(--el-fill-color-light);
+  color: var(--el-color-primary);
+}
+
+.guide-chapters button:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+}
+
+.guide-chapters button[aria-current] {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
   font-weight: 600;
 }
 

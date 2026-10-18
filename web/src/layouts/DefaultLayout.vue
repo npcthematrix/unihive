@@ -89,7 +89,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Document, Connection, Setting, Grid, Files, Fold, Expand, DataLine, UserFilled, Unlock } from '@element-plus/icons-vue'
+import { Fold, Expand, UserFilled, Unlock } from '@element-plus/icons-vue'
+import { MENU } from '@/constants/menu'
 import { useAuthStore } from '@/stores/auth'
 import brandMark from '@/assets/unihive-logo.png'
 
@@ -136,14 +137,8 @@ function toggleCollapsed(): void {
 // 内联非 overlay 布局会把主内容挤到 ~150px; 当前页标题顶栏已有, 折叠态
 // 菜单项有 EP tooltip)。手动 toggle 是用户显式动作, 导航不应打断。
 
-const MENU = [
-  { path: '/guides', title: '接入指南', icon: Document },
-  { path: '/l1-cache', title: '网关运行监控', icon: DataLine },
-  { path: '/interfaces', title: 'MCP APIs', icon: Connection },
-  { path: '/config', title: '配置信息', icon: Setting },
-  { path: '/omni', title: 'OMNI板块管理', icon: Grid },
-  { path: '/mcp-browser', title: 'MCP 浏览器', icon: Files },
-] as const
+/* 菜单项定义在 @/constants/menu —— 抽出去才能被单测覆盖 path 与路由的一致性
+   (曾因菜单写 /l1-cache、实际路由是 /gateway-monitor 导致该项永不高亮)。 */
 
 async function onLogout(): Promise<void> {
   loggingOut.value = true

@@ -3,8 +3,9 @@
     <header class="view-header">
       <h1 class="view-h1">MCP APIs</h1>
       <div class="view-actions">
-        <span class="ifs-meta">{{ metaText }}</span>
-        <span v-if="timestampText" class="view-time">{{ timestampText }}</span>
+        <span class="view-meta">
+          {{ metaText }}<template v-if="timestampText"> · {{ timestampText }}</template>
+        </span>
         <el-button size="small" @click="copyAll">复制全部 tool 名</el-button>
       </div>
     </header>
@@ -522,17 +523,7 @@ onUnmounted(() => {
 /* 统一页面外壳: 标题行 + 卡片 */
 /* view-* 类已抽到 web/src/styles/view-header.css (全局) */
 
-.view-time {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
 /* .panel-card 圆角已收敛到 styles/main.css (全局) */
-
-.ifs-meta {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
 
 .ifs-layout {
   display: flex;

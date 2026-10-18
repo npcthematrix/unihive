@@ -1,36 +1,70 @@
 <template>
   <div class="view-page">
-    <!-- 页头: 全页唯一的刷新/自动刷新控件 -->
-    <header class="view-header">
-      <h1 class="view-h1">网关运行监控</h1>
-      <div class="view-actions">
-        <span
-          class="last-refresh"
-          :class="{ failed: loadError, stale: !loadError && ageSec > STALE_THRESHOLD_SEC }"
-        >
-          {{ refreshLabel }}
-        </span>
-        <el-button :icon="Refresh" :loading="manualLoading" @click="load(true)">
-          立即刷新
-        </el-button>
-        <el-tooltip
-          content="每 10 秒自动刷新 网关进程 / 并发管线 / 缓存；「上游总览」不自动刷新 (请用该标签内的刷新按钮)"
-          placement="top"
-        >
-          <span class="auto-toggle">
-            <el-switch v-model="autoRefresh" />
-            <span class="auto-label">自动刷新</span>
+    <!-- 页头 + 子标签共用一个吸顶容器 —— 与「配置信息」「OMNI」「接入指南」
+         同构。原先这里用 el-tabs, 标题随内容滚走、只有标签条吸顶, 另外三页
+         却是"标题 + 标签一起吸顶", 换页时页面框架会跳。 -->
+    <div class="cfg-sticky-head">
+      <header class="view-header">
+        <h1 class="view-h1">网关运行监控</h1>
+        <div class="view-actions">
+          <span
+            class="last-refresh"
+            :class="{ failed: loadError, stale: !loadError && ageSec > STALE_THRESHOLD_SEC }"
+          >
+            {{ refreshLabel }}
           </span>
-        </el-tooltip>
-      </div>
-    </header>
+          <el-button size="small" :icon="Refresh" :loading="manualLoading" @click="load(true)">
+            立即刷新
+          </el-button>
+          <el-tooltip
+            content="每 10 秒自动刷新 网关进程 / 并发管线 / 缓存；「上游总览」不自动刷新 (请用该标签内的刷新按钮)"
+            placement="top"
+          >
+            <span class="auto-toggle">
+              <el-switch v-model="autoRefresh" />
+              <span class="auto-label">自动刷新</span>
+            </span>
+          </el-tooltip>
+        </div>
+      </header>
 
-    <el-tabs v-model="activeTab" class="monitor-tabs">
+      <!-- 子标签 — WAI-ARIA Tabs: roving tabindex + 方向键, 与另三页同款 -->
+      <nav
+        class="cfg-subtabs"
+        role="tablist"
+        aria-label="监控子标签"
+        @keydown="onTablistKeydown"
+      >
+        <button
+          v-for="tab in TABS"
+          :id="`monitor-tab-${tab.key}`"
+          :key="tab.key"
+          type="button"
+          class="cfg-subtab"
+          :class="{ active: activeTab === tab.key }"
+          role="tab"
+          :aria-selected="activeTab === tab.key"
+          :aria-controls="`monitor-panel-${tab.key}`"
+          :tabindex="activeTab === tab.key ? 0 : -1"
+          @click="selectTab(tab.key)"
+        >
+          {{ tab.title }}
+          <!-- 排队数徽标: 只在并发管线标签上, 且有排队时才出现 -->
+          <span v-if="tab.key === 'pipeline' && totalQueued > 0" class="tab-badge">
+            {{ totalQueued }}
+          </span>
+        </button>
+      </nav>
+    </div>
+
+    <div class="cfg-panel-stack">
       <!-- ===== 上游总览 (默认, 不自动刷新) ===== -->
-      <el-tab-pane name="overview">
-        <template #label>
-          <span class="tab-label">上游总览</span>
-        </template>
+      <section
+        v-show="activeTab === 'overview'"
+        id="monitor-panel-overview"
+        role="tabpanel"
+        aria-labelledby="monitor-tab-overview"
+      >
         <el-alert
           v-if="overviewEverLoaded"
           type="info"
@@ -45,13 +79,15 @@
           :loading="overviewLoading"
           @refresh="refreshOverview"
         />
-      </el-tab-pane>
+      </section>
 
       <!-- ===== 网关进程 ===== -->
-      <el-tab-pane name="gateway">
-        <template #label>
-          <span class="tab-label">网关进程</span>
-        </template>
+      <section
+        v-show="activeTab === 'gateway'"
+        id="monitor-panel-gateway"
+        role="tabpanel"
+        aria-labelledby="monitor-tab-gateway"
+      >
         <RuntimeStrip :stats="runtime" />
         <div class="gateway-summary">
           <div v-for="s in gatewaySummary" :key="s.label" class="gs-item">
@@ -63,24 +99,25 @@
             </span>
           </div>
         </div>
-      </el-tab-pane>
+      </section>
 
       <!-- ===== 并发管线 ===== -->
-      <el-tab-pane name="pipeline">
-        <template #label>
-          <span class="tab-label">
-            并发管线
-            <span v-if="totalQueued > 0" class="tab-badge">{{ totalQueued }}</span>
-          </span>
-        </template>
+      <section
+        v-show="activeTab === 'pipeline'"
+        id="monitor-panel-pipeline"
+        role="tabpanel"
+        aria-labelledby="monitor-tab-pipeline"
+      >
         <PipelinePanel :mootdx="metrics" :tdx-quant="tdxQuantMetrics" :thsdk="thsdkMetrics" />
-      </el-tab-pane>
+      </section>
 
       <!-- ===== 缓存与存储 ===== -->
-      <el-tab-pane name="cache">
-        <template #label>
-          <span class="tab-label">缓存与存储</span>
-        </template>
+      <section
+        v-show="activeTab === 'cache'"
+        id="monitor-panel-cache"
+        role="tabpanel"
+        aria-labelledby="monitor-tab-cache"
+      >
 
         <!-- 顶部 summary: 两层缓存 · 总览 (一眼可见健康度) -->
         <CacheSummaryCard
@@ -90,7 +127,7 @@
           :metrics="metrics"
         />
 
-        <!-- sub-tab 导航: 用 segmented 视觉与外层 el-tabs 分级 (见 .cache-subtabs) -->
+        <!-- sub-tab 导航: 用 segmented 视觉与外层下划线 tab 分级 (见 .cache-subtabs) -->
         <nav
           class="cfg-subtabs cache-subtabs"
           role="tablist"
@@ -167,16 +204,18 @@
             @reset="onResetL1"
           />
         </section>
-      </el-tab-pane>
+      </section>
 
       <!-- ===== 错误跟踪 ===== -->
-      <el-tab-pane name="errors">
-        <template #label>
-          <span class="tab-label">错误跟踪</span>
-        </template>
+      <section
+        v-show="activeTab === 'errors'"
+        id="monitor-panel-errors"
+        role="tabpanel"
+        aria-labelledby="monitor-tab-errors"
+      >
         <ErrorTrackingPanel :active="activeTab === 'errors'" />
-      </el-tab-pane>
-    </el-tabs>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -187,6 +226,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { STALE_THRESHOLD_SEC } from '@/constants/time'
 import { formatHMS } from '@/utils/time'
+import { scrollPageTop } from '@/utils/scrollTop'
 import { marketSession } from '@/utils/market-session'
 import { getStatus as getStatusDirect } from '@/api/status'
 import { errorMessage } from '@/api/client'
@@ -263,6 +303,42 @@ watch(
   },
 )
 
+/** 顶层子标签定义 (驱动 v-for + 无障碍 id 关联)。 */
+const TABS: readonly { key: MonitorTab; title: string }[] = [
+  { key: 'overview', title: '上游总览' },
+  { key: 'gateway', title: '网关进程' },
+  { key: 'pipeline', title: '并发管线' },
+  { key: 'cache', title: '缓存与存储' },
+  { key: 'errors', title: '错误跟踪' },
+]
+
+/**
+ * 切换顶层子标签。URL 写入只发生在用户点击/键盘切换时 —— 与「配置信息」
+ * 「OMNI」一致。挂载时不再往 URL 里塞 ?tab=overview: 缺省标签不需要出现在
+ * 地址栏, 复制出去的链接也更干净。
+ */
+function selectTab(tab: MonitorTab): void {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  void router.replace({ query: { ...route.query, tab } })
+  // 与另三个带标签的页面一致: 各标签长短差异大, 不重置滚动会落到新标签中段。
+  scrollPageTop()
+}
+
+/**
+ * 顶层 tablist 方向键导航 (WAI-ARIA roving tabindex): Left/Right 循环切换,
+ * Home/End 跳首尾; 与另三个页面共用 nextTabKey。
+ */
+function onTablistKeydown(e: KeyboardEvent): void {
+  const target = nextTabKey(TAB_KEYS, activeTab.value, e.key)
+  if (!target) return
+  e.preventDefault()
+  selectTab(target)
+  void nextTick(() => {
+    document.getElementById(`monitor-tab-${target}`)?.focus()
+  })
+}
+
 // ===== 缓存 sub-tab (?cacheSub=) 双向同步 =====
 // 仅当 activeTab==='cache' 时此 ref 才有视觉意义, 但始终同步 URL 以便
 // 切到 cache 标签时直接定位到上次的 sub-tab。
@@ -335,12 +411,8 @@ function stopFastPoll(): void {
 // M3: immediate —— 深链 (如 ?tab=pipeline) 直接落到管线标签时, 旧码 watch 不触发,
 // fastPollActive 保持 false 且快采定时器从不启动, 页面停在 10s 粗粒度刷新,
 // 抓不到 <1s 的历史K线突发。immediate 让首屏即按当前标签决定是否起快采。
+// URL 写回不在这里做 (由 selectTab 负责): 否则首屏就会把缺省标签塞进地址栏。
 watch(activeTab, (tab) => {
-  // 标签变化写回 URL (仅在不同时, 避免无谓 replace)
-  if (route.query.tab !== tab) {
-    void router.replace({ query: { ...route.query, tab } })
-  }
-
   stopFastPoll()
   fastPollActive.value = tab === 'pipeline'
   if (tab === 'pipeline') {
@@ -418,34 +490,9 @@ const totalQueued = computed(() => {
   cursor: default;
 }
 
-/* 页头随内容滚走; 由 el-tabs 头吸顶 —— 长 tab (上游总览 / 缓存) 滚动后仍可
-   直接切 tab, 不必回到顶部。与 ConfigView 的 .cfg-sticky-head 同思路。 */
-.view-header {
-  position: static;
-}
-
-/* 子标签页 */
-.monitor-tabs {
-  margin-top: 2px;
-}
-
-/* tab 头吸顶: top:0 + 页面底色, 下方内容从吸顶条下滚过 */
-.monitor-tabs :deep(.el-tabs__header) {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  margin-bottom: 12px;
-  padding-top: 4px;
-  background: var(--el-bg-color-page);
-}
-
-.monitor-tabs :deep(.el-tabs__content) {
-  padding-top: 4px;
-}
-
-.tab-label {
-  font-weight: 500;
-}
+/* 页头与子标签由 .cfg-sticky-head 统一吸顶 (全局规则把 .view-header 降级为
+   static), 这里不再需要覆写 —— 长标签页 (上游总览 / 缓存) 滚动后标题和标签
+   都还在, 与另三页一致。 */
 
 /* 排队数徽标: 白字压 --el-color-warning (#E6A23C) 仅约 2.2:1, 不达 WCAG AA。
    改深棕字压同底色 → 约 6.4:1; 两主题下 --el-color-warning 均为琥珀色,
@@ -522,9 +569,10 @@ const totalQueued = computed(() => {
   }
 }
 
-/* 缓存子标签: 与外层 el-tabs (下划线 tab) 明确分级 —— 用分段控件 (segmented)
-   视觉, 读作"当前标签内的过滤"而非"又一层 tab"。同时补上总览卡与子标签之间的
-   间距 (全局 .cfg-subtabs 只有 margin-bottom, 与上方 el-card 贴死, 上下不对称)。 */
+/* 缓存子标签: 与外层 .cfg-subtabs (下划线 tab) 明确分级 —— 用分段控件
+   (segmented) 视觉, 读作"当前标签内的过滤"而非"又一层 tab"。同时补上总览卡
+   与子标签之间的间距 (全局 .cfg-subtabs 只有 margin-bottom, 与上方 el-card
+   贴死, 上下不对称)。 */
 .cache-subtabs {
   gap: 4px;
   margin-top: 12px;

@@ -14,7 +14,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { copyText } from '@/utils/clipboard'
@@ -24,18 +24,33 @@ const props = defineProps<{
   code: string
 }>()
 
+const COPY_FEEDBACK_MS = 1500
+
 const copying = ref(false)
 const copied = ref(false)
+let resetTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearResetTimer(): void {
+  if (resetTimer !== null) {
+    clearTimeout(resetTimer)
+    resetTimer = null
+  }
+}
+
+onBeforeUnmount(clearResetTimer)
 
 async function onCopy() {
   copying.value = true
   try {
     await copyText(props.code, '')
+    // 成功只留按钮内的「已复制」—— 原先还叠一个 ElMessage.success,
+    // 同一件事两处反馈, 对视觉用户是噪音。
     copied.value = true
-    ElMessage.success('已复制')
-    setTimeout(() => {
+    clearResetTimer()
+    resetTimer = setTimeout(() => {
       copied.value = false
-    }, 1500)
+      resetTimer = null
+    }, COPY_FEEDBACK_MS)
   } catch {
     ElMessage.error('复制失败, 请手动复制')
   } finally {

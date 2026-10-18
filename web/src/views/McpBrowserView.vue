@@ -280,7 +280,7 @@ onUnmounted(() => {
         </span>
       </h1>
       <div class="view-actions">
-        <span v-if="metaText" class="mcp-meta">{{ metaText }}</span>
+        <span v-if="metaText" class="view-meta">{{ metaText }}</span>
         <el-button size="small" @click="copyAll">复制全部 tool 名</el-button>
         <el-button size="small" :icon="Refresh" :loading="loading" @click="refresh">
           刷新
@@ -502,11 +502,6 @@ onUnmounted(() => {
   flex: 1;
   min-width: 0;
   min-height: 320px;
-}
-
-.mcp-meta {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
 }
 
 .mcp-banner {

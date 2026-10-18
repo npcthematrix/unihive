@@ -9,7 +9,7 @@
  * - AbortController: unmount 时取消在途请求, 不留悬挂连接 (与监控页同处理)
  * - 失败保留旧值 (跟监控页 runtime 源失败策略一致: 不挂告警, 不闪空)
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import { isCanceledError } from '@/api/client'
 import { getRuntimeStats } from '@/api/runtime'
 
@@ -17,7 +17,7 @@ const POLL_INTERVAL_MS = 60_000
 
 export interface UseToolCountResult {
   /** 运行时工具数; null = 尚未拿到 (首屏 / 持续失败)。 */
-  toolCount: ReturnType<typeof ref<number | null>>
+  toolCount: Ref<number | null>
 }
 
 export function useToolCount(): UseToolCountResult {
