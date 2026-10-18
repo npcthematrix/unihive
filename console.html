@@ -4,8 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>UniHive Console</title>
-    <link rel="icon" type="image/svg+xml" href="/static/console/favicon.svg" />
-    <link rel="apple-touch-icon" type="image/svg+xml" sizes="180x180" href="/static/console/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/static/console/favicon.svg?v=5bc99db8" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/static/console/favicon.png?v=5bc99db8" />
+    <!-- iOS 的 apple-touch-icon 只认 PNG, 指向 SVG 会被静默忽略 (旧配置即如此) -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/console/apple-touch-icon.png?v=5bc99db8" />
     <meta name="theme-color" content="#0e3a8c" />
     <meta name="description" content="UniHive — 金融数据 MCP 聚合网关, 统一 /mcp 端点, 多源上游路由。" />
     <style>
@@ -30,7 +32,9 @@
       #app-boot .boot-mark {
         width: 64px;
         height: 64px;
-        filter: drop-shadow(0 4px 16px rgba(20, 184, 166, 0.35));
+        /* 与 App.vue 的 .boot-mark 同款: 品牌蓝 #3B82F6 的柔光 (原为青色,
+           与主色不属同一色相) */
+        filter: drop-shadow(0 4px 16px rgba(59, 130, 246, 0.35));
       }
       #app-boot .boot-wordmark {
         font-family: 'Space Grotesk', 'Inter', system-ui, sans-serif;
@@ -54,7 +58,7 @@
         height: 22px;
         margin-top: 6px;
         border: 2px solid rgba(255, 255, 255, 0.14);
-        border-top-color: rgba(94, 234, 212, 0.85);
+        border-top-color: rgba(147, 197, 253, 0.9);
         border-radius: 50%;
         animation: app-boot-spin 0.8s linear infinite;
       }
@@ -69,15 +73,15 @@
         }
       }
     </style>
-    <script type="module" crossorigin src="/static/console/assets/index-DtPm_iqL.js"></script>
+    <script type="module" crossorigin src="/static/console/assets/index-Bpr0YQqf.js"></script>
     <link rel="modulepreload" crossorigin href="/static/console/assets/vue-hmD7xhy6.js">
     <link rel="modulepreload" crossorigin href="/static/console/assets/element-plus-DlwqTlkm.js">
-    <link rel="stylesheet" crossorigin href="/static/console/assets/index-CJiBwOrE.css">
+    <link rel="stylesheet" crossorigin href="/static/console/assets/index-hTJNW8k_.css">
   </head>
   <body>
     <div id="app">
       <div id="app-boot">
-        <img class="boot-mark" src="/static/console/favicon.svg" alt="" aria-hidden="true" />
+        <img class="boot-mark" src="/static/console/favicon.svg?v=5bc99db8" alt="" aria-hidden="true" />
         <div class="boot-wordmark">UniHive</div>
         <div class="boot-tagline">MCP · AGGREGATE</div>
         <div class="boot-spinner" role="status" aria-label="启动中"></div>
