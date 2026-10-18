@@ -1,6 +1,6 @@
 """Mootdx2 → TDX_QUANT transparent adapter for 行情类 tools.
 
-6 tools covered. Writes the mapping/period/param conventions as code-level
+7 tools covered. Writes the mapping/period/param conventions as code-level
 constants — these are protocol-level and not user-editable.
 
 Usage:
@@ -27,6 +27,14 @@ Mapping caveat (2026-09-14 audit):
     没有多代码 stock_list 形态。因此 get_batch_quote 从代理映射中移除
     (旧映射每次调用必抛 TypeError 并刷两条 ERROR 再回退), 批量行情直接
     走路由链上的 mootdx2。
+
+2026-10-18 实测 D:/new_tdx_mock/PYPlugins/user/tqcenter.py:
+    ``get_market_data(stock_list=[...])`` 是真正的多标的形式 ——
+    ``_fast_format_kline_data`` 返回 ``{字段: DataFrame(columns=stock_list)}``,
+    每只票一列。因此 ``batch_bars`` 可以代理: 一次调用取回全部代码的 K 线,
+    再由 ``_normalize_kline_batch_records`` 拆回 ``{代码: [记录]}`` 的对外
+    合同。批量快照 (get_batch_quote) 之所以不行, 是因为
+    ``get_market_snapshot`` 没有对应的多代码形态, 两者限制不同。
 """
 from __future__ import annotations
 
@@ -205,34 +213,39 @@ _TQ_VOL_SHARES_PER_LOT = 100.0
 _TQ_AMOUNT_WAN_PER_YUAN = 10000.0
 
 
-def _normalize_kline_records(payload: Any, period: str = "") -> Any:
-    """tdx_quant ``get_market_data`` 的 ``{字段: DataFrame}`` → K线记录列表。
+def _column_series(value: Any, stock: str, *, allow_positional: bool = False) -> Any:
+    """从 ``{字段: DataFrame(columns=stock_list)}`` 里取出某一只标的的列。
 
-    网关 K 线类工具 (get_kline / get_index_kline / get_index_all /
-    get_index_bars) 的对外合同是
-    ``[{"date", "open", "high", "low", "close", "volume"}, ...]``。
-    tqcenter 返回按字段分列的 DataFrame 字典, 这里按时间索引逐根拼回记录。
-
-    - 时间给 ``date`` (YYYY-MM-DD), 有完整时间戳时附 ``datetime``
-      (分钟级 K 线需要它区分同一天的多根);
-    - **量纲换算**: 成交量按周期换算成 mootdx2 口径 (日线及以上 ÷100 股→手,
-      分钟线保持股), 成交额一律 ×10000 (万元→元); 详见 ``_TQ_DAILY_PERIODS``
-      上方注释;
-    - 同时补 ``year/month/day/hour/minute``, 与 mootdx2 在线 bars 路径的
-      字段集对齐 (回落到 mootdx2 时字段不会变);
-    - 缺 Close 列 / 空字典 → ``[]`` (上层按 no_data 业务态处理);
-    - 任一根 close 为 NaN (无成交) 时跳过该根。
+    - 多标的: 严格按列名取 (tqcenter 的列名就是我们传进去的 stock_list 元素);
+    - ``allow_positional`` (只在本次请求就一只票时为 True): 列名对不上但只有
+      一列时按位置取, 兜底 tqcenter 改名的情况。**多标的时绝不允许** ——
+      否则「请求了两只、只返回一只」会把剩下那只的数据复制给缺失的代码;
+    - 已是 Series / dict (单标的历史形态): 原样返回。
     """
-    if payload is None:
-        return []
-    if isinstance(payload, list):
-        return payload
-    if not isinstance(payload, dict):
-        return payload
+    if value is None:
+        return None
+    if hasattr(value, "columns"):  # pandas DataFrame
+        if stock in value.columns:
+            return value[stock]
+        if allow_positional and len(value.columns) == 1:
+            return value.iloc[:, 0]
+        return None
+    if hasattr(value, "items"):  # pandas Series / dict
+        return value
+    return None
 
-    series_by_field = {
-        str(key).lower(): _field_series(value) for key, value in payload.items()
-    }
+
+def _build_kline_records(
+    series_by_field: dict[str, Any], period: str = ""
+) -> list[dict[str, Any]]:
+    """把「字段 → 单标的序列」拼成 K 线记录列表。
+
+    ``series_by_field`` 的键必须已小写 (调用方负责), 值是可 ``.items()``
+    迭代出 (时间, 值) 的序列。
+
+    量纲按 ``period`` 统一: 日线及以上成交量 股→手 (÷100)、成交额
+    万元→元 (×10000); 分钟线成交量原样 (mootdx2 分钟线也是「股」)。
+    """
     close_series = series_by_field.get("close")
     if close_series is None:
         return []
@@ -249,6 +262,7 @@ def _normalize_kline_records(payload: Any, period: str = "") -> Any:
     vol_divisor = (
         _TQ_VOL_SHARES_PER_LOT if period in _TQ_DAILY_PERIODS else 1.0
     )
+
     records = []
     for ts, close in close_series.items():
         if close is None or close != close:  # NaN != NaN
@@ -281,9 +295,111 @@ def _normalize_kline_records(payload: Any, period: str = "") -> Any:
     return records
 
 
+def _normalize_kline_records(payload: Any, period: str = "") -> Any:
+    """tdx_quant ``get_market_data`` 的 ``{字段: DataFrame}`` → K线记录列表。
+
+    网关 K 线类工具 (get_kline / get_index_kline / get_index_all /
+    get_index_bars) 的对外合同是
+    ``[{"date", "open", "high", "low", "close", "volume"}, ...]``。
+    tqcenter 返回按字段分列的 DataFrame 字典, 这里按时间索引逐根拼回记录。
+
+    - 时间给 ``date`` (YYYY-MM-DD), 有完整时间戳时附 ``datetime``
+      (分钟级 K 线需要它区分同一天的多根);
+    - **量纲换算**: 成交量按周期换算成 mootdx2 口径 (日线及以上 ÷100 股→手,
+      分钟线保持股), 成交额一律 ×10000 (万元→元); 详见 ``_TQ_DAILY_PERIODS``
+      上方注释;
+    - 同时补 ``year/month/day/hour/minute``, 与 mootdx2 在线 bars 路径的
+      字段集对齐 (回落到 mootdx2 时字段不会变);
+    - 缺 Close 列 / 空字典 → ``[]`` (上层按 no_data 业务态处理);
+    - 任一根 close 为 NaN (无成交) 时跳过该根。
+
+    多标的请求请用 ``_normalize_kline_batch_records`` —— 这里只取第 0 列。
+    """
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return payload
+
+    series_by_field = {
+        str(key).lower(): _field_series(value) for key, value in payload.items()
+    }
+    return _build_kline_records(series_by_field, period)
+
+
+def _normalize_kline_batch_records(
+    payload: Any, stock_list: list[str], period: str = ""
+) -> Any:
+    """多标的 ``get_market_data`` 返回 → ``{代码: [K线记录]}``。
+
+    ``batch_bars`` 的对外合同是 ``{"600000": [{...}], "000001": [...]}``
+    (见 config/tools_mootdx2.yaml), 键是裸 6 位代码 —— 与 mootdx2
+    ``BatchDailyFetcher`` 的返回键一致, 换源后调用方不需要改。
+
+    - tqcenter 给的是 ``{字段: DataFrame(columns=stock_list)}``, 每只票一列,
+      这里按列拆开, 逐只走 ``_build_kline_records``;
+    - **量纲与其它 K 线工具一致**: 走 ``_build_kline_records`` 的默认口径 ——
+      日线及以上 成交量 股→手 (÷100)、成交额 万元→元 (×10000), 分钟线成交量
+      原样。代理侧所有 K 线工具 (get_kline / get_index_* / batch_bars) 必须
+      同口径, 否则同一天同一只票在两个工具里差 100 倍。实测参考
+      (002273 / 2026-10-14): tqcenter 原始 Volume 28,422,624、Amount 59,220.3
+      万元 → 归一化后 vol 284,226.24 (手)、amount 592,203,000 (元)。
+    - 单只票没有数据 → 该键给 ``[]`` (与 mootdx2 的 ``v is not None`` 兜底
+      一致); **全部为空 → 返回 ``{}``**, 让 router 判定为 miss 并回落原 chain;
+    - 已经是 ``{代码: [记录]}`` 形状时幂等透传。
+    """
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        return payload
+    # 幂等: 值全是 list 说明已经是对外合同形状 (字段帧的值是 DataFrame/Series)
+    if payload and all(isinstance(v, list) for v in payload.values()):
+        return payload
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    # 只有「本次就一只票」时才允许按位置兜底, 多标的必须严格按列名匹配
+    allow_positional = len(stock_list) == 1
+    for stock in stock_list:
+        series_by_field = {}
+        for key, value in payload.items():
+            series = _column_series(value, stock, allow_positional=allow_positional)
+            if series is not None:
+                series_by_field[str(key).lower()] = series
+        result[_bare_code(stock)] = _build_kline_records(series_by_field, period)
+
+    if not any(result.values()):
+        return {}
+    return result
+
+
+#: batch_bars 的对外合同上限 —— 与 ``api/mootdx2_client.MAX_LIMIT_BATCH_BARS*``
+#: 必须一致 (tests/test_proxy_adapter.py 有一致性断言)。这里复制一份而不是
+#: 反向 import, 是为了避免 core 拉进整个 mootdx2 客户端模块。
+#: 代理命中时这些校验不会被 mootdx2 客户端执行, 所以必须在 adapter 里补上,
+#: 否则超限请求会绕过合同直接打到 tqcenter (调用方看到的是「成功」)。
+_BATCH_BARS_MAX_CODES = 20
+_BATCH_BARS_MAX_LIMIT = 500
+
+
+def _split_codes(value: Any) -> list[str]:
+    """``"600000, sz000001"`` → ``["600000", "sz000001"]`` (去空白/空项)。"""
+    return [c.strip() for c in str(value or "").split(",") if c.strip()]
+
+
+def _bare_code(stock_code: str) -> str:
+    """``600519.SH`` → ``600519`` (batch_bars 对外合同的键形态)。"""
+    return str(stock_code).split(".")[0]
+
+
 def _kline_normalizer(period: str) -> ResponseNormalizer:
     """按周期绑定量纲换算的 K 线归一化器 (日线手 / 分钟线股)。"""
     return lambda payload: _normalize_kline_records(payload, period)
+
+
+def _batch_kline_normalizer(stock_list: list[str], period: str) -> ResponseNormalizer:
+    """按标的列表 + 周期绑定的批量 K 线归一化器。"""
+    return lambda payload: _normalize_kline_batch_records(payload, stock_list, period)
 
 
 class Mootdx2ToTdxQuantAdapter:
@@ -302,6 +418,10 @@ class Mootdx2ToTdxQuantAdapter:
         "get_index_all": "get_market_data",
         "get_index_bars": "get_market_data",
         "get_minute_data": "get_market_data",       # period='1m', stock_list=[code]
+        # batch_bars 代理: tqcenter 的 get_market_data 支持多标的
+        # (返回 {字段: DataFrame(columns=stock_list)}), 一次调用取回全部代码,
+        # 比 mootdx2 逐只 bars 更快; 失败/空结果由 router 回落原 chain。
+        "batch_bars": "get_market_data",
     }
 
     PERIOD_MAP: dict[str, str] = {
@@ -348,6 +468,11 @@ class Mootdx2ToTdxQuantAdapter:
         elif tdx_tool == "get_market_data" and mootdx2_tool == "get_minute_data":
             tdx_params = self._adapt_get_minute_data_to_market_data(params)
             normalizer = _normalize_minute_records
+        elif tdx_tool == "get_market_data" and mootdx2_tool == "batch_bars":
+            tdx_params = self._adapt_batch_bars(params)
+            normalizer = _batch_kline_normalizer(
+                tdx_params["stock_list"], tdx_params["period"]
+            )
         elif tdx_tool == "get_market_data" and mootdx2_tool == "get_index_bars":
             tdx_params = self._adapt_get_index_bars(params)
             normalizer = _kline_normalizer(tdx_params["period"])
@@ -379,7 +504,7 @@ class Mootdx2ToTdxQuantAdapter:
         """
         is_index = mootdx2_tool in ("get_index_kline", "get_index_all")
         code = params.get("code") or params.get("codes", "")
-        raw_codes = [c.strip() for c in str(code).split(",") if c.strip()]
+        raw_codes = _split_codes(code)
         if is_index and not all(
             _has_exchange_marker(re.sub(r"\s+", "", c)) for c in raw_codes
         ):
@@ -392,6 +517,47 @@ class Mootdx2ToTdxQuantAdapter:
         type_raw = params.get("type", "day")
         period = self.PERIOD_MAP.get(type_raw, type_raw)
         count = int(params.get("limit", 100) or 100)
+        return {
+            "stock_list": stock_list,
+            "period": period,
+            "count": count,
+        }
+
+    def _adapt_batch_bars(self, params: dict) -> dict:
+        """batch_bars(codes, type, limit) → get_market_data(stock_list, period, count)。
+
+        与 ``_adapt_get_kline`` 的区别只有一处: 这里没有「指数」概念, 不做
+        ``_has_exchange_marker`` 校验 —— batch_bars 收的就是个股裸代码, 由
+        ``_normalize_stock_code_for_tdxquant`` 按号段补交易所后缀。
+
+        ``limit`` 在 mootdx2 侧是「每只股票返回根数」(1-500), tqcenter 的
+        ``count`` 语义相同 (最近 n 根, 截止 end_time 默认当前), 直接对应。
+
+        合同上限 (≤20 只 / 1-500 根) 在这里再校验一遍: 代理命中时
+        ``mootdx2_client.batch_bars`` 的入参校验根本不会执行, 不补的话
+        超限请求会绕过合同打到 tqcenter 并返回「成功」。抛
+        ``ProxyAdapterError`` → router 回落原 chain → 由客户端给出标准的
+        invalid_param 业务态。
+        """
+        raw_codes = _split_codes(params.get("codes") or params.get("code"))
+        if not raw_codes:
+            raise ProxyAdapterError("batch_bars requires codes")
+        if len(raw_codes) > _BATCH_BARS_MAX_CODES:
+            raise ProxyAdapterError(
+                f"batch_bars supports at most {_BATCH_BARS_MAX_CODES} codes, "
+                f"got {len(raw_codes)}"
+            )
+        type_raw = params.get("type", "day")
+        period = self.PERIOD_MAP.get(type_raw, type_raw)
+        # 注意不能用 ``or 100``: 那会把非法的 limit=0 悄悄变成 100, 与客户端
+        # 「0 属于 invalid_param」的合同不一致。
+        limit_raw = params.get("limit")
+        count = 100 if limit_raw is None else int(limit_raw)
+        if not (1 <= count <= _BATCH_BARS_MAX_LIMIT):
+            raise ProxyAdapterError(
+                f"batch_bars limit must be 1-{_BATCH_BARS_MAX_LIMIT}, got {count}"
+            )
+        stock_list = [_normalize_stock_code_for_tdxquant(c) for c in raw_codes]
         return {
             "stock_list": stock_list,
             "period": period,

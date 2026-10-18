@@ -101,6 +101,75 @@ class TestProxyEnabledAndTdxHealthy:
         assert mootdx2.calls == [], "未降级, mootdx2 不应被调"
 
 
+class TestProxyCoversBatchBars:
+    """batch_bars 已纳入 TOOL_MAP: 代理启用时走 tdx_quant 的多标的 get_market_data。"""
+
+    @pytest.mark.asyncio
+    async def test_batch_bars_routes_to_tdx_with_multi_code(self, tmp_yaml):
+        pd = pytest.importorskip("pandas")
+        tmp_yaml.write_text("proxy:\n  enabled: true\n", encoding="utf-8")
+        proxy = ProxySettings(tmp_yaml)
+        idx = pd.DatetimeIndex(["2026-10-14"])
+        payload = {
+            "Close": pd.DataFrame(
+                {"002273.SZ": [20.46], "600519.SH": [1505.0]}, index=idx
+            ),
+            "Volume": pd.DataFrame(
+                {"002273.SZ": [28422624], "600519.SH": [2657276]}, index=idx
+            ),
+        }
+        mootdx2 = FakeMooTDX2()
+        tdx = FakeTdxQuant(payload=payload)
+        router = Router(
+            upstreams={"mootdx2": mootdx2, "tdx_quant": tdx},
+            routing_config={"batch_bars": {"chain": ["mootdx2"]}},
+            upstream_tool_mapping={},
+            proxy_settings=proxy,
+        )
+        result = await router.route(
+            "batch_bars", {"codes": "002273,600519", "type": "day", "limit": 5}
+        )
+
+        assert result.success is True
+        assert result.source == "tdx_quant"
+        assert tdx.calls == [
+            (
+                "get_market_data",
+                {
+                    "stock_list": ["002273.SZ", "600519.SH"],
+                    "period": "1d",
+                    "count": 5,
+                },
+            )
+        ]
+        assert mootdx2.calls == [], "一次多标的调用即可, 不应回落"
+        # 对外合同: {裸代码: [记录]}, 成交量按日线口径 股→手
+        assert set(result.data) == {"002273", "600519"}
+        assert result.data["002273"][0]["vol"] == 284226.24
+        assert result.data["600519"][0]["close"] == 1505.0
+
+    @pytest.mark.asyncio
+    async def test_batch_bars_empty_tdx_payload_falls_back(self, tmp_yaml):
+        """tqcenter 返回空 → 归一化后 {} → 回落 mootdx2 链, 不当作成功。"""
+        tmp_yaml.write_text("proxy:\n  enabled: true\n", encoding="utf-8")
+        proxy = ProxySettings(tmp_yaml)
+        mootdx2 = FakeMooTDX2(payload={"600519": [{"date": "2026-10-14"}]})
+        tdx = FakeTdxQuant(payload={})
+        router = Router(
+            upstreams={"mootdx2": mootdx2, "tdx_quant": tdx},
+            routing_config={"batch_bars": {"chain": ["mootdx2"]}},
+            upstream_tool_mapping={},
+            proxy_settings=proxy,
+        )
+        result = await router.route(
+            "batch_bars", {"codes": "600519", "type": "day", "limit": 1}
+        )
+
+        assert result.success is True
+        assert result.source == "mootdx2"
+        assert len(mootdx2.calls) == 1
+
+
 class TestProxyEnabledButTdxUnavailable:
     """proxy.enabled=True + tdx UNAVAILABLE → 降级 mootdx2 (永远降级)."""
 

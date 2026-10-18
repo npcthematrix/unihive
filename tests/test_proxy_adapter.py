@@ -21,14 +21,16 @@ class TestAdapterToolMapping:
             ("get_index_all", "get_market_data"),
             ("get_index_bars", "get_market_data"),
             ("get_minute_data", "get_market_data"),
+            ("batch_bars", "get_market_data"),
         ],
     )
-    def test_tool_map_covers_6_quote_tools(self, mootdx2_tool, tdx_tool):
+    def test_tool_map_covers_quote_tools(self, mootdx2_tool, tdx_tool):
         assert self.adapter.TOOL_MAP[mootdx2_tool] == tdx_tool
 
     def test_supports_returns_true_for_mapped_tools(self):
         assert self.adapter.supports("get_quote") is True
         assert self.adapter.supports("get_kline") is True
+        assert self.adapter.supports("batch_bars") is True
 
     def test_supports_returns_false_for_unmapped_tools(self):
         assert self.adapter.supports("get_trade") is False
@@ -142,6 +144,60 @@ class TestAdaptParams:
         assert params["stock_list"] == ["600519.SH"]
         # limit 应改名为 count (tdx_quant 用 count, sign 表示方向)
         assert params["count"] == 10
+
+    def test_adapt_batch_bars_translates_codes_list(self):
+        """batch_bars(codes, type, limit) → get_market_data(stock_list, period, count).
+
+        tqcenter 的 get_market_data 支持多标的 (返回每票一列), 所以批量 K 线
+        可以一次调用取回, 不需要像 get_batch_quote 那样逐只。
+        """
+        tool, params, _normalizer = self.adapter.adapt(
+            "batch_bars",
+            {"codes": "002273, sh600519", "type": "day", "limit": 120},
+        )
+        assert tool == "get_market_data"
+        assert params == {
+            "stock_list": ["002273.SZ", "600519.SH"],
+            "period": "1d",
+            "count": 120,
+        }
+
+    def test_adapt_batch_bars_defaults(self):
+        """limit 缺省 100, type 缺省 day。"""
+        _tool, params, _normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "600519"}
+        )
+        assert params["period"] == "1d"
+        assert params["count"] == 100
+
+    @pytest.mark.parametrize(
+        "mootdx2_period,tdx_period",
+        [("week", "1w"), ("month", "1mon"), ("minute1", "1m"), ("minute60", "1h")],
+    )
+    def test_adapt_batch_bars_period_mapping(self, mootdx2_period, tdx_period):
+        _tool, params, _normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "600519", "type": mootdx2_period}
+        )
+        assert params["period"] == tdx_period
+
+    def test_adapt_batch_bars_requires_codes(self):
+        """codes 为空 → ProxyAdapterError, 由 router 回落原 chain。"""
+        with pytest.raises(ProxyAdapterError):
+            self.adapter.adapt("batch_bars", {"codes": "  "})
+
+    def test_adapt_batch_bars_rejects_more_than_20_codes(self):
+        """合同上限 ≤20 只: 代理命中时客户端校验不执行, adapter 必须自己拦。
+
+        抛错 → 回落原 chain → 由 mootdx2 客户端给出标准 invalid_param 业务态。
+        """
+        codes = ",".join(str(600000 + i) for i in range(21))
+        with pytest.raises(ProxyAdapterError):
+            self.adapter.adapt("batch_bars", {"codes": codes})
+
+    @pytest.mark.parametrize("limit", [0, -1, 501])
+    def test_adapt_batch_bars_rejects_out_of_range_limit(self, limit):
+        with pytest.raises(ProxyAdapterError):
+            self.adapter.adapt("batch_bars", {"codes": "600519", "limit": limit})
 
     def test_adapt_get_minute_data_pins_today_window(self):
         """mootdx2 get_minute_data(code) → tdx_quant get_market_data(当日窗口)。
@@ -322,3 +378,120 @@ class TestResponseNormalize:
         assert normalizer({"Close": pd.Series([float("nan")], index=idx)}) == []
         assert normalizer({}) == []
         assert normalizer(None) == []
+
+
+class TestNormalizeBatchKline:
+    """batch_bars 的多标的归一化: {字段: DataFrame(columns=stock_list)} → {代码: [记录]}。
+
+    量纲与 get_kline 等 K 线工具一致: 日线及以上 成交量 股→手 (÷100)、
+    成交额 万元→元 (×10000)。
+    """
+
+    def setup_method(self):
+        self.adapter = Mootdx2ToTdxQuantAdapter()
+
+    def _payload(self):
+        pd = pytest.importorskip("pandas")
+        idx = pd.DatetimeIndex(["2026-10-14", "2026-10-15"])
+        return {
+            "Open": pd.DataFrame({"002273.SZ": [21.04, 19.68], "600519.SH": [1500.0, 1510.0]}, index=idx),
+            "Close": pd.DataFrame({"002273.SZ": [20.46, 19.52], "600519.SH": [1505.0, 1520.0]}, index=idx),
+            "Volume": pd.DataFrame({"002273.SZ": [28422624, 40998696], "600519.SH": [2657276, 2700000]}, index=idx),
+            "Amount": pd.DataFrame({"002273.SZ": [59220.3, 80557.4], "600519.SH": [398591.2, 410000.0]}, index=idx),
+        }
+
+    def test_splits_columns_per_stock(self):
+        """两只票各成一键, 键是裸 6 位代码 (与 mootdx2 合同一致)。"""
+        _tool, _params, normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "002273,600519", "type": "day", "limit": 2}
+        )
+        out = normalizer(self._payload())
+
+        assert set(out) == {"002273", "600519"}
+        assert len(out["002273"]) == 2
+        assert out["002273"][0]["date"] == "2026-10-14"
+        assert out["002273"][0]["close"] == 20.46
+        assert out["600519"][1]["close"] == 1520.0
+
+    def test_volume_converted_to_lots_for_daily(self):
+        """日线成交量 股→手 (÷100), 与 get_kline 代理路径同口径。"""
+        _tool, _params, normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "002273,600519", "type": "day", "limit": 2}
+        )
+        out = normalizer(self._payload())
+        assert out["002273"][0]["vol"] == 284226.24
+        assert out["002273"][0]["volume"] == 284226.24
+        assert out["600519"][0]["vol"] == 26572.76
+
+    def test_minute_period_keeps_shares(self):
+        """分钟线不换算成交量 (mootdx2 分钟线也是「股」)。"""
+        _tool, _params, normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "002273", "type": "minute1", "limit": 2}
+        )
+        out = normalizer(self._payload())
+        assert out["002273"][0]["vol"] == 28422624.0
+
+    def test_amount_converted_wan_to_yuan(self):
+        _tool, _params, normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "002273", "type": "day", "limit": 2}
+        )
+        out = normalizer(self._payload())
+        assert out["002273"][0]["amount"] == 592203000.0
+
+    def test_missing_stock_gets_empty_list_but_others_kept(self):
+        """请求了两只但只返回一只 → 缺的那只给 [] (不丢键)。"""
+        pd = pytest.importorskip("pandas")
+        idx = pd.DatetimeIndex(["2026-10-14"])
+        payload = {"Close": pd.DataFrame({"002273.SZ": [20.46]}, index=idx)}
+        _tool, _params, normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "002273,600519", "type": "day", "limit": 1}
+        )
+        out = normalizer(payload)
+        assert out["002273"][0]["close"] == 20.46
+        assert out["600519"] == []
+
+    def test_all_empty_returns_empty_dict_for_fallback(self):
+        """全部没数据 → {} (router 据此回落原 chain, 而不是返回全空字典)。"""
+        pd = pytest.importorskip("pandas")
+        idx = pd.DatetimeIndex(["2026-10-14"])
+        _tool, _params, normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "002273", "type": "day", "limit": 1}
+        )
+        assert normalizer({"Close": pd.DataFrame({"002273.SZ": [float("nan")]}, index=idx)}) == {}
+        assert normalizer({}) == {}
+        assert normalizer(None) == {}
+
+    def test_idempotent_for_already_normalized_dict(self):
+        records = {"002273": [{"date": "2026-10-14", "close": 20.46}]}
+        _tool, _params, normalizer = self.adapter.adapt(
+            "batch_bars", {"codes": "002273", "type": "day", "limit": 1}
+        )
+        assert normalizer(records) is records
+
+
+class TestBatchLimitsStayInSync:
+    """adapter 复制的上限常量必须与 mootdx2 客户端一致 (防止两处漂移)。"""
+
+    def test_constants_match_mootdx2_client(self):
+        from src.unihive.api.mootdx2_client import (
+            MAX_LIMIT_BATCH_BARS,
+            MAX_LIMIT_BATCH_BARS_CODES,
+        )
+        from src.unihive.core import proxy_adapter
+
+        assert proxy_adapter._BATCH_BARS_MAX_CODES == MAX_LIMIT_BATCH_BARS_CODES
+        assert proxy_adapter._BATCH_BARS_MAX_LIMIT == MAX_LIMIT_BATCH_BARS
+
+
+class TestBatchLimitsStayInSync:
+    """adapter 复制的上限常量必须与 mootdx2 客户端一致 (防止两处漂移)。"""
+
+    def test_constants_match_mootdx2_client(self):
+        from src.unihive.api.mootdx2_client import (
+            MAX_LIMIT_BATCH_BARS,
+            MAX_LIMIT_BATCH_BARS_CODES,
+        )
+        from src.unihive.core import proxy_adapter
+
+        assert proxy_adapter._BATCH_BARS_MAX_CODES == MAX_LIMIT_BATCH_BARS_CODES
+        assert proxy_adapter._BATCH_BARS_MAX_LIMIT == MAX_LIMIT_BATCH_BARS

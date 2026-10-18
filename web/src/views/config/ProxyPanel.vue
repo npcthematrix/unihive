@@ -68,7 +68,6 @@
       <h4 class="proxy-section-title">未代理的 mootdx2 行情类工具</h4>
       <p class="proxy-section-hint">以下工具属于行情类但不在代理范围内, 继续走原 mootdx2 链路</p>
       <ul>
-        <li><code>batch_bars</code> — 批量 K 线 (候选: 待 tqcenter 多代码形式验证后加入)</li>
         <li><code>get_k_data</code> / <code>get_minutes</code> / <code>get_fzline_local</code> — 其他 K 线/分时入口</li>
         <li><code>get_minute_local</code> / <code>get_daily_local</code> — 本地缓存路径 (走代理会绕过缓存, 故排除)</li>
         <li><code>get_index_overview</code> — 6 大指数概览 (聚合类, tdx_quant 需循环调用)</li>
