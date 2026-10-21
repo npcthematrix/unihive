@@ -10,7 +10,7 @@
       </div>
     </header>
 
-    <el-card shadow="never" class="panel-card">
+    <el-card shadow="never" class="panel-card view-body">
       <div class="ifs-layout">
       <!-- 左侧: 搜索 + 过滤器 + 分组导航 -->
       <aside class="ifs-sidebar">
@@ -538,9 +538,12 @@ onUnmounted(() => {
   gap: 12px;
   position: sticky;
   top: 0;
-  /* 矮视口下侧栏 (筛选卡 + 289 工具分组导航) 会比视口高, sticky 失效且
-     整页被侧栏撑高; 限制为视口高并在侧栏内部滚动。 */
-  max-height: calc(100vh - 24px);
+  /* 矮视口下侧栏 (筛选卡 + 289 工具分组导航) 会比滚动区高, sticky 失效且
+     整页被侧栏撑高; 限制为滚动区高度并在侧栏内部滚动。
+     2026-10-18: 滚动容器从 el-main 换成卡片自身 (.panel-card.view-body),
+     可见高度 = 100dvh - 主区内距 32 - 页头 ~82 - 页面间距 20 - 卡片内距 40
+     ≈ 100dvh - 174, 取 180 留 6px 余量。 */
+  max-height: calc(100dvh - 180px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }

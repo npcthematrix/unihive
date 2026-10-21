@@ -57,7 +57,7 @@
       </nav>
     </div>
 
-    <div class="cfg-panel-stack">
+    <div class="cfg-panel-stack view-body">
       <!-- ===== 上游总览 (默认, 不自动刷新) ===== -->
       <section
         v-show="activeTab === 'overview'"

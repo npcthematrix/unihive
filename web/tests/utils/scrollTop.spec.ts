@@ -7,7 +7,21 @@ describe('scrollPageTop', () => {
     vi.restoreAllMocks()
   })
 
-  it('同时滚动主内容容器与 window (两条都调, 不依赖谁承担滚动)', () => {
+  it('优先归位页面内的 .view-body (真正的滚动容器)', () => {
+    const body = document.createElement('div')
+    body.className = 'view-body'
+    const bodyScroll = vi.fn()
+    body.scrollTo = bodyScroll as unknown as typeof body.scrollTo
+    document.body.appendChild(body)
+
+    const winScroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    scrollPageTop()
+
+    expect(bodyScroll).toHaveBeenCalledWith({ top: 0 })
+    expect(winScroll).toHaveBeenCalledWith({ top: 0, behavior: 'auto' })
+  })
+
+  it('同时兜底滚动 el-main 与 window (不依赖谁承担滚动)', () => {
     const main = document.createElement('main')
     main.id = 'main-content'
     const mainScroll = vi.fn()

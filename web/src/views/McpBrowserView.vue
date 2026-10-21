@@ -288,7 +288,7 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <el-card shadow="never" class="panel-card">
+    <el-card shadow="never" class="panel-card view-body">
       <div class="mcp-layout">
       <!-- 左侧: 搜索 + 形状开关 + 上游导航 -->
       <aside class="mcp-sidebar">
@@ -488,12 +488,13 @@ onUnmounted(() => {
 .mcp-sidebar {
   flex: 0 0 264px;
   position: sticky;
-  top: 16px;
+  top: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  /* 同 InterfacesView: 矮视口下侧栏内部滚动, 不把整页撑高 */
-  max-height: calc(100vh - 32px);
+  /* 同 InterfacesView: 矮视口下侧栏内部滚动, 不把整页撑高。
+     180 = 主区内距 32 + 页头 ~82 + 页面间距 20 + 卡片内距 40 + 余量 6 */
+  max-height: calc(100dvh - 180px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }

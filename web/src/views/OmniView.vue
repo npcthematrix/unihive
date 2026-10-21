@@ -42,7 +42,7 @@
          运行监控」同构。外壳卡片会把面板内容整体内缩 20px (另两页为 0),
          切换页面时内容左缘对不齐; 且 StatsPanel 自己的 stat-card 本就是白底
          描边卡, 套在白色外壳里等于白压白。 -->
-    <div class="cfg-panel-stack">
+    <div class="cfg-panel-stack view-body">
       <!-- 3 个 panel, 切换只显示 active -->
       <!-- 首屏加载由各 panel 内部 skeleton 承担, 不套外层遮罩 (避免 mask + skeleton 同屏) -->
       <section

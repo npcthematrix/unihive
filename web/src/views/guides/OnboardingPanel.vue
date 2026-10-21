@@ -2,10 +2,12 @@
   <article class="guide-article">
     <!-- 1. 快速开始 -->
     <section :id="HUMAN_SECTIONS[0].id" class="guide-section">
-      <h2>{{ HUMAN_SECTIONS[0].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ HUMAN_SECTIONS[0].num }}.</span>{{ HUMAN_SECTIONS[0].title }}
+      </h2>
       <p>UniHive MCP 是一个统一的金融数据网关, 把通达信、同花顺等数据源聚合在同一个 MCP 接口后面。</p>
 
-      <h3>1.1 启动网关</h3>
+      <h3>启动网关</h3>
       <p>网关默认以 <strong>HTTP 模式</strong>启动 (推荐), 同时也支持 STDIO 模式。在项目根目录下运行:</p>
       <CodeBlock :code="START_HTTP" />
       <p>启动后, 控制台和 HTTP 网关共用端口 <code>http://127.0.0.1:18080</code> (MCP 接口在 <code>/mcp</code> 子路径下)。</p>
@@ -15,7 +17,7 @@
         (工作目录必须是项目根, <code>-m</code> 才解析得到 <code>src.unihive</code>)。
       </p>
 
-      <h3>1.2 配置管理</h3>
+      <h3>配置管理</h3>
       <p>
         日常配置在控制台<strong>「配置信息」</strong>页维护, 事实源是配置库 <code>data/config.db</code> —
         上游启停、工具契约、FUYAO TTL 等改动<strong>热生效, 无需重启</strong>。空库首次启动时自动从出厂
@@ -26,7 +28,9 @@
 
     <!-- 2. 数据源与路由 -->
     <section :id="HUMAN_SECTIONS[1].id" class="guide-section">
-      <h2>{{ HUMAN_SECTIONS[1].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ HUMAN_SECTIONS[1].num }}.</span>{{ HUMAN_SECTIONS[1].title }}
+      </h2>
       <p>网关背后是 <strong>9 个上游端点</strong>, 按工具路由分发, 失败自动降级:</p>
       <ul>
         <li><strong>mootdx2</strong> — 通达信本地 TCP: 行情 / K 线 / 板块 (含离线指数 / ETF)</li>
@@ -50,7 +54,7 @@
         上表是能力划分, 不含运行态; 每个上游的启用状态与连通性以「配置信息 → 上游」页为准。
       </p>
 
-      <h3>2.1 路由与降级链</h3>
+      <h3>路由与降级链</h3>
       <p>
         每个 gateway 工具声明一个<strong>路由键</strong> (<code>routing</code>), 写在所属数据源的
         <code>config/tools_&lt;源&gt;.yaml</code> 里。路由键对应一条调用链: 链定义在
@@ -63,7 +67,7 @@
         <strong>「工具规格」</strong>页可热编辑工具的路由键与缓存档。
       </p>
 
-      <h3>2.2 缓存策略</h3>
+      <h3>缓存策略</h3>
       <p>
         按工具的 <code>cache_ttl_key</code> 分档, 档位见 <code>config/upstreams.yaml</code> 的
         <code>cache.ttl</code> (historical / fundamentals / special_data / index_data / fund_* 等)。
@@ -78,7 +82,9 @@
 
     <!-- 3. MCP APIs -->
     <section :id="HUMAN_SECTIONS[2].id" class="guide-section">
-      <h2>{{ HUMAN_SECTIONS[2].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ HUMAN_SECTIONS[2].num }}.</span>{{ HUMAN_SECTIONS[2].title }}
+      </h2>
       <p v-if="toolCount != null">
         当前网关对外暴露 <strong>{{ toolCount }}</strong> 个 MCP 工具 (9 个上游端点), 按上游自动分组、
         路由与缓存。完整列表 (含每个 tool 的描述、参数、缓存策略) 都在 <strong>「MCP APIs」</strong> 页。
@@ -91,16 +97,18 @@
 
     <!-- 4. 故障排查 -->
     <section :id="HUMAN_SECTIONS[3].id" class="guide-section">
-      <h2>{{ HUMAN_SECTIONS[3].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ HUMAN_SECTIONS[3].num }}.</span>{{ HUMAN_SECTIONS[3].title }}
+      </h2>
 
-      <h3>4.1 连接失败</h3>
+      <h3>连接失败</h3>
       <ul>
         <li>检查网关是否已启动: 访问 <code>http://127.0.0.1:18080</code></li>
         <li>检查客户端配置中的 <code>cwd</code> 路径是否正确</li>
         <li>Windows 下确认 Python 已加入 PATH</li>
       </ul>
 
-      <h3>4.2 接口返回错误</h3>
+      <h3>接口返回错误</h3>
       <ul>
         <li>查看控制台「网关运行监控 → 上游总览」, 确认对应上游是否在线</li>
         <li>查看返回的 <code>last_error</code> 字段</li>
@@ -110,14 +118,14 @@
         </li>
       </ul>
 
-      <h3>4.3 参数错误</h3>
+      <h3>参数错误</h3>
       <ul>
         <li>股票代码由网关自动标准化 (<code>000001</code>、<code>sh600519</code>、<code>600519.SH</code>、<code>sz000001</code> 都能识别)</li>
         <li>日期统一使用 <code>YYYYMMDD</code> (如 <code>20260301</code>)</li>
         <li>具体参数以 <strong>「MCP APIs」</strong> 页每个 tool 行的「详情」展开为准</li>
       </ul>
 
-      <h3>4.4 反馈渠道</h3>
+      <h3>反馈渠道</h3>
       <p>
         遇到问题请提交 Issue 到
         <a href="https://github.com/unihive/unihive" target="_blank" rel="noopener">github.com/unihive/unihive</a>,

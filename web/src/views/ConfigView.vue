@@ -84,8 +84,10 @@
     </nav>
     </div>
 
-    <!-- 7 个 panel, 切换只显示 active -->
-    <div v-loading="loading && !config" class="cfg-panel-stack">
+    <!-- 7 个 panel, 切换只显示 active。
+         .view-body 让这块成为本页唯一的滚动容器 —— 页头与子标签固定不动,
+         滚动条落在标签栏之下, 而不是从窗口顶边拉到底边 (el-main 不再滚)。 -->
+    <div v-loading="loading && !config" class="cfg-panel-stack view-body">
       <section
         v-show="activeTab === 'upstreams'"
         id="cfg-panel-upstreams"

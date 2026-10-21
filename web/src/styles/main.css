@@ -400,9 +400,13 @@ details[open] .cfg-section-toggle {
    ============================================================================ */
 
 .cfg-sticky-head {
+  /* 页头不再需要 position:sticky —— 它在 .view-body 之外, 只有正文滚 (见
+     styles/view-header.css 的 .view-body)。保留 sticky 作兜底: 万一某页把页头
+     放进滚动流, 行为不会退化。flex:none 保证它不被正文挤扁。 */
   position: sticky;
   top: 0;
   z-index: 5;
+  flex: none;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -435,11 +439,16 @@ details[open] .cfg-section-toggle {
    原先 .onboarding-* 与 .ai-* 两套 scoped 规则近乎逐字重复 (章节导航 4 条、
    章节 5 条、code 各 1 条, 合计约 90 行), 改一处要改两处, 且已经漂移:
    p 边距 8px vs 8px 0 12px、word-break 只加在 AI 面板。
-   另: --guide-anchor-offset 由 GuidesView 按吸顶条实际高度写入, 供
-   scroll-margin-top 使用 —— 否则锚点跳转后章节标题正好藏在吸顶条下面。
+   另: 页头固定在滚动容器 .view-body 之外, 章节锚点不需要再避让吸顶条高度。
    ============================================================================ */
 
+/* 行长上限: 原先正文随卡片铺满, 1440px 屏约 82 字/行、1920px 屏超过 110 字/行,
+   中文长段落读起来要来回甩眼。860px ≈ 60 字/行, 落在可读区间内; 代码块也跟着
+   收窄, 长 JSON 不至于拉成一条。
+   宽屏下 860 已由 .guide-body 的 900px 列宽 (减两侧 20px 内距) 精确给出,
+   这里保留 max-width 只作单列布局 (≤1200px) 的兜底。 */
 .guide-article {
+  max-width: 860px;
   font-size: 14px;
   line-height: 1.65;
   color: var(--el-text-color-primary);
@@ -448,11 +457,20 @@ details[open] .cfg-section-toggle {
 .guide-section {
   padding: 16px 0 24px;
   border-bottom: 1px dashed var(--el-border-color-lighter);
-  scroll-margin-top: var(--guide-anchor-offset, 0px);
+  /* 12px 呼吸: 页头已在滚动容器之外 (见 .view-body), 落点不会藏到标题下面,
+     这里只需要让本节的分隔线露在落点上方, 一眼确认「跳到哪儿了」 */
+  scroll-margin-top: 12px;
 }
 
 .guide-section:last-child {
   border-bottom: none;
+  /* 末节不再留 24px 底 padding: 卡片自身还有 20px, 叠加后底部留白明显大于顶部 */
+  padding-bottom: 0;
+}
+
+/* 首节同理: 卡片内距 20px + 16px 会让标题离卡片顶边 36px, 与底部 20px 不对称 */
+.guide-section:first-child {
+  padding-top: 0;
 }
 
 /* 标题层级: h1 22px → h2 17px → h3 15px。h3 与全站 .card-title /
@@ -461,6 +479,14 @@ details[open] .cfg-section-toggle {
   margin: 0 0 12px;
   font-size: 17px;
   font-weight: 600;
+}
+
+/* 章节序号: 由 format.ts 的 num 渲染, 不再写进标题字符串。
+   次级色 + 等宽数字 —— 序号退到背景, 同时保证 1. 与 10. 后面的标题左缘对齐。 */
+.guide-h2-num {
+  margin-right: 6px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .guide-section h3 {
@@ -480,6 +506,12 @@ details[open] .cfg-section-toggle {
   padding-left: 22px;
 }
 
+/* 「数据源与路由」那组列表每项都是一两行的长句, 项间零间距会连成一片。
+   只加相邻项间距, 首项不额外占位。 */
+.guide-section li + li {
+  margin-top: 4px;
+}
+
 .guide-section code {
   padding: 1px 6px;
   border-radius: 3px;
@@ -489,6 +521,18 @@ details[open] .cfg-section-toggle {
   /* 长路径 / 长 URL 在窄屏不撑破卡片 */
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+/* 正文外链: 不写的话走浏览器默认 #0000EE, 与全站主色 #3B82F6 和正文色都打架。
+   下划线保留 (链接不能只靠颜色区分), offset 让下划线不压住中文字脚。 */
+.guide-section a {
+  color: var(--el-color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.guide-section a:hover {
+  color: var(--el-color-primary-dark-2);
 }
 
 .guide-muted {
@@ -506,12 +550,56 @@ details[open] .cfg-section-toggle {
   color: var(--el-text-color-regular);
 }
 
-/* 章节导航: 与上方 .cfg-subtabs 明确分级 —— 胶囊形内联按钮, 不再叠一个
-   带边框的整条, 避免「子标签条 + 章节条」两条框线上下贴死。 */
+/* ============================================================================
+   接入指南 — 正文 + 右侧目录
+   章节导航原先与标题、子标签挤在同一条吸顶容器里, 三行常驻 125px。这页是
+   唯一需要长时间阅读的页面, 吸顶条吃掉的高度最不划算 —— 改为右侧目录:
+   - 正文列封顶 900px (= .guide-article 的 860 + 卡片左右各 20 内距), 行长
+     上限由**列宽**约束而不是再给 article 套一个 max-width —— 否则卡片比
+     正文宽, 正文右侧会多出一截空白, 卡片内左右留白不对称
+   - 目录栏由 grid 拉伸到与卡片同高, 内部的 .guide-toc-inner 才有吸附行程
+     (sticky 元素的吸附范围是父盒, 父盒若只有内容高就完全不会动)
+   - 视口 <1200px (正文列不足 ~700px) 时退回正文上方的横向胶囊条, 且不再吸附
+   ============================================================================ */
+
+.guide-body {
+  display: grid;
+  /* 第一列 max 900 → 卡片内容区正好 860; min 0 允许窄屏收缩 */
+  grid-template-columns: minmax(0, 900px) 200px;
+  /* 目录在 DOM 里排在正文之前 (朗读顺序先目录), 宽屏用区域把它挪到右栏 */
+  grid-template-areas: 'doc toc';
+  gap: 32px;
+  /* 900 + 32 + 200 */
+  max-width: 1132px;
+}
+
+.guide-card {
+  grid-area: doc;
+}
+
+.guide-toc {
+  grid-area: toc;
+  min-width: 0;
+}
+
+/* 吸附位置 = 滚动区顶部 + 12px 呼吸 (页头在滚动区之外, 不再需要叠加它的高度) */
+.guide-toc-inner {
+  position: sticky;
+  top: 12px;
+}
+
+.guide-toc-title {
+  margin: 0 0 6px;
+  padding-left: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+}
+
 .guide-chapters {
   display: flex;
-  flex-wrap: wrap;
-  gap: 2px 4px;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .guide-chapters button {
@@ -521,12 +609,39 @@ details[open] .cfg-section-toggle {
   border: 0;
   background: transparent;
   font-family: inherit;
-  padding: 3px 10px;
-  border-radius: 999px;
+  /* 竖排目录: 序号成一条右对齐的数字栏, 文字左对齐、占满整行,
+     命中区域比胶囊大, 扫读时左缘成一条线 */
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  text-align: left;
   font-size: 13px;
+  line-height: 1.45;
   color: var(--el-text-color-regular);
   cursor: pointer;
   transition: background-color 120ms ease, color 120ms ease;
+}
+
+/* 序号与正文标题同源 (format.ts 的 num), 只是在这里缩成窄栏:
+   等宽数字 + 右对齐, 1 和 6 占同样宽度, 标题不会左右抖。 */
+.guide-toc-num {
+  flex: none;
+  min-width: 1.1em;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--el-text-color-placeholder);
+}
+
+.guide-toc-text {
+  min-width: 0;
+}
+
+.guide-chapters button:hover .guide-toc-num,
+.guide-chapters button[aria-current] .guide-toc-num {
+  color: inherit;
 }
 
 .guide-chapters button:hover {
@@ -543,6 +658,54 @@ details[open] .cfg-section-toggle {
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
   font-weight: 600;
+}
+
+/* 窄屏: 右侧目录没有立足之地, 退回正文上方的横向胶囊条 (与改造前的位置一致),
+   但不再吸附 —— 吸顶条保持两行, 把高度留给正文。 */
+@media (max-width: 1200px) {
+  .guide-body {
+    grid-template-columns: minmax(0, 1fr);
+    /* 单列时目录落到正文上方, 与 DOM 顺序一致 */
+    grid-template-areas: 'toc' 'doc';
+    gap: 12px;
+    /* 单列下卡片会铺满, 但正文仍封顶 860 —— 不一起收窄的话, 卡片右侧
+       会多出几十 px 空档。902 = 860 + 卡片左右内距 + 边框 */
+    max-width: 902px;
+  }
+
+  .guide-toc-inner {
+    position: static;
+  }
+
+  .guide-toc-title {
+    display: none;
+  }
+
+  .guide-chapters {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 2px 4px;
+    padding-left: 6px;
+  }
+
+  .guide-chapters button {
+    padding: 3px 10px;
+    border-radius: 999px;
+    gap: 5px;
+  }
+
+  /* 胶囊里序号只是标识, 缩小一号省宽度, 375px 屏能少换一行 */
+  .guide-toc-num {
+    font-size: 11px;
+  }
+}
+
+/* 窄屏: 侧栏已折叠到 64px, 卡片再吃 EP 默认的 20px 内距, 375px 屏上正文只剩
+   不到 240px。降到 12px, 把宽度还给正文。 */
+@media (max-width: 640px) {
+  .guide-card .el-card__body {
+    padding: 14px 12px;
+  }
 }
 
 /* ============================================================================

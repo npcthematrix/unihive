@@ -2,7 +2,9 @@
   <article class="guide-article">
     <!-- 1. 简介 -->
     <section :id="AI_SECTIONS[0].id" class="guide-section">
-      <h2>{{ AI_SECTIONS[0].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ AI_SECTIONS[0].num }}.</span>{{ AI_SECTIONS[0].title }}
+      </h2>
       <p>
         UniHive 通过标准 MCP 协议暴露, 兼容 Claude Desktop、Cursor、Cline 等主流 AI 客户端。
         以下是 3 个最常用客户端的配置示例, 复制后粘贴到对应配置文件即可接入。
@@ -15,40 +17,45 @@
 
     <!-- 2. HTTP 模式 (推荐) -->
     <section :id="AI_SECTIONS[1].id" class="guide-section">
-      <h2>{{ AI_SECTIONS[1].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ AI_SECTIONS[1].num }}.</span>{{ AI_SECTIONS[1].title }}
+      </h2>
       <p class="guide-muted">当前网关地址: <code>{{ mcpUrl }}</code></p>
 
-      <h3>Claude Desktop</h3>
-      <p>
-        配置文件路径:
-        <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows) /
-        <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) /
-        <code>~/.config/Claude/claude_desktop_config.json</code> (Linux)
-      </p>
+      <!-- 三个客户端的配置结构一致, 只贴一份: 原先每个 h3 下各贴一遍同一段
+           JSON, 同一屏里出现三次, 读者会以为三段配置有差别。 -->
+      <p>三个主流客户端的配置结构一致, 粘贴到对应配置文件即可:</p>
       <CodeBlock :code="httpConfig" />
 
-      <h3>Cursor</h3>
-      <p>
-        配置文件路径: <code>~/.cursor/mcp.json</code> (全局) 或
-        项目根目录 <code>.cursor/mcp.json</code> (项目级优先)
-      </p>
-      <CodeBlock :code="httpConfig" />
+      <h3>配置文件位置</h3>
+      <ul>
+        <li>
+          <strong>Claude Desktop</strong> —
+          <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows) /
+          <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS) /
+          <code>~/.config/Claude/claude_desktop_config.json</code> (Linux)
+        </li>
+        <li>
+          <strong>Cursor</strong> — <code>~/.cursor/mcp.json</code> (全局), 或项目根目录
+          <code>.cursor/mcp.json</code> (项目级优先)
+        </li>
+        <li>
+          <strong>Cline</strong> (VS Code 扩展) — 左侧活动栏点 Cline 图标 → 顶栏
+          "MCP Servers" → "Configure", Cline 会打开 <code>cline_mcp_settings.json</code>
+        </li>
+      </ul>
 
-      <h3>Cline (VS Code 扩展)</h3>
-      <p>
-        在 VS Code 左侧活动栏点击 Cline 图标 → 顶栏 "MCP Servers" → "Configure", Cline 会打开
-        <code>cline_mcp_settings.json</code>。字段与 Cursor 基本一致。
-      </p>
       <p class="guide-muted">
         各客户端版本对远程 MCP 的 schema 要求并不完全统一。若粘贴后被拒绝, 请按该客户端文档
         补上传输类型字段 (通常形如 <code>"type": "http"</code> 或 <code>"streamableHttp"</code>)。
       </p>
-      <CodeBlock :code="httpConfig" />
     </section>
 
     <!-- 3. STDIO 模式 (备选) -->
     <section :id="AI_SECTIONS[2].id" class="guide-section">
-      <h2>{{ AI_SECTIONS[2].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ AI_SECTIONS[2].num }}.</span>{{ AI_SECTIONS[2].title }}
+      </h2>
       <p>
         适用于不支持 HTTP MCP 的旧客户端。需要在配置文件路径下用 <code>command</code> + <code>args</code>
         + <code>cwd</code> 三段指定启动方式。
@@ -63,7 +70,9 @@
 
     <!-- 4. AI Agent 系统提示词 -->
     <section :id="AI_SECTIONS[3].id" class="guide-section">
-      <h2>{{ AI_SECTIONS[3].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ AI_SECTIONS[3].num }}.</span>{{ AI_SECTIONS[3].title }}
+      </h2>
       <p>
         把以下提示词添加到 AI 客户端的 system prompt / custom instructions 字段,
         让 Agent 自动知道如何调用 UniHive 工具。
@@ -77,7 +86,9 @@
 
     <!-- 5. 验证是否接入成功 -->
     <section :id="AI_SECTIONS[4].id" class="guide-section">
-      <h2>{{ AI_SECTIONS[4].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ AI_SECTIONS[4].num }}.</span>{{ AI_SECTIONS[4].title }}
+      </h2>
       <ol>
         <li>重启 AI 客户端 (Claude Desktop 完全退出后再打开)。</li>
         <li v-if="toolCount != null">
@@ -99,7 +110,9 @@
 
     <!-- 6. 自定义端口 -->
     <section :id="AI_SECTIONS[5].id" class="guide-section">
-      <h2>{{ AI_SECTIONS[5].title }}</h2>
+      <h2>
+        <span class="guide-h2-num">{{ AI_SECTIONS[5].num }}.</span>{{ AI_SECTIONS[5].title }}
+      </h2>
       <p>
         如果你修改了启动端口 (例如改成 <code>19080</code>), 上面 JSON 示例中的 URL 也要相应替换。
         推荐保持默认 <code>18080</code> 以便与控制台共用。

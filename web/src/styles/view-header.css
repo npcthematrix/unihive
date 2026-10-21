@@ -17,6 +17,40 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+  /* 撑满 el-main 给出的确定高度, 自己再切「固定页头 + 滚动正文」:
+     flex:1 拿到剩余高度, min-height:0 让 .view-body 能真正收缩 (flex 子项
+     默认 min-height:auto 会被内容顶开, 那样滚动又跑回 el-main 上)。 */
+  flex: 1;
+  min-height: 0;
+}
+
+/* ============================================================================
+   滚动正文 — 每个页面的唯一滚动容器 (2026-10-18)
+   之前滚动发生在 el-main 上: 它的高度是整个窗口, 所以滚动条从窗口顶边一直
+   拉到底边, 页头/子标签也在滚动行程里 —— 视觉上像"整个大页面在滚"。
+   现在页头 (含子标签) 固定在 .view-page 的顶部, 只有这块区域滚:
+   - 滚动条落在标题/子标签之下, 高度 = 内容区高度
+   - scrollbar-gutter: stable 预留槽位, 切子标签时面板高低不同也不会左右跳
+   - 2px 内距让滚动条不压住卡片的圆角描边
+   ============================================================================ */
+
+.view-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  /* 细滚动条: 默认 15px 宽的滚动条落在内容区里, 看着仍像"窗口滚动条误入面板"。
+     收窄后它明确属于这块内容, 也把槽位宽度从 15 降到 10, 页头与卡片的右缘
+     差得更少。只写标准属性 —— 同时写 ::-webkit-scrollbar 会互相禁用。 */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.4) transparent;
+}
+
+/* 卡片自身承担滚动时 (MCP APIs / MCP 浏览器) 不留槽位:
+   槽位在卡片内距之外再挤 15px, 会让表格左右不居中。 */
+.panel-card.view-body {
+  scrollbar-gutter: auto;
 }
 
 .view-header {
@@ -26,12 +60,8 @@
   gap: 12px;
   flex-wrap: wrap;
   /* 间距由 .view-page gap 统一管, 不再 margin-bottom 重复 */
-  /* L4 sticky 长页吸顶 — bg 与 el-main 同色, padding-bottom 留 4px 防内容闪边 */
-  position: sticky;
-  top: 0;
-  background: var(--el-bg-color-page);
-  z-index: 5;
-  padding-bottom: 4px;
+  /* 页头已在滚动容器之外 (见 .view-body), 不再需要 position:sticky ——
+     原先的 sticky 是为了"长页滚走不丢标题", 现在靠布局保证。 */
 }
 
 .view-h1 {

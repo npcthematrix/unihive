@@ -44,6 +44,18 @@ describe('章节表', () => {
       expect(new Set(titles).size).toBe(titles.length)
     }
   })
+
+  test('序号从 1 起连续递增 —— 目录与正文的编号都从 num 派生', () => {
+    for (const list of [HUMAN_SECTIONS, AI_SECTIONS]) {
+      expect(list.map((s) => s.num)).toEqual(list.map((_, i) => i + 1))
+    }
+  })
+
+  test('标题里不写字面序号 —— 否则页面上会出现 "1. 1. 快速开始" 这类重复编号', () => {
+    for (const s of all) {
+      expect(s.title).not.toMatch(/^\d/)
+    }
+  })
 })
 
 describe('sectionsForTab', () => {

@@ -359,6 +359,14 @@ onBeforeUnmount(() => {
   background: var(--el-bg-color-page);
   padding: 16px;
   outline: none;
+  /* 主内容区自身**不再滚动**: 滚动交给每个页面内部的 .view-body。
+     之前 el-main 是 overflow:auto 且高度=整窗, 滚动条从窗口顶边拉到底边,
+     页面标题和子标签都落在滚动行程里 —— 看上去"整个大页面在滚", 而不是
+     "标签页内部在滚"。现在 el-main 只负责给出确定高度, 页面自己切分
+     「固定页头 + 滚动正文」。 */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 键盘用户 Tab 进站点时跳过侧栏导航, 直接到主内容。 平时视觉隐藏,
