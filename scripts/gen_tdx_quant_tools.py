@@ -102,7 +102,10 @@ def infer_cache_ttl_key(name: str) -> str | None:
 # ---------- 解析 ----------
 
 _METHOD_HEADING = re.compile(
-    r"^###\s+\d+\.\d+\s+(?P<title>[^`\n]+?)`(?P<name>[A-Za-z_][A-Za-z0-9_]*)`\s*$",
+    # 标题行允许反引号之后还有尾注 (如 `### 9.6 批量调用选股公式 `formula_process_mul_xg` ⭐推荐`)。
+    # 旧正则用 \s*$ 锚行尾, 尾注会让整行匹配失败 —— 该小节于是被并进上一节,
+    # 上一节的 section 里因此混入它的参数表 (formula_get_data 被塞进 10 个参数)。
+    r"^###\s+\d+\.\d+\s+(?P<title>[^`\n]+?)`(?P<name>[A-Za-z_][A-Za-z0-9_]*)`[^\n]*$",
     re.MULTILINE,
 )
 _PARAM_ROW = re.compile(

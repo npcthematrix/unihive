@@ -6,6 +6,7 @@ tools:
   routing: get_market_data
   upstream_tool_mapping:
     tdx_quant: get_market_data
+  cache_ttl_key: historical
   dangerous: false
   params:
   - name: field_list
@@ -19,20 +20,20 @@ tools:
   - name: period
     required: true
     type: str
-    description: 'K线周期：`''1m''`（1分钟）/`''5m''`（5分钟）/`''10m''`（10分钟）/`''15m''`（15分钟）/`''30m''`（30分钟）/`''1h''`（60分钟）/`''45d''`（45日）/`''1d''`（日线）/`''1w''`（周线）/`''1mon''`（月线）/`''1q''`（季线）/`''1y''`（年线）'
+    description: K线周期：`'1m'`（1分钟）/`'5m'`（5分钟）/`'10m'`（10分钟）/`'15m'`（15分钟）/`'30m'`（30分钟）/`'1h'`（60分钟）/`'45d'`（45日）/`'1d'`（日线）/`'1w'`（周线）/`'1mon'`（月线）/`'1q'`（季线）/`'1y'`（年线）
     enum:
-    - 1m
-    - 5m
     - 10m
     - 15m
-    - 30m
-    - 1h
-    - 45d
     - 1d
-    - 1w
+    - 1h
+    - 1m
     - 1mon
     - 1q
+    - 1w
     - 1y
+    - 30m
+    - 45d
+    - 5m
   - name: start_time
     required: false
     type: str
@@ -63,6 +64,7 @@ tools:
   routing: get_market_snapshot
   upstream_tool_mapping:
     tdx_quant: get_market_snapshot
+  cache_ttl_key: realtime_quote
   dangerous: false
   params:
   - name: stock_code
@@ -73,11 +75,32 @@ tools:
     required: false
     type: List[str]
     description: 可选，指定返回字段（大小写不敏感）；空列表返回所有字段
+- name: get_market_snapshot_batch
+  description: 一次调用取多只股票的最新行情快照。
+  routing: get_market_snapshot_batch
+  upstream_tool_mapping:
+    tdx_quant: get_market_snapshot_batch
+  cache_ttl_key: null
+  dangerous: false
+  params:
+  - name: stock_list
+    required: true
+    type: List[str]
+    description: 股票代码列表
+  - name: field_list
+    required: false
+    type: List[str]
+    description: 指定返回字段（大小写不敏感）；空列表返回所有字段
+  - name: return_df
+    required: false
+    type: bool
+    description: '`True` 返回 DataFrame；默认 `False` 返回 `{代码: {字段: 值}}`'
 - name: get_stock_info
   description: 获取股票基础信息
   routing: get_stock_info
   upstream_tool_mapping:
     tdx_quant: get_stock_info
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_code
@@ -93,6 +116,7 @@ tools:
   routing: get_relation
   upstream_tool_mapping:
     tdx_quant: get_relation
+  cache_ttl_key: ticker_list
   dangerous: false
   params:
   - name: stock_code
@@ -104,6 +128,7 @@ tools:
   routing: get_divid_factors
   upstream_tool_mapping:
     tdx_quant: get_divid_factors
+  cache_ttl_key: historical
   dangerous: false
   params:
   - name: stock_code
@@ -123,6 +148,7 @@ tools:
   routing: get_more_info
   upstream_tool_mapping:
     tdx_quant: get_more_info
+  cache_ttl_key: realtime_quote
   dangerous: false
   params:
   - name: stock_code
@@ -138,6 +164,7 @@ tools:
   routing: get_gb_info
   upstream_tool_mapping:
     tdx_quant: get_gb_info
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_code
@@ -157,6 +184,7 @@ tools:
   routing: get_kzz_info
   upstream_tool_mapping:
     tdx_quant: get_kzz_info
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_code
@@ -172,6 +200,7 @@ tools:
   routing: get_ipo_info
   upstream_tool_mapping:
     tdx_quant: get_ipo_info
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: ipo_type
@@ -194,17 +223,39 @@ tools:
   routing: get_trackzs_etf_info
   upstream_tool_mapping:
     tdx_quant: get_trackzs_etf_info
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: zs_code
     required: false
     type: str
     description: 指数代码，如 `'000300.CSI'`（沪深300）、`'950162.CSI'`（科创芯片设计）
+- name: get_gb_info_by_date
+  description: 按日期区间取股本信息
+  routing: get_gb_info_by_date
+  upstream_tool_mapping:
+    tdx_quant: get_gb_info_by_date
+  cache_ttl_key: fundamentals
+  dangerous: false
+  params:
+  - name: stock_code
+    required: true
+    type: str
+    description: 股票代码
+  - name: start_date
+    required: true
+    type: str
+    description: 开始日期
+  - name: end_date
+    required: true
+    type: str
+    description: 结束日期
 - name: get_financial_data
   description: 获取财务报表数据（字段 FN1~FN584），需要客户端下载专业财务数据包。
   routing: get_financial_data
   upstream_tool_mapping:
     tdx_quant: get_financial_data
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -232,6 +283,7 @@ tools:
   routing: get_financial_data_by_date
   upstream_tool_mapping:
     tdx_quant: get_financial_data_by_date
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -261,6 +313,7 @@ tools:
   routing: get_gpjy_value
   upstream_tool_mapping:
     tdx_quant: get_gpjy_value
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -284,6 +337,7 @@ tools:
   routing: get_gpjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_gpjy_value_by_date
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -312,6 +366,7 @@ tools:
   routing: get_bkjy_value
   upstream_tool_mapping:
     tdx_quant: get_bkjy_value
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -335,6 +390,7 @@ tools:
   routing: get_bkjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_bkjy_value_by_date
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: stock_list
@@ -363,6 +419,7 @@ tools:
   routing: get_scjy_value
   upstream_tool_mapping:
     tdx_quant: get_scjy_value
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: field_list
@@ -382,6 +439,7 @@ tools:
   routing: get_scjy_value_by_date
   upstream_tool_mapping:
     tdx_quant: get_scjy_value_by_date
+  cache_ttl_key: fundamentals
   dangerous: false
   params:
   - name: field_list
@@ -406,6 +464,7 @@ tools:
   routing: get_gp_one_data
   upstream_tool_mapping:
     tdx_quant: get_gp_one_data
+  cache_ttl_key: realtime_quote
   dangerous: false
   params:
   - name: stock_list
@@ -421,6 +480,7 @@ tools:
   routing: get_stock_list
   upstream_tool_mapping:
     tdx_quant: get_stock_list
+  cache_ttl_key: ticker_list
   dangerous: false
   params:
   - name: market
@@ -439,6 +499,7 @@ tools:
   routing: get_sector_list
   upstream_tool_mapping:
     tdx_quant: get_sector_list
+  cache_ttl_key: ticker_list
   dangerous: false
   params:
   - name: list_type
@@ -456,6 +517,7 @@ tools:
   routing: get_stock_list_in_sector
   upstream_tool_mapping:
     tdx_quant: get_stock_list_in_sector
+  cache_ttl_key: ticker_list
   dangerous: false
   params:
   - name: block_code
@@ -475,6 +537,7 @@ tools:
   routing: get_user_sector
   upstream_tool_mapping:
     tdx_quant: get_user_sector
+  cache_ttl_key: ticker_list
   dangerous: false
   params: []
 - name: create_sector
@@ -482,6 +545,7 @@ tools:
   routing: create_sector
   upstream_tool_mapping:
     tdx_quant: create_sector
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -497,6 +561,7 @@ tools:
   routing: delete_sector
   upstream_tool_mapping:
     tdx_quant: delete_sector
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -508,6 +573,7 @@ tools:
   routing: rename_sector
   upstream_tool_mapping:
     tdx_quant: rename_sector
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -523,6 +589,7 @@ tools:
   routing: clear_sector
   upstream_tool_mapping:
     tdx_quant: clear_sector
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -534,6 +601,7 @@ tools:
   routing: refresh_cache
   upstream_tool_mapping:
     tdx_quant: refresh_cache
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: market
@@ -549,6 +617,7 @@ tools:
   routing: refresh_kline
   upstream_tool_mapping:
     tdx_quant: refresh_kline
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_list
@@ -568,6 +637,7 @@ tools:
   routing: subscribe_hq
   upstream_tool_mapping:
     tdx_quant: subscribe_hq
+  cache_ttl_key: null
   dangerous: false
   params:
   - name: stock_list
@@ -579,6 +649,7 @@ tools:
   routing: unsubscribe_hq
   upstream_tool_mapping:
     tdx_quant: unsubscribe_hq
+  cache_ttl_key: null
   dangerous: false
   params:
   - name: stock_list
@@ -590,6 +661,7 @@ tools:
   routing: get_subscribe_hq_stock_list
   upstream_tool_mapping:
     tdx_quant: get_subscribe_hq_stock_list
+  cache_ttl_key: null
   dangerous: false
   params: []
 - name: send_message
@@ -597,6 +669,7 @@ tools:
   routing: send_message
   upstream_tool_mapping:
     tdx_quant: send_message
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: msg_str
@@ -608,6 +681,7 @@ tools:
   routing: send_file
   upstream_tool_mapping:
     tdx_quant: send_file
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: file_path
@@ -619,6 +693,7 @@ tools:
   routing: send_warn
   upstream_tool_mapping:
     tdx_quant: send_warn
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_list
@@ -665,6 +740,7 @@ tools:
   routing: send_bt_data
   upstream_tool_mapping:
     tdx_quant: send_bt_data
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_code
@@ -688,6 +764,7 @@ tools:
   routing: send_user_block
   upstream_tool_mapping:
     tdx_quant: send_user_block
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: block_code
@@ -707,6 +784,7 @@ tools:
   routing: exec_to_tdx
   upstream_tool_mapping:
     tdx_quant: exec_to_tdx
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: url
@@ -718,6 +796,7 @@ tools:
   routing: print_to_tdx
   upstream_tool_mapping:
     tdx_quant: print_to_tdx
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: df_list
@@ -757,6 +836,7 @@ tools:
   routing: get_trading_dates
   upstream_tool_mapping:
     tdx_quant: get_trading_dates
+  cache_ttl_key: workday
   dangerous: false
   params:
   - name: market
@@ -780,6 +860,7 @@ tools:
   routing: formula_format_data
   upstream_tool_mapping:
     tdx_quant: formula_format_data
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: data_dict
@@ -791,6 +872,7 @@ tools:
   routing: formula_set_data
   upstream_tool_mapping:
     tdx_quant: formula_set_data
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_code
@@ -822,6 +904,7 @@ tools:
   routing: formula_set_data_info
   upstream_tool_mapping:
     tdx_quant: formula_set_data_info
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: stock_code
@@ -853,6 +936,7 @@ tools:
   routing: formula_zb
   upstream_tool_mapping:
     tdx_quant: formula_zb
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -872,6 +956,7 @@ tools:
   routing: formula_xg
   upstream_tool_mapping:
     tdx_quant: formula_xg
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -887,6 +972,7 @@ tools:
   routing: formula_exp
   upstream_tool_mapping:
     tdx_quant: formula_exp
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -898,17 +984,67 @@ tools:
     type: str
     description: 逗号分隔的数字字符串，最多16个参数，如 `'12,26,9'`
 - name: formula_get_data
-  description: 取回此前设置的公式数据结果（无入参；需先通过 formula_xg / formula_exp / formula_process_* 等设置好公式与股票参数）。
+  description: 在调用公式后，获取当前设置的公式数据结果。
   routing: formula_get_data
   upstream_tool_mapping:
     tdx_quant: formula_get_data
+  cache_ttl_key: null
   dangerous: true
   params: []
+- name: formula_process_mul_xg
+  description: 批量调用选股公式
+  routing: formula_process_mul_xg
+  upstream_tool_mapping:
+    tdx_quant: formula_process_mul_xg
+  cache_ttl_key: null
+  dangerous: true
+  params:
+  - name: formula_name
+    required: true
+    type: str
+    description: 公式名称
+  - name: formula_arg
+    required: false
+    type: str
+    description: 公式参数字符串
+  - name: return_count
+    required: false
+    type: int
+    description: 每只股票返回结果数量
+  - name: return_date
+    required: false
+    type: bool
+    description: 是否返回日期
+  - name: stock_list
+    required: true
+    type: List[str]
+    description: 股票代码列表
+  - name: stock_period
+    required: false
+    type: str
+    description: K线周期，默认 `'1d'`
+  - name: start_time
+    required: false
+    type: str
+    description: 开始日期
+  - name: end_time
+    required: false
+    type: str
+    description: 结束日期
+  - name: count
+    required: false
+    type: int
+    description: K线数量
+  - name: dividend_type
+    required: false
+    type: int
+    description: 复权类型
 - name: formula_process_mul_zb
   description: 对多只股票批量调用通达信指标公式，参数含义同 `formula_process_mul_xg`，额外支持 `xsflag` 精度控制。
   routing: formula_process_mul_zb
   upstream_tool_mapping:
     tdx_quant: formula_process_mul_zb
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: formula_name
@@ -960,6 +1096,7 @@ tools:
   routing: stock_account
   upstream_tool_mapping:
     tdx_quant: stock_account
+  cache_ttl_key: null
   dangerous: false
   params:
   - name: account
@@ -975,6 +1112,7 @@ tools:
   routing: query_stock_orders
   upstream_tool_mapping:
     tdx_quant: query_stock_orders
+  cache_ttl_key: null
   dangerous: false
   params:
   - name: account_id
@@ -994,6 +1132,7 @@ tools:
   routing: query_stock_positions
   upstream_tool_mapping:
     tdx_quant: query_stock_positions
+  cache_ttl_key: null
   dangerous: false
   params:
   - name: account_id
@@ -1005,6 +1144,7 @@ tools:
   routing: order_stock
   upstream_tool_mapping:
     tdx_quant: order_stock
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: account_id
@@ -1036,6 +1176,7 @@ tools:
   routing: cancel_order_stock
   upstream_tool_mapping:
     tdx_quant: cancel_order_stock
+  cache_ttl_key: null
   dangerous: true
   params:
   - name: account_id
@@ -1055,6 +1196,7 @@ tools:
   routing: query_stock_asset
   upstream_tool_mapping:
     tdx_quant: query_stock_asset
+  cache_ttl_key: null
   dangerous: false
   params:
   - name: account_id

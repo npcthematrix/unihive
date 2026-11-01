@@ -244,9 +244,11 @@ tq.initialize(__file__)
 |----|------|
 | `'1m'` | 1分钟 |
 | `'5m'` | 5分钟 |
+| `'10m'` | 10分钟 |
 | `'15m'` | 15分钟 |
 | `'30m'` | 30分钟 |
 | `'1h'` | 60分钟 |
+| `'45d'` | 45日 |
 | `'1d'` | 日线 |
 | `'1w'` | 周线 |
 | `'1mon'` | 月线 |
@@ -331,7 +333,7 @@ tq.get_market_data(
 |------|------|------|------|
 | field_list | N | List[str] | 需返回的字段列表；空列表返回所有字段 |
 | stock_list | Y | List[str] | 股票代码列表 |
-| period | Y | str | K线周期：`'1m'`（1分钟）/`'5m'`（5分钟）/`'15m'`（15分钟）/`'30m'`（30分钟）/`'1h'`（60分钟）/`'1d'`（日线）/`'1w'`（周线） |
+| period | Y | str | K线周期：`'1m'`（1分钟）/`'5m'`（5分钟）/`'10m'`（10分钟）/`'15m'`（15分钟）/`'30m'`（30分钟）/`'1h'`（60分钟）/`'45d'`（45日）/`'1d'`（日线）/`'1w'`（周线）/`'1mon'`（月线）/`'1q'`（季线）/`'1y'`（年线） |
 | start_time | N | str | 开始时间 |
 | end_time | N | str | 结束时间；未传则默认当前时间 |
 | count | N | int | `count>0`：取截止 end_time 最近 n 条；`count<=0`：使用 start_time/end_time 区间 |
@@ -426,6 +428,35 @@ tq.get_market_snapshot(
  'Sellv': ['4', '31', '139', '4', '4'],
  'Average': '35.05', 'Zangsu': '-0.25', 'ZAFPre3': '-1.83', 'ErrorId': '0'}
 ```
+
+---
+
+#### 批量获取实时行情快照 `get_market_snapshot_batch`
+
+```python
+tq.get_market_snapshot_batch(
+    stock_list: List[str] = [],
+    field_list: List[str] = [],
+    return_df: bool = False
+) -> Dict
+```
+
+一次调用取多只股票的最新行情快照。
+
+**参数说明：**
+
+| 参数 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| stock_list | Y | List[str] | 股票代码列表 |
+| field_list | N | List[str] | 指定返回字段（大小写不敏感）；空列表返回所有字段 |
+| return_df | N | bool | `True` 返回 DataFrame；默认 `False` 返回 `{代码: {字段: 值}}` |
+
+**与 `get_market_snapshot` 的区别：**
+- 单只接口每次调用独占一次 DLL 往返；批量接口把 N 只合并成一次请求。实测 200 只：单只循环 1801ms vs 批量 55ms（32.6 倍）。
+- 返回结构是 `{代码: 快照字典}`；tq 版没有 `RefreshTime` 字段。
+- 输入非法时返回空结构而不是抛错，**不会**关掉共享连接（单只接口会）。
+
+**使用场景：** 自选股/板块批量看盘、组合实时估值 —— 任何"一次要很多只票的现价"的场景。
 
 ---
 
@@ -970,7 +1001,7 @@ tq.get_trackzs_etf_info(zs_code: str = '') -> List[Dict]
   'PreClose': '1.192', 'IOPV': '1.2071', 'Zgb': '7646.90', 'Sz': '0.92'}, ...]
 ```
 
-###  2.12  `get_gb_info_by_date`: 按日期区间取股本信息
+### 2.12 按日期区间取股本信息 `get_gb_info_by_date`
 
 **参数说明：**
 
@@ -1900,21 +1931,21 @@ tq.send_bt_data(
 ```python
 tq.send_user_block(
     block_code: str = '',
-    stocks: List[str] = [],
+    stock_list: List[str] = [],
     show: bool = False
 ) -> Dict
 ```
 
 - `block_code`：目标板块简称；**为空字符串时发送到"临时条件股"板块**
-- `stocks`：股票代码列表；**传入空列表 `[]` = 清空板块**
+- `stock_list`：股票代码列表；**传入空列表 `[]` = 清空板块**
 - `show`：是否在客户端自动跳转显示该板块
 
 ```python
 # 发送选股结果到临时条件股
-tq.send_user_block(block_code='', stocks=result_list)
+tq.send_user_block(block_code='', stock_list=result_list)
 
 # 发送到自定义板块并显示
-tq.send_user_block(block_code='MYBLOCK', stocks=result_list, show=True)
+tq.send_user_block(block_code='MYBLOCK', stock_list=result_list, show=True)
 ```
 
 ---

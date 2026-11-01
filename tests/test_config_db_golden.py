@@ -2,7 +2,7 @@
 
 这是 P2 的硬关卡: 实体形态不能丢失/改变任何运行时配置 ——
 装配结果 (合回 bootstrap 后) 必须与现行加载链产出的合并 dict 逐字段相等,
-工具 spec 全字段相等 (实测 302 个, 含 requires_env 门控)。
+工具 spec 全字段相等 (实测 305 个, 含 requires_env 门控)。
 """
 from __future__ import annotations
 
@@ -37,10 +37,10 @@ def bundle():
     return merged, specs, provenance, path, template
 
 
-def test_real_config_loads_302_tools(bundle):
+def test_real_config_loads_305_tools(bundle):
     merged, specs, _provenance, _path, template = bundle
-    assert len(specs) == 302
-    assert len(template.tools) == 302
+    assert len(specs) == 305
+    assert len(template.tools) == 305
     # 9 个上游块 (4 个 fuyao 端点各自独立 + mootdx2/tdx_quant/omni/thsdk/THS-LOCAL)
     assert len(template.upstreams) == 9
     # 内联在 upstreams.yaml 的只有 53 个 fuyao/fqgate spec, 其余 241 来自 5 个 tools_*.yaml
@@ -50,7 +50,7 @@ def test_real_config_loads_302_tools(bundle):
         by_source[tool.source_file] = by_source.get(tool.source_file, 0) + 1
     assert by_source["upstreams.yaml"] == 53
     assert by_source["tools_omni.yaml"] == 6
-    assert sum(by_source.values()) == 302
+    assert sum(by_source.values()) == 305
 
 
 def test_sections_exclude_entity_and_bootstrap_keys(bundle):

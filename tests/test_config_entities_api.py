@@ -52,8 +52,8 @@ async def test_entities_summary_after_seed(seeded_store):
         assert set(upstream) == {"name", "type", "enabled", "origin", "updated_at"}
         assert upstream["origin"] == "builtin"
         assert isinstance(upstream["enabled"], bool)
-    assert summary["tools"]["total"] == 302
-    assert sum(summary["tools"]["by_origin"].values()) == 302
+    assert summary["tools"]["total"] == 305
+    assert sum(summary["tools"]["by_origin"].values()) == 305
     # 出厂 seed 的段与上游 origin 均为 builtin
     assert summary["sections"], "expected seeded sections (cache/logging/gateway/...)"
     assert all(s["origin"] == "builtin" for s in summary["sections"])
@@ -90,7 +90,7 @@ async def test_entities_handler_db_mode(seeded_store):
         assert payload["source"] == "db"
         assert payload["revision"] == 0
         assert len(payload["upstreams"]) == 9
-        assert payload["tools"]["total"] == 302
+        assert payload["tools"]["total"] == 305
     finally:
         ca.set_config_db(None)
         await store.close()
