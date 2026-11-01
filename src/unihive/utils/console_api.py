@@ -1457,7 +1457,11 @@ async def upstream_metrics_api(req: "Request") -> "JSONResponse":
             status_code=501,
         )
     try:
-        metrics = getter()
+        # get_metrics() 是同步方法, 且 tdx_quant 的实现里含一次同步 socket
+        # 探测 (0.5s 超时)。直接 await getter() 会在事件循环线程上跑 ——
+        # 控制台每 2.5s 轮询一次该接口, 只要 TdxW.exe 的端口处于「丢包而非
+        # 拒连」状态, 每次轮询都会把整个网关冻结 0.5s。挪进线程即可。
+        metrics = await asyncio.to_thread(getter)
     except Exception:
         # 细节 (可能含内部路径/连接串) 只进日志, 对外固定错误码。
         logger.exception("upstream_metrics_api(%s) raised", name)

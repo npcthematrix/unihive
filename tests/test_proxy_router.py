@@ -367,3 +367,38 @@ class TestProxyMinuteDataAdaptation:
         assert result.data == [
             {"time": "09:31:00", "price": 25.03, "volume": 13377.0},
         ]
+
+
+class TestNormalizationRunsOffEventLoop:
+    """归一化是纯 CPU, 必须在 worker 线程跑 —— 否则满配 batch_bars 会僵住网关.
+
+    2026-11-01 实测: 20 只 × 500 根的归一化留在事件循环里时, 同期 /health
+    从 1.8ms 飙到 450ms。这里锁住「不在事件循环线程执行」这个性质。
+    """
+
+    @pytest.mark.asyncio
+    async def test_normalizer_executes_in_worker_thread(self):
+        import threading
+
+        router = Router(upstreams={}, routing_config={})
+        loop_thread = threading.get_ident()
+        seen: dict[str, int] = {}
+
+        def normalizer(payload):
+            seen["thread"] = threading.get_ident()
+            return payload
+
+        result = await router._normalize_off_loop(normalizer, {"ok": 1})
+
+        assert result == {"ok": 1}
+        assert seen["thread"] != loop_thread, "归一化不应跑在事件循环线程上"
+
+    @pytest.mark.asyncio
+    async def test_normalizer_exception_propagates(self):
+        router = Router(upstreams={}, routing_config={})
+
+        def boom(_payload):
+            raise ValueError("bad frame")
+
+        with pytest.raises(ValueError, match="bad frame"):
+            await router._normalize_off_loop(boom, {})

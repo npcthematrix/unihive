@@ -7,7 +7,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..api.upstream_client import ErrorKind, ToolResult, UpstreamClient
 from .proxy_adapter import Mootdx2ToTdxQuantAdapter, ProxyAdapterError
@@ -411,6 +411,22 @@ class Router:
             error_kind=overall_kind,
         )
 
+    async def _normalize_off_loop(
+        self, normalizer: Callable[[Any], Any], payload: Any
+    ) -> Any:
+        """在 worker 线程执行响应归一化, 不阻塞事件循环。
+
+        归一化是纯 CPU 活: ``batch_bars`` 满配 (20 只 × 500 根) 要把 1 万行
+        DataFrame 拆成记录列表。实测留在事件循环里会让同期 /health 从
+        1.8ms 飙到 450ms —— 一次满配批量请求就能把控制台轮询、健康检查、
+        其它 MCP 请求一起僵住。pandas 的重活本身释放 GIL, 挪进线程后事件
+        循环只受 GIL 切片影响, 不再出现整段停顿。
+
+        用默认 executor 而不是 tdx_quant 专用池: 专用池的 worker 是给阻塞
+        DLL 调用用的, 归一化排在它们后面会被 DLL 队列拖住。
+        """
+        return await asyncio.to_thread(normalizer, payload)
+
     async def _try_proxy(
         self,
         gateway_tool: str,
@@ -471,7 +487,7 @@ class Router:
                 f"[{gateway_tool}] proxy Success via tdx_quant in "
                 f"{total_duration}ms"
             )
-            payload = normalizer(result.data)
+            payload = await self._normalize_off_loop(normalizer, result.data)
             # 归一化后为空 = TQ 这条源在本次范围里没数据 → 当作 miss 继续走原
             # chain, 而不是就此终结 (分时: TQ 本地分钟数据缺失时由
             # mootdx2/tdxpy 兜底)。所有源都空时, 由链尾源自己的 no_data

@@ -76,6 +76,39 @@ def _resolve_strategy_id(configured: str) -> str:
     return new_id
 
 
+#: 单标的参数名 —— 这些位置出现空串时 tqcenter 会先 ``tq.close()`` 再抛错。
+_CODE_ARG_NAMES: tuple[str, ...] = (
+    "stock_code", "code", "codes", "zs_code", "block_code",
+)
+
+
+def _invalid_input_error(arguments: dict[str, Any]) -> str | None:
+    """拦截「空代码」入参, 返回错误文案; 合法则返回 None。
+
+    为什么必须在网关侧拦: tqcenter 的数据方法在入参校验失败时走的是
+    ``cls.close()`` + raise (2026-11-01 实测源码 19 处), 而 ``tq`` 是**进程级
+    单例**, ``close()`` 关的是所有请求共用的那一条 DLL 连接。一次
+    ``get_market_data(stock_list=[])`` 就能把并发中的其它请求一起掐断, 之后
+    只能靠下一次调用的 ``_auto_initialize`` 重建 (实测每次多付 7.7s)。
+
+    空串/空列表对任何工具都不是合法代码, 判掉没有误伤风险; 有默认值语义的
+    工具靠「不传该参数」表达, 不会传空串。
+    """
+    stock_list = arguments.get("stock_list")
+    if isinstance(stock_list, (list, tuple)):
+        if not stock_list:
+            return "stock_list 不能为空"
+        if any(not str(item).strip() for item in stock_list):
+            return "stock_list 不能包含空代码"
+    elif isinstance(stock_list, str) and not stock_list.strip():
+        return "stock_list 不能为空"
+    for name in _CODE_ARG_NAMES:
+        value = arguments.get(name)
+        if isinstance(value, str) and not value.strip():
+            return f"{name} 不能为空"
+    return None
+
+
 class TdxQuantClient:
     """进程内直调 tqcenter.py 的上游客户端。"""
 
@@ -125,7 +158,7 @@ class TdxQuantClient:
         port = self.config.settings.tdx_remote_port
         try:
             return await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
+                asyncio.get_running_loop().run_in_executor(
                     get_tdx_quant_executor(),
                     lambda: _do_probe_port(host, port, 2.0),
                 ),
@@ -277,7 +310,7 @@ class TdxQuantClient:
         if self._tq is None:
             return False
         try:
-            await asyncio.get_event_loop().run_in_executor(
+            await asyncio.get_running_loop().run_in_executor(
                 get_tdx_quant_executor(),
                 lambda: self._tq.get_user_sector(),
             )
@@ -304,7 +337,7 @@ class TdxQuantClient:
             # tqcenter.py 模块体, ctypes 加载 DLL) 与 initialize 同是同步阻塞段,
             # 一体包进 worker thread 并持 _dll_lock; 旧实现把 import 留在事件
             # 循环线程, import 期 DLL 加载仍会冻结 boot 且 wait_for 无法打断。
-            await asyncio.get_event_loop().run_in_executor(
+            await asyncio.get_running_loop().run_in_executor(
                 get_tdx_quant_executor(),
                 lambda: self._dll_import_and_initialize(tdx_root, tqcenter_dir),
             )
@@ -361,7 +394,7 @@ class TdxQuantClient:
                 # tq.close() 同步调 DLL, 在主线程跑会阻塞 event loop 0.5s+
                 # (HIGH2). executor 跑让其他 in-flight 请求继续调度。
                 # M2 (round 11): 持 _dll_lock 与在途/晚到 initialize 互斥。
-                await asyncio.get_event_loop().run_in_executor(
+                await asyncio.get_running_loop().run_in_executor(
                     get_tdx_quant_executor(), self._dll_close
                 )
             except Exception as e:
@@ -369,8 +402,69 @@ class TdxQuantClient:
         self._tq = None
         self._status = UpstreamStatus.UNAVAILABLE
 
+    def _record_failure(self) -> None:
+        """累计一次「调用级」失败, 达阈值时重连 / 降级。
+
+        与 ``_health_loop`` 共用 ``_fail_count`` (同一事件循环, 无需加锁)。
+
+        2026-11-01: 之前只有健康循环的主动探活在计数, 而 DLL 卡死时最直接的
+        信号恰恰是**调用超时**。不计数的话网关会一直以 healthy 接受请求, 每个
+        都拖满 ``call_timeout_sec`` 再返回, 队列越积越深 —— 实测一次并发冲击
+        后单次调用从 26ms 劣化到 7.7s, ``/api/upstreams/tdx_quant/metrics``
+        仍然报 ``status=healthy``, 控制台看不出任何异常。计数后网关能在连续
+        超时后主动降级, 后续请求快速失败而不是继续排队。
+        """
+        self._fail_count += 1
+        if self._fail_count >= self.config.settings.reconnect_threshold:
+            self._schedule_reconnect()
+        if self._fail_count >= self.config.settings.unavailable_threshold:
+            self._trip_unavailable(
+                f"{self._fail_count} failed calls (health loop will retry)"
+            )
+
+    def _trip_unavailable(self, reason: str) -> None:
+        """置 UNAVAILABLE 并记一条 error（幂等）。
+
+        健康循环 / reconnect 成功后会把它复位成 HEALTHY。
+        """
+        if self._status == UpstreamStatus.UNAVAILABLE:
+            return
+        self._status = UpstreamStatus.UNAVAILABLE
+        logger.error(f"[{self.name}] marked UNAVAILABLE: {reason}")
+
+    def _pool_exhausted(self) -> bool:
+        """阻塞池是否已无空闲 worker（全部卡在 DLL 内部）。
+
+        为什么这条判据比「失败计数达阈值」更快也更准：
+
+        ``asyncio.wait_for`` 只能取消 await, 杀不掉已经进入 DLL 的线程。tqcenter
+        内部的 ``timeout_ms`` 最大 60s (K 线), 是 ``call_timeout_sec`` 的 6 倍,
+        所以**每次调用超时都会留下一个僵尸线程继续占着 worker**, 最长再占 50s。
+        worker 一旦全被占住, 新请求只能排队 —— 排多久都拿不到结果, 继续接受
+        请求没有任何意义, 必须立刻快速失败。
+
+        判据本身不含魔数: "有调用刚超时" + "池里一个空闲 worker 都没有" 就是
+        饱和的确定性证据, 与具体接口的正常耗时无关。
+        """
+        from ..core.blocking_pool import tdx_quant_executor_snapshot
+
+        snap = tdx_quant_executor_snapshot()
+        capacity = snap.get("capacity") or 0
+        return capacity > 0 and (snap.get("active") or 0) >= capacity
+
     def _schedule_reconnect(self) -> None:
-        """MED4: 启动 reconnect 任务并加入 tracking set, 完成后自动从 set 移除."""
+        """MED4: 启动 reconnect 任务并加入 tracking set, 完成后自动从 set 移除.
+
+        2026-11-01 合并并发触发: 一次断连会让在途的每个请求都失败, 旧实现
+        于是排起 N 个 reconnect 任务 —— ``_reconnect_lock`` 只保证它们不并发,
+        不保证不重复, 每个仍要跑一遍 close+initialize 的阻塞 DLL 序列, 把
+        worker 和 DLL 队列占满, 恢复反而更慢。已有任务在跑或排队时直接复用。
+        """
+        if any(not task.done() for task in self._reconnect_tasks):
+            logger.debug(
+                f"[{self.name}] reconnect already scheduled, coalescing"
+            )
+            return
         task = asyncio.create_task(self._reconnect())
         self._reconnect_tasks.add(task)
         task.add_done_callback(self._reconnect_tasks.discard)
@@ -384,6 +478,16 @@ class TdxQuantClient:
         暂时无数据但底层 DLL 已就绪, 应该让请求尝试走通。
         """
         start_time = time.time()
+        # 先拦空代码: 送进 DLL 的代价是关掉整条共享连接 (见 _invalid_input_error)
+        invalid = _invalid_input_error(arguments)
+        if invalid is not None:
+            return ToolResult(
+                success=False,
+                error=f"[{self.name}] {invalid}",
+                error_detail={"error_type": "invalid_param", "message": invalid},
+                source=self.name,
+                duration_ms=0,
+            )
         if self._status == UpstreamStatus.UNAVAILABLE or self._tq is None:
             return ToolResult(
                 success=False,
@@ -394,7 +498,7 @@ class TdxQuantClient:
 
         try:
             result = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
+                asyncio.get_running_loop().run_in_executor(
                     get_tdx_quant_executor(),
                     lambda: getattr(self._tq, tool_name)(**arguments),
                 ),
@@ -421,6 +525,12 @@ class TdxQuantClient:
         except asyncio.TimeoutError as e:
             duration_ms = int((time.time() - start_time) * 1000)
             err = classify_exception(e)
+            # 超时是最可靠的「DLL 卡死」信号, 必须计入健康判定 (见 _record_failure)
+            self._record_failure()
+            if self._pool_exhausted():
+                self._trip_unavailable(
+                    "阻塞池已无空闲 worker (调用超时, 线程仍卡在 DLL 内)"
+                )
             return ToolResult(
                 success=False,
                 error=err.message,
@@ -431,6 +541,9 @@ class TdxQuantClient:
             duration_ms = int((time.time() - start_time) * 1000)
             err = classify_exception(e)
             if err.error_type == TdxQuantErrorType.UPSTREAM_UNAVAILABLE:
+                # 链路级异常: 计数 + 立即排一次重连 (计数达阈值时同样会排,
+                # _schedule_reconnect 已做合并, 重复触发无副作用)
+                self._record_failure()
                 self._schedule_reconnect()
             logger.error(f"[{self.name}] call {tool_name} failed: {e}")
             return ToolResult(
@@ -508,7 +621,7 @@ class TdxQuantClient:
                 continue
             try:
                 result = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
+                    asyncio.get_running_loop().run_in_executor(
                         get_tdx_quant_executor(), lambda: self._tq.get_user_sector()
                     ),
                     timeout=5.0,
@@ -541,7 +654,7 @@ class TdxQuantClient:
 
     async def _reconnect(self):
         """重连：tq.close() + tq.initialize()，asyncio.Lock 串行化。"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._reconnect_lock:
             try:
                 if self._tq:

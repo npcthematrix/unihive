@@ -541,3 +541,212 @@ async def test_strategy_id_is_not_filepath(monkeypatch, tmp_path):
         f"strategy_id 不应是路径: {c._strategy_id}"
     )
     assert not c._strategy_id.endswith(".py")
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-01 并发/性能加固
+# ---------------------------------------------------------------------------
+
+def test_invalid_input_error_rejects_empty_codes():
+    """空代码必须在网关侧拦下 —— 送进 tqcenter 会 close() 掉进程级共享连接."""
+    from src.unihive.api.tdx_quant_client import _invalid_input_error
+
+    # 空 stock_list / 含空项
+    assert _invalid_input_error({"stock_list": []}) is not None
+    assert _invalid_input_error({"stock_list": ["600519.SH", ""]}) is not None
+    assert _invalid_input_error({"stock_list": "  "}) is not None
+    # 空单标的代码
+    assert _invalid_input_error({"stock_code": ""}) is not None
+    assert _invalid_input_error({"code": " "}) is not None
+    # 合法入参一律放行
+    assert _invalid_input_error({"stock_list": ["600519.SH"]}) is None
+    assert _invalid_input_error({"stock_code": "600519.SH"}) is None
+    assert _invalid_input_error({"ipo_type": "1"}) is None
+    assert _invalid_input_error({}) is None
+
+
+@pytest.mark.asyncio
+async def test_call_tool_rejects_empty_stock_list_without_touching_dll(
+    client_config, mock_tq
+):
+    """空 stock_list 直接返回 invalid_param, 不得进 DLL (mock 零调用)."""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    c = TdxQuantClient(client_config)
+    c._tq = mock_tq
+    c._status = UpstreamStatus.HEALTHY
+
+    result = await c.call_tool("get_market_data", {"stock_list": [], "period": "1d"})
+
+    assert result.success is False
+    assert "stock_list" in (result.error or "")
+    assert result.error_kind == "invalid_request"
+    mock_tq.get_market_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_tasks_are_coalesced(client_config, mock_tq):
+    """并发失败只应排一个 reconnect —— 旧实现会排 N 个串行 close+init."""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    c = TdxQuantClient(client_config)
+    c._tq = mock_tq
+    c._status = UpstreamStatus.HEALTHY
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_reconnect():
+        started.set()
+        await release.wait()
+
+    c._reconnect = slow_reconnect  # type: ignore[method-assign]
+
+    for _ in range(5):
+        c._schedule_reconnect()
+
+    assert len(c._reconnect_tasks) == 1, "5 次触发只应产生 1 个 reconnect 任务"
+    await started.wait()
+    # 任务在跑时再触发, 仍然复用
+    c._schedule_reconnect()
+    assert len(c._reconnect_tasks) == 1
+    release.set()
+    await asyncio.gather(*list(c._reconnect_tasks), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_call_timeouts_trip_circuit_breaker(mock_tq):
+    """连续调用超时必须让上游主动降级, 而不是永远报 healthy 拖满超时.
+
+    2026-11-01 实测: DLL 被并发冲击卡死后, 每次调用稳定 7.7s, 而
+    /api/upstreams/tdx_quant/metrics 仍返回 status=healthy —— 因为旧实现
+    只有健康循环在计失败, 调用超时完全不参与判定。
+    """
+    import time as _time
+
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake_tdx",
+            strategy_id="test_strategy",
+            health_check_interval_sec=3600,
+            reconnect_threshold=2,
+            unavailable_threshold=3,
+            call_timeout_sec=0.05,
+        ),
+    )
+
+    def slow_snapshot(**_kwargs):
+        _time.sleep(0.2)
+        return {"ErrorId": "0"}
+
+    mock_tq.get_market_snapshot = slow_snapshot
+
+    c = TdxQuantClient(cfg)
+    c._tq = mock_tq
+    c._status = UpstreamStatus.HEALTHY
+    c._reconnect = AsyncMock()  # 隔离重连, 只看计数与降级
+
+    for _ in range(3):
+        r = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+        assert r.success is False
+
+    assert c.status == UpstreamStatus.UNAVAILABLE, (
+        f"连续 3 次超时后应降级, 实际 {c.status}"
+    )
+    # 降级后立即快速失败, 不再进 DLL
+    before = c._fail_count
+    r = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    assert r.success is False and "unavailable" in (r.error or "")
+    assert c._fail_count == before, "已降级时不应继续累计失败"
+
+
+@pytest.mark.asyncio
+async def test_pool_exhaustion_trips_breaker_on_first_timeout(mock_tq, monkeypatch):
+    """池已无空闲 worker 时, 一次超时就该降级 —— 不必等满 10 次失败计数。
+
+    ``wait_for`` 取消不了已经进 DLL 的线程, 每次超时都留下一个僵尸 worker
+    (tqcenter 内部 timeout_ms 最长 60s)。若等到 ``unavailable_threshold=10``
+    次超时才降级, 10 个 worker 早已全被僵尸占满, 期间所有请求只能排队。
+    """
+    import time as _time
+
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake_tdx",
+            strategy_id="test_strategy",
+            health_check_interval_sec=3600,
+            reconnect_threshold=99,        # 关掉计数路径, 只验证池判据
+            unavailable_threshold=99,
+            call_timeout_sec=0.05,
+        ),
+    )
+
+    def slow_snapshot(**_kwargs):
+        _time.sleep(0.3)
+        return {"ErrorId": "0"}
+
+    mock_tq.get_market_snapshot = slow_snapshot
+
+    c = TdxQuantClient(cfg)
+    c._tq = mock_tq
+    c._status = UpstreamStatus.HEALTHY
+    c._reconnect = AsyncMock()
+
+    # 池打满: capacity=10, active=10, 无空闲 worker
+    monkeypatch.setattr(
+        "src.unihive.core.blocking_pool.tdx_quant_executor_snapshot",
+        lambda: {"capacity": 10, "workers": 10, "active": 10, "queued": 3},
+    )
+
+    r = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    assert r.success is False
+    assert c._fail_count == 1, "计数仍应只加 1"
+    assert c.status == UpstreamStatus.UNAVAILABLE, (
+        f"池耗尽时首次超时就应降级, 实际 {c.status}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pool_exhaustion_does_not_trip_when_workers_free(mock_tq, monkeypatch):
+    """池还有空闲 worker 时, 单次超时不该降级 (只是慢, 不是饱和)。"""
+    import time as _time
+
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake_tdx",
+            strategy_id="test_strategy",
+            health_check_interval_sec=3600,
+            reconnect_threshold=99,
+            unavailable_threshold=99,
+            call_timeout_sec=0.05,
+        ),
+    )
+
+    def slow_snapshot(**_kwargs):
+        _time.sleep(0.3)
+        return {"ErrorId": "0"}
+
+    mock_tq.get_market_snapshot = slow_snapshot
+
+    c = TdxQuantClient(cfg)
+    c._tq = mock_tq
+    c._status = UpstreamStatus.HEALTHY
+    c._reconnect = AsyncMock()
+
+    monkeypatch.setattr(
+        "src.unihive.core.blocking_pool.tdx_quant_executor_snapshot",
+        lambda: {"capacity": 10, "workers": 10, "active": 3, "queued": 0},
+    )
+
+    r = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    assert r.success is False
+    assert c.status != UpstreamStatus.UNAVAILABLE, "池未打满时不应降级"

@@ -495,3 +495,67 @@ class TestBatchLimitsStayInSync:
 
         assert proxy_adapter._BATCH_BARS_MAX_CODES == MAX_LIMIT_BATCH_BARS_CODES
         assert proxy_adapter._BATCH_BARS_MAX_LIMIT == MAX_LIMIT_BATCH_BARS
+
+
+class TestVectorizedKlineBuildEquivalence:
+    """向量化路径必须与标量兜底逐字段一致 (含 NaN / 非时间索引 / 缺字段)."""
+
+    @staticmethod
+    def _sbf(payload, stock, allow_positional):
+        from src.unihive.core import proxy_adapter as pa
+
+        out = {}
+        for key, value in payload.items():
+            series = pa._column_series(value, stock, allow_positional=allow_positional)
+            if series is not None:
+                out[str(key).lower()] = series
+        return out
+
+    def test_matches_scalar_implementation_on_random_frames(self):
+        pd = pytest.importorskip("pandas")
+        np = pytest.importorskip("numpy")
+        from src.unihive.core import proxy_adapter as pa
+
+        rng = np.random.default_rng(20261101)
+        for n_bars in (1, 7, 40):
+            for freq in ("D", "min"):
+                idx = pd.date_range("2024-01-01", periods=n_bars, freq=freq)
+                payload = {}
+                for field in ("Open", "High", "Low", "Close", "Volume", "Amount"):
+                    values = rng.random(n_bars) * 100
+                    values[rng.integers(0, n_bars)] = np.nan
+                    payload[field] = pd.DataFrame({"X": values}, index=idx)
+                for period in ("1d", "1m"):
+                    sbf = self._sbf(payload, "X", True)
+                    expected = pa._build_kline_records_scalar(
+                        sbf,
+                        sbf["close"],
+                        pa._TQ_VOL_SHARES_PER_LOT
+                        if period in pa._TQ_DAILY_PERIODS
+                        else 1.0,
+                    )
+                    assert pa._build_kline_records(sbf, period) == expected
+
+    def test_falls_back_to_scalar_for_plain_dicts(self):
+        """dict 形态没有可靠顺序 → 必须走标量路径, 结果顺序跟随 close."""
+        from src.unihive.core import proxy_adapter as pa
+
+        sbf = {
+            "close": {"a": 1.0, "b": float("nan"), "c": 3.0},
+            "open": {"c": 30.0, "a": 10.0, "b": 20.0},
+        }
+        assert pa._build_kline_records(sbf, "1d") == [
+            {"date": "a", "open": 10.0, "close": 1.0},
+            {"date": "c", "open": 30.0, "close": 3.0},
+        ]
+
+    def test_non_datetime_index_only_emits_date(self):
+        pd = pytest.importorskip("pandas")
+        from src.unihive.core import proxy_adapter as pa
+
+        idx = pd.Index(["2024-01-02", "2024-01-03"])
+        sbf = {"close": pd.Series([1.5, 2.5], index=idx)}
+        assert pa._build_kline_records(sbf, "1d") == [
+            {"date": "2024-01-02", "close": 1.5},
+            {"date": "2024-01-03", "close": 2.5},
+        ]
