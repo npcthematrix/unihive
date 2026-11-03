@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
  * Round-13 簇O: ConfigView 加载编排抽出为纯 composable。
  * 旧实现先 await getConfig(), 实体摘要 / 工具清单 / proxy 三路独立请求
  * 等它落地后才发出 —— 无谓瀑布; 且任一软失败的处理散在 SFC 里无法单测。
- * 新实现四路请求同一 tick 并发 (Promise.allSettled), 失败彼此独立。
+ * 新实现各路请求同一 tick 并发 (Promise.allSettled), 失败彼此独立;
+ * 池参数快照 (round-14 H2) 也并入同一条 load, 面板不再自己 onMounted 拉。
  */
 import { createConfigPageLoader, type ConfigPageApis } from '@/views/config/pageLoader'
 
@@ -50,6 +51,10 @@ function makeApis(overrides: Partial<ConfigPageApis> = {}) {
       calls.push('interfaces')
       return overrides.getInterfaces?.() ?? Promise.resolve({ tools: [] })
     }),
+    getPool: vi.fn(() => {
+      calls.push('pool')
+      return overrides.getPool?.() ?? Promise.resolve({} as never)
+    }),
     getProxy: vi.fn(() => {
       calls.push('proxy')
       return overrides.getProxy?.() ?? Promise.resolve({} as never)
@@ -66,15 +71,16 @@ function setup(overrides: Partial<ConfigPageApis> = {}, isProxyActive = () => fa
 }
 
 describe('createConfigPageLoader — 并发', () => {
-  it('四路请求在同一 tick 全部发出 (不被 config 阻塞成瀑布)', async () => {
+  it('五路请求在同一 tick 全部发出 (不被 config 阻塞成瀑布)', async () => {
     const { loader, calls } = setup({
       getConfig: () => deferred().promise,
       getEntities: () => deferred().promise,
       getInterfaces: () => deferred().promise,
+      getPool: () => deferred().promise,
       getProxy: () => deferred().promise,
     })
     loader.load()
-    expect(calls).toEqual(['config', 'entities', 'interfaces', 'proxy'])
+    expect(calls).toEqual(['config', 'entities', 'interfaces', 'pool', 'proxy'])
   })
 })
 
@@ -392,7 +398,7 @@ describe('createConfigPageLoader — 失败保留上次可用数据', () => {
   })
 })
 
-describe('createConfigPageLoader — 通道状态 (entitiesError / toolsSettled)', () => {
+describe('createConfigPageLoader — 通道状态 (entitiesError / toolsLoaded)', () => {
   it('entities 失败: entitiesError 置位且 entities 保持 null; 重试成功后清空', async () => {
     const ent = [
       deferred<Record<string, unknown>>(),
@@ -414,15 +420,38 @@ describe('createConfigPageLoader — 通道状态 (entitiesError / toolsSettled)
     expect(loader.entities.value).toEqual({ source: 'db' })
   })
 
-  it('interfaces 成功或失败都标记 toolsSettled (复制 JSON 就绪判定)', async () => {
+  it('toolsLoaded 只在真的拿到清单时置位 (M1: 失败与契约漂移都不算就绪)', async () => {
     const ok = setup({ getInterfaces: () => Promise.resolve({ tools: [] }) })
-    expect(ok.loader.toolsSettled.value).toBe(false)
+    expect(ok.loader.toolsLoaded.value).toBe(false)
     await ok.loader.load()
-    expect(ok.loader.toolsSettled.value).toBe(true)
+    expect(ok.loader.toolsLoaded.value).toBe(true)
+    expect(ok.loader.toolsError.value).toBe('')
 
     const bad = setup({ getInterfaces: () => Promise.reject(new Error('ifs-down')) })
     await bad.loader.load()
-    expect(bad.loader.toolsSettled.value).toBe(true)
+    expect(bad.loader.toolsLoaded.value).toBe(false)
+    expect(bad.loader.toolsError.value).toBe('ifs-down')
+
+    const drifted = setup({ getInterfaces: () => Promise.resolve({} as never) })
+    await drifted.loader.load()
+    expect(drifted.loader.toolsLoaded.value).toBe(false)
+    expect(drifted.loader.toolsError.value).toContain('tools')
+  })
+
+  it('成功一轮后再失败: 保留 toolsLoaded 与旧清单, 只记错误', async () => {
+    const ifs = [
+      deferred<{ tools: unknown[] }>(),
+      deferred<{ tools: unknown[] }>(),
+    ]
+    const { loader } = setup({ getInterfaces: queued(ifs) })
+    ifs[0].resolve({ tools: [] })
+    await loader.load()
+    expect(loader.toolsLoaded.value).toBe(true)
+
+    ifs[1].reject(new Error('ifs-down'))
+    await loader.load(true)
+    expect(loader.toolsLoaded.value).toBe(true)
+    expect(loader.toolsError.value).toBe('ifs-down')
   })
 
   it('旧一轮 entities 失败不得污染新一轮的成功态', async () => {
@@ -442,5 +471,62 @@ describe('createConfigPageLoader — 通道状态 (entitiesError / toolsSettled)
 
     expect(loader.entities.value).toEqual({ source: 'db' })
     expect(loader.entitiesError.value).toBe('')
+  })
+})
+
+describe('createConfigPageLoader — 池参数通道 (H2)', () => {
+  it('load 落地快照并清空 poolError', async () => {
+    const { loader } = setup({
+      getPool: () => Promise.resolve({ mootdx2_reader_limit: 4 } as never),
+    })
+    await loader.load()
+    expect(loader.pool.value).toEqual({ mootdx2_reader_limit: 4 })
+    expect(loader.poolError.value).toBe('')
+  })
+
+  it('池失败只置 poolError: 不打 toast, 也不影响其余通道', async () => {
+    const { loader, notify } = setup({
+      getConfig: () => Promise.resolve({ upstreams: {} } as never),
+      getPool: () => Promise.reject(new Error('pool-down')),
+    })
+    await expect(loader.load()).resolves.toBeUndefined()
+    expect(loader.pool.value).toBeNull()
+    expect(loader.poolError.value).toBe('pool-down')
+    expect(loader.config.value).toEqual({ upstreams: {} })
+    expect(loader.loadError.value).toBe('')
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('瞬时失败保留上次可用快照 (面板据此继续可编辑)', async () => {
+    const pl = [
+      deferred<Record<string, unknown>>(),
+      deferred<Record<string, unknown>>(),
+    ]
+    const { loader } = setup({ getPool: queued(pl) })
+    pl[0].resolve({ mootdx2_reader_limit: 4 } as never)
+    await loader.load()
+
+    pl[1].reject(new Error('pool-down'))
+    await loader.load(true)
+    expect(loader.pool.value).toEqual({ mootdx2_reader_limit: 4 })
+    expect(loader.poolError.value).toBe('pool-down')
+  })
+
+  it('过期一轮的池结果不得覆盖 loadPool 重试后的新数据', async () => {
+    const pl = [
+      deferred<Record<string, unknown>>(),
+      deferred<Record<string, unknown>>(),
+    ]
+    const { loader } = setup({ getPool: queued(pl) })
+    void loader.load() // 第一轮池挂起
+    const retry = loader.loadPool() // 折叠区重试按钮
+    pl[1].resolve({ mootdx2_reader_limit: 8 } as never)
+    await retry
+    pl[0].reject(new Error('stale-pool'))
+    await pl[0].promise.catch(() => undefined)
+    await flush()
+
+    expect(loader.pool.value).toEqual({ mootdx2_reader_limit: 8 })
+    expect(loader.poolError.value).toBe('')
   })
 })

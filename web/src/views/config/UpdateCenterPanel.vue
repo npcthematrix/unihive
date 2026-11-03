@@ -585,12 +585,16 @@ const appliedImpactGroups = computed<ImpactGroup[]>(() => {
 /**
  * M2: 模板状态 (构建+hash 比对) 只在本 tab 激活时拉取, 不在进入配置页即自发请求。
  * 首次激活拉一次, 离开不重复; 同 ErrorTrackingPanel 的 active 模式。
+ *
+ * 触发条件同时跟 active 与 isDb: 深链 ?tab=updateCenter 进入本页时 active
+ * 一开局就是 true 且不再变化, 而 entities (isDb 的依据) 要等接口落地 ——
+ * 只听 active 会让这个 tab 永远停在空态。
  */
 const statusLoadedOnce = ref(false)
 watch(
-  () => props.active,
-  (active) => {
-    if (active && isDb.value && !statusLoadedOnce.value && !status.value && !statusLoading.value) {
+  [() => props.active, isDb],
+  ([active, db]) => {
+    if (active && db && !statusLoadedOnce.value && !status.value && !statusLoading.value) {
       statusLoadedOnce.value = true
       void loadStatus()
     }

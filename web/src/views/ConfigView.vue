@@ -1,7 +1,8 @@
 <template>
   <div class="view-page">
-    <!-- 页头 + 告警 + subtab 共用一个 sticky 容器: 长页滚动时标题与
-         标签一起吸顶, 不必回到顶部才能切 tab。原先只有 .view-header 吸顶。 -->
+    <!-- 页头 + subtab 共用一个固定容器: 长页滚动时标题与标签一起置顶, 不必回到
+         顶部才能切 tab。告警不放进这里 —— 本容器在滚动区之外, 占的是净高度,
+         多行且不可关闭的告警会把小屏 (1366x768) 标签栏以下的可视区吃光。 -->
     <div class="cfg-sticky-head">
     <header class="view-header">
       <h1 class="view-h1">配置信息</h1>
@@ -19,44 +20,6 @@
         >立即刷新</el-button>
       </div>
     </header>
-
-    <div v-if="loadError || proxyError || entitiesFailed" class="alert-stack">
-      <el-alert
-        v-if="loadError"
-        type="error"
-        :closable="false"
-        show-icon
-        :title="`加载失败：${loadError}`"
-      >
-        <el-button size="small" @click="load(false)">重试</el-button>
-      </el-alert>
-
-      <el-alert
-        v-if="proxyError"
-        type="warning"
-        :closable="false"
-        show-icon
-        :title="`代理设置加载失败：${proxyError}`"
-      >
-        <el-button size="small" @click="loadProxy">重试</el-button>
-      </el-alert>
-
-      <!-- 实体摘要失败会让「可编辑」判定一并失效 (isDbMode 无法确认),
-           此处必须显式说明, 否则上游/工具/池参数三处热编辑入口会静默消失。 -->
-      <el-alert
-        v-if="entitiesFailed"
-        type="warning"
-        :closable="false"
-        show-icon
-        title="配置库实体加载失败, 热编辑入口已暂时隐藏"
-      >
-        <div class="entities-failed-hint">
-          无法确认配置事实源 ({{ entitiesError }})。上游连接块 / 工具规格 /
-          全局池参数的编辑入口依赖该接口, 请重试或点击右上角「立即刷新」。
-        </div>
-        <el-button size="small" @click="loadEntities">重试</el-button>
-      </el-alert>
-    </div>
 
     <!-- subtab 导航 — WAI-ARIA Tabs 模式: roving tabindex + 方向键 -->
     <nav
@@ -86,8 +49,64 @@
 
     <!-- 7 个 panel, 切换只显示 active。
          .view-body 让这块成为本页唯一的滚动容器 —— 页头与子标签固定不动,
-         滚动条落在标签栏之下, 而不是从窗口顶边拉到底边 (el-main 不再滚)。 -->
+         滚动条落在标签栏之下, 而不是从窗口顶边拉到底边 (el-main 不再滚)。
+         加载告警落在这里 (滚动区首屏可见, 读正文时跟着滚走)。 -->
     <div v-loading="loading && !config" class="cfg-panel-stack view-body">
+      <div v-if="loadError || proxyError || entitiesFailed || toolsFailed" class="alert-stack">
+        <el-alert
+          v-if="loadError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="`加载失败：${loadError}`"
+        >
+          <el-button size="small" @click="load(false)">重试</el-button>
+        </el-alert>
+
+        <el-alert
+          v-if="proxyError"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="`代理设置加载失败：${proxyError}`"
+        >
+          <el-button size="small" @click="loadProxy">重试</el-button>
+        </el-alert>
+
+        <!-- 实体摘要失败会让「可编辑」判定一并失效 (isDbMode 无法确认),
+             此处必须显式说明, 否则上游/工具/池参数三处热编辑入口会静默消失。 -->
+        <el-alert
+          v-if="entitiesFailed"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="配置库实体加载失败, 热编辑入口已暂时隐藏"
+        >
+          <div class="alert-hint">
+            无法确认配置事实源 ({{ entitiesError }})。上游连接块 / 工具规格 /
+            全局池参数的编辑入口依赖该接口, 请重试或点击右上角「立即刷新」。
+          </div>
+          <el-button size="small" @click="loadEntities">重试</el-button>
+        </el-alert>
+
+        <!-- 快照本身不含 tools, 「工具」tab 与复制 JSON 都靠 /api/interfaces
+             补齐。这里静默失败会让两者不一致: 屏幕上看不到清单, 复制出的
+             JSON 也缺 tools, 而页头「复制 JSON」按钮过去照样可点。 -->
+        <el-alert
+          v-if="toolsFailed"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="工具清单加载失败, 「复制 JSON」已暂时停用"
+        >
+          <div class="alert-hint">
+            配置快照不含 tools 段 ({{ toolsError }})。工具 tab 与剪贴板内容依赖
+            该接口补齐, 请重试或点击右上角「立即刷新」。
+          </div>
+          <el-button size="small" @click="loadInterfaceTools">重试</el-button>
+        </el-alert>
+      </div>
+
       <section
         v-show="activeTab === 'upstreams'"
         id="cfg-panel-upstreams"
@@ -97,10 +116,15 @@
         <UpstreamsPanel
           :config="displayConfig"
           :editable="isDbMode"
+          :write-blocked="isYamlEscape"
+          :pool="pool"
+          :pool-error="poolError"
           @changed="onUpstreamEnabled"
           @connection-saved="onUpstreamConnectionSaved"
           @kill-switch-changed="onKillSwitchChanged"
           @pool-config-saved="onPoolConfigSaved"
+          @pool-retry="loadPool"
+          @write-conflict="onWriteConflict"
         />
       </section>
 
@@ -122,6 +146,7 @@
         <ToolsPanel
           :config="displayConfig"
           :editable="isDbMode"
+          :write-blocked="isYamlEscape"
           @changed="onToolEdited"
         />
       </section>
@@ -145,7 +170,7 @@
         role="tabpanel"
         aria-labelledby="cfg-tab-proxy"
       >
-        <ProxyPanel :proxy="proxy" @change="onProxyChange" />
+        <ProxyPanel :proxy="proxy" :loading="proxyLoading" :error="proxyError" @change="onProxyChange" />
       </section>
 
       <section
@@ -174,7 +199,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getConfig, getConfigEntities, getProxySettings } from '@/api/config'
+import { getConfig, getConfigEntities, getPoolConfig, getProxySettings } from '@/api/config'
 import type { ConfigRevision, GatewayConfig, ProxySettings } from '@/api/config'
 import { getInterfaces } from '@/api/interfaces'
 import { copyText } from '@/utils/clipboard'
@@ -199,8 +224,8 @@ const router = useRouter()
 const copyInFlight = ref(false)
 
 /**
- * 四路数据 (config / 实体摘要 / 全量工具清单 / proxy) 的并发加载编排,
- * 各通道独立错误面。逻辑抽到 config/pageLoader 纯 composable 单测。
+ * 五路数据 (config / 实体摘要 / 全量工具清单 / 池参数快照 / proxy) 的并发加载
+ * 编排, 各通道独立错误面。逻辑抽到 config/pageLoader 纯 composable 单测。
  * isProxyActive 是惰性 getter, 引用下方稍后声明的 activeTab (闭包调用时才读)。
  */
 const {
@@ -208,24 +233,30 @@ const {
   entities,
   interfaceTools,
   proxy,
+  pool,
+  poolError,
   loading,
   manualLoading,
+  proxyLoading,
   loadError,
   proxyError,
   entitiesError,
-  toolsSettled,
+  toolsError,
+  toolsLoaded,
   lastRefresh,
   proxyLastRefresh,
   load: loaderLoad,
   loadProxy,
   loadEntities,
   loadInterfaceTools,
+  loadPool,
 } = createConfigPageLoader(
   {
     getConfig,
     getEntities: getConfigEntities,
     getInterfaces,
     getProxy: getProxySettings,
+    getPool: getPoolConfig,
   },
   (message) => ElMessage.error(message),
   () => activeTab.value === 'proxy',
@@ -292,6 +323,14 @@ const userModifiedEntitiesCount = computed(() => userModifiedCount(entities.valu
 const isDbMode = computed(() => entities.value?.source === 'db')
 
 /**
+ * yaml 逃生模式 (配置事实源是出厂文件) —— 与「entities 还没加载完」是两回事,
+ * 只在确定是 yaml 时为 true。上游启用/禁用与 dangerous kill switch 这两个
+ * 行内写控件过去不受任何模式约束: 该模式下点一次必然吃 503, 只能拿到一条
+ * 错误 toast。面板据此把写控件置灰并说明原因。
+ */
+const isYamlEscape = computed(() => entities.value?.source === 'yaml')
+
+/**
  * 实体摘要请求失败 (且没有任何可用数据) —— 与「yaml 逃生模式」是两回事:
  * 前者是异常, 需要显式错误面 + 重试; 后者是预期状态, 只需说明即可。
  * 两者都会让 isDbMode 变成 false, 所以必须分开呈现, 否则上游 / 工具规格 /
@@ -300,14 +339,21 @@ const isDbMode = computed(() => entities.value?.source === 'db')
 const entitiesFailed = computed(() => Boolean(entitiesError.value) && !entities.value)
 
 /**
+ * 工具清单请求失败 (且没有任何可用数据) —— 与实体摘要同理, 需要单独的错误面:
+ * displayConfig 靠这份清单补齐 tools, 一次瞬时失败会让「复制 JSON」静默
+ * 复制出缺 tools 的配置, 与屏幕所见不一致。
+ */
+const toolsFailed = computed(() => Boolean(toolsError.value) && !interfaceTools.value.length)
+
+/**
  * 「复制 JSON」就绪判定。displayConfig 在快照缺 tools 时用 /api/interfaces
- * 合成清单补齐, 所以必须等该通道结束过一轮 (成功或失败), 否则首屏 config
- * 先落地时立即复制会得到一份缺 tools 的 JSON, 与屏幕所见不一致。
+ * 合成清单补齐, 所以必须等该通道**成功**落地过一轮 —— 旧的「结束过一轮即就绪」
+ * 在首屏 tools 请求挂掉时成立, 复制结果会缺 tools。
  */
 const copyReady = computed(() => {
   if (!config.value) return false
   if (config.value.tools && config.value.tools.length) return true
-  return toolsSettled.value
+  return toolsLoaded.value
 })
 
 const TABS = computed(() => [
@@ -421,6 +467,16 @@ function onPoolConfigSaved(payload: {
   void loadInterfaceTools()
 }
 
+/**
+ * 行内写操作 (上游开关 / kill switch / 池参数) 撞乐观锁: 后端这两个 409 体
+ * 不回带新 revision (只有实体编辑回带 expected/actual), 本地 config.version
+ * 因此一直是陈旧的 —— 只弹「请刷新」的话, 用户每次重试都再撞一次 409。
+ * 这里直接整份重拉把 version 换新, 用户下一次保存即可成功。
+ */
+function onWriteConflict(): void {
+  void load(false)
+}
+
 const refreshLabel = computed(() =>
   formatLastRefreshLabel(loadError.value, lastRefresh.value),
 )
@@ -463,18 +519,21 @@ defineExpose({ load })
 </script>
 
 <style scoped>
-/* 页头 + 告警 + subtab 的统一吸顶容器 .cfg-sticky-head, 以及 .cfg-panel-stack
+/* 页头 + subtab 的统一固定容器 .cfg-sticky-head, 以及 .cfg-panel-stack
    已于 2026-10-17 上提到 main.css (OmniView 引用了同名类但 scoped 不外溢,
    那边实际没生效)。此处只保留本页特有的样式。 */
 
-/* 只在有告警时渲染 (模板已加 v-if), 不再靠 margin-bottom 制造幽灵间距 */
+/* 只在有告警时渲染 (模板已加 v-if)。父容器 .cfg-panel-stack 是普通块级流
+   (不是 flex gap 容器), 所以告警之间的间距和它与下方 panel 的间距都由这里给。 */
 .alert-stack {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-bottom: 12px;
 }
 
-.entities-failed-hint {
+/* 告警正文里的补充说明 (实体 / 工具两条共用), 与重试按钮之间留呼吸。 */
+.alert-hint {
   margin: 4px 0 8px;
   font-size: 0.82rem;
   line-height: 1.6;

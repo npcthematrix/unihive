@@ -1,7 +1,7 @@
 <template>
   <div class="proxy-panel">
     <p class="proxy-description">
-      mootdx2 → TDX_QUANT 透明代理。启用后, 以下 <strong>{{ coverageCount }}</strong> 个行情类
+      mootdx2 → TDX_QUANT 透明代理。启用后, 以下 <strong>{{ coverageCountText }}</strong> 个行情类
       工具优先走 TDX_QUANT (本地 DLL, 更稳定), 失败时自动降级到 MOOTDX2 (远程 TDX)。
     </p>
 
@@ -86,9 +86,16 @@ import { errorMessage } from '@/api/client'
 
 interface Props {
   proxy: ProxySettings | null
+  /** 父层 proxy 通道仍在请求: 空 coverage 此时不代表「TOOL_MAP 为空」。 */
+  loading?: boolean
+  /** 父层 proxy 通道的错误文本; 有值说明这份数据根本没拿到。 */
+  error?: string
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  loading: false,
+  error: '',
+})
 const emit = defineEmits<{
   (e: 'change', updated: ProxySettings): void
 }>()
@@ -108,12 +115,22 @@ watch(
 
 const coverage = computed<ProxyCoverageEntry[]>(() => props.proxy?.coverage || [])
 const coverageCount = computed(() => coverage.value.length)
-const coverageEmpty = computed(() =>
-  coverage.value.length ? '' : '覆盖范围为空 — TOOL_MAP 未配置或加载失败',
+/** 首屏/重试期间不报「0 个」—— 那是「还没拿到」, 不是「真的没有」。 */
+const coverageCountText = computed(() =>
+  props.loading && !props.proxy ? '…' : String(coverageCount.value),
 )
+const coverageEmpty = computed(() => {
+  if (coverageCount.value) return ''
+  if (props.loading && !props.proxy) return '加载中…'
+  if (props.error) return `代理设置加载失败: ${props.error}`
+  return '覆盖范围为空 — TOOL_MAP 未配置或加载失败'
+})
 
 const OFFLINE_STATUSES: TdxQuantStatus[] = ['UNAVAILABLE', 'MISSING']
+/** 数据没落地前不给切: 否则默认 enabled=false 会被当成真实状态写回服务端。 */
 const toggleDisabled = computed(() =>
+  props.loading ||
+  !props.proxy ||
   OFFLINE_STATUSES.includes(props.proxy?.tdx_quant_status || 'UNKNOWN'),
 )
 

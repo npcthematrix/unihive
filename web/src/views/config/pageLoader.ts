@@ -4,6 +4,7 @@ import type {
   ConfigEntities,
   ConfigTool,
   GatewayConfig,
+  PoolConfigSnapshot,
   ProxySettings,
 } from '@/api/config'
 import type { ToolParam, ToolSpec } from '@/api/interfaces'
@@ -12,10 +13,12 @@ import type { ToolParam, ToolSpec } from '@/api/interfaces'
  * Round-13 簇O: ConfigView 的数据加载编排。
  *
  * 旧实现先 await getConfig(), 实体摘要 / 全量工具清单 / proxy 三路
- * 独立请求等它落地后才发出 —— 无谓瀑布。本 composable 让四路请求
+ * 独立请求等它落地后才发出 —— 无谓瀑布。本 composable 让各路请求
  * 在同一 tick 并发 (Promise.allSettled), 且失败通道彼此独立:
  * - getConfig 失败 → loadError (配置面板内联 alert)
- * - entities / interfaces 失败 → toast, 不阻塞配置渲染
+ * - entities 失败 → toast + entitiesError, 不阻塞配置渲染
+ * - interfaces 失败 → toast + toolsError (「复制 JSON」就绪判定用 toolsLoaded)
+ * - pool 失败 → poolError (上游面板「全局池参数」折叠区内联降级)
  * - proxy 失败 → proxyError (proxy 面板独立 alert)
  *
  * 并发安全 (审查 HIGH-1): 每通道单调 generation 计数, 过期调用
@@ -44,6 +47,7 @@ export interface ConfigPageApis {
   getEntities: () => Promise<ConfigEntities>
   getInterfaces: () => Promise<InterfaceToolsResponse>
   getProxy: () => Promise<ProxySettings>
+  getPool: () => Promise<PoolConfigSnapshot>
 }
 
 export interface ConfigPageLoader {
@@ -51,6 +55,10 @@ export interface ConfigPageLoader {
   entities: Ref<ConfigEntities | null>
   interfaceTools: Ref<ConfigTool[]>
   proxy: Ref<ProxySettings | null>
+  /** 启动期池参数运行态快照 (「全局池参数」折叠区的数据源)。 */
+  pool: Ref<PoolConfigSnapshot | null>
+  /** 池快照通道的最近一次错误; 不清空 pool (失败保留上次可用数据)。 */
+  poolError: Ref<string>
   loading: Ref<boolean>
   manualLoading: Ref<boolean>
   proxyLoading: Ref<boolean>
@@ -62,8 +70,14 @@ export interface ConfigPageLoader {
    * 但只有后者需要给用户一个可重试的错误面 (否则热编辑入口会静默消失)。
    */
   entitiesError: Ref<string>
-  /** /api/interfaces 通道是否已结束过一轮 (成功或失败); 复制 JSON 的就绪判定用。 */
-  toolsSettled: Ref<boolean>
+  /**
+   * 工具清单通道的最近一次错误 (含后端契约漂移)。同样不清空
+   * interfaceTools, 但 toolsLoaded 不会因此变 true —— 「复制 JSON」
+   * 必须只在真的拿到过清单时才就绪, 否则会复制到一份缺 tools 的快照。
+   */
+  toolsError: Ref<string>
+  /** /api/interfaces 是否成功落地过至少一轮; 复制 JSON 的就绪判定用。 */
+  toolsLoaded: Ref<boolean>
   lastRefresh: Ref<number | null>
   proxyLastRefresh: Ref<number | null>
   /** 全量加载; isManual=true 时只驱动按钮 loading 态。 */
@@ -74,6 +88,8 @@ export interface ConfigPageLoader {
   loadEntities: () => Promise<void>
   /** 全量工具清单单独重拉 (热编辑/发布态变化后)。 */
   loadInterfaceTools: () => Promise<void>
+  /** 池参数快照单独重拉 (「全局池参数」折叠区的重试按钮)。 */
+  loadPool: () => Promise<void>
 }
 
 function mapInterfaceTools(tools: InterfaceToolRow[]): ConfigTool[] {
@@ -97,13 +113,16 @@ export function createConfigPageLoader(
   const entities = ref<ConfigEntities | null>(null)
   const interfaceTools = ref<ConfigTool[]>([])
   const proxy = ref<ProxySettings | null>(null)
+  const pool = ref<PoolConfigSnapshot | null>(null)
   const loading = ref(false)
   const manualLoading = ref(false)
   const proxyLoading = ref(false)
   const loadError = ref('')
   const proxyError = ref('')
+  const poolError = ref('')
   const entitiesError = ref('')
-  const toolsSettled = ref(false)
+  const toolsError = ref('')
+  const toolsLoaded = ref(false)
   const lastRefresh = ref<number | null>(null)
   const proxyLastRefresh = ref<number | null>(null)
 
@@ -113,6 +132,7 @@ export function createConfigPageLoader(
   let entitiesGen = 0
   let toolsGen = 0
   let proxyGen = 0
+  let poolGen = 0
   let loadGen = 0
 
   /** proxy 通道: 独立 loading/error, 自身不抛 (外层 load 永不因 proxy reject)。 */
@@ -179,18 +199,39 @@ export function createConfigPageLoader(
       // 后端契约漂移 (tools 缺失/非数组) 不当异常抛穿, 保留旧清单 + toast。
       const raw: unknown = data?.tools
       if (!Array.isArray(raw)) {
+        toolsError.value = '响应缺少 tools 字段'
         notify('加载工具清单失败: 响应缺少 tools 字段')
         return
       }
       interfaceTools.value = mapInterfaceTools(raw as InterfaceToolRow[])
+      toolsError.value = ''
+      // 只有真的拿到清单才算「已加载」: 失败/契约漂移即便保留了旧数据,
+      // 也不能让「复制 JSON」据此认为自己复制的是完整快照。
+      toolsLoaded.value = true
     } catch (error) {
       if (gen === toolsGen) {
-        notify(`加载工具清单失败: ${errorMessage(error, '未知错误')}`)
+        const message = errorMessage(error, '未知错误')
+        toolsError.value = message
+        notify(`加载工具清单失败: ${message}`)
       }
-    } finally {
-      // 无论成功/失败/契约漂移, 都标记该通道已结束过一轮 ——
-      // ConfigView 的「复制 JSON」据此判断 displayConfig 是否已补齐 tools。
-      if (gen === toolsGen) toolsSettled.value = true
+    }
+  }
+
+  /**
+   * 池参数快照: 与 proxy 同款独立错误面 (折叠区内联降级文本, 不打 toast ——
+   * 该端点在网关未初始化池时本就返回 404/503, 属于预期降级)。
+   */
+  async function fetchPool(promise: Promise<PoolConfigSnapshot>): Promise<void> {
+    const gen = ++poolGen
+    try {
+      const value = await promise
+      if (gen !== poolGen) return
+      pool.value = value
+      poolError.value = ''
+    } catch (error) {
+      if (gen === poolGen) {
+        poolError.value = errorMessage(error, '加载池参数失败')
+      }
     }
   }
 
@@ -200,11 +241,12 @@ export function createConfigPageLoader(
     else loading.value = true
     loadError.value = ''
 
-    // 四路请求同一 tick 全部发出, 谁也不等 config 落地。
+    // 各路请求同一 tick 全部发出, 谁也不等 config 落地。
     const jobs = [
       fetchConfig(apis.getConfig()),
       fetchEntities(apis.getEntities()),
       fetchTools(apis.getInterfaces()),
+      fetchPool(apis.getPool()),
     ]
     const proxyJob = applyProxy(apis.getProxy())
 
@@ -230,18 +272,22 @@ export function createConfigPageLoader(
     entities,
     interfaceTools,
     proxy,
+    pool,
+    poolError,
     loading,
     manualLoading,
     proxyLoading,
     loadError,
     proxyError,
     entitiesError,
-    toolsSettled,
+    toolsError,
+    toolsLoaded,
     lastRefresh,
     proxyLastRefresh,
     load,
     loadProxy: () => applyProxy(apis.getProxy()),
     loadEntities: () => fetchEntities(apis.getEntities()),
     loadInterfaceTools: () => fetchTools(apis.getInterfaces()),
+    loadPool: () => fetchPool(apis.getPool()),
   }
 }

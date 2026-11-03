@@ -7,10 +7,20 @@
       aria-label="筛选工具规格"
     />
 
+    <!-- yaml 逃生模式: 编辑列整列消失, 不给这句话用户只能看到「入口凭空没了」。 -->
+    <div v-if="writeBlocked" class="cfg-banner cfg-banner-warn">
+      <span class="cfg-info-icon" aria-hidden="true">i</span>
+      <span>
+        网关以 <code>UNIHIVE_CONFIG_SOURCE=yaml</code> 逃生模式启动, 工具规格只读;
+        热编辑入口需以默认模式重启网关恢复。
+      </span>
+    </div>
+
     <!-- 口径说明: 本页数据源是 /api/interfaces (装配后 + env 过滤后的可发布集),
          不是 config.db 的工具实体表。两者计数天然不同, 必须说清楚,
-         否则用户会以为「配置库」少算了工具。 -->
-    <div v-if="editable" class="tools-scope-note">
+         否则用户会以为「配置库」少算了工具。
+         逃生模式同样需要这句话 (口径差异与能不能编辑无关)。 -->
+    <div class="tools-scope-note">
       此处为<strong>装配后可发布</strong>的工具集 (已按上游启用态与 env 门控过滤),
       与「配置库」的实体总数口径不同; 需补环境变量才会出现的工具不会列在此处。
     </div>
@@ -105,9 +115,14 @@ interface Props {
   config: GatewayConfig | null
   /** db 实体模式才出编辑入口 (yaml 逃生模式只读)。 */
   editable?: boolean
+  /** 确定处于 yaml 逃生模式 — 给只读横幅 (与加载中区分, 避免横幅闪烁)。 */
+  writeBlocked?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), { editable: false })
+const props = withDefaults(defineProps<Props>(), {
+  editable: false,
+  writeBlocked: false,
+})
 const emit = defineEmits<{
   changed: [payload: {
     name: string

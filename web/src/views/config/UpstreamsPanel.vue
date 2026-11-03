@@ -1,5 +1,16 @@
 <template>
   <div class="ups-panel">
+    <!-- yaml 逃生模式横幅: 出厂文件即事实源, 本页所有写入口都不可用。
+         不给这句话, 用户只会看到「编辑」列凭空消失, 以及点开关换来一条 503。 -->
+    <div v-if="writeBlocked" class="cfg-banner cfg-banner-warn">
+      <span class="cfg-info-icon" aria-hidden="true">i</span>
+      <span>
+        网关以 <code>UNIHIVE_CONFIG_SOURCE=yaml</code> 逃生模式启动, 配置事实源是出厂
+        <code>config/upstreams.yaml</code> —— 启用/停用、dangerous 封禁、全局池参数与
+        连接块编辑均不可写。移除该环境变量并以默认模式重启网关即可恢复热编辑。
+      </span>
+    </div>
+
     <!-- 搜索框 -->
     <div class="ups-toolbar">
       <CfgSearchInput
@@ -58,6 +69,8 @@
               :type="isEnabled(row.cfg) ? 'danger' : 'success'"
               plain
               :loading="toggling.has(row.name)"
+              :disabled="writeBlocked"
+              :title="writeBlocked ? YAML_WRITE_HINT : undefined"
               :aria-label="`${toggleLabel(isEnabled(row.cfg))}上游 ${row.name}`"
               @click="onToggle(row)"
             >{{ toggleLabel(isEnabled(row.cfg)) }}</el-button>
@@ -135,7 +148,7 @@
     <details class="cfg-section">
       <summary class="cfg-section-header">
         <span class="cfg-section-title">
-          <span class="cfg-section-toggle">▸</span>
+          <span class="cfg-section-toggle">▾</span>
           全局池参数
           <span class="cfg-section-sub">— 启动期一次性, 运行时改需重启</span>
           <el-tag
@@ -147,8 +160,9 @@
         </span>
       </summary>
       <div class="cfg-section-body">
-        <div v-if="poolConfigError" class="muted">
-          池配置未可用: {{ poolConfigError }}
+        <div v-if="poolConfigError" class="cfg-pool-error">
+          <span class="muted">运行态池参数不可用: {{ poolConfigError }}</span>
+          <el-button size="small" @click="$emit('poolRetry')">重试</el-button>
         </div>
         <div v-else-if="!poolConfig" class="muted">加载中...</div>
         <div v-else>
@@ -182,6 +196,7 @@
               </span>
             </template>
           </div>
+          <div class="cfg-pool-meta muted">{{ poolSnapshotLabel }}</div>
           <div v-if="canEditPool" class="cfg-pool-actions">
             <el-button
               size="small"
@@ -217,15 +232,11 @@
             :title="`启用后启动期校验配置库/YAML 中的工具名都在上游 tools/list 中实际出现 (只读全局开关, 启动时读取生效, 暂不支持热修改)`"
           >strict_registry</span>
           <span
-            class="cfg-switch interactive"
-            role="button"
-            :class="killSwitchBusy
-              ? 'busy'
-              : (config?.disable_dangerous ? 'on' : 'off')"
+            class="cfg-switch"
+            :class="killSwitchClass"
+            :role="writeBlocked ? undefined : 'button'"
             :aria-pressed="Boolean(config?.disable_dangerous)"
-            :title="config?.disable_dangerous
-              ? '点击解除封禁: 补回当前可发布的 dangerous 工具'
-              : '点击封禁: 立即从对外 /mcp 摘除所有 dangerous: true 的工具 (写操作类)'"
+            :title="killSwitchTitle"
             @click="onToggleKillSwitch"
             @keydown.enter.prevent="onToggleKillSwitch"
             @keydown.space.prevent="onToggleKillSwitch"
@@ -261,7 +272,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
 import type {
   ConfigRevision,
@@ -271,12 +282,12 @@ import type {
   UpstreamConfig,
 } from '@/api/config'
 import {
-  getPoolConfig,
   setDisableDangerous,
   setUpstreamEnabled,
   updatePoolConfig,
 } from '@/api/config'
 import { errorMessage } from '@/api/client'
+import { formatHMS } from '@/utils/time'
 import { loggingToRows, retryToString } from './format'
 import {
   isUpstreamEnabled as isEnabled,
@@ -292,9 +303,32 @@ interface Props {
   config: GatewayConfig | null
   /** db 实体模式才出连接块编辑入口 (yaml 逃生模式只读)。 */
   editable?: boolean
+  /**
+   * 确定处于 yaml 逃生模式: 写接口一律 503, 行内写控件 (启用/停用、
+   * disable_dangerous、池参数) 全部置灰。与 editable 分工 —— editable 在
+   * entities 未落地时也是 false, 不能用它推断「模式」, 否则横幅会闪。
+   */
+  writeBlocked?: boolean
+  /**
+   * 运行态池参数快照, 由 ConfigView 的统一刷新编排 (pageLoader) 喂入 ——
+   * 面板此前自己 onMounted 拉一次, 于是「立即刷新」和乐观锁冲突重拉都刷不到
+   * 它, 同一页两套刷新节奏。
+   */
+  pool?: PoolConfigSnapshot | null
+  /** 池快照通道的错误文本 (空串 = 正常)。 */
+  poolError?: string
 }
 
-const props = withDefaults(defineProps<Props>(), { editable: false })
+const props = withDefaults(defineProps<Props>(), {
+  editable: false,
+  writeBlocked: false,
+  pool: null,
+  poolError: '',
+})
+
+/** 逃生模式下所有写控件共用的 tooltip 文案。 */
+const YAML_WRITE_HINT = 'YAML 逃生模式下不可写, 需以默认模式重启网关'
+
 const emit = defineEmits<{
   changed: [payload: UpstreamEnabledChanged]
   connectionSaved: [payload: {
@@ -312,7 +346,14 @@ const emit = defineEmits<{
     revision: ConfigRevision
     pending_restart: PoolConfigEditResult['pending_restart']
   }]
+  /** 池快照通道失败后的重试: 数据源在父层 pageLoader, 面板只发意图。 */
+  poolRetry: []
   openapiImported: [payload: { revision: number }]
+  /**
+   * 行内写操作撞乐观锁 409 且错误体没回带新 revision —— 本地 version 已经
+   * 陈旧, 请父层重拉配置; 否则用户每次重试都再撞一次 409。
+   */
+  writeConflict: []
 }>()
 
 /** 连接块编辑弹窗状态。 */
@@ -423,7 +464,7 @@ function looksMasked(v: string): boolean {
  * - 409 与其他错误走 ElMessage, 不本地改状态 (服务端是唯一真来源)。
  */
 async function onToggle(row: UpstreamRow): Promise<void> {
-  if (toggling.value.has(row.name)) return
+  if (props.writeBlocked || toggling.value.has(row.name)) return
   const next = !isEnabled(row.cfg)
 
   if (!next) {
@@ -500,7 +541,8 @@ async function onToggle(row: UpstreamRow): Promise<void> {
     } else {
       const msg = errorMessage(e, '操作失败')
       if (msg.includes('version_conflict') || msg.includes('revision 不一致')) {
-        ElMessage.error('配置版本已变更, 请刷新页面后重试')
+        ElMessage.error('配置版本已变更, 已重新拉取最新配置, 请再点一次')
+        emit('writeConflict')
       } else {
         ElMessage.error(msg)
       }
@@ -516,13 +558,31 @@ async function onToggle(row: UpstreamRow): Promise<void> {
 const killSwitchBusy = ref(false)
 
 /**
+ * 开关徽标类: on/off 恒等于「配置里的值」(逃生模式下也要看得见当前值),
+ * interactive 只在可写时给 —— 没它就没有 pointer/cursor, 视觉上即不可点。
+ */
+const killSwitchClass = computed(() => ({
+  on: Boolean(props.config?.disable_dangerous),
+  off: !props.config?.disable_dangerous,
+  interactive: !props.writeBlocked,
+  busy: killSwitchBusy.value && !props.writeBlocked,
+}))
+
+const killSwitchTitle = computed(() => {
+  if (props.writeBlocked) return YAML_WRITE_HINT
+  return props.config?.disable_dangerous
+    ? '点击解除封禁: 补回当前可发布的 dangerous 工具'
+    : '点击封禁: 立即从对外 /mcp 摘除所有 dangerous: true 的工具 (写操作类)'
+})
+
+/**
  * 热切换 disable_dangerous:
  * - 封禁 (off→on) 会让写操作类 dangerous 接口立即消失, 先弹确认;
  * - 成功后向 ConfigView 冒泡 patch 顶层 disable_dangerous 与 version;
  * - 409 / 500 处理与上游热开关同规则 (服务端是唯一真来源)。
  */
 async function onToggleKillSwitch(): Promise<void> {
-  if (killSwitchBusy.value) return
+  if (props.writeBlocked || killSwitchBusy.value) return
   const next = !props.config?.disable_dangerous
 
   if (next) {
@@ -579,7 +639,8 @@ async function onToggleKillSwitch(): Promise<void> {
     } else {
       const msg = errorMessage(e, '操作失败')
       if (msg.includes('version_conflict') || msg.includes('revision 不一致')) {
-        ElMessage.error('配置版本已变更, 请刷新页面后重试')
+        ElMessage.error('配置版本已变更, 已重新拉取最新配置, 请再点一次')
+        emit('writeConflict')
       } else {
         ElMessage.error(msg)
       }
@@ -595,8 +656,9 @@ const logRows = computed(() => loggingToRows(props.config?.logging))
 // 启动期池配置 (db 模式可编辑; 保存即落 config.db, 运行时改需重启)
 // ---------------------------------------------------------------------------
 
-const poolConfig = ref<PoolConfigSnapshot | null>(null)
-const poolConfigError = ref<string | null>(null)
+/** 快照与错误都由父层 pageLoader 的池通道喂入 (统一刷新节奏)。 */
+const poolConfig = computed(() => props.pool)
+const poolConfigError = computed(() => props.poolError || null)
 /** PUT 响应: persisted + running + pending_restart, 用于"需重启"badge 渲染。 */
 const poolEditState = ref<PoolConfigEditResult | null>(null)
 const poolSaving = ref(false)
@@ -607,14 +669,19 @@ const poolDraft = reactive<{ mootdx2_reader_limit: number; mootdx2_worker_thread
   tdx_quant_worker_threads: 0,
 })
 
+/** 草稿是否被用户动过 —— 决定新一轮快照能否覆盖它 (见下方 watcher)。 */
+const draftTouched = ref(false)
+/** 程序化对齐草稿时, 不得反过来把 draftTouched 置真。 */
+let syncingDraft = false
+
 /**
- * 草稿任一字段变 → 清掉 "需重启" badge (poolEditState)。
+ * 草稿任一字段变 → 清掉 "需重启" badge (poolEditState) + 记下「用户动过」。
  *
  * badge 仅在「落库但运行态未生效」期间显示, 一旦用户再次编辑意味着
  * 旧 PUT 的 pending_restart 已被覆盖 (新 draft 会重新走 PUT), 不应
- * 残留误导。resetPoolDraft() 自身也清 poolEditState, 双重保险;
- * watcher 默认 flush:'pre' 在 resetPoolDraft 的同步赋值后批处理, 不会
- * 抢先把 poolEditState 置 null 又被 reset 重新覆盖。
+ * 残留误导。watcher 默认 flush:'pre', 会在 resetPoolDraft 的同步赋值后批处理,
+ * 所以由 resetPoolDraft 自己用 syncingDraft 守卫挡住「对齐草稿」被误判成
+ * 「用户编辑」。
  */
 watch(
   () => [
@@ -622,7 +689,23 @@ watch(
     poolDraft.mootdx2_worker_threads,
     poolDraft.tdx_quant_worker_threads,
   ],
-  () => { poolEditState.value = null },
+  () => {
+    poolEditState.value = null
+    if (!syncingDraft) draftTouched.value = true
+  },
+)
+
+/**
+ * 池快照落地/更新 (首次加载、立即刷新、乐观锁冲突重拉都走这里):
+ * 用户还没动过草稿才对齐到当前运行态, 否则保留输入 —— 否则一次后台
+ * 刷新会把正在填的池参数清空。
+ */
+watch(
+  poolConfig,
+  (snap) => {
+    if (snap && !draftTouched.value) resetPoolDraft()
+  },
+  { immediate: true },
 )
 
 /** db 实体模式 + 可编辑 prop + 池 snapshot 已加载 — 三者都齐才显示表单。 */
@@ -700,11 +783,15 @@ const anyPendingRestart = computed(() =>
 )
 
 function resetPoolDraft(): void {
-  if (!poolConfig.value) return
-  poolDraft.mootdx2_reader_limit = poolConfig.value.mootdx2_reader_limit
-  poolDraft.mootdx2_worker_threads = poolConfig.value.mootdx2_worker_threads
-  poolDraft.tdx_quant_worker_threads = poolConfig.value.tdx_quant_worker_threads
+  const snap = poolConfig.value
+  if (!snap) return
+  syncingDraft = true
+  poolDraft.mootdx2_reader_limit = snap.mootdx2_reader_limit
+  poolDraft.mootdx2_worker_threads = snap.mootdx2_worker_threads
+  poolDraft.tdx_quant_worker_threads = snap.tdx_quant_worker_threads
   poolEditState.value = null
+  draftTouched.value = false
+  void nextTick(() => { syncingDraft = false })
 }
 
 async function onSavePool(): Promise<void> {
@@ -741,7 +828,11 @@ async function onSavePool(): Promise<void> {
   } catch (e: unknown) {
     const info = describeEntityEditError(e)
     if (info.kind === 'revision_conflict') {
-      ElMessage.error('配置版本已变更, 请刷新页面后重试')
+      ElMessage.error('配置版本已变更, 已重新拉取最新配置, 请再保存一次')
+      // 父层整份重拉: 换掉陈旧 version, 池通道同时刷新 (草稿由
+      // draftTouched 保住 —— 冲突说明别的会话动过配置, 当前输入仍然
+      // 大概率是想要的目标值)。
+      emit('writeConflict')
     } else if (info.kind === 'store_unavailable') {
       ElMessage.error('配置库不可用 (YAML 逃生模式), 无法保存')
     } else {
@@ -752,16 +843,13 @@ async function onSavePool(): Promise<void> {
   }
 }
 
-onMounted(async () => {
-  try {
-    const snap = await getPoolConfig()
-    poolConfig.value = snap
-    resetPoolDraft()
-  } catch (e: unknown) {
-    // 404/500/503 均降级为只展示错误文本, 不弹 ElMessage (折叠区里静默)
-    poolConfigError.value = errorMessage(e, '未知错误')
-  }
-})
+/**
+ * 运行态快照的采集时刻 (后端 UNIX 秒)。过去面板只在挂载时拉一次, 展示的值
+ * 可能是几分钟前的旧读数却无任何标注; 纳入统一刷新后必须把新鲜度一起给出。
+ */
+const poolSnapshotLabel = computed(() =>
+  poolConfig.value ? `运行态采样 ${formatHMS(poolConfig.value.timestamp * 1000)}` : '',
+)
 </script>
 
 <style scoped>
@@ -969,6 +1057,20 @@ onMounted(async () => {
 
 .cfg-pool-input :deep(.el-input__inner) {
   text-align: left;
+}
+
+/* 运行态采样时刻: 池参数纳入统一刷新后, 这行说明读数是几点采的。 */
+.cfg-pool-meta {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+/* 快照不可用 (404/503/瞬时失败) 时给一个就地重试入口 —— 数据源在父层
+   pageLoader 的池通道, 面板只发 poolRetry。 */
+.cfg-pool-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* 保存/重置 行 */

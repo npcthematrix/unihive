@@ -6,7 +6,9 @@
         此处为当前生效的 <code>cache</code> 全局配置 — 存于配置库
         <code>data/config.db</code> 的 <code>config_section</code>
         (空库由出厂 YAML 模板 seed; 与「网关运行监控」页的运行时缓存是不同概念)。
-        只读展示, <strong>修改后需重启网关</strong>生效。
+        本页<strong>只读</strong>: 控制台没有该段的编辑入口, 改法是更新出厂 YAML 的
+        <code>cache</code> 段后在「出厂更新」tab 应用 (或直接改配置库),
+        <strong>两种都要重启网关才生效</strong>。
       </span>
       <span v-else>
         网关以 <code>UNIHIVE_CONFIG_SOURCE=yaml</code> 逃生模式启动, 此处为

@@ -173,9 +173,10 @@ body {
   overflow: hidden;
 }
 
-.cfg-section + .cfg-section {
-  margin-top: 12px;
-}
+/* 纵向间距不在这里给: 五个 panel (.ups-panel / .cache-panel / .db-panel /
+   .uc-panel) 都是 display:flex + column + gap:12px 的容器, 原先这条
+   `.cfg-section + .cfg-section { margin-top: 12px }` 会与 gap 叠加,
+   导致「首个折叠区距上方内容 12px、折叠区之间 24px」两套节奏。 */
 
 .cfg-section-header {
   cursor: pointer;
@@ -397,6 +398,9 @@ details[open] .cfg-section-toggle {
      引用了同名类却完全不生效 —— scoped 不外溢)
    - .cfg-panel-stack 给 v-show 面板留最小高度, 避免切换时页面高度跳变
    - .panel-section-title 是面板内小节标题, 原先 SyncPanel / StatsPanel 各写一份
+   本容器在滚动区之外, 高度是「净扣」的: 只放标题 + 子标签, 错误告警一律渲染到
+   .view-body 里 (ConfigView 原先把 3 条告警塞在这里, 多行告警 + 不可关闭
+   = 小屏上标签栏以下没剩多少可视区)。
    ============================================================================ */
 
 .cfg-sticky-head {
