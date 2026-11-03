@@ -47,6 +47,11 @@ export interface ErrorListResponse {
   in_memory: number
   in_db: number
   latest_ts: string | null
+  /**
+   * M7: 后端算作 `in_db > 0 or bool(history)` —— history=true 时恒为 true,
+   * 与"库里到底有没有历史"无关。所以 UI 判断历史是否为空要用 in_db === 0,
+   * 不能用这个字段, 否则历史模式下永远不会出现空态提示。
+   */
   history_available: boolean
   /** 内存环形缓冲上限 (后端 _MEMORY_MAXLEN, 供前端展示)。 */
   memory_cap: number

@@ -113,6 +113,12 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     lastFetchSec.value = 0
   }
 
+  // M2: 轮询 AbortController — 组件 unmount 时一次性取消所有在途请求,
+  // 避免 setInterval 触发的请求在 unmount 后继续跑完、占后端连接。
+  // 声明必须早于 load(): load 体内直接读 ac.signal, 放在后面只是靠"调用时机
+  // 晚于 setup"侥幸不触发 TDZ。
+  const ac = new AbortController()
+
   let inFlight = false
   let pollCount = 0
   /** 手动刷新撞在途轮询时排队: 本轮结束后补一次真正的手动刷新。 */
@@ -180,13 +186,20 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   const respRateSeries = computed(() => seriesOf((sample) => sample.respRate))
   const liveEntriesSeries = computed(() => seriesOf((sample) => sample.liveEntries))
 
-  const refreshLabel = computed(() =>
-    formatRefreshLabel({
+  /**
+   * M3: formatRefreshLabel 只在 lastFetchSec===0 时报「刷新失败」, 而 loadError
+   * 是四源聚合 —— /api/runtime 单独挂掉时 /api/status 仍成功、时戳照样刷新,
+   * 页头于是渲染成红色的「刚刚刷新」: 颜色说失败、文字说新鲜。这里给"有时戳
+   * 但仍有源失败"的态补一句, 让文字与颜色一致 (具体是哪个源走 title 提示)。
+   */
+  const refreshLabel = computed(() => {
+    const base = formatRefreshLabel({
       loadError: loadError.value,
       lastFetchSec: lastFetchSec.value,
       ageSec: ageSec.value,
-    }),
-  )
+    })
+    return loadError.value && lastFetchSec.value ? `${base} · 部分数据源失败` : base
+  })
 
   /** 管线标签的 2.5s 快采是否在跑: 是 → 全局 10s 轮询跳过 mootdx/thsdk
    *  metrics (快采已在更频繁地更新它们), 消除重复请求。 */
@@ -305,12 +318,20 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       runtimeLoadError.value = errorMessage(runtimeResult.reason, '无法加载网关运行态')
     }
 
-    // 任一主源成功 = 页面已拿到过真实数据, 锁存首屏
+    // 任一主源成功 = 页面已拿到过真实数据, 锁存首屏。
+    // M4: skip 哨兵 ({skipped:true}) 的 status 同样是 'fulfilled' —— 管线标签
+    // 快采在跑时三个组件源全走哨兵, 旧码据此锁存, 于是深链 ?tab=pipeline +
+    // 网关不可达时一个字节真实数据都没读到, 首屏遮罩也永不再出现。
+    const gotRealData = (r: PromiseSettledResult<unknown>): boolean => {
+      if (r.status !== 'fulfilled') return false
+      const v = r.value as Record<string, unknown> | null
+      return !(v !== null && typeof v === 'object' && 'skipped' in v)
+    }
     if (
-      metricsResult.status === 'fulfilled'
+      gotRealData(metricsResult)
       || statusResult.status === 'fulfilled'
-      || thsdkResult.status === 'fulfilled'
-      || tdxQuantResult.status === 'fulfilled'
+      || gotRealData(thsdkResult)
+      || gotRealData(tdxQuantResult)
     ) {
       everLoaded = true
     }
@@ -425,10 +446,6 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
    * 与主 load 的 inFlight 独立 —— 快采不应阻塞主轮询, 主轮询也不应阻塞快采。 */
   let fastInFlight = false
 
-  // M2: 轮询 AbortController — 组件 unmount 时一次性取消所有在途请求,
-  // 避免 setInterval 触发的请求在 unmount 后继续跑完、占后端连接。
-  const ac = new AbortController()
-
   /** 只刷新组件 metrics (管线标签快速采样用, 不拉 status/cache)。
    * mootdx2 / tdx_quant / thsdk 三源线程池快照都在这里高频更新。 */
   async function loadComponentMetrics(): Promise<void> {
@@ -444,12 +461,22 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
         getUpstreamMetrics('tdx_quant', { signal: ac.signal }),
       ])
       // M6: 快采偶发失败保留旧值, 不置 null 闪空 (与主 load() 的失败策略一致)。
+      // M8: 但保留旧值不等于静默 —— 旧码快采失败既不挂 *LoadError 也不提示,
+      // 停在「并发」标签时三源全挂, 条形图就冻结在最后一次成功值上, 本标签内
+      // 没有任何告警面。这里挂到与主轮询同一批 *LoadError (页头 banner 共用)。
       if (mootdxResult.status === 'fulfilled') {
         metrics.value = mootdxResult.value.metrics
+        l1LoadError.value = ''
+      } else if (!isCanceledError(mootdxResult.reason)) {
+        l1LoadError.value = errorMessage(mootdxResult.reason, '无法加载 MooTDX2 指标')
       }
       if (thsdkResult.status === 'fulfilled') {
         thsdkMetrics.value = thsdkResult.value.metrics
+        thsdkLoadError.value = ''
+      } else if (!isCanceledError(thsdkResult.reason)) {
+        thsdkLoadError.value = errorMessage(thsdkResult.reason, 'THSDK 状态不可用')
       }
+      // tdx_quant 失败仍不挂告警: 与主 load() 同策略 (池快照非首屏关键源)。
       if (tdxQuantResult.status === 'fulfilled') {
         tdxQuantMetrics.value = tdxQuantResult.value.metrics
       }

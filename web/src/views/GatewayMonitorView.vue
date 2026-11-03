@@ -10,16 +10,14 @@
           <span
             class="last-refresh"
             :class="{ failed: loadError, stale: !loadError && ageSec > STALE_THRESHOLD_SEC }"
+            :title="loadError || undefined"
           >
             {{ refreshLabel }}
           </span>
           <el-button size="small" :icon="Refresh" :loading="manualLoading" @click="load(true)">
             立即刷新
           </el-button>
-          <el-tooltip
-            content="每 10 秒自动刷新 网关进程 / 并发 / 缓存；「上游总览」不自动刷新 (请用该标签内的刷新按钮)"
-            placement="top"
-          >
+          <el-tooltip :content="autoRefreshHint" placement="top">
             <span class="auto-toggle">
               <el-switch v-model="autoRefresh" />
               <span class="auto-label">自动刷新</span>
@@ -70,8 +68,19 @@
         tabindex="0"
         aria-labelledby="monitor-tab-overview"
       >
+        <!-- L1: 首拉失败时旧码这里什么都不渲染 (提示条 v-if 要求已加载过),
+             只剩一张空表 + 「暂无匹配的上游」, 把"没加载"说成"没匹配"。 -->
         <el-alert
-          v-if="overviewEverLoaded"
+          v-if="!overviewEverLoaded"
+          type="warning"
+          title="上游状态尚未加载"
+          :description="overviewPendingText"
+          show-icon
+          :closable="false"
+          class="overview-stale-alert"
+        />
+        <el-alert
+          v-else
           type="info"
           :title="`本页数据已冻结 · ${overviewLabel} · 需要新数据请点「刷新」`"
           show-icon
@@ -147,11 +156,12 @@
         aria-labelledby="monitor-tab-cache"
       >
 
-        <!-- 顶部 summary: 两层缓存 · 总览 (一眼可见健康度) -->
+        <!-- 顶部 summary: 两层缓存 · 速览 (定位哪层出问题, 权威数值在子标签里) -->
         <CacheSummaryCard
           :resp-cache="respCache"
           :resp-foreign="statsFromForeignProcess"
           :breakdown-total-tools="breakdownTotalTools"
+          :breakdown-error="breakdownLoadError"
           :metrics="metrics"
           :auto-refresh="autoRefresh"
         />
@@ -245,7 +255,9 @@
         tabindex="0"
         aria-labelledby="monitor-tab-errors"
       >
-        <ErrorTrackingPanel :active="activeTab === 'errors'" />
+        <!-- M1: 错误跟踪自带独立轮询, 旧码与页头「自动刷新」开关完全解耦 ——
+             关掉开关它照旧每 10s 拉一次。现在一并受控。 -->
+        <ErrorTrackingPanel :active="activeTab === 'errors'" :auto-refresh="autoRefresh" />
       </section>
     </div>
   </div>
@@ -256,12 +268,16 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { POLL_INTERVAL_MS, STALE_THRESHOLD_SEC } from '@/constants/time'
+import {
+  FAST_POLL_INTERVAL_MS,
+  POLL_INTERVAL_SEC,
+  STALE_THRESHOLD_SEC,
+} from '@/constants/time'
 import { formatHMS } from '@/utils/time'
 import { scrollPageTop } from '@/utils/scrollTop'
 import { marketSession } from '@/utils/market-session'
 import { getStatus as getStatusDirect } from '@/api/status'
-import { errorMessage } from '@/api/client'
+import { errorMessage, isCanceledError } from '@/api/client'
 import { parseHashTab, nextTabKey } from './_shared/hashTab'
 import { deriveGatewaySummary } from './monitor/summary'
 import { useGatewayRuntime } from '@/composables/useGatewayRuntime'
@@ -315,6 +331,19 @@ const {
 
 // 1s 时钟驱动交易时段条带倒计时
 const session = computed(() => marketSession(new Date(nowSec.value * 1000)))
+
+/**
+ * L3: 开关提示的秒数一律从常量派生。旧码这里写死「每 10 秒」, 而同页
+ * gatewayFreshText 却从 POLL_INTERVAL_MS 算 —— 改常量后两处说法会分家。
+ * M1/H2: 同时把「错误跟踪」和「并发」快采纳进说明, 旧文案漏了这两条,
+ * 用户以为关掉开关就全停了。
+ */
+const autoRefreshHint = computed(
+  () =>
+    `每 ${POLL_INTERVAL_SEC} 秒自动刷新 网关进程 / 并发 / 缓存 / 错误跟踪；`
+    + `「并发」标签另按 ${FAST_POLL_INTERVAL_MS / 1000} 秒快采线程池快照。`
+    + '「上游总览」是手动快照, 请用该标签内的刷新按钮。',
+)
 
 // ===== 子标签 ↔ URL (?tab=) 双向同步, 参照 OmniView =====
 const route = useRoute()
@@ -402,6 +431,9 @@ function selectCacheSub(tab: CacheSubTab): void {
   if (activeCacheSub.value === tab) return
   activeCacheSub.value = tab
   void router.replace({ query: { ...route.query, cacheSub: tab } })
+  // B5: 与顶层 selectTab 同理 —— 响应缓存子页带明细表, 比 L1 子页长得多,
+  // 滚到中部再切会落在新子页中段。
+  scrollPageTop()
 }
 
 /** 缓存子标签定义 (驱动 v-for + 无障碍 id 关联)。 */
@@ -439,10 +471,23 @@ const overviewLoading = ref(false)
 const overviewEverLoaded = ref(false)
 // 总览自己的快照时刻 (sec)。与全页 refreshLabel 解耦: 全页每 10s 刷新,
 // 但总览冻结不动, 用全页时戳会显示"刚刚刷新"而误导用户以为总览也更新了。
+// L2: 一律取服务端 /api/status 的 timestamp, 不取客户端 nowSec —— 同页
+// 「网关进程」的新鲜度文案用的就是 status.timestamp, 两个时戳必须同源。
 const overviewFetchedAt = ref(0)
-const overviewLabel = computed(() =>
-  overviewFetchedAt.value ? `快照于 ${formatHMS(overviewFetchedAt.value * 1000)}` : '尚未加载',
+// 提示条只在 overviewEverLoaded 为真时渲染, 此处不再需要 '尚未加载' 兜底 (L1)。
+const overviewLabel = computed(() => `快照于 ${formatHMS(overviewFetchedAt.value * 1000)}`)
+
+// L1: 首拉失败时旧码整条提示条都不渲染 (v-if 要求已加载过), 只剩一张空表配
+// 「暂无匹配的上游」。这里补上说明, 并区分"失败"与"还在路上"。
+const overviewPendingText = computed(() =>
+  loadError.value
+    ? `拉取失败 (${loadError.value})。可点面板内「刷新」单独重试。`
+    : '正在等待首次 /api/status 返回。',
 )
+
+// L4: 总览手动刷新自己的 AbortController。不复用主轮询那条 (它由 composable
+// 在 unmount 时 abort), 但同样要在 unmount 时取消在途请求。
+const overviewAc = new AbortController()
 
 // 管线标签激活时 2.5s 快速采样 (历史K线突发 <1s, 10s 抓不到),
 // 离开标签立即停止, 不增加后台负担。
@@ -455,20 +500,33 @@ function stopFastPoll(): void {
   }
 }
 
-// M3: immediate —— 深链 (如 ?tab=pipeline) 直接落到管线标签时, 旧码 watch 不触发,
-// fastPollActive 保持 false 且快采定时器从不启动, 页面停在 10s 粗粒度刷新,
-// 抓不到 <1s 的历史K线突发。immediate 让首屏即按当前标签决定是否起快采。
-// URL 写回不在这里做 (由 selectTab 负责): 否则首屏就会把缺省标签塞进地址栏。
-watch(activeTab, (tab) => {
+/**
+ * H2: 快采同时受「当前标签」与页头「自动刷新」开关约束, 回调内再跳过隐藏页。
+ * 旧码只按标签起停: 关掉开关它照跑, 浏览器切到后台也照跑 —— 只要停在「并发」
+ * 标签就是无限期 1.2 req/s 打后端, 与开关文案说的完全相反。
+ */
+function syncFastPoll(): void {
   stopFastPoll()
-  fastPollActive.value = tab === 'pipeline'
-  if (tab === 'pipeline') {
+  const want = activeTab.value === 'pipeline' && autoRefresh.value
+  fastPollActive.value = want
+  if (!want) return
+  void loadComponentMetrics()
+  fastTimer = setInterval(() => {
+    if (typeof document !== 'undefined' && document.hidden) return
     void loadComponentMetrics()
-    fastTimer = setInterval(() => void loadComponentMetrics(), 2500)
-  }
-}, { immediate: true })
+  }, FAST_POLL_INTERVAL_MS)
+}
 
-onBeforeUnmount(stopFastPoll)
+// immediate 保留: 深链 (如 ?tab=pipeline) 直接落到管线标签时, 非 immediate 的
+// watch 不触发, fastPollActive 停在 false 且快采定时器从不启动, 页面退回 10s
+// 粗粒度刷新, 抓不到 <1s 的历史K线突发。
+// URL 写回不在这里做 (由 selectTab 负责): 否则首屏就会把缺省标签塞进地址栏。
+watch([activeTab, autoRefresh], syncFastPoll, { immediate: true })
+
+onBeforeUnmount(() => {
+  stopFastPoll()
+  overviewAc.abort()
+})
 
 // ---- 上游总览行: 从 {name: info} 拆成带 name 的数组 ----
 function toUpstreamRows(
@@ -486,23 +544,27 @@ watch(gatewayStatus, (s) => {
   if (s && overviewEverLoaded.value === false) {
     upstreamRows.value = toUpstreamRows(s.upstreams)
     upstreamSummary.value = s.summary
-    overviewFetchedAt.value = nowSec.value
+    overviewFetchedAt.value = s.timestamp
     overviewEverLoaded.value = true
   }
 })
 
 // 手动「刷新」总览: 单独拉一次 status (复用网关 getStatus), 只更新总览副本。
 async function refreshOverview(): Promise<void> {
+  // L4: 连点「刷新」旧码会并发多个 getStatus(), 返回顺序不定 → 快照可能落在
+  // 较旧那一次上。按钮本身带 :loading, 这里再补一道在途守卫。
+  if (overviewLoading.value) return
   overviewLoading.value = true
   try {
-    const data = await getStatusDirect()
+    const data = await getStatusDirect({ signal: overviewAc.signal })
     upstreamRows.value = toUpstreamRows(data.upstreams)
     upstreamSummary.value = data.summary
-    overviewFetchedAt.value = nowSec.value
+    overviewFetchedAt.value = data.timestamp
     overviewEverLoaded.value = true
   } catch (e) {
     // M1: 旧码只有 try/finally, 失败无反馈 + unhandled rejection, 用户误以为刷新成功。
-    ElMessage.error(errorMessage(e, '上游状态刷新失败'))
+    // 主动取消 (unmount) 不弹错。
+    if (!isCanceledError(e)) ElMessage.error(errorMessage(e, '上游状态刷新失败'))
   } finally {
     overviewLoading.value = false
   }
@@ -530,7 +592,7 @@ const gatewayFreshText = computed(() => {
   const statusAt = freshAt(gatewayStatus.value?.timestamp)
   const runtimeAt = freshAt(runtime.value?.timestamp)
   const cadence = autoRefresh.value
-    ? `每 ${Math.round(POLL_INTERVAL_MS / 1000)} 秒自动刷新`
+    ? `每 ${POLL_INTERVAL_SEC} 秒自动刷新`
     : '自动刷新已关闭, 数据不会自行更新'
   return `上游健康取自 ${statusAt} · 运行态取自 ${runtimeAt} · ${cadence}。`
     + '「上游总览」是手动快照, 需在该标签内单独点「刷新」。'
@@ -543,7 +605,15 @@ const runtimeFrozenText = computed(() =>
     : '下方运行态指标从未成功加载, 一律显示「—」(与「读到 0」区分)。',
 )
 
-// 全组件排队/等待总数 (线程池队列 + 信号量等待者), 驱动标签徽标
+/**
+ * L9: 「并发」标签徽标 = 各层 queued + waiters 之和, 与 PipelinePanel 里每张卡
+ * summary 的 busy 口径逐项对齐:
+ *   MooTDX2   = thread_pool.queued + reader_gate.waiters  (闸门无队列, 只有等待者)
+ *   TDX 量化  = thread_pool.queued                        (策略池/DLL 闸门不上报排队)
+ *   THSDK     = worker_pool.queued                        (单 worker 池无等待者字段)
+ * PipelinePanel 新增任何带 queued/waiters 的层时, 这里必须同步加一项, 否则徽标
+ * 会比面板内显示的排队数小 —— 两处都是"当前有多少在等", 不该读出两个值。
+ */
 const totalQueued = computed(() => {
   const mootdxQueued =
     (metrics.value?.thread_pool?.queued ?? 0)

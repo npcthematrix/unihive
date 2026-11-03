@@ -837,3 +837,46 @@ details[open] .cfg-section-toggle {
   }
 }
 
+/* ============================================================================
+   摘要格子 — 「上游总览」与「错误跟踪」共用 (B7)
+   原先两页各写一套: 总览居中 22px repeat(6,1fr) 断点 1100/560, 错误跟踪左对齐
+   22px repeat(4,…) 断点 768, 缓存卡又是 18px repeat(3,…) 断点 560 —— 同一个
+   监控页的三个标签, 摘要格子的对齐/字号/列数/断点全不一样。这里收敛成一套。
+   auto-fit + minmax: 列数随格数自适应 (总览 6~7 格、错误跟踪 3+1 跨列),
+   空轨道自动折叠, 不必每页各写一份 grid-template-columns。
+   ============================================================================ */
+.sum-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.sum-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.sum-num {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  /* 中性默认色: 上游总览的 text-online / text-degraded 等状态色在同元素上覆盖它。 */
+  color: var(--el-text-color-primary);
+}
+
+.sum-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 768px) {
+  .sum-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+

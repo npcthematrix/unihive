@@ -391,6 +391,65 @@ describe('useGatewayRuntime — 管理动作', () => {
   })
 })
 
+describe('useGatewayRuntime — 回归 (M4): 快采哨兵不算「已加载」', () => {
+  test('主源全败 + 组件源被快采跳过时, 下一轮真拉仍按首屏处理', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    // 停在「并发」标签: 三个组件源被换成 { skipped: true } 哨兵 (status=fulfilled)
+    rt.fastPollActive.value = true
+    vi.mocked(getStatus).mockRejectedValueOnce(new Error('down'))
+    vi.mocked(getRuntimeStats).mockRejectedValueOnce(new Error('down'))
+    await rt.load()
+
+    // 旧码把哨兵当成真数据 → everLoaded 置真 → 恢复后 firstLoad=false,
+    // 首屏遮罩再也不出现: 用户看到的是空表而非「正在加载」。
+    rt.fastPollActive.value = false
+    const recovery = rt.load()
+    expect(rt.initialLoading.value).toBe(true)
+    await recovery
+    expect(rt.initialLoading.value).toBe(false)
+  })
+
+  test('哨兵轮询里只要 status 成功就算已加载, 不误留首屏遮罩', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    rt.fastPollActive.value = true
+    vi.mocked(getRuntimeStats).mockRejectedValueOnce(new Error('down'))
+    await rt.load()
+
+    rt.fastPollActive.value = false
+    const next = rt.load()
+    expect(rt.initialLoading.value).toBe(false)
+    await next
+  })
+})
+
+describe('useGatewayRuntime — 回归 (M8): 快采失败必须可见', () => {
+  test('快采轮询失败挂到与主轮询同一批 *LoadError, 恢复后清空', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    vi.mocked(getUpstreamMetrics)
+      .mockRejectedValueOnce(new Error('l1 down')) // mootdx2
+      .mockRejectedValueOnce(new Error('thsdk down')) // thsdk
+      .mockRejectedValueOnce(new Error('tdx down')) // tdx_quant
+
+    await rt.loadComponentMetrics()
+
+    // 旧码快采失败既不挂错误面也不提示: 停在「并发」标签时三源全挂,
+    // 条形图静默冻结在最后一次成功值上。
+    expect(rt.l1LoadError.value).toContain('l1 down')
+    expect(rt.thsdkLoadError.value).toContain('thsdk down')
+    // tdx_quant 与主 load() 同策略: 非首屏关键源, 不挂告警
+    expect(rt.loadError.value).toContain('l1 down')
+    expect(rt.loadError.value).not.toContain('tdx down')
+    // 保留旧值不闪空
+    expect(rt.metrics.value).toBeNull()
+
+    await rt.loadComponentMetrics()
+
+    expect(rt.l1LoadError.value).toBe('')
+    expect(rt.thsdkLoadError.value).toBe('')
+    expect(rt.metrics.value?.daily_l1?.size).toBe(3)
+  })
+})
+
 describe('useGatewayRuntime — 手动刷新排队/首屏锁存', () => {
   test('轮询在途时点击手动刷新: 不丢弃, 本轮结束后补一次真手动刷新', async () => {
     let resolveBreakdown: (value: CacheBreakdownResponse) => void = () => {}

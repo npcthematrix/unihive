@@ -971,6 +971,14 @@ def _do_probe(upstream_type: str, base_url: str, cfg: dict) -> dict:
         "latency_ms": None,
         "last_error": None,
     }
+    # enabled=False 的上游一律直接判 disabled, 不发探活请求。
+    # 旧码只在末尾 else 分支 (非 http/http_jsonrpc) 才看 enabled, 于是被禁用的
+    # HTTP 上游照样打 /health: 探得通就报 online, 而 get_upstream_status 的汇总
+    # 按 enabled 把它计入 disabled, 前端 isUsableUpstream 也按 enabled 判不可用
+    # —— 同一行三个口径互相矛盾, 还白白发流量。
+    if not result["enabled"]:
+        result["status"] = "disabled"
+        return result
     if upstream_type == "http" and base_url:
         health_url = base_url.rstrip("/") + "/health"
         try:
@@ -1010,7 +1018,8 @@ def _do_probe(upstream_type: str, base_url: str, cfg: dict) -> dict:
             result["status"] = "offline"
             result["last_error"] = str(e)[:_PROBE_ERROR_MAX_CHARS]
     else:
-        result["status"] = "configured" if cfg.get("enabled") else "disabled"
+        # 走到这里 enabled 必为 True (禁用已在函数开头早退)。
+        result["status"] = "configured"
     return result
 
 

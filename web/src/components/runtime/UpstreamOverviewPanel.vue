@@ -14,11 +14,12 @@
       </div>
     </template>
 
-    <!-- 汇总计数 -->
-    <div v-loading="loading && !rows.length" class="summary-grid">
-      <div v-for="card in summaryCards" :key="card.key" class="stat-card">
-        <span class="stat-num" :class="card.cls">{{ summary?.[card.key] ?? '—' }}</span>
-        <span class="stat-label">{{ card.label }}</span>
+    <!-- 汇总计数 — .sum-grid/.sum-cell/.sum-num/.sum-label 与「错误跟踪」共用
+         (styles/main.css), 旧码本页另写一套居中 6 列版式 (B7)。 -->
+    <div v-loading="loading && !rows.length" class="sum-grid summary-grid">
+      <div v-for="card in summaryCards" :key="card.key" class="sum-cell">
+        <span class="sum-num" :class="card.cls">{{ summary?.[card.key] ?? '—' }}</span>
+        <span class="sum-label">{{ card.label }}</span>
       </div>
     </div>
 
@@ -40,7 +41,7 @@
       :data="sortedRows"
       class="ups-table"
       size="small"
-      empty-text="暂无匹配的上游"
+      :empty-text="rows.length ? '暂无匹配的上游' : '暂无上游数据 (状态未加载或未配置上游)'"
       @sort-change="onSortChange"
     >
       <el-table-column
@@ -66,17 +67,26 @@
         :sort-orders="['ascending', 'descending']"
         width="110"
       >
+        <!-- H3: 徽标一律走 rowStatus() 而不是裸 row.status。后端 _do_probe 对
+             http / http_jsonrpc 类型不看 enabled, 照样探活并写 online/degraded/offline,
+             于是配置里关掉的 HTTP 上游在这里显示成绿色「在线」, 而同屏汇总卡把它
+             算进「已禁用」、过滤片又把它归到「异常」—— 一行数据三种口径。 -->
         <template #default="{ row }">
-          <span class="status-badge" :class="['b-' + row.status, { muted: row.status === 'disabled' }]">
-            <span class="status-icon" :class="`icon-${row.status}`">
-              {{ statusIcon(row.status) }}
+          <span
+            class="status-badge"
+            :class="['b-' + rowStatus(row), { muted: rowStatus(row) === 'disabled' }]"
+          >
+            <span class="status-icon" :class="`icon-${rowStatus(row)}`">
+              {{ statusIcon(rowStatus(row)) }}
             </span>
-            {{ STATUS_TEXT[row.status] ?? '未知' }}
+            {{ STATUS_TEXT[rowStatus(row)] ?? '未知' }}
           </span>
         </template>
       </el-table-column>
+      <!-- L11: prop 必须是行上真实存在的字段 (latency_ms); 旧码写 "latency",
+           custom 排序下不影响显示, 但 el-table 内部拿不到该列的取值。 -->
       <el-table-column
-        prop="latency"
+        prop="latency_ms"
         label="延迟"
         sortable="custom"
         :sort-orders="['ascending', 'descending']"
@@ -152,19 +162,42 @@ const STATUS_ORDER: Record<string, number> = {
 const TYPE_TEXT: Record<string, string> = { http: 'HTTP', stdio: 'Stdio', npx: 'NPX' }
 
 const filter = ref<'all' | 'healthy' | 'unhealthy'>('all')
-const ALLOWED_SORT_KEYS = ['name', 'status', 'latency'] as const
+// L11: 与列上的 prop 一致 (行字段是 latency_ms, 旧码写 'latency')。
+const ALLOWED_SORT_KEYS = ['name', 'status', 'latency_ms'] as const
 type SortKey = (typeof ALLOWED_SORT_KEYS)[number]
 const sortKey = ref<SortKey | null>(null)
 const sortAsc = ref(true)
 
-const summaryCards = [
-  { key: 'total', label: '上游总数', cls: '' },
-  { key: 'online', label: '在线', cls: 'text-online' },
-  { key: 'degraded', label: '降级', cls: 'text-degraded' },
-  { key: 'offline', label: '离线', cls: 'text-offline' },
-  { key: 'configured', label: '已配置', cls: 'text-configured' },
-  { key: 'disabled', label: '已禁用', cls: 'text-disabled' },
-] as const
+/**
+ * H3: 展示用的状态一律以 enabled 为准。后端 _do_probe 只对非 HTTP 类型回
+ * 'disabled', http / http_jsonrpc 分支不看 enabled, 照样探活并写
+ * online/degraded/offline —— 配置里关掉的 HTTP 上游于是顶着绿色「在线」徽标,
+ * 而同屏汇总卡算它「已禁用」、过滤片又把它归进「异常」。
+ */
+function rowStatus(row: UpstreamRow): UpstreamStatusValue {
+  return row.enabled ? row.status : 'disabled'
+}
+
+/**
+ * M2: 后端按实际状态桶动态累加 (console_api.py `summary[bucket] = …`), 启动
+ * 收敛中的上游会落进 unknown 桶。旧码只渲染 6 张固定卡, 于是启动阶段
+ * 「上游总数 4」而六卡加起来 3, 缺的那个无处可看 —— 而「网关进程」标签恰恰
+ * 会报「N 个未知 (启动中)」。这里在 unknown > 0 时补一张卡。
+ */
+const summaryCards = computed(() => {
+  const base = [
+    { key: 'total', label: '上游总数', cls: '' },
+    { key: 'online', label: '在线', cls: 'text-online' },
+    { key: 'degraded', label: '降级', cls: 'text-degraded' },
+    { key: 'offline', label: '离线', cls: 'text-offline' },
+    { key: 'configured', label: '已配置', cls: 'text-configured' },
+    { key: 'disabled', label: '已禁用', cls: 'text-disabled' },
+  ]
+  if ((props.summary?.unknown ?? 0) > 0) {
+    base.splice(5, 0, { key: 'unknown', label: '启动中', cls: 'text-unknown' })
+  }
+  return base
+})
 
 function isHealthy(row: UpstreamRow): boolean {
   // M4: 与「网关进程」标签同一口径 (api/status.ts isUsableUpstream)。
@@ -192,8 +225,8 @@ const sortedRows = computed(() => {
       va = a.name
       vb = b.name
     } else if (key === 'status') {
-      va = STATUS_ORDER[a.status] ?? 99
-      vb = STATUS_ORDER[b.status] ?? 99
+      va = STATUS_ORDER[rowStatus(a)] ?? 99
+      vb = STATUS_ORDER[rowStatus(b)] ?? 99
     } else {
       va = a.latency_ms === null ? -1 : a.latency_ms
       vb = b.latency_ms === null ? -1 : b.latency_ms
@@ -261,37 +294,15 @@ function onSortChange(payload: { prop: string | null; order: 'ascending' | 'desc
 </script>
 
 <style scoped>
-/* .panel-card 圆角 / .card-toolbar / .card-title 已收敛到 styles/main.css (全局)。 */
+/* .panel-card 圆角 / .card-toolbar / .card-title 已收敛到 styles/main.css (全局)。
+   B7: 摘要格子本体 (.sum-grid/.sum-cell/.sum-num/.sum-label) 同样上提全局, 与
+   「错误跟踪」共用一套。旧码本页另写一份居中 + repeat(6,1fr) + 断点 1100/560,
+   与错误跟踪的左对齐 repeat(4,…) 断点 768 完全不同 —— 同页三个标签三种版式。
+   这里只留本页特有的着色类与间距。 */
 
 .summary-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 10px;
   margin-bottom: 12px;
   min-height: 70px;
-}
-
-.stat-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 12px 8px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  background: var(--el-fill-color-blank);
-}
-
-.stat-num {
-  font-size: 22px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
 }
 
 .text-online { color: var(--el-color-success); }
@@ -299,6 +310,8 @@ function onSortChange(payload: { prop: string | null; order: 'ascending' | 'desc
 .text-offline { color: var(--el-color-danger); }
 .text-configured { color: var(--el-color-primary); }
 .text-disabled { color: var(--el-text-color-placeholder); }
+/* M2: 启动中 (unknown 桶) — 中性灰, 不是故障红也不是健康绿 */
+.text-unknown { color: var(--el-text-color-secondary); }
 
 .filter-chips {
   margin-bottom: 12px;
@@ -388,11 +401,6 @@ function onSortChange(payload: { prop: string | null; order: 'ascending' | 'desc
   opacity: 0.5;
 }
 
-@media (max-width: 1100px) {
-  .summary-grid { grid-template-columns: repeat(3, 1fr); }
-}
-
-@media (max-width: 560px) {
-  .summary-grid { grid-template-columns: repeat(2, 1fr); }
-}
+/* 摘要格子的断点由全局 .sum-grid 统一 (auto-fit + ≤768px 降 2 列);
+   旧码本页另写 1100→3 列 / 560→2 列, 与「错误跟踪」的 768 断点不一致 (B7)。 */
 </style>

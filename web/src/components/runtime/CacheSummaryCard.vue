@@ -1,6 +1,6 @@
 <!--
-  缓存 tab 顶部 summary: 两层缓存 (响应缓存 + MooTDX2 L1) 的关键指标,
-  一眼可见健康度, 详细数据进 sub-tab 看。
+  缓存 tab 顶部速览条: 两层缓存 (响应缓存 + MooTDX2 L1) 的健康度定位用,
+  详细数值与管理动作在下方 sub-tab 的 RespCacheCard / Mootdx2L1Card 里。
   数据从 useGatewayRuntime() 的同一批 prop 直接派生 (不拉额外接口)。
 -->
 <template>
@@ -8,7 +8,7 @@
     <template #header>
       <div class="card-toolbar">
         <h2 class="card-title">
-          两层缓存 · 总览
+          两层缓存 · 速览
           <small class="sub">响应缓存 + MooTDX2 L1</small>
         </h2>
         <span class="card-meta">
@@ -17,90 +17,75 @@
       </div>
     </template>
 
-    <div class="tile-grid">
-      <!-- 响应缓存 tile -->
-      <div class="cache-tile" data-layer="resp">
-        <div class="tile-head">
-          <span class="tile-title">响应缓存</span>
-          <span class="tile-status">
-            <!-- M4: 装饰点 aria-hidden, 屏读不读 "绿点"; 旁边文字给真实状态 -->
-            <span class="status-dot" :class="respStatusDotClass" aria-hidden="true" />
-            <span :class="respStatusValueClass">{{ respStatusText }}</span>
-          </span>
-          <span class="tile-sub">SQLite · logs/cache.db</span>
-        </div>
-
-        <div class="tile-stats">
-          <div class="stat-cell">
-            <div class="stat-label">活跃条目</div>
-            <div class="stat-value">{{ respLiveText }}</div>
-            <div v-if="!respForeign" class="stat-hint">总 {{ respEntriesText }} · 死页 {{ respFreelistText }}</div>
-            <div v-else class="stat-hint">总 {{ respEntriesText }}</div>
-          </div>
-          <div class="stat-cell">
-            <div class="stat-label">命中率</div>
+    <!-- B4: 旧版每层三个 18px 大格 (活跃条目 / 命中率 / 工具覆盖), 与下方子标签里的
+         RespCacheCard、Mootdx2L1Card 重复显示同几个数字; 宽屏下总览卡与详情卡同屏,
+         页面上出现两个「命中率 43%」且无从判断哪个权威。改成每层一行的速览条, 字号
+         降到 12-13px 明确从属, 并在末尾写明权威数值在子标签里。 -->
+    <div class="strip-list">
+      <div class="strip-row">
+        <span class="strip-name">
+          <!-- M4: 装饰点 aria-hidden, 屏读不读 "绿点"; 旁边文字给真实状态 -->
+          <span class="status-dot" :class="respStatusDotClass" aria-hidden="true" />
+          响应缓存
+          <span class="strip-state" :class="respStatusValueClass">{{ respStatusText }}</span>
+        </span>
+        <span class="strip-sub">SQLite · logs/cache.db</span>
+        <span class="strip-metrics">
+          <span class="m">
+            <span class="m-label">命中</span>
             <!-- H1: 颜色 + 文字徽标双通道, 色盲/灰度仍可读 -->
-            <div class="stat-value-row">
-              <span class="stat-value" :class="respRateClass">{{ respRateText }}</span>
-              <span
-                v-if="respRateTierLabel"
-                class="rate-tier"
-                :class="respRateTierClass"
-                :aria-label="`${respRateTierLabel} (${respRateText})`"
-              >{{ respRateTierLabel }}</span>
-            </div>
-            <div v-if="respHitHint" class="stat-hint">{{ respHitHint }}</div>
-            <div v-else class="stat-hint">尚无请求</div>
-          </div>
-          <div class="stat-cell">
-            <div class="stat-label">工具覆盖</div>
-            <div class="stat-value">{{ respToolCoverageText }}</div>
-            <div class="stat-hint">有缓存条目的工具数</div>
-          </div>
-        </div>
+            <span class="m-value" :class="respRateClass">{{ respRateText }}</span>
+            <span
+              v-if="respRateTierLabel"
+              class="rate-tier"
+              :class="respRateTierClass"
+              :aria-label="`${respRateTierLabel} (${respRateText})`"
+            >{{ respRateTierLabel }}</span>
+          </span>
+          <span class="m">
+            <span class="m-label">活跃</span>
+            <span class="m-value">{{ respLiveText }}</span>
+          </span>
+          <span class="m" :title="respToolCoverageTitle">
+            <span class="m-label">工具</span>
+            <span class="m-value">{{ respToolCoverageText }}</span>
+          </span>
+        </span>
       </div>
 
-      <!-- MooTDX2 L1 tile -->
-      <div class="cache-tile" data-layer="l1">
-        <div class="tile-head">
-          <span class="tile-title">MooTDX2 L1</span>
-          <span class="tile-status">
-            <!-- M4: 装饰点 aria-hidden -->
-            <span class="status-dot" :class="l1StatusDotClass" aria-hidden="true" />
-            <span :class="l1StatusValueClass">{{ l1StatusText }}</span>
+      <div class="strip-row">
+        <span class="strip-name">
+          <span class="status-dot" :class="l1StatusDotClass" aria-hidden="true" />
+          MooTDX2 L1
+          <span class="strip-state" :class="l1StatusValueClass">{{ l1StatusText }}</span>
+        </span>
+        <span class="strip-sub">进程内 · 日K / 板块扫描 / 异动扫描</span>
+        <span class="strip-metrics">
+          <span class="m">
+            <span class="m-label">命中</span>
+            <span class="m-value" :class="l1RateClass">{{ l1RateText }}</span>
+            <span
+              v-if="l1RateTierLabel"
+              class="rate-tier"
+              :class="l1RateTierClass"
+              :aria-label="`${l1RateTierLabel} (${l1RateText})`"
+            >{{ l1RateTierLabel }}</span>
           </span>
-          <span class="tile-sub">进程内 · 日K / 板块扫描 / 异动扫描</span>
-        </div>
-
-        <div class="tile-stats">
-          <div class="stat-cell">
-            <div class="stat-label">当前 size</div>
-            <div class="stat-value">{{ l1SizeText }}</div>
-            <div class="stat-hint">{{ l1SizeHint }}</div>
-          </div>
-          <div class="stat-cell">
-            <div class="stat-label">命中率</div>
-            <!-- H1: 颜色 + 文字徽标双通道 -->
-            <div class="stat-value-row">
-              <span class="stat-value" :class="l1RateClass">{{ l1RateText }}</span>
-              <span
-                v-if="l1RateTierLabel"
-                class="rate-tier"
-                :class="l1RateTierClass"
-                :aria-label="`${l1RateTierLabel} (${l1RateText})`"
-              >{{ l1RateTierLabel }}</span>
-            </div>
-            <div v-if="l1HitHint" class="stat-hint">{{ l1HitHint }}</div>
-            <div v-else class="stat-hint">尚无请求</div>
-          </div>
-          <div class="stat-cell">
-            <div class="stat-label">扫描 L1</div>
-            <div class="stat-value">{{ l1ScanSizeText }}</div>
-            <div class="stat-hint">板块 + 异动条目合计</div>
-          </div>
-        </div>
+          <span class="m" title="当前条目数 / 上限">
+            <span class="m-label">size</span>
+            <span class="m-value">{{ l1SizeText }}</span>
+          </span>
+          <span class="m" title="板块 + 异动条目合计">
+            <span class="m-label">扫描</span>
+            <span class="m-value">{{ l1ScanSizeText }}</span>
+          </span>
+        </span>
       </div>
     </div>
+
+    <p class="strip-note">
+      速览只用于定位是哪一层出了问题; 命中率、条目数、死页等权威数值与清理操作见下方子标签。
+    </p>
   </el-card>
 </template>
 
@@ -110,9 +95,10 @@ import type { CacheStats } from '@/api/status'
 import type { UpstreamMetrics, L1CacheStats } from '@/api/upstream-metrics'
 import { numOrDash } from '@/utils/number'
 import { useHitRate } from '@/composables/useHitRate'
+import { POLL_INTERVAL_SEC } from '@/constants/time'
 
 /**
- * 两层缓存 summary tile: 复用 useGatewayRuntime 的同一批 props 派生,
+ * 两层缓存速览条: 复用 useGatewayRuntime 的同一批 props 派生,
  * 不增加额外网络请求。GatewayMonitorView 始终挂着, 与 sub-tab 切换无关。
  */
 const props = defineProps<{
@@ -121,8 +107,10 @@ const props = defineProps<{
   respForeign: boolean
   /** 工具有缓存条目的总数 (breakdown.total_tools)。 */
   breakdownTotalTools: number
+  /** breakdown 拉取失败提示, '' = 无错误。见 respToolCoverageText (M9)。 */
+  breakdownError: string
   metrics: UpstreamMetrics | null
-  /** 自动刷新是否开启 (页头开关)。关闭时 card-meta 不显示"每 10s 自动刷新"。 */
+  /** 自动刷新是否开启 (页头开关)。关闭时 card-meta 不显示轮询周期。 */
   autoRefresh: boolean
 }>()
 
@@ -131,7 +119,8 @@ const props = defineProps<{
 // card-meta: 三态 — 异进程残留提示 / 自动刷新 / 手动模式
 const cardMetaText = computed(() => {
   if (props.respForeign) return '响应缓存命中率为上一进程残留'
-  return props.autoRefresh ? '每 10s 自动刷新' : '手动刷新模式'
+  // L3: 周期文案由 POLL_INTERVAL_MS 派生, 改常量时这里不会静默漂移。
+  return props.autoRefresh ? `每 ${POLL_INTERVAL_SEC}s 自动刷新` : '手动刷新模式'
 })
 
 const respStatusText = computed(() => {
@@ -153,16 +142,19 @@ const respStatusValueClass = computed(() => {
 const respLiveText = computed(() =>
   props.respCache?.enabled ? numOrDash(props.respCache.live_entries) : '—',
 )
-const respEntriesText = computed(() =>
-  props.respCache?.enabled ? numOrDash(props.respCache.entries) : '—',
-)
-const respFreelistText = computed(() =>
-  props.respCache?.enabled ? numOrDash(props.respCache.freelist_count) : '—',
-)
 const respToolCoverageText = computed(() => {
   if (!props.respCache?.enabled) return '—'
-  return props.breakdownTotalTools > 0 ? String(props.breakdownTotalTools) : '0'
+  // M9: breakdown 失败时 total_tools 停在上一次的值 (首轮失败则为 0), 旧码把它
+  // 渲染成「0 个工具有缓存」, 与 RespCacheCard 里那条「明细加载失败」告警互相
+  // 矛盾 —— 读者会以为缓存真的空了。失败一律显示 "—"。
+  if (props.breakdownError) return '—'
+  return String(props.breakdownTotalTools)
 })
+const respToolCoverageTitle = computed(() =>
+  props.breakdownError
+    ? `明细未取到: ${props.breakdownError}`
+    : '有缓存条目的工具数',
+)
 
 // 命中率: 单一来源 useHitRate (直读后端 hit_rate)。异进程 / 缓存停用 → 抑制成 "—"。
 // 核对后端 console_api.py:815 与 cache.py:87: total>0 时 hit_rate = hits/(hits+misses),
@@ -182,13 +174,6 @@ const respRateTierLabel = respRate.tierLabel
 const respRateTierClass = computed(() =>
   respRate.tier.value ? `tier-${respRate.tier.value}` : '',
 )
-const respHitHint = computed(() => {
-  const c = props.respCache
-  if (!c?.enabled) return c?.error || '缓存数据库未创建'
-  if (props.respForeign) return '上一进程残留'
-  const total = (c.hits ?? 0) + (c.misses ?? 0)
-  return total > 0 ? `共 ${total} 次请求` : ''
-})
 
 // ============ MooTDX2 L1 派生 ============
 const dailyL1 = computed<L1CacheStats | null>(
@@ -212,12 +197,9 @@ const l1StatusValueClass = computed(() => {
 })
 
 const l1SizeText = computed(() => {
-  const size = dailyL1.value?.size
-  return size == null ? '—' : String(size)
-})
-const l1SizeHint = computed(() => {
-  const maxsize = dailyL1.value?.maxsize
-  return maxsize != null ? `上限 ${maxsize}` : '进程内, 重启清空'
+  const l1 = dailyL1.value
+  if (l1?.size == null) return '—'
+  return l1.maxsize != null ? `${l1.size}/${l1.maxsize}` : String(l1.size)
 })
 
 // 命中率: 同响应缓存, 复用 useHitRate (单一来源); 停用 / 无指标 → 抑制成 "—"。
@@ -235,12 +217,6 @@ const l1RateTierLabel = l1Rate.tierLabel
 const l1RateTierClass = computed(() =>
   l1Rate.tier.value ? `tier-${l1Rate.tier.value}` : '',
 )
-const l1HitHint = computed(() => {
-  const l1 = dailyL1.value
-  if (!l1?.enabled) return l1 ? '缓存已停用' : '尚未拉到指标'
-  const total = (l1.hits ?? 0) + (l1.misses ?? 0)
-  return total > 0 ? `共 ${total} 次请求` : ''
-})
 
 const l1ScanSizeText = computed<string>(() => {
   const m = props.metrics
@@ -261,99 +237,79 @@ const l1ScanSizeText = computed<string>(() => {
   color: var(--el-text-color-secondary);
 }
 
-.tile-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.cache-tile {
+.strip-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px;
+  gap: 8px;
+}
+
+.strip-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   background: var(--el-fill-color-blank);
 }
 
-.tile-head {
-  display: flex;
+.strip-name {
+  display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   font-size: 13px;
-}
-
-.tile-title {
-  font-size: 14px;
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
 
-.tile-status {
+.strip-state {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.strip-sub {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+.strip-metrics {
+  margin-left: auto;
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.m {
+  display: inline-flex;
+  align-items: baseline;
   gap: 5px;
   font-size: 12px;
 }
 
-.tile-sub {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
-}
-
-/* .status-dot / .status-online / .status-disabled / .status-unknown 已上提全局 */
-
-.tile-status .on { color: var(--el-color-success); font-weight: 600; }
-.tile-status .off { color: var(--el-text-color-secondary); }
-.tile-status .unknown { color: var(--el-text-color-placeholder); }
-
-.tile-stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.stat-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
-}
-
-.stat-label {
-  font-size: 11px;
+.m-label {
   color: var(--el-text-color-secondary);
 }
 
-.stat-value {
-  font-size: 18px;
+.m-value {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--el-text-color-primary);
 }
 
-.stat-value.rate-good { color: var(--el-color-success); }
-.stat-value.rate-mid { color: var(--el-color-warning); }
-.stat-value.rate-low { color: var(--el-color-danger); }
+.m-value.rate-good { color: var(--el-color-success); }
+.m-value.rate-mid { color: var(--el-color-warning); }
+.m-value.rate-low { color: var(--el-color-danger); }
 
-/* H1: stat-value + tier 徽标同行 (避免 tier 把大字挤换行) */
-.stat-value-row {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
+.strip-state.on { color: var(--el-color-success); font-weight: 600; }
+.strip-state.off { color: var(--el-text-color-secondary); }
+.strip-state.unknown { color: var(--el-text-color-placeholder); }
 
 .rate-tier {
   font-size: 11px;
   font-weight: 600;
-  padding: 1px 6px;
+  padding: 0 6px;
   border-radius: 999px;
   border: 1px solid currentColor;
   line-height: 1.4;
@@ -363,26 +319,17 @@ const l1ScanSizeText = computed<string>(() => {
 .rate-tier.tier-mid  { color: var(--el-color-warning); }
 .rate-tier.tier-low  { color: var(--el-color-danger); }
 
-.stat-hint {
+.strip-note {
+  margin: 10px 2px 0;
   font-size: 11px;
-  color: var(--el-text-color-regular);
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
 }
 
-/* M3: 768px 中间断点替代原 860px。
-   原 860px 在平板横屏 (768-1024) 把 tile 降单列过早; 改为 768px 才降。 */
 @media (max-width: 768px) {
-  .tile-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .tile-sub {
+  .strip-metrics {
     margin-left: 0;
-  }
-}
-
-@media (max-width: 560px) {
-  .tile-stats {
-    grid-template-columns: 1fr;
+    width: 100%;
   }
 }
 </style>

@@ -231,6 +231,106 @@ def test_get_upstreams_includes_description():
         assert info["description"].strip(), f"{name} description is empty in response"
 
 
+# ---------------------------------------------------------------------------
+# 回归 (H3): 被禁用的 HTTP 上游不得探活, 且逐行 status 与 summary 必须同源
+# ---------------------------------------------------------------------------
+# 旧码 _do_probe 只在末尾 else 分支 (非 http/http_jsonrpc) 才看 enabled, 于是
+# enabled=False 的 HTTP 上游照样打 /health: 探得通就报 online, 而
+# get_upstream_status 的 summary 按 enabled 把它计入 disabled, 前端
+# isUsableUpstream 也按 enabled 判不可用 —— 同一行三个口径互相矛盾, 还白发流量。
+
+
+def test_do_probe_disabled_http_upstream_skips_probe():
+    """enabled=False 的 http 上游直接判 disabled, 一个字节都不发。"""
+    from unittest.mock import patch
+    from src.unihive.utils.console_api import _do_probe
+
+    cfg = {"enabled": False, "type": "http", "description": "已禁用的 HTTP 上游"}
+    with patch("src.unihive.utils.console_api.httpx.get") as mock_get:
+        result = _do_probe("http", "http://127.0.0.1:9", cfg)
+
+    mock_get.assert_not_called()
+    assert result["status"] == "disabled"
+    assert result["enabled"] is False
+    assert result["latency_ms"] is None
+    assert result["last_error"] is None
+
+
+def test_do_probe_disabled_jsonrpc_upstream_skips_probe():
+    """http_jsonrpc 同样早退, 不发 server.info。"""
+    from unittest.mock import patch
+    from src.unihive.utils.console_api import _do_probe
+
+    with patch("src.unihive.utils.console_api.httpx.post") as mock_post:
+        result = _do_probe("http_jsonrpc", "http://127.0.0.1:9", {"enabled": False})
+
+    mock_post.assert_not_called()
+    assert result["status"] == "disabled"
+
+
+def test_do_probe_enabled_http_upstream_still_probes():
+    """守住早退没有误伤正常路径: enabled=True 仍打 /health 并报 online。"""
+    from unittest.mock import MagicMock, patch
+    from src.unihive.utils.console_api import _do_probe
+
+    with patch(
+        "src.unihive.utils.console_api.httpx.get",
+        return_value=MagicMock(status_code=200),
+    ) as mock_get:
+        result = _do_probe("http", "http://127.0.0.1:9", {"enabled": True})
+
+    mock_get.assert_called_once()
+    assert result["status"] == "online"
+    assert isinstance(result["latency_ms"], int)
+
+
+def test_do_probe_enabled_non_http_upstream_is_configured():
+    """进程内 client 探不了活: enabled=True → configured (早退后 else 分支的唯一取值)。"""
+    from src.unihive.utils.console_api import _do_probe
+
+    assert _do_probe("sdk", "", {"enabled": True})["status"] == "configured"
+
+
+def test_disabled_upstream_row_and_summary_agree():
+    """禁用上游的逐行 status 与 summary 的 disabled 桶必须同源。
+
+    这是 H3 的用户可见面: 旧码下同一行会同时读作「行: online / 汇总: disabled /
+    前端: 不可用」。
+    """
+    from unittest.mock import patch
+    from src.unihive.utils import console_api
+
+    cfg = {
+        "upstreams": {
+            "dead_http": {
+                "enabled": False,
+                "type": "http",
+                "base_url": "http://127.0.0.1:9",
+                "description": "已禁用",
+            },
+            "live_sdk": {"enabled": True, "type": "sdk", "description": "进程内"},
+        }
+    }
+    # _probe_cache 是模块级 TTLCache(5s), 清掉以免与其他用例串味
+    console_api._probe_cache.clear()
+    try:
+        with patch.object(console_api, "load_config", return_value=cfg), patch.object(
+            console_api.httpx, "get"
+        ) as mock_get:
+            result = console_api.get_upstream_status()
+    finally:
+        console_api._probe_cache.clear()
+
+    mock_get.assert_not_called()
+    assert result["upstreams"]["dead_http"]["status"] == "disabled"
+    assert result["upstreams"]["live_sdk"]["status"] == "configured"
+    summary = result["summary"]
+    assert summary["total"] == 2
+    assert summary["disabled"] == 1
+    assert summary["configured"] == 1
+    assert summary["online"] == 0
+
+
 def test_console_html_uses_upstream_description():
     """Regression: StatusView + api/status must hit the upstream endpoint that
     carries the upstream `description` field.

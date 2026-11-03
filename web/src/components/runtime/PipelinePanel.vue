@@ -5,11 +5,15 @@
         <h2 class="card-title">并发
           <small class="sub">容量 · 占用 · 排队 (实时)</small>
         </h2>
+        <!-- B1: 排队/等待旧码各给一个色点, 但两点都是 --el-color-warning ——
+             图例并排四项里第三、第四项视觉完全相同却标着两个词, 无法区分它声称
+             要区分的两件事。这两者在行内本来也不是条形段而是文字, 所以图例直接
+             复用行内那两套文字样式, 所见即所得。 -->
         <span class="pipeline-legend">
           <span class="legend-item"><i class="dot dot-active" />执行中</span>
           <span class="legend-item"><i class="dot" />空闲容量</span>
-          <span class="legend-item"><i class="dot dot-queue" />排队</span>
-          <span class="legend-item"><i class="dot dot-wait" />等待</span>
+          <span class="legend-item"><span class="bar-queue">+N 排队</span></span>
+          <span class="legend-item"><span class="layer-waiters">· N 等待</span></span>
         </span>
       </div>
     </template>
@@ -44,9 +48,12 @@
               <span v-if="layer.waiters > 0" class="layer-waiters">
                 · {{ layer.waiters }} 等待
               </span>
-              <span v-if="layer.total != null || layer.peak != null" class="layer-cumul">
-                累计 {{ layer.total ?? '—' }} · 峰 {{ layer.peak ?? '—' }}
-              </span>
+            </span>
+            <!-- B2: 累计/峰原来挤在 a/c 那个 max-content 格里, 把中间的进度条
+                 压短 —— 只有 MooTDX2 上报累计计数, 于是同一页两个组件的条长不一致。
+                 改成独立一行后条宽只受容器决定。 -->
+            <span v-if="layer.total != null || layer.peak != null" class="layer-cumul">
+              累计 {{ layer.total ?? '—' }} · 峰 {{ layer.peak ?? '—' }}
             </span>
           </div>
         </div>
@@ -87,6 +94,18 @@ interface Layer {
 function activePctOf(active: number, capacity: number): number {
   if (capacity <= 0) return 0
   return Math.min(100, Number(((active / capacity) * 100).toFixed(1)))
+}
+
+/**
+ * L8: 「没数据」原来三张卡各写一套 —— MooTDX2/TDX 量化报 summary=未采样 +
+ * note=指标未加载, THSDK 却把「指标未加载」写在 summary 里且没有 note, 同一个
+ * 状态在不同卡片上既换了位置又换了词。统一成两档, 并给出可行动的 note:
+ * props 为 null = 还没轮到这次采样; props 有值但一层都没有 = 后端没上报池快照。
+ */
+function emptySummary(hasProps: boolean): { summary: string; note: string } {
+  return hasProps
+    ? { summary: '指标未加载', note: '后端未上报线程池/闸门快照' }
+    : { summary: '未采样', note: '本轮尚未取到该组件的指标' }
 }
 
 function poolLayer(label: string, pool?: ExecutorSnapshot | null): Layer | null {
@@ -136,15 +155,14 @@ const pipelines = computed(() => {
   const mBusy = mActive + mQueued + mWaiters
   const mParts = [`${mActive} 执行`, `${mQueued} 排队`]
   if (mWaiters > 0) mParts.push(`${mWaiters} 等待`)
+  const mEmpty = mootdxLayers.length ? null : emptySummary(props.mootdx != null)
   result.push({
     component: 'MooTDX2',
     isPrimary: true,
     layers: mootdxLayers,
     // M2: props 未加载/无 layers 是「未采样」, 不是「空闲」(监控页方向性误导)。
-    summary: mootdxLayers.length
-      ? (mBusy > 0 ? mParts.join(' · ') : '空闲')
-      : '未采样',
-    note: mootdxLayers.length ? undefined : '指标未加载',
+    summary: mEmpty ? mEmpty.summary : (mBusy > 0 ? mParts.join(' · ') : '空闲'),
+    note: mEmpty?.note,
   })
 
   // ---- TDX 量化终端 ----
@@ -193,59 +211,57 @@ const pipelines = computed(() => {
   const tdqQueued = tdqLayers.reduce((s, l) => s + l.queued, 0)
   const tdqWaiters = tdqLayers.reduce((s, l) => s + l.waiters, 0)
   const tdqBusy = tdqActive + tdqQueued + tdqWaiters
-  let tdqNote: string | undefined
-  if (!tdqLayers.length) {
-    tdqNote = '指标未加载'
-  } else if (nInst > 1) {
-    tdqNote = '多策略实例: 阻塞线程池只等子进程; 真正 DLL 在各策略进程里。'
-  } else if (nInst === 1) {
-    tdqNote = '当前是进程内单实例; 配置 strategy_instances>1 并重启后才会拉子进程。'
+  const tdqEmpty = tdqLayers.length ? null : emptySummary(props.tdxQuant != null)
+  let tdqNote = tdqEmpty?.note
+  if (!tdqEmpty) {
+    if (nInst > 1) {
+      tdqNote = '多策略实例: 阻塞线程池只等子进程; 真正 DLL 在各策略进程里。'
+    } else if (nInst === 1) {
+      tdqNote = '当前是进程内单实例; 配置 strategy_instances>1 并重启后才会拉子进程。'
+    }
   }
   result.push({
     component: 'TDX 量化终端',
     layers: tdqLayers,
     // 统一 summary 格式: a 执行 · b 排队 · c 等待 / 空闲 / 未采样
-    summary: tdqLayers.length
-      ? (tdqBusy > 0
+    summary: tdqEmpty
+      ? tdqEmpty.summary
+      : (tdqBusy > 0
           ? `${tdqActive} 执行 · ${tdqQueued} 排队${tdqWaiters > 0 ? ` · ${tdqWaiters} 等待` : ''}`
-          : '空闲')
-      : '未采样',
+          : '空闲'),
     note: tdqNote,
   })
 
   // ---- THSDK ----
   // 状态优先: 即使 worker_pool 缺失, 熔断/限频状态仍应展示, 不整卡"未采样"。
-  // (实测 THSDK 当前 metrics 为 {} → 走"指标未加载"分支, 将来接好状态字段后自动生效)
   const t = props.thsdk
   const thsdkPool = poolLayer('单 worker 池', t?.worker_pool)
   const tLayers: Layer[] = thsdkPool ? [thsdkPool] : []
   const tActive = thsdkPool?.active ?? 0
   const tQueued = thsdkPool?.queued ?? 0
-  const tWaiters = thsdkPool?.waiters ?? 0
-  const tBusy = tActive + tQueued + tWaiters
+  // L7: ExecutorSnapshot 没有 waiters 字段, poolLayer 也把它硬编码成 0 ——
+  // 原先的 `· N 等待` 分支永远不可达, 删掉以免读者以为 THSDK 会上报等待数。
+  const tBusy = tActive + tQueued
 
   let summary: string
   let note: string | undefined
-  if (t == null) {
-    summary = '未采样'
-  } else if (Object.keys(t).length === 0) {
-    summary = '指标未加载'
-  } else if (t.circuit_breaker === 'open') {
+  if (t?.circuit_breaker === 'open') {
     summary = '熔断中'
     note = `${t.cb_cooldown_remaining_sec ?? 0}s 后自动探活`
-  } else if (t.circuit_breaker === 'half_open') {
+  } else if (t?.circuit_breaker === 'half_open') {
     summary = '半开探活'
     note = '探针执行中'
-  } else if (t.throttle_remaining_sec && t.throttle_remaining_sec > 0) {
+  } else if (t?.throttle_remaining_sec && t.throttle_remaining_sec > 0) {
     summary = '限频冷却'
     note = `剩 ${t.throttle_remaining_sec}s`
-  } else if (tLayers.length) {
-    summary = tBusy > 0
-      ? `${tActive} 执行 · ${tQueued} 排队${tWaiters > 0 ? ` · ${tWaiters} 等待` : ''}`
-      : '空闲'
   } else {
-    // 有指标但池快照未上报: 不淹没为"未采样"
-    summary = t.circuit_breaker === 'closed' ? '运行正常' : '指标未加载'
+    const tEmpty = tLayers.length ? null : emptySummary(t != null)
+    if (tEmpty) {
+      summary = tEmpty.summary
+      note = tEmpty.note
+    } else {
+      summary = tBusy > 0 ? `${tActive} 执行 · ${tQueued} 排队` : '空闲'
+    }
   }
   result.push({
     component: 'THSDK',
@@ -287,17 +303,6 @@ const pipelines = computed(() => {
 .dot-active {
   background: var(--el-color-primary);
   border-color: var(--el-color-primary);
-}
-
-.dot-queue {
-  background: var(--el-color-warning);
-  border-color: var(--el-color-warning);
-}
-
-/* 等待 = 与 .layer-waiters 琥珀色文字同义, 用 warning 区分于执行中 */
-.dot-wait {
-  background: var(--el-color-warning);
-  border-color: var(--el-color-warning);
 }
 
 .pipeline-list {
@@ -345,19 +350,27 @@ const pipelines = computed(() => {
   gap: 8px;
 }
 
+/* B2: 累计/峰独占第二行, 不再和 a/c 抢那个 max-content 列 —— 否则只有上报
+   累计计数的组件 (MooTDX2) 会把条压短, 同页两个组件条长不一致。 */
 .layer-row {
   display: grid;
   grid-template-columns: 108px minmax(0, 1fr) minmax(110px, max-content);
+  grid-template-areas:
+    'label bar num'
+    '.     cumul cumul';
   align-items: center;
-  gap: 12px;
+  column-gap: 12px;
+  row-gap: 2px;
 }
 
 .layer-label {
+  grid-area: label;
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
 .layer-bar {
+  grid-area: bar;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -386,6 +399,7 @@ const pipelines = computed(() => {
 }
 
 .layer-num {
+  grid-area: num;
   font-size: 12px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -402,6 +416,8 @@ const pipelines = computed(() => {
 }
 
 .layer-cumul {
+  grid-area: cumul;
+  text-align: right;
   /* 11px = 本仓可读下限 (原 10px 过小) */
   font-size: 11px;
   font-weight: 400;
@@ -420,10 +436,6 @@ const pipelines = computed(() => {
     flex-direction: column;
     align-items: stretch;
     gap: 4px;
-  }
-
-  .layer-num {
-    text-align: right;
   }
 }
 </style>
