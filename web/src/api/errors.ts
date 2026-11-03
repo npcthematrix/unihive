@@ -48,6 +48,12 @@ export interface ErrorListResponse {
   in_db: number
   latest_ts: string | null
   history_available: boolean
+  /** 内存环形缓冲上限 (后端 _MEMORY_MAXLEN, 供前端展示)。 */
+  memory_cap: number
+  /** 触发批量写 SQLite 的阈值 (后端 _FLUSH_THRESHOLD)。 */
+  flush_threshold: number
+  /** SQLite 库内上限 (后端 _DB_MAX_ROWS, LRU 淘汰)。 */
+  db_cap: number
   timestamp: number
 }
 

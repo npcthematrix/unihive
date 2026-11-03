@@ -84,14 +84,19 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
   const tdxQuantMetrics = ref<UpstreamMetrics | null>(null)
   const initialLoading = ref(false)
   const manualLoading = ref(false)
-  // H3: 聚合所有关键源 (网关主状态 / MooTDX2 / THSDK) 的失败。
+  // H3: 聚合所有关键源 (网关主状态 / MooTDX2 / THSDK / 运行态) 的失败。
   // 顶层 banner (last-refresh 红/黄) 反映"任意关键源失败", 不再仅看 status。
   // 各子卡仍保留自己的 *LoadError, 不丢上下文。
   const respLoadError = ref('')
   const l1LoadError = ref('')
   const thsdkLoadError = ref('')
+  const runtimeLoadError = ref('')
   const loadError = computed<string>(
-    () => respLoadError.value || l1LoadError.value || thsdkLoadError.value,
+    () =>
+      respLoadError.value
+      || l1LoadError.value
+      || thsdkLoadError.value
+      || runtimeLoadError.value,
   )
 
   // 时间戳/时钟: 默认挂生命周期 (1s 时钟 + 轮询 + visibility 重拉); 单测可走本地兜底。
@@ -290,9 +295,14 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
       }
     }
 
-    // runtime 源失败保留上一次数据, 不挂告警
+    // runtime 源: 失败保留上一次数据 (冻结值仍可读), 但挂独立错误面并计入
+    // loadError。旧码此处完全静默 → /api/runtime 503 时网关进程标签把上一次
+    // 快照当实时数据展示, 用户无从判断新鲜度。
     if (runtimeResult.status === 'fulfilled') {
       runtime.value = runtimeResult.value
+      runtimeLoadError.value = ''
+    } else if (!isCanceledError(runtimeResult.reason)) {
+      runtimeLoadError.value = errorMessage(runtimeResult.reason, '无法加载网关运行态')
     }
 
     // 任一主源成功 = 页面已拿到过真实数据, 锁存首屏
@@ -491,7 +501,7 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     vacuumLoading.value = true
     try {
       const resp = await vacuumCache()
-      notify.success(`整理完成, 数据库 ${resp.db_size_mb} MB`)
+      notify.success(`整理完成, 数据库 ${(resp.db_size_mb ?? 0).toFixed(2)} MB`)
       await load()
     } catch (error) {
       notify.error(errorMessage(error, '整理失败'))
@@ -514,7 +524,14 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     try {
       await clearCache()
       notify.success('响应缓存已清空')
-      samples.value = []
+      // 只清响应缓存相关采样点 (respRate/liveEntries), 保留 L1 趋势 (l1Rate/l1Size)。
+      // 旧码 samples.value = [] 清空了所有趋势 → L1 趋势线断裂, 虽然 load() 会续上,
+      // 但 Sparkline 中间出现缺口不够优雅。
+      samples.value = samples.value.map((s) => ({
+        ...s,
+        respRate: null,
+        liveEntries: null,
+      }))
       await load(false, true)
     } catch (error) {
       notify.error(errorMessage(error, '清空失败'))
@@ -535,6 +552,7 @@ export function useGatewayRuntime(options: UseGatewayRuntimeOptions = {}) {
     l1LoadError,
     respLoadError,
     thsdkLoadError,
+    runtimeLoadError,
     initialLoading,
     manualLoading,
     statsFromForeignProcess,

@@ -2,20 +2,21 @@
   <el-card shadow="never" class="panel-card">
     <template #header>
       <div class="pipeline-toolbar">
-        <h2 class="card-title">并发管线
+        <h2 class="card-title">并发
           <small class="sub">容量 · 占用 · 排队 (实时)</small>
         </h2>
         <span class="pipeline-legend">
           <span class="legend-item"><i class="dot dot-active" />执行中</span>
           <span class="legend-item"><i class="dot" />空闲容量</span>
           <span class="legend-item"><i class="dot dot-queue" />排队</span>
+          <span class="legend-item"><i class="dot dot-wait" />等待</span>
         </span>
       </div>
     </template>
 
     <p class="pipeline-scope-hint">
-      仅展示进程内阻塞调用组件 (MooTDX2 / TDX 量化终端 / THSDK) 的线程池与闸门；
-      fuyao (HTTP) 与 omni (SQLite) 为异步 I/O, 无线程池, 不在此列。
+      仅展示进程内阻塞调用组件 (MooTDX2 / TDX 量化终端 / THSDK)；
+      fuyao (HTTP) 与 omni (SQLite) 为异步 I/O, 不在此列。
     </p>
 
     <div class="pipeline-list">
@@ -43,8 +44,8 @@
               <span v-if="layer.waiters > 0" class="layer-waiters">
                 · {{ layer.waiters }} 等待
               </span>
-              <span v-if="layer.total > 0 || layer.peak > 0" class="layer-cumul">
-                累计 {{ layer.total }} · 峰 {{ layer.peak }}
+              <span v-if="layer.total != null || layer.peak != null" class="layer-cumul">
+                累计 {{ layer.total ?? '—' }} · 峰 {{ layer.peak ?? '—' }}
               </span>
             </span>
           </div>
@@ -63,7 +64,7 @@ import type {
   ExecutorSnapshot,
 } from '@/api/upstream-metrics'
 
-/** 并发管线面板: 每个组件按 线程池/闸门 层展示容量、占用、排队。 */
+/** 并发面板: 每个组件按 线程池/闸门 层展示容量、占用、排队。 */
 const props = defineProps<{
   mootdx: UpstreamMetrics | null
   tdxQuant: UpstreamMetrics | null
@@ -76,8 +77,9 @@ interface Layer {
   active: number
   queued: number
   waiters: number
-  total: number
-  peak: number
+  /** null = 后端未提供该层累计数据 (区别于 0 = 确实无累计)。 */
+  total: number | null
+  peak: number | null
   activePct: number
 }
 
@@ -96,8 +98,8 @@ function poolLayer(label: string, pool?: ExecutorSnapshot | null): Layer | null 
     active: pool.active,
     queued: pool.queued,
     waiters: 0,
-    total: pool.total ?? 0,
-    peak: pool.peak ?? 0,
+    total: pool.total ?? null,
+    peak: pool.peak ?? null,
     activePct: activePctOf(pool.active, pool.capacity),
   }
 }
@@ -123,8 +125,8 @@ const pipelines = computed(() => {
       active: gate.acquired,
       queued: 0,
       waiters: gate.waiters,
-      total: gate.total ?? 0,
-      peak: gate.peak ?? 0,
+      total: gate.total ?? null,
+      peak: gate.peak ?? null,
       activePct: activePctOf(gate.acquired, gate.capacity),
     })
   }
@@ -146,41 +148,110 @@ const pipelines = computed(() => {
   })
 
   // ---- TDX 量化终端 ----
-  // Route A: 与 mootdx2 拆开, 用独立阻塞线程池。tdx_quant 不在 client 层维护提交计数,
-  // 故无累计/峰值层 (只报实时容量/占用/排队)。
+  // 策略进程 = 官方 1.3.0 多实例; DLL 闸门 = call_limit; 阻塞线程池是父进程
+  // 等 Pipe/DLL 的线程, 不是 TdxW 并发路数。
   const tdq = props.tdxQuant
+  const tdqLayers: Layer[] = []
+  const nInst = Number(tdq?.strategy_instances ?? 0)
+  const poolSnap = tdq?.strategy_pool
+  if (nInst > 0 || poolSnap) {
+    const cap = Number(poolSnap?.size ?? nInst)
+    const active = poolSnap
+      ? (poolSnap.instances || []).filter((row) => row.busy).length
+      : Number(tdq?.call_inflight ?? 0)
+    // 条上的占用是 busy; 容量本身就是实例数, 空闲时 0/2 也说明开了两路。
+    // total/peak = null: 后端策略实例池不提供累计/峰值统计。
+    tdqLayers.push({
+      label: nInst > 1 ? '策略进程' : '策略实例',
+      capacity: cap,
+      active,
+      queued: 0,
+      waiters: 0,
+      total: null,
+      peak: null,
+      activePct: activePctOf(active, cap),
+    })
+  }
+  const callLimit = Number(tdq?.call_limit ?? 0)
+  if (callLimit > 0) {
+    const inflight = Number(tdq?.call_inflight ?? 0)
+    tdqLayers.push({
+      label: 'DLL 闸门',
+      capacity: callLimit,
+      active: inflight,
+      queued: 0,
+      waiters: 0,
+      // total/peak = null: 后端 DLL 闸门不提供累计/峰值统计。
+      total: null,
+      peak: null,
+      activePct: activePctOf(inflight, callLimit),
+    })
+  }
   const tdqPool = poolLayer('阻塞线程池', tdq?.thread_pool)
-  const tdqLayers: Layer[] = tdqPool ? [tdqPool] : []
-  const tdqBusy = (tdqPool?.active ?? 0) + (tdqPool?.queued ?? 0)
+  if (tdqPool) tdqLayers.push(tdqPool)
+  const tdqActive = tdqLayers.reduce((s, l) => s + l.active, 0)
+  const tdqQueued = tdqLayers.reduce((s, l) => s + l.queued, 0)
+  const tdqWaiters = tdqLayers.reduce((s, l) => s + l.waiters, 0)
+  const tdqBusy = tdqActive + tdqQueued + tdqWaiters
+  let tdqNote: string | undefined
+  if (!tdqLayers.length) {
+    tdqNote = '指标未加载'
+  } else if (nInst > 1) {
+    tdqNote = '多策略实例: 阻塞线程池只等子进程; 真正 DLL 在各策略进程里。'
+  } else if (nInst === 1) {
+    tdqNote = '当前是进程内单实例; 配置 strategy_instances>1 并重启后才会拉子进程。'
+  }
   result.push({
     component: 'TDX 量化终端',
     layers: tdqLayers,
+    // 统一 summary 格式: a 执行 · b 排队 · c 等待 / 空闲 / 未采样
     summary: tdqLayers.length
-      ? (tdqBusy > 0 ? `${tdqPool?.active} 执行 · ${tdqPool?.queued ?? 0} 排队` : '空闲')
+      ? (tdqBusy > 0
+          ? `${tdqActive} 执行 · ${tdqQueued} 排队${tdqWaiters > 0 ? ` · ${tdqWaiters} 等待` : ''}`
+          : '空闲')
       : '未采样',
-    note: tdqLayers.length ? undefined : '指标未加载',
+    note: tdqNote,
   })
 
   // ---- THSDK ----
+  // 状态优先: 即使 worker_pool 缺失, 熔断/限频状态仍应展示, 不整卡"未采样"。
+  // (实测 THSDK 当前 metrics 为 {} → 走"指标未加载"分支, 将来接好状态字段后自动生效)
   const t = props.thsdk
   const thsdkPool = poolLayer('单 worker 池', t?.worker_pool)
   const tLayers: Layer[] = thsdkPool ? [thsdkPool] : []
-  const busy = (thsdkPool?.active ?? 0) + (thsdkPool?.queued ?? 0)
+  const tActive = thsdkPool?.active ?? 0
+  const tQueued = thsdkPool?.queued ?? 0
+  const tWaiters = thsdkPool?.waiters ?? 0
+  const tBusy = tActive + tQueued + tWaiters
+
+  let summary: string
   let note: string | undefined
-  if (t?.circuit_breaker === 'open') {
-    note = `熔断中 · ${t.cb_cooldown_remaining_sec ?? 0}s 后自动探活`
-  } else if (t?.circuit_breaker === 'half_open') {
-    note = '熔断半开 · 探针执行中'
-  } else if (t && t.throttle_remaining_sec > 0) {
-    note = `限频冷却 · 剩 ${t.throttle_remaining_sec}s`
+  if (t == null) {
+    summary = '未采样'
+  } else if (Object.keys(t).length === 0) {
+    summary = '指标未加载'
+  } else if (t.circuit_breaker === 'open') {
+    summary = '熔断中'
+    note = `${t.cb_cooldown_remaining_sec ?? 0}s 后自动探活`
+  } else if (t.circuit_breaker === 'half_open') {
+    summary = '半开探活'
+    note = '探针执行中'
+  } else if (t.throttle_remaining_sec && t.throttle_remaining_sec > 0) {
+    summary = '限频冷却'
+    note = `剩 ${t.throttle_remaining_sec}s`
+  } else if (tLayers.length) {
+    summary = tBusy > 0
+      ? `${tActive} 执行 · ${tQueued} 排队${tWaiters > 0 ? ` · ${tWaiters} 等待` : ''}`
+      : '空闲'
+  } else {
+    // 有指标但池快照未上报: 不淹没为"未采样"
+    summary = t.circuit_breaker === 'closed' ? '运行正常' : '指标未加载'
   }
   result.push({
     component: 'THSDK',
     layers: tLayers,
-    summary: tLayers.length
-      ? (busy > 0 ? `${thsdkPool?.active} 执行 · ${thsdkPool?.queued ?? 0} 排队` : '空闲')
-      : '未采样',
-    note: note ?? (tLayers.length ? undefined : '指标未加载'),
+    summary,
+    note,
   })
 
   return result
@@ -204,12 +275,13 @@ const pipelines = computed(() => {
   gap: 5px;
 }
 
+/* 空闲容量 = 进度条 track 的灰色未占用部分, 色点须与 track 一致 */
 .dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--el-fill-color) ;
-  border: 1px solid var(--el-border-color);
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
 }
 
 .dot-active {
@@ -218,6 +290,12 @@ const pipelines = computed(() => {
 }
 
 .dot-queue {
+  background: var(--el-color-warning);
+  border-color: var(--el-color-warning);
+}
+
+/* 等待 = 与 .layer-waiters 琥珀色文字同义, 用 warning 区分于执行中 */
+.dot-wait {
   background: var(--el-color-warning);
   border-color: var(--el-color-warning);
 }
@@ -269,7 +347,7 @@ const pipelines = computed(() => {
 
 .layer-row {
   display: grid;
-  grid-template-columns: 96px 1fr 92px;
+  grid-template-columns: 108px minmax(0, 1fr) minmax(110px, max-content);
   align-items: center;
   gap: 12px;
 }

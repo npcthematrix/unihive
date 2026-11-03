@@ -71,7 +71,7 @@
 
       <MiniStat label="活跃条目" :value="liveEntriesText" hint="未过期" />
       <MiniStat label="过期条目" :value="expiredText" hint="待清理" />
-      <MiniStat label="总条目" :value="entriesText" />
+      <MiniStat label="总条目" :value="entriesText" :hint="totalEntriesHint" />
       <MiniStat label="数据库" :value="dbSizeText" :hint="`WAL ${walText}`" />
       <MiniStat label="死页" :value="freelistText" hint="VACUUM 可回收" />
     </div>
@@ -201,6 +201,13 @@ const expiredText = computed(() =>
 const entriesText = computed(() =>
   props.cache?.enabled ? numOrDash(props.cache.entries) : '—',
 )
+// P2: 总条目 = 活跃 + 过期 + 历史冻结行(null_expiry)。冻结行(Round-12 后禁写)
+// 既不计入"活跃"也不计入"过期", 故三数并列时 活跃+过期 < 总条目。补口径说明,
+// 避免用户误以为三者应相加相等。
+const totalEntriesHint = computed(() => {
+  const n = props.cache?.null_expiry_entries
+  return n && n > 0 ? `含 ${n} 条历史冻结行` : undefined
+})
 const dbSizeText = computed(() =>
   props.cache?.enabled ? `${(props.cache.db_size_mb || 0).toFixed(2)} MB` : '—',
 )

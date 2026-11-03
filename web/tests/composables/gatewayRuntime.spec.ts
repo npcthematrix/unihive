@@ -173,14 +173,29 @@ describe('useGatewayRuntime — 三源独立结算', () => {
     expect(rt.refreshLabel.value).toContain('失败')
   })
 
-  test('runtime 源失败静默保留旧值, 不产生错误态', async () => {
+  test('回归 (H2): runtime 源失败保留旧值, 但挂独立错误面并计入 loadError', async () => {
     const rt = useGatewayRuntime({ lifecycle: false })
     await rt.load()
     vi.mocked(getRuntimeStats).mockRejectedValueOnce(new Error('x'))
 
     await rt.load()
 
+    // 冻结值仍可读 (不空表), 但必须能被界面感知
     expect(rt.runtime.value?.tool_count).toBe(207)
+    expect(rt.runtimeLoadError.value).toContain('x')
+    expect(rt.loadError.value).toContain('x')
+  })
+
+  test('runtime 恢复成功后错误面复位', async () => {
+    const rt = useGatewayRuntime({ lifecycle: false })
+    await rt.load()
+    vi.mocked(getRuntimeStats).mockRejectedValueOnce(new Error('x'))
+    await rt.load()
+    expect(rt.runtimeLoadError.value).not.toBe('')
+
+    await rt.load()
+
+    expect(rt.runtimeLoadError.value).toBe('')
     expect(rt.loadError.value).toBe('')
   })
 })
@@ -339,18 +354,28 @@ describe('useGatewayRuntime — 管理动作', () => {
     expect(notifier.success).toHaveBeenCalledWith(expect.stringContaining('0.4'))
   })
 
-  test('onClear 后清空采样环并强制 breakdown 刷新', async () => {
+  test('onClear 只清响应缓存趋势, 保留 L1 趋势, 并强制 breakdown 刷新', async () => {
     const notifier = makeNotifier(true)
     const rt = useGatewayRuntime({ lifecycle: false, notifier })
     await rt.load()
     await rt.load()
     expect(rt.respRateSeries.value).toHaveLength(2)
+    expect(rt.l1RateSeries.value).toHaveLength(2)
 
     await rt.onClear()
 
     expect(clearCache).toHaveBeenCalledTimes(1)
-    // 环被清空, 只剩 onClear 内部那次 reload 的新点
-    expect(rt.respRateSeries.value).toHaveLength(1)
+    // onClear 不再清空整个 samples, 而是把 respRate/liveEntries 设为 null;
+    // L1 趋势 (l1Rate/l1Size) 保留不变。load(false, true) 添加 1 个新采样点。
+    // 总长度 = 2 (原有, respRate=null) + 1 (新) = 3
+    expect(rt.respRateSeries.value).toHaveLength(3)
+    // 前两个点的 respRate 被置为 null (响应缓存清空)
+    expect(rt.respRateSeries.value[0]).toBeNull()
+    expect(rt.respRateSeries.value[1]).toBeNull()
+    // L1 趋势保留: 仍是 2 个原有非 null 点 + 1 个新点 = 3
+    expect(rt.l1RateSeries.value).toHaveLength(3)
+    expect(rt.l1RateSeries.value[0]).not.toBeNull()
+    expect(rt.l1RateSeries.value[1]).not.toBeNull()
     expect(getCacheToolBreakdown).toHaveBeenCalledTimes(2)
   })
 

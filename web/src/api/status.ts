@@ -19,6 +19,24 @@ export interface UpstreamStatus {
   last_error: string | null
 }
 
+/** UpstreamStatus 加 name 字段 (从 {name: info} map 拆成数组行)。 */
+export interface UpstreamRow extends UpstreamStatus {
+  name: string
+}
+
+/**
+ * 「可用上游」的唯一口径 (M4)。
+ *
+ * 以 `enabled` 为准, 不信 `status === 'disabled'`: 后端 get_upstream_status
+ * 对有运行时 client 的上游会用 client 状态桶覆盖 `status`, 已禁用的上游照样可能
+ * 带 online / offline。configured = 已启用但该类型不发探测, 同样可用。
+ */
+export function isUsableUpstream(
+  entry: Pick<UpstreamStatus, 'enabled' | 'status'>,
+): boolean {
+  return entry.enabled && (entry.status === 'online' || entry.status === 'configured')
+}
+
 export interface StatusSummary {
   total: number
   online: number

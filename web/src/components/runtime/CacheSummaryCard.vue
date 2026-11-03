@@ -1,5 +1,5 @@
 <!--
-  缓存与存储 tab 顶部 summary: 两层缓存 (响应缓存 + MooTDX2 L1) 的关键指标,
+  缓存 tab 顶部 summary: 两层缓存 (响应缓存 + MooTDX2 L1) 的关键指标,
   一眼可见健康度, 详细数据进 sub-tab 看。
   数据从 useGatewayRuntime() 的同一批 prop 直接派生 (不拉额外接口)。
 -->
@@ -12,7 +12,7 @@
           <small class="sub">响应缓存 + MooTDX2 L1</small>
         </h2>
         <span class="card-meta">
-          {{ respForeign ? '响应缓存命中率为上一进程残留' : '每 10s 自动刷新' }}
+          {{ cardMetaText }}
         </span>
       </div>
     </template>
@@ -122,9 +122,17 @@ const props = defineProps<{
   /** 工具有缓存条目的总数 (breakdown.total_tools)。 */
   breakdownTotalTools: number
   metrics: UpstreamMetrics | null
+  /** 自动刷新是否开启 (页头开关)。关闭时 card-meta 不显示"每 10s 自动刷新"。 */
+  autoRefresh: boolean
 }>()
 
 // ============ 响应缓存派生 ============
+
+// card-meta: 三态 — 异进程残留提示 / 自动刷新 / 手动模式
+const cardMetaText = computed(() => {
+  if (props.respForeign) return '响应缓存命中率为上一进程残留'
+  return props.autoRefresh ? '每 10s 自动刷新' : '手动刷新模式'
+})
 
 const respStatusText = computed(() => {
   const c = props.respCache

@@ -113,10 +113,11 @@ import { computed, ref } from 'vue'
 import { Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { copyText } from '@/utils/clipboard'
 import { upstreamDisplayName } from '@/constants/upstreams'
+import { isUsableUpstream } from '@/api/status'
 import type {
   StatusSummary,
-  UpstreamStatus,
   UpstreamStatusValue,
+  UpstreamRow,
 } from '@/api/status'
 
 /** 上游总览: 纯展示 + 过滤/排序。**不自动刷新**, 只在手动「刷新」
@@ -131,10 +132,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
-
-export interface UpstreamRow extends UpstreamStatus {
-  name: string
-}
 
 const STATUS_TEXT: Record<string, string> = {
   online: '在线',
@@ -170,7 +167,10 @@ const summaryCards = [
 ] as const
 
 function isHealthy(row: UpstreamRow): boolean {
-  return row.status === 'online' || row.status === 'configured'
+  // M4: 与「网关进程」标签同一口径 (api/status.ts isUsableUpstream)。
+  // 旧实现只看 status, 忽略 enabled —— 后端会用 client 状态桶覆盖禁用上游的
+  // status, 于是同一行在两个标签一边算健康一边不算。
+  return isUsableUpstream(row)
 }
 
 const healthyCount = computed(() => props.rows.filter(isHealthy).length)

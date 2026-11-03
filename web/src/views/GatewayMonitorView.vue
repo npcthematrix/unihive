@@ -17,7 +17,7 @@
             立即刷新
           </el-button>
           <el-tooltip
-            content="每 10 秒自动刷新 网关进程 / 并发管线 / 缓存；「上游总览」不自动刷新 (请用该标签内的刷新按钮)"
+            content="每 10 秒自动刷新 网关进程 / 并发 / 缓存；「上游总览」不自动刷新 (请用该标签内的刷新按钮)"
             placement="top"
           >
             <span class="auto-toggle">
@@ -49,7 +49,7 @@
           @click="selectTab(tab.key)"
         >
           {{ tab.title }}
-          <!-- 排队数徽标: 只在并发管线标签上, 且有排队时才出现 -->
+          <!-- 排队数徽标: 只在并发标签上, 且有排队时才出现 -->
           <span v-if="tab.key === 'pipeline' && totalQueued > 0" class="tab-badge">
             {{ totalQueued }}
           </span>
@@ -88,20 +88,40 @@
         role="tabpanel"
         aria-labelledby="monitor-tab-gateway"
       >
-        <RuntimeStrip :stats="runtime" />
-        <div class="gateway-summary">
-          <div v-for="s in gatewaySummary" :key="s.label" class="gs-item">
-            <span class="gs-label">{{ s.label }}</span>
-            <span class="gs-value" :class="s.tone ? `tone-${s.tone}` : ''">
-              <!-- M4: 装饰点 aria-hidden -->
-              <span v-if="s.dot" class="gs-dot" :class="`dot-${s.tone}`" aria-hidden="true" />
-              {{ s.value }}
+        <!-- H2: /api/runtime 失败时下面 6 格是上一次成功读取的冻结快照, 必须
+             说出来。旧码这条通道完全静默 (错误不进 loadError), 于是页头报「刷新
+             失败」而本标签照常显示几小时前的 PID / 调用数, 用户无从分辨。 -->
+        <el-alert
+          v-if="runtimeLoadError"
+          type="error"
+          :title="runtimeLoadError"
+          :description="runtimeFrozenText"
+          show-icon
+          :closable="false"
+          class="gateway-alert"
+        />
+        <div class="metric-grid" role="group" aria-label="网关进程指标">
+          <div v-for="s in gatewaySummary" :key="s.label" class="metric-tile">
+            <span class="metric-tile-label">{{ s.label }}</span>
+            <span class="metric-tile-value" :class="s.tone ? `tone-${s.tone}` : ''">
+              <!-- 装饰点 aria-hidden: 状态文案 + 颜色已表意, 点只做强化 -->
+              <span
+                v-if="s.dot"
+                class="metric-dot"
+                :class="`dot-${s.tone ?? 'neutral'}`"
+                aria-hidden="true"
+              />
+              <span class="metric-tile-text">
+                {{ s.value }}
+                <span v-if="s.unit" class="metric-tile-unit">{{ s.unit }}</span>
+              </span>
             </span>
           </div>
         </div>
+        <p class="metric-note">{{ gatewayFreshText }}</p>
       </section>
 
-      <!-- ===== 并发管线 ===== -->
+      <!-- ===== 并发 ===== -->
       <section
         v-show="activeTab === 'pipeline'"
         id="monitor-panel-pipeline"
@@ -111,7 +131,7 @@
         <PipelinePanel :mootdx="metrics" :tdx-quant="tdxQuantMetrics" :thsdk="thsdkMetrics" />
       </section>
 
-      <!-- ===== 缓存与存储 ===== -->
+      <!-- ===== 缓存 ===== -->
       <section
         v-show="activeTab === 'cache'"
         id="monitor-panel-cache"
@@ -125,6 +145,7 @@
           :resp-foreign="statsFromForeignProcess"
           :breakdown-total-tools="breakdownTotalTools"
           :metrics="metrics"
+          :auto-refresh="autoRefresh"
         />
 
         <!-- sub-tab 导航: 用 segmented 视觉与外层下划线 tab 分级 (见 .cache-subtabs) -->
@@ -224,7 +245,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { STALE_THRESHOLD_SEC } from '@/constants/time'
+import { POLL_INTERVAL_MS, STALE_THRESHOLD_SEC } from '@/constants/time'
 import { formatHMS } from '@/utils/time'
 import { scrollPageTop } from '@/utils/scrollTop'
 import { marketSession } from '@/utils/market-session'
@@ -234,8 +255,8 @@ import { parseHashTab, nextTabKey } from './_shared/hashTab'
 import { deriveGatewaySummary } from './monitor/summary'
 import { useGatewayRuntime } from '@/composables/useGatewayRuntime'
 import SessionBar from '@/components/SessionBar.vue'
-import RuntimeStrip from '@/components/RuntimeStrip.vue'
-import UpstreamOverviewPanel, { type UpstreamRow } from '@/components/runtime/UpstreamOverviewPanel.vue'
+import UpstreamOverviewPanel from '@/components/runtime/UpstreamOverviewPanel.vue'
+import { type UpstreamRow, type UpstreamStatus } from '@/api/status'
 import CacheSummaryCard from '@/components/runtime/CacheSummaryCard.vue'
 import RespCacheCard from '@/components/runtime/RespCacheCard.vue'
 import Mootdx2L1Card from '@/components/runtime/Mootdx2L1Card.vue'
@@ -252,6 +273,7 @@ const {
   loadError,
   l1LoadError,
   respLoadError,
+  runtimeLoadError,
   initialLoading,
   manualLoading,
   statsFromForeignProcess,
@@ -307,8 +329,8 @@ watch(
 const TABS: readonly { key: MonitorTab; title: string }[] = [
   { key: 'overview', title: '上游总览' },
   { key: 'gateway', title: '网关进程' },
-  { key: 'pipeline', title: '并发管线' },
-  { key: 'cache', title: '缓存与存储' },
+  { key: 'pipeline', title: '并发' },
+  { key: 'cache', title: '缓存' },
   { key: 'errors', title: '错误跟踪' },
 ]
 
@@ -425,7 +447,7 @@ onBeforeUnmount(stopFastPoll)
 
 // ---- 上游总览行: 从 {name: info} 拆成带 name 的数组 ----
 function toUpstreamRows(
-  upstreams: Record<string, import('@/api/status').UpstreamStatus> | undefined,
+  upstreams: Record<string, UpstreamStatus> | undefined,
 ): UpstreamRow[] {
   return Object.entries(upstreams ?? {}).map(([name, info]) => ({ name, ...info }))
 }
@@ -461,10 +483,39 @@ async function refreshOverview(): Promise<void> {
   }
 }
 
-// ---- 网关进程标签: 总体摘要 (填均衡首屏, 不使下方大片空白) ----
+// ---- 网关进程标签: 全部指标 tile (上游健康 2 + 运行态 6) ----
 // 派生逻辑抽到 views/monitor/summary.ts (纯函数, 可脱离 plugin-vue 单测)。
+// M3/B1: 旧版这里同时渲染 <RuntimeStrip> (6 格) + gatewaySummary (2 格), 两套
+// 网格、两套断点、两种 tile 样式, 且 PID / 调用数重复出现。现在合成一张网格。
 const gatewaySummary = computed(() =>
   deriveGatewaySummary(gatewayStatus.value, runtime.value),
+)
+
+/** 秒级时间戳 → 「HH:MM:SS」, 空值回退占位。 */
+function freshAt(tsSec: number | null | undefined): string {
+  return tsSec ? formatHMS(tsSec * 1000) : '—'
+}
+
+/**
+ * B3: 两个标签的数据新鲜度各自标注。上游总览有独立的「快照于」提示条,
+ * 网关进程此前只有页头一个全页 refreshLabel —— 它只跟踪 /api/status, 运行态
+ * 通道失败或滞后时看不出来, 所以这里分别列出两个来源自己的时刻。
+ */
+const gatewayFreshText = computed(() => {
+  const statusAt = freshAt(gatewayStatus.value?.timestamp)
+  const runtimeAt = freshAt(runtime.value?.timestamp)
+  const cadence = autoRefresh.value
+    ? `每 ${Math.round(POLL_INTERVAL_MS / 1000)} 秒自动刷新`
+    : '自动刷新已关闭, 数据不会自行更新'
+  return `上游健康取自 ${statusAt} · 运行态取自 ${runtimeAt} · ${cadence}。`
+    + '「上游总览」是手动快照, 需在该标签内单独点「刷新」。'
+})
+
+/** 运行态失败提示的补充说明: 明确下面 6 格是旧数据还是从没读到过。 */
+const runtimeFrozenText = computed(() =>
+  runtime.value
+    ? `下方 6 格运行态指标已冻结于 ${freshAt(runtime.value.timestamp)}, 是上一次成功读取的值, 不是实时数据。`
+    : '下方运行态指标从未成功加载, 一律显示「—」(与「读到 0」区分)。',
 )
 
 // 全组件排队/等待总数 (线程池队列 + 信号量等待者), 驱动标签徽标
@@ -511,15 +562,16 @@ const totalQueued = computed(() => {
   text-align: center;
 }
 
-/* 网关进程摘要条 */
-.gateway-summary {
+/* 网关进程指标网格: 8 格固定 4 列 (两行), 断点逐级降列。
+   不用 repeat(auto-fit, …) —— auto-fit 会折叠空轨道, 上游健康 2 格与运行态
+   6 格的 tile 数不同, 每行实际列宽会错位, 两区无法对齐成同一张表。 */
+.metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
-  margin-top: 12px;
 }
 
-.gs-item {
+.metric-tile {
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -529,42 +581,71 @@ const totalQueued = computed(() => {
   background: var(--el-fill-color-blank);
 }
 
-.gs-label {
+.metric-tile-label {
   font-size: 11px;
   color: var(--el-text-color-secondary);
   white-space: nowrap;
 }
 
-.gs-value {
+.metric-tile-value {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 7px;
   font-size: 15px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
-.gs-dot {
+.metric-tile-unit {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+}
+
+.metric-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
+  /* 与 15px 加粗数字并排, baseline 对齐会把小圆点拽到基线上, 这里显式居中 */
+  align-self: center;
+}
+
+.metric-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
 }
 
 .dot-good { background: var(--el-color-success); }
 .dot-warn { background: var(--el-color-warning); }
 .dot-bad { background: var(--el-color-danger); }
+/* 「未加载 / 未配置上游」: 不带判断的中性灰, 不能伪装成健康绿点 */
+.dot-neutral { background: var(--el-text-color-placeholder); }
 
 .tone-good { color: var(--el-color-success); }
 .tone-warn { color: var(--el-color-warning); }
 .tone-bad { color: var(--el-color-danger); }
+.tone-busy { color: var(--el-color-primary); }
+
+.gateway-alert {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 1200px) {
+  .metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 
 @media (max-width: 860px) {
-  .gateway-summary {
+  .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 560px) {
-  .gateway-summary {
+  .metric-grid {
     grid-template-columns: 1fr;
   }
 }

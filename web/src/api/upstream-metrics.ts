@@ -55,6 +55,18 @@ export interface CurrentServer {
   port: number
 }
 
+/** tdx_quant 策略进程池快照 (strategy_instances>1 时才有)。 */
+export interface StrategyPoolSnapshot {
+  size: number
+  instances: Array<{
+    index: number
+    pid: number | null
+    alive: boolean
+    busy: boolean
+    strategy_path: string
+  }>
+}
+
 /** 单个 upstream client 的运行时指标 (key 随实现扩展) */
 export interface UpstreamMetrics {
   total_requests?: number
@@ -67,6 +79,12 @@ export interface UpstreamMetrics {
   daily_l1?: L1CacheStats
   top_board_l1?: L1CacheStats
   unusual_l1?: L1CacheStats
+  /** tdx_quant: 同时进入 DLL/子进程 RPC 的闸门。 */
+  call_limit?: number
+  call_inflight?: number
+  /** tdx_quant: 官方多策略实例数。>1 时父进程不加载 DLL。 */
+  strategy_instances?: number
+  strategy_pool?: StrategyPoolSnapshot | null
   [k: string]: unknown
 }
 

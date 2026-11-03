@@ -177,6 +177,10 @@ const items = ref<ErrorItem[]>([])
 const inMemory = ref(0)
 const inDb = ref(0)
 const latestTs = ref<string | null>(null)
+// 后端容量常量: 从 API 响应中读取 (旧码硬编码 200/150/5000, 后端调整后前端不一致)
+const memoryCap = ref(200)
+const flushThreshold = ref(150)
+const dbCap = ref(5000)
 const scope = ref<'recent' | 'history'>('recent')
 const toolFilter = ref('')
 const kindFilter = ref('')
@@ -191,10 +195,7 @@ const KIND_OPTIONS = [
   { value: 'internal_error', label: '内部错误' },
 ] as const
 
-// 与后端 error_buffer 常量对齐 (展示用)
-const memoryCap = 200
-const flushThreshold = 150
-const dbCap = 5000
+// 与后端 error_buffer 常量对齐 — 现从 API 响应动态读取, 不再硬编码。
 const POLL_INTERVAL = 10_000
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -206,13 +207,20 @@ async function refresh() {
       limit: 100,
       history: scope.value === 'history',
     })
-    items.value = resp.items.map((it, idx) => ({
+    items.value = resp.items.map((it) => ({
       ...it,
-      rowKey: `${it.ts}-${it.tool}-${idx}`,
+      // 稳定 key: ts_epoch 是后端附加的 epoch 秒 (排序/去重用), 同一错误
+      // 多次拉取时 ts_epoch 不变; 旧码用数组 idx, 数据顺序变化时 rowKey
+      // 变化 → el-table row-key 展开行状态错乱 (展开了错误的行)。
+      rowKey: `${it.ts_epoch}-${it.tool}`,
     }))
     inMemory.value = resp.in_memory
     inDb.value = resp.in_db
     latestTs.value = resp.latest_ts
+    // 从后端响应同步容量常量 (后端调整后前端自动跟进)
+    if (resp.memory_cap) memoryCap.value = resp.memory_cap
+    if (resp.flush_threshold) flushThreshold.value = resp.flush_threshold
+    if (resp.db_cap) dbCap.value = resp.db_cap
   } catch (e: unknown) {
     loadError.value = e instanceof Error ? e.message : '错误记录拉取失败'
   } finally {
@@ -239,8 +247,11 @@ const latestLabel = computed(() =>
 )
 
 function formatTs(ts: string): string {
-  // 后端给 UTC ISO; 转本地时间显示。若解析失败原样返回。
-  const d = new Date(ts)
+  // 后端给 UTC ISO 毫秒 (带 Z 后缀); 但 SQLite 行的 ts 列可能缺时区后缀,
+  // new Date() 会把无后缀的 ISO 当本地时间 → 偏移 8 小时。
+  // 补 Z 后缀确保一律按 UTC 解析, 再由 toLocale 转本地显示。
+  const normalized = ts.endsWith('Z') || ts.includes('+') ? ts : ts + 'Z'
+  const d = new Date(normalized)
   if (Number.isNaN(d.getTime())) return ts
   const pad = (n: number) => String(n).padStart(2, '0')
   return (
