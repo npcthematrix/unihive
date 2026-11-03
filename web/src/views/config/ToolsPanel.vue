@@ -92,7 +92,7 @@
       </el-table-column>
     </el-table>
 
-    <div v-if="search.trim()" class="tools-count">
+    <div v-if="search.trim()" class="cfg-filter-count">
       显示 {{ filteredTools.length }} / {{ totalTools }}
     </div>
 
@@ -253,11 +253,5 @@ const emptyText = computed(() => {
 
 .tools-param:not(.required) {
   color: var(--text-secondary);
-}
-
-.tools-count {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  margin-top: 4px;
 }
 </style>

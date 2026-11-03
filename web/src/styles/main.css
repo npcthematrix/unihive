@@ -101,13 +101,15 @@ body {
   cursor: not-allowed;
 }
 
-/* 计数 badge — ConfigView tab 上显示配置项数量 */
+/* 计数 chip — 「配置信息」标签上的条目总数, 「网关运行监控」的排队徽标也复用
+   这一份 (原先两页各写一套: 一处灰字 chip、一处白字压琥珀底)。 */
 .cfg-subtab-count {
   font-family: var(--el-font-family-monospace, 'Consolas', 'Monaco', monospace);
   font-size: 0.72rem;
   padding: 1px 7px;
   background: var(--el-fill-color);
-  color: var(--el-text-color-secondary);
+  /* secondary (#909399) 在白底仅 ~2.9:1, 数字是正文信息不是装饰, 用 regular */
+  color: var(--cfg-text-secondary);
   border-radius: 999px;
   font-weight: 500;
   line-height: 1.4;
@@ -117,6 +119,17 @@ body {
 .cfg-subtab.active .cfg-subtab-count {
   background: var(--el-color-primary-light-9, #ecf5ff);
   color: var(--el-color-primary);
+}
+
+/* 需处理徽标 (>0 才出现): 琥珀底 + 深棕字。白字压 --el-color-warning 仅 ~2.2:1,
+   不达 WCAG AA; 两主题下该变量都是琥珀色, 硬编码深棕前景是安全的。
+   后一条选择器与 .active 那条同权重、位置在后, 否则选中态会把告警色刷成主色。 */
+.cfg-subtab-count.is-attention,
+.cfg-subtab.active .cfg-subtab-count.is-attention,
+.cfg-subtab[aria-selected='true'] .cfg-subtab-count.is-attention {
+  background: var(--el-color-warning);
+  color: #3a2a00;
+  font-weight: 600;
 }
 
 /* ============================================================================
@@ -156,6 +169,18 @@ body {
   /* 不再带 margin-bottom: 消费方 (Upstreams/Mapping/Tools panel) 都是
      display:flex + gap:12px 的纵向容器, 会与 gap 叠加成 24px; 在
      .ups-toolbar 这种横向 flex 行里还会把基线顶歪。间距交给容器管。 */
+}
+
+/* ============================================================================
+   筛选结果计数页脚 — UpstreamsPanel / MappingPanel / ToolsPanel 共用
+   三个面板原先各写一份 (.ups-* / .map-count / .tools-count), 文案同为
+   「显示 N / M」但样式两份重复、上游面板干脆没有 (只在 el-table 空表文案里
+   塞了一次, 搜出非空结果时总数就完全不显示了)。统一到这里, 三处同进同退。
+   ============================================================================ */
+
+.cfg-filter-count {
+  font-size: 0.75rem;
+  color: var(--cfg-text-secondary);
 }
 
 /* ============================================================================

@@ -21,7 +21,10 @@
       </div>
     </header>
 
-    <!-- subtab 导航 — WAI-ARIA Tabs 模式: roving tabindex + 方向键 -->
+    <!-- subtab 导航 — WAI-ARIA Tabs 模式: roving tabindex + 方向键。
+         面板一律带 tabindex="0" (APG 同款): 从标签条 Tab 出去时先落进面板本体,
+         读屏软件才会把 role=tabpanel 连同 aria-labelledby 的标题一起播报, 用户
+         才知道自己换到了哪一页; 隐藏面板由 v-show 置 display:none, 不可聚焦。 -->
     <nav
       class="cfg-subtabs"
       role="tablist"
@@ -42,7 +45,10 @@
         @click="selectTab(tab.key)"
       >
         {{ tab.title }}
-        <span v-if="tab.count !== ''" class="cfg-subtab-count">{{ tab.count }}</span>
+        <span v-if="tab.count !== undefined" class="cfg-subtab-count">{{ tab.count }}</span>
+        <span v-if="tab.attention" class="cfg-subtab-count is-attention">
+          {{ tab.attention }}
+        </span>
       </button>
     </nav>
     </div>
@@ -111,6 +117,7 @@
         v-show="activeTab === 'upstreams'"
         id="cfg-panel-upstreams"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="cfg-tab-upstreams"
       >
         <UpstreamsPanel
@@ -132,6 +139,7 @@
         v-show="activeTab === 'mapping'"
         id="cfg-panel-mapping"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="cfg-tab-mapping"
       >
         <MappingPanel :config="displayConfig" />
@@ -141,6 +149,7 @@
         v-show="activeTab === 'tools'"
         id="cfg-panel-tools"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="cfg-tab-tools"
       >
         <ToolsPanel
@@ -155,6 +164,7 @@
         v-show="activeTab === 'cache'"
         id="cfg-panel-cache"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="cfg-tab-cache"
       >
         <!-- entities 未加载完时默认按 db 措辞, 避免逃生模式 banner 闪烁 -->
@@ -168,6 +178,7 @@
         v-show="activeTab === 'proxy'"
         id="cfg-panel-proxy"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="cfg-tab-proxy"
       >
         <ProxyPanel :proxy="proxy" :loading="proxyLoading" :error="proxyError" @change="onProxyChange" />
@@ -177,6 +188,7 @@
         v-show="activeTab === 'database'"
         id="cfg-panel-database"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="cfg-tab-database"
       >
         <DatabasePanel :entities="entities" />
@@ -186,6 +198,7 @@
         v-show="activeTab === 'updateCenter'"
         id="cfg-panel-updateCenter"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="cfg-tab-updateCenter"
       >
         <UpdateCenterPanel :entities="entities" :active="activeTab === 'updateCenter'" @applied="onFactoryUpgradeApplied" />
@@ -356,16 +369,30 @@ const copyReady = computed(() => {
   return toolsLoaded.value
 })
 
-const TABS = computed(() => [
-  { key: 'upstreams' as const, title: TAB_TITLES.upstreams, count: upstreamsCount.value },
-  { key: 'mapping' as const, title: TAB_TITLES.mapping, count: mappingCount.value },
-  { key: 'tools' as const, title: TAB_TITLES.tools, count: toolsCount.value },
-  { key: 'cache' as const, title: TAB_TITLES.cache, count: ttlCount.value },
-  { key: 'proxy' as const, title: TAB_TITLES.proxy, count: coverageCount.value },
-  { key: 'database' as const, title: TAB_TITLES.database, count: userModifiedEntitiesCount.value },
-  // 出厂更新无静态角标计数 (模板 hash 信号在面板内拉取展示)
-  { key: 'updateCenter' as const, title: TAB_TITLES.updateCenter, count: '' },
-])
+/**
+ * 角标分两种语义, 不能挤在同一个数字里 (旧 TABS 就是这么混的):
+ * - `count`: 该页条目总数, 恒显 —— 0 也是事实 (「0 个工具」不是故障)。
+ * - `attention`: 需要用户处理的条目数, 只在 >0 时出现, 用告警 chip
+ *   (与「网关运行监控」并发标签的排队徽标共用 .cfg-subtab-count.is-attention)。
+ *
+ * 表身由 TAB_KEYS 派生 + Record<TabKey, …> 穷尽: 三处各列一遍 7 个 key 的旧写法
+ * 加标签时只会漏一处 (TS 只校验 TAB_TITLES, 漏了 TABS 就是那个标签凭空不出现)。
+ * 出厂更新没有静态计数 (模板 hash 信号在面板内拉取展示), 给空对象即可。
+ */
+const tabMeta = computed<Record<TabKey, { count?: number; attention?: number }>>(() => ({
+  upstreams: { count: upstreamsCount.value },
+  mapping: { count: mappingCount.value },
+  tools: { count: toolsCount.value },
+  cache: { count: ttlCount.value },
+  proxy: { count: coverageCount.value },
+  // 配置库角标是「用户改动实体行数」, 属待处理信号, 不是实体总数
+  database: { attention: userModifiedEntitiesCount.value },
+  updateCenter: {},
+}))
+
+const TABS = computed(() =>
+  TAB_KEYS.map((key) => ({ key, title: TAB_TITLES[key], ...tabMeta.value[key] })),
+)
 
 function onProxyChange(updated: ProxySettings) {
   proxy.value = updated

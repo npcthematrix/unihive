@@ -28,7 +28,9 @@
         </div>
       </header>
 
-      <!-- 子标签 — WAI-ARIA Tabs: roving tabindex + 方向键, 与另三页同款 -->
+      <!-- 子标签 — WAI-ARIA Tabs: roving tabindex + 方向键, 与另三页同款。
+           顶层面板带 tabindex="0" (Tab 从标签条出来先落进面板, 读屏才播报
+           tabpanel 标题); 隐藏面板由 v-show 置 display:none, 不可聚焦。 -->
       <nav
         class="cfg-subtabs"
         role="tablist"
@@ -49,8 +51,10 @@
           @click="selectTab(tab.key)"
         >
           {{ tab.title }}
-          <!-- 排队数徽标: 只在并发标签上, 且有排队时才出现 -->
-          <span v-if="tab.key === 'pipeline' && totalQueued > 0" class="tab-badge">
+          <!-- 排队数徽标: 只在并发标签上, 且有排队时才出现。chip 样式与
+               「配置信息」的计数角标共用 (main.css .cfg-subtab-count.is-attention),
+               但语义不同 —— 那边灰底是条目总数, 这里告警色才是「有待处理」。 -->
+          <span v-if="tab.key === 'pipeline' && totalQueued > 0" class="cfg-subtab-count is-attention">
             {{ totalQueued }}
           </span>
         </button>
@@ -63,6 +67,7 @@
         v-show="activeTab === 'overview'"
         id="monitor-panel-overview"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="monitor-tab-overview"
       >
         <el-alert
@@ -86,6 +91,7 @@
         v-show="activeTab === 'gateway'"
         id="monitor-panel-gateway"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="monitor-tab-gateway"
       >
         <!-- H2: /api/runtime 失败时下面 6 格是上一次成功读取的冻结快照, 必须
@@ -126,6 +132,7 @@
         v-show="activeTab === 'pipeline'"
         id="monitor-panel-pipeline"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="monitor-tab-pipeline"
       >
         <PipelinePanel :mootdx="metrics" :tdx-quant="tdxQuantMetrics" :thsdk="thsdkMetrics" />
@@ -136,6 +143,7 @@
         v-show="activeTab === 'cache'"
         id="monitor-panel-cache"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="monitor-tab-cache"
       >
 
@@ -170,7 +178,9 @@
           >{{ sub.label }}</button>
         </nav>
 
-        <!-- 响应缓存 sub-tab: SessionBar + 例外说明 + RespCacheCard -->
+        <!-- 响应缓存 sub-tab: SessionBar + 例外说明 + RespCacheCard。
+             嵌套层的 panel 不给 tabindex="0" —— 外层缓存面板已经是一个 Tab
+             停靠点, 再给内层加会变成连着两跳、都停在同一片内容上。 -->
         <section
           v-show="activeCacheSub === 'resp'"
           id="cache-panel-resp"
@@ -232,6 +242,7 @@
         v-show="activeTab === 'errors'"
         id="monitor-panel-errors"
         role="tabpanel"
+        tabindex="0"
         aria-labelledby="monitor-tab-errors"
       >
         <ErrorTrackingPanel :active="activeTab === 'errors'" />
@@ -325,14 +336,23 @@ watch(
   },
 )
 
-/** 顶层子标签定义 (驱动 v-for + 无障碍 id 关联)。 */
-const TABS: readonly { key: MonitorTab; title: string }[] = [
-  { key: 'overview', title: '上游总览' },
-  { key: 'gateway', title: '网关进程' },
-  { key: 'pipeline', title: '并发' },
-  { key: 'cache', title: '缓存' },
-  { key: 'errors', title: '错误跟踪' },
-]
+/**
+ * 顶层子标签定义 (驱动 v-for + 无障碍 id 关联)。由 TAB_KEYS 派生: 旧写法在
+ * TAB_KEYS 与 TABS 里各列一遍 5 个 key, 加标签时漏一处不会报错, 只会让那个
+ * 标签永远点不到 (URL ?tab= 能解析到, 标签条上却没有)。
+ */
+const TAB_TITLES: Record<MonitorTab, string> = {
+  overview: '上游总览',
+  gateway: '网关进程',
+  pipeline: '并发',
+  cache: '缓存',
+  errors: '错误跟踪',
+}
+
+const TABS: readonly { key: MonitorTab; title: string }[] = TAB_KEYS.map((key) => ({
+  key,
+  title: TAB_TITLES[key],
+}))
 
 /**
  * 切换顶层子标签。URL 写入只发生在用户点击/键盘切换时 —— 与「配置信息」
@@ -385,10 +405,15 @@ function selectCacheSub(tab: CacheSubTab): void {
 }
 
 /** 缓存子标签定义 (驱动 v-for + 无障碍 id 关联)。 */
-const CACHE_SUBTABS: readonly { key: CacheSubTab; label: string }[] = [
-  { key: 'resp', label: '响应缓存' },
-  { key: 'l1', label: 'MooTDX2 L1缓存' },
-]
+/** 与顶层同款: 标签由 CACHE_SUBTAB_KEYS 派生, 标题表穷尽校验。 */
+const CACHE_SUBTAB_TITLES: Record<CacheSubTab, string> = {
+  resp: '响应缓存',
+  l1: 'MooTDX2 L1缓存',
+}
+
+const CACHE_SUBTABS: readonly { key: CacheSubTab; label: string }[] = CACHE_SUBTAB_KEYS.map(
+  (key) => ({ key, label: CACHE_SUBTAB_TITLES[key] }),
+)
 
 /**
  * 缓存子 tablist 方向键导航 (WAI-ARIA roving tabindex): Left/Right 循环切换,
@@ -544,23 +569,6 @@ const totalQueued = computed(() => {
 /* 页头与子标签由 .cfg-sticky-head 统一吸顶 (全局规则把 .view-header 降级为
    static), 这里不再需要覆写 —— 长标签页 (上游总览 / 缓存) 滚动后标题和标签
    都还在, 与另三页一致。 */
-
-/* 排队数徽标: 白字压 --el-color-warning (#E6A23C) 仅约 2.2:1, 不达 WCAG AA。
-   改深棕字压同底色 → 约 6.4:1; 两主题下 --el-color-warning 均为琥珀色,
-   故此处硬编码深色前景是安全的。 */
-.tab-badge {
-  display: inline-block;
-  min-width: 16px;
-  margin-left: 4px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--el-color-warning);
-  color: #3a2a00;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-}
 
 /* 网关进程指标网格: 8 格固定 4 列 (两行), 断点逐级降列。
    不用 repeat(auto-fit, …) —— auto-fit 会折叠空轨道, 上游健康 2 格与运行态

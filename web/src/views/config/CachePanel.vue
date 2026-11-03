@@ -23,7 +23,7 @@
       <summary class="cfg-section-header">
         <span class="cfg-section-title">
           <span class="cfg-section-toggle">▾</span>
-          缓存有效期是怎样决定的（两条动态规则）
+          缓存有效期是怎样决定的（三条规则）
         </span>
       </summary>
       <div class="cfg-section-body cache-rules">

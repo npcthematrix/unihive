@@ -40,25 +40,24 @@
     <div class="proxy-coverage">
       <h4 class="proxy-section-title">覆盖范围</h4>
       <p class="proxy-section-hint">以下工具在代理启用时优先走 TDX_QUANT</p>
-      <div class="proxy-coverage-table-scroll">
-        <el-table :data="coverage" class="proxy-coverage-table" :empty-text="coverageEmpty">
-          <el-table-column label="MOOTDX2 工具" min-width="200">
-            <template #default="{ row }">
-              <code>{{ row.mootdx2_tool }}</code>
-            </template>
-          </el-table-column>
-          <el-table-column width="40" align="center">
-            <template #default>
-              <span class="proxy-arrow" aria-hidden="true">→</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="TDX_QUANT 工具" min-width="200">
-            <template #default="{ row }">
-              <code>{{ row.tdx_quant_tool }}</code>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
+      <!-- el-table 自带横向滚动, 不再套外层 overflow 容器 -->
+      <el-table :data="coverage" class="proxy-coverage-table" :empty-text="coverageEmpty">
+        <el-table-column label="MOOTDX2 工具" min-width="200">
+          <template #default="{ row }">
+            <code>{{ row.mootdx2_tool }}</code>
+          </template>
+        </el-table-column>
+        <el-table-column width="40" align="center">
+          <template #default>
+            <span class="proxy-arrow" aria-hidden="true">→</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="TDX_QUANT 工具" min-width="200">
+          <template #default="{ row }">
+            <code>{{ row.tdx_quant_tool }}</code>
+          </template>
+        </el-table-column>
+      </el-table>
     </div>
 
     <!-- 未代理的行情类工具 (静态说明, 无 JS 数据)
@@ -284,11 +283,6 @@ async function onToggle(value: boolean | string | number) {
   margin: 0 0 6px;
   font-size: 0.8rem;
   color: var(--cfg-text-secondary);
-}
-
-.proxy-coverage-table-scroll {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
 }
 
 .proxy-coverage-table code {

@@ -39,7 +39,7 @@
       </el-table-column>
     </el-table>
 
-    <div v-if="search.trim()" class="map-count">
+    <div v-if="search.trim()" class="cfg-filter-count">
       显示 {{ filteredEntries.length }} / {{ totalEntries }}
     </div>
   </div>
@@ -141,11 +141,5 @@ const emptyText = computed(() => {
   color: var(--text-secondary);
   font-size: 0.8rem;
   margin: 0 2px;
-}
-
-.map-count {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  margin-top: 4px;
 }
 </style>

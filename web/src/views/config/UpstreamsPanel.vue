@@ -20,8 +20,7 @@
       />
     </div>
 
-    <!-- 上游表 -->
-    <div class="ups-table-scroll">
+    <!-- 上游表 (el-table 自带横向滚动, 不再套外层 overflow 容器) -->
     <el-table
       ref="tableRef"
       :data="filteredEntries"
@@ -142,6 +141,9 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <div v-if="search.trim()" class="cfg-filter-count">
+      显示 {{ filteredEntries.length }} / {{ totalUpstreams }}
     </div>
 
     <!-- 启动期池配置 (cfg > env > default 优先级链, 重启才生效) -->
@@ -348,7 +350,6 @@ const emit = defineEmits<{
   }]
   /** 池快照通道失败后的重试: 数据源在父层 pageLoader, 面板只发意图。 */
   poolRetry: []
-  openapiImported: [payload: { revision: number }]
   /**
    * 行内写操作撞乐观锁 409 且错误体没回带新 revision —— 本地 version 已经
    * 陈旧, 请父层重拉配置; 否则用户每次重试都再撞一次 409。
@@ -413,9 +414,11 @@ const filteredEntries = computed<UpstreamRow[]>(() => {
 
 const anyExpandable = computed(() => upstreamEntries.value.some((r) => r.hasDetail))
 
+/** 空表文案只管「为什么空」; N / M 计数交给表格下方 .cfg-filter-count 页脚
+ *  (与 Mapping / Tools 两个面板同一条规则, 命中非空时也能看到总数)。 */
 const emptyText = computed(() => {
   if (!totalUpstreams.value) return '暂无上游配置'
-  return `无匹配项 (${filteredEntries.value.length} / ${totalUpstreams.value})`
+  return '无匹配项'
 })
 
 /** el-table 实例: 名称列的自定义 ▸ 按钮通过它驱动真 expand 列。 */
@@ -853,18 +856,13 @@ const poolSnapshotLabel = computed(() =>
 </script>
 
 <style scoped>
-.ups-table-scroll {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
 .ups-panel {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-/* 搜索框 + OpenAPI 导入按钮同行 */
+/* 搜索框独占一行 (OpenAPI 导入按钮已下线, 不再同行) */
 .ups-toolbar {
   display: flex;
   align-items: center;
