@@ -16,6 +16,7 @@ class TestAdapterToolMapping:
         "mootdx2_tool,tdx_tool",
         [
             ("get_quote", "get_market_snapshot"),
+            ("get_batch_quote", "get_market_snapshot_batch"),
             ("get_kline", "get_market_data"),
             ("get_index_kline", "get_market_data"),
             ("get_index_all", "get_market_data"),
@@ -31,13 +32,12 @@ class TestAdapterToolMapping:
         assert self.adapter.supports("get_quote") is True
         assert self.adapter.supports("get_kline") is True
         assert self.adapter.supports("batch_bars") is True
+        assert self.adapter.supports("get_batch_quote") is True
 
     def test_supports_returns_false_for_unmapped_tools(self):
         assert self.adapter.supports("get_trade") is False
         assert self.adapter.supports("get_trade_history") is False
         assert self.adapter.supports("get_finance") is False
-        # get_batch_quote: tqcenter 快照仅单只 stock_code, 不代理批量行情
-        assert self.adapter.supports("get_batch_quote") is False
 
 
 class TestNormalizeStockCode:
@@ -115,12 +115,29 @@ class TestAdaptParams:
         assert tool == "get_market_snapshot"
         assert params == {"stock_code": "600519.SH"}
 
-    def test_adapt_get_batch_quote_not_supported(self):
-        """批量行情不走代理: tqcenter.get_market_snapshot 仅接受单只 stock_code。"""
+    def test_adapt_get_batch_quote_uses_snapshot_batch(self):
+        """1.3.x get_market_snapshot_batch: 一次调用取多只快照。"""
+        tool, params, normalizer = self.adapter.adapt(
+            "get_batch_quote", {"codes": "600519.SH,000001.SZ"}
+        )
+        assert tool == "get_market_snapshot_batch"
+        assert params == {
+            "stock_list": ["600519.SH", "000001.SZ"],
+            "return_df": False,
+        }
+        rows = normalizer({
+            "600519.SH": {"Now": "1800", "LastClose": "1790"},
+            "000001.SZ": {"Now": "10.5", "LastClose": "10.0"},
+        })
+        assert [r["stock_code"] for r in rows] == ["600519.SH", "000001.SZ"]
+        assert rows[0]["Now"] == "1800"
+
+    def test_adapt_get_batch_quote_rejects_empty_and_oversize(self):
         with pytest.raises(ProxyAdapterError):
-            self.adapter.adapt(
-                "get_batch_quote", {"codes": "600519.SH,000001.SZ"}
-            )
+            self.adapter.adapt("get_batch_quote", {"codes": ""})
+        too_many = ",".join(f"60000{i}.SH" for i in range(51))
+        with pytest.raises(ProxyAdapterError):
+            self.adapter.adapt("get_batch_quote", {"codes": too_many})
 
     @pytest.mark.parametrize(
         "mootdx2_period,tdx_period",

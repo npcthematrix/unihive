@@ -71,10 +71,13 @@ class TestGetProxySettings:
         body = json.loads(resp.body)
         assert body["enabled"] is False
         assert body["tdx_quant_status"] == "HEALTHY"
-        # 应返回工具映射覆盖范围 (7 个; get_batch_quote 2026-09-21 移出,
-        # batch_bars 2026-10-18 加入)
-        assert len(body["coverage"]) == 7
+        # 8 个: get_batch_quote 2026-11-02 重新接入 get_market_snapshot_batch
+        assert len(body["coverage"]) == 8
         assert {"mootdx2_tool": "batch_bars", "tdx_quant_tool": "get_market_data"} in body["coverage"]
+        assert {
+            "mootdx2_tool": "get_batch_quote",
+            "tdx_quant_tool": "get_market_snapshot_batch",
+        } in body["coverage"]
         # 验证 coverage 是只读说明, 不应包含可编辑字段
         for entry in body["coverage"]:
             assert "mootdx2_tool" in entry

@@ -75,6 +75,38 @@ def test_l3_tdx_quant_construct_preserves_remote_port():
     )
 
 
+def test_tdx_quant_construct_propagates_strategy_instances():
+    """config.db / YAML 的 strategy_instances 必须进 TdxQuantClient, 否则永远单进程。"""
+    server = GatewayServer.__new__(GatewayServer)
+    client = server._construct_upstream_client(
+        "tdq",
+        {
+            "type": "tdx_quant",
+            "tdx_root": "C:/new_tdx",
+            "strategy_instances": 2,
+        },
+    )
+    assert client._strategy_instances == 2
+    assert client._use_process_pool() is True
+
+    capped = server._construct_upstream_client(
+        "tdq",
+        {"type": "tdx_quant", "strategy_instances": 99},
+    )
+    assert capped._strategy_instances == 8
+
+
+def test_tdx_quant_strategy_instances_env_fallback(monkeypatch):
+    monkeypatch.setenv("UNIHIVE_TDX_QUANT_STRATEGY_INSTANCES", "3")
+    server = GatewayServer.__new__(GatewayServer)
+    client = server._construct_upstream_client("tdq", {"type": "tdx_quant"})
+    assert client._strategy_instances == 3
+    pinned = server._construct_upstream_client(
+        "tdq", {"type": "tdx_quant", "strategy_instances": 1}
+    )
+    assert pinned._strategy_instances == 1
+
+
 # ---------------------------------------------------------------------------
 # L5: 删除死 metrics 路由
 # ---------------------------------------------------------------------------

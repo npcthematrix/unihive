@@ -1,6 +1,6 @@
 """Mootdx2 → TDX_QUANT transparent adapter for 行情类 tools.
 
-7 tools covered. Writes the mapping/period/param conventions as code-level
+8 tools covered. Writes the mapping/period/param conventions as code-level
 constants — these are protocol-level and not user-editable.
 
 Usage:
@@ -33,8 +33,11 @@ Mapping caveat (2026-09-14 audit):
     ``_fast_format_kline_data`` 返回 ``{字段: DataFrame(columns=stock_list)}``,
     每只票一列。因此 ``batch_bars`` 可以代理: 一次调用取回全部代码的 K 线,
     再由 ``_normalize_kline_batch_records`` 拆回 ``{代码: [记录]}`` 的对外
-    合同。批量快照 (get_batch_quote) 之所以不行, 是因为
-    ``get_market_snapshot`` 没有对应的多代码形态, 两者限制不同。
+    合同。
+
+2026-11-02: tqcenter 1.3.x 提供 ``get_market_snapshot_batch(stock_list)``,
+    返回 ``{代码: 快照字典}``。``get_batch_quote`` 重新接入代理, 归一化成
+    记录列表; 空结果仍由 router 回落 mootdx2。
 """
 from __future__ import annotations
 
@@ -482,6 +485,8 @@ def _normalize_kline_batch_records(
 #: 否则超限请求会绕过合同直接打到 tqcenter (调用方看到的是「成功」)。
 _BATCH_BARS_MAX_CODES = 20
 _BATCH_BARS_MAX_LIMIT = 500
+#: 与 ``api/mootdx2_client.MAX_LIMIT_BATCH_QUOTE`` 对齐。
+_BATCH_QUOTE_MAX_CODES = 50
 
 
 def _split_codes(value: Any) -> list[str]:
@@ -504,6 +509,59 @@ def _batch_kline_normalizer(stock_list: list[str], period: str) -> ResponseNorma
     return lambda payload: _normalize_kline_batch_records(payload, stock_list, period)
 
 
+def _lookup_batch_snapshot(inner: dict[str, Any], code: str) -> dict[str, Any] | None:
+    """按 THS 后缀 / 裸码 / 大小写变体取批量快照中的一行。"""
+    if code in inner and isinstance(inner[code], dict):
+        return inner[code]
+    bare = str(code).split(".")[0]
+    for key, value in inner.items():
+        if not isinstance(value, dict):
+            continue
+        if str(key) == code or str(key).split(".")[0] == bare:
+            return value
+        if str(key).upper() == str(code).upper():
+            return value
+    return None
+
+
+def _normalize_batch_quote_records(payload: Any, stock_list: list[str]) -> list[dict[str, Any]]:
+    """``get_market_snapshot_batch`` 的 ``{代码: 快照}`` → 记录列表。
+
+    空列表让 router 当成 miss 回落 mootdx2。列表入参原样返回。
+    """
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if not isinstance(payload, dict):
+        return []
+    inner = payload.get("Value") if "ErrorId" in payload and "Value" in payload else payload
+    if not isinstance(inner, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for code in stock_list:
+        snap = _lookup_batch_snapshot(inner, code)
+        if not isinstance(snap, dict):
+            continue
+        row = dict(snap)
+        row.setdefault("stock_code", code)
+        rows.append(row)
+    if rows:
+        return rows
+    for key, value in inner.items():
+        if key in ("ErrorId", "ErrMsg") or not isinstance(value, dict):
+            continue
+        row = dict(value)
+        row.setdefault("stock_code", key)
+        rows.append(row)
+    return rows
+
+
+def _batch_quote_normalizer(stock_list: list[str]) -> ResponseNormalizer:
+    """按请求顺序把批量快照拆成 get_batch_quote 记录列表。"""
+    return lambda payload: _normalize_batch_quote_records(payload, stock_list)
+
+
 class Mootdx2ToTdxQuantAdapter:
     """Adapter that translates mootdx2 行情类 tool calls to tdx_quant equivalents.
 
@@ -513,8 +571,7 @@ class Mootdx2ToTdxQuantAdapter:
 
     TOOL_MAP: dict[str, str] = {
         "get_quote": "get_market_snapshot",
-        # get_batch_quote 不代理: tqcenter 快照仅支持单只 stock_code
-        # (2026-09-21 实测), 批量需求直接走 mootdx2。
+        "get_batch_quote": "get_market_snapshot_batch",
         "get_kline": "get_market_data",
         "get_index_kline": "get_market_data",
         "get_index_all": "get_market_data",
@@ -567,6 +624,9 @@ class Mootdx2ToTdxQuantAdapter:
         if tdx_tool == "get_market_snapshot":
             tdx_params = self._adapt_get_quote(params)
             normalizer = _identity
+        elif tdx_tool == "get_market_snapshot_batch":
+            tdx_params = self._adapt_get_batch_quote(params)
+            normalizer = _batch_quote_normalizer(tdx_params["stock_list"])
         elif tdx_tool == "get_market_data" and mootdx2_tool == "get_minute_data":
             tdx_params = self._adapt_get_minute_data_to_market_data(params)
             normalizer = _normalize_minute_records
@@ -596,6 +656,19 @@ class Mootdx2ToTdxQuantAdapter:
         code = params["code"]
         stock_code = _normalize_stock_code_for_tdxquant(code)
         return {"stock_code": stock_code}
+
+    def _adapt_get_batch_quote(self, params: dict) -> dict:
+        """get_batch_quote(codes) → get_market_snapshot_batch(stock_list)."""
+        raw_codes = _split_codes(params.get("codes") or params.get("code"))
+        if not raw_codes:
+            raise ProxyAdapterError("get_batch_quote requires codes")
+        if len(raw_codes) > _BATCH_QUOTE_MAX_CODES:
+            raise ProxyAdapterError(
+                f"get_batch_quote supports at most {_BATCH_QUOTE_MAX_CODES} codes, "
+                f"got {len(raw_codes)}"
+            )
+        stock_list = [_normalize_stock_code_for_tdxquant(c) for c in raw_codes]
+        return {"stock_list": stock_list, "return_df": False}
 
     def _adapt_get_kline(self, mootdx2_tool: str, params: dict) -> dict:
         """get_kline / get_index_kline / get_index_all → get_market_data.

@@ -330,6 +330,23 @@ def test_upstream_config_key_level_merge():
     assert not result.conflicts
 
 
+def test_factory_adds_strategy_instances_on_existing_tdx_quant():
+    """出厂新增 strategy_instances: old/cur 都没有该键时必须流入, 否则库不升级永远 N=1。"""
+    old = bundle(upstreams=[upstream(name="tdx_quant", type_="tdx_quant", config={"tdx_root": "D:/tdx"})])
+    cur = bundle(upstreams=[upstream(name="tdx_quant", type_="tdx_quant", config={"tdx_root": "D:/tdx"})])
+    new = bundle(upstreams=[upstream(
+        name="tdx_quant",
+        type_="tdx_quant",
+        config={"tdx_root": "D:/tdx", "strategy_instances": 2},
+    )])
+    result = merge_bundles(old, cur, new)
+    cfg = result.bundle["upstreams"][0]["config"]
+    assert cfg["strategy_instances"] == 2
+    assert cfg["tdx_root"] == "D:/tdx"
+    change = by_name(result.upstreams)["tdx_quant"]
+    assert "config.strategy_instances" in change.fields
+
+
 def test_upstream_config_leaf_conflict_keeps_cur():
     old = bundle(upstreams=[upstream(config={"base_url": "http://old"})])
     cur = bundle(upstreams=[upstream(config={"base_url": "http://mine"})])
