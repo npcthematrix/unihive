@@ -1,6 +1,8 @@
 """tests/test_tdx_quant_client.py — TdxQuantClient 单元测试（mock tqcenter.tq）。"""
 import asyncio
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -750,3 +752,194 @@ async def test_pool_exhaustion_does_not_trip_when_workers_free(mock_tq, monkeypa
     r = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
     assert r.success is False
     assert c.status != UpstreamStatus.UNAVAILABLE, "池未打满时不应降级"
+
+
+@pytest.mark.asyncio
+async def test_call_limit_rejects_when_slots_full(client_config, mock_tq):
+    """call_limit 槽位被占满时新请求快速失败, 不再往池里堆僵尸。"""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake_tdx",
+            strategy_id="test_strategy",
+            health_check_interval_sec=3600,
+            call_timeout_sec=2,
+            call_limit=1,
+            reconnect_threshold=99,
+            unavailable_threshold=99,
+            unavailable_cooldown_sec=30,
+        ),
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_snapshot(**_kwargs):
+        started.set()
+        release.wait(timeout=2)
+        return {"ErrorId": "0"}
+
+    mock_tq.get_market_snapshot = blocked_snapshot
+    c = TdxQuantClient(cfg)
+    c._tq = mock_tq
+    c._status = UpstreamStatus.HEALTHY
+    c._reconnect = AsyncMock()
+
+    first = asyncio.create_task(
+        c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    )
+    await asyncio.to_thread(started.wait, 2)
+    second = await c.call_tool("get_market_snapshot", {"stock_code": "000001.SZ"})
+    assert second.success is False
+    assert "busy" in (second.error or "") or "unavailable" in (second.error or "")
+    assert c.status == UpstreamStatus.UNAVAILABLE
+    release.set()
+    await first
+
+
+@pytest.mark.asyncio
+async def test_cooldown_blocks_recovery_while_slots_held(client_config):
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    c = TdxQuantClient(client_config)
+    c._status = UpstreamStatus.UNAVAILABLE
+    c._cooldown_until = time.monotonic() + 30
+    assert c._blocked_from_recovery() is True
+    c._cooldown_until = 0.0
+    c._call_sema = asyncio.Semaphore(0)
+    assert c._blocked_from_recovery() is True
+
+
+@pytest.mark.asyncio
+async def test_formula_stateful_tools_are_serialized(client_config, mock_tq):
+    """formula_set_data 与 formula_zb 不得交错进 DLL。"""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def slow_set(**_kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.08)
+        with lock:
+            active -= 1
+        return {"ErrorId": "0"}
+
+    mock_tq.formula_set_data = slow_set
+    c = TdxQuantClient(client_config)
+    c._tq = mock_tq
+    c._status = UpstreamStatus.HEALTHY
+
+    await asyncio.gather(
+        c.call_tool("formula_set_data", {"stock_code": "600519.SH", "stock_data": [1]}),
+        c.call_tool("formula_set_data", {"stock_code": "000001.SZ", "stock_data": [2]}),
+    )
+    assert peak == 1
+
+
+@pytest.mark.asyncio
+async def test_reconnect_waits_for_inflight_before_close(client_config, mock_tq):
+    """close 不得与在途 get 并发打进同一 DLL。"""
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    events: list[str] = []
+    started = threading.Event()
+
+    def slow_get(**_kwargs):
+        events.append("get_start")
+        started.set()
+        time.sleep(0.15)
+        events.append("get_end")
+        return {"ErrorId": "0"}
+
+    def close_fn():
+        events.append("close")
+
+    mock_tq.get_market_snapshot = slow_get
+    mock_tq.close = close_fn
+    mock_tq.initialize = MagicMock(return_value={"ErrorId": "0"})
+    c = TdxQuantClient(client_config)
+    c._tq = mock_tq
+    c._status = UpstreamStatus.HEALTHY
+
+    get_task = asyncio.create_task(
+        c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    )
+    await asyncio.to_thread(started.wait, 2)
+    await c._reconnect()
+    await get_task
+    assert events.index("get_end") < events.index("close")
+
+
+@pytest.mark.asyncio
+async def test_strategy_instances_default_stays_in_process(client_config, mock_tq):
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+
+    c = TdxQuantClient(client_config)
+    assert c._strategy_instances == 1
+    assert await c.start() is True
+    mock_tq.initialize.assert_called()
+    assert c._pool is None
+    await c.stop()
+
+
+@pytest.mark.asyncio
+async def test_multi_instance_routes_through_process_pool(monkeypatch):
+    from src.unihive.api.tdx_quant_client import TdxQuantClient
+    from src.unihive.api.upstream_client import UpstreamStatus
+
+    calls: list[tuple] = []
+
+    class FakePool:
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def call(self, method, params, timeout, sticky=False, acquire_timeout=0.05):
+            calls.append((method, dict(params), sticky))
+            return {"ErrorId": "0", "Now": "10.5"}
+
+        def snapshot(self):
+            return {"size": 2, "instances": []}
+
+    cfg = TdxQuantConfig(
+        name="tdx_quant",
+        settings=TdxQuantSettings(
+            tdx_root="D:/fake_tdx",
+            strategy_id="test_strategy",
+            health_check_interval_sec=3600,
+            call_timeout_sec=5,
+            call_limit=2,
+            strategy_instances=2,
+            reconnect_threshold=99,
+            unavailable_threshold=99,
+        ),
+    )
+    c = TdxQuantClient(cfg)
+    monkeypatch.setattr(c, "_make_pool", lambda: FakePool())
+    with patch.object(c, "_probe_tdx_remote_port", new=AsyncMock(return_value=True)):
+        assert await c.start() is True
+    assert c._pool is not None
+    assert c.status == UpstreamStatus.HEALTHY
+    snap = await c.call_tool("get_market_snapshot", {"stock_code": "600519.SH"})
+    assert snap.success is True
+    zb = await c.call_tool("formula_zb", {"stock_code": "600519.SH"})
+    assert zb.success is True
+    methods = [row[0] for row in calls]
+    assert "get_user_sector" in methods
+    assert "get_market_snapshot" in methods
+    sticky_zb = [row for row in calls if row[0] == "formula_zb"]
+    assert sticky_zb and sticky_zb[0][2] is True
+    metrics = c.get_metrics()
+    assert metrics["strategy_instances"] == 2
+    assert metrics["strategy_pool"]["size"] == 2
+    await c.stop()
+    assert c._pool is None
+

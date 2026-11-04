@@ -10,7 +10,9 @@ mootdx2（通达信本地 TCP 库）、tdx_quant（tqcenter DLL）、thsdk（本
 - mootdx2: 16 worker（Reader 闸门 `_READER_SEMAPHORE_LIMIT=6` 已把并发 Reader
   钉死为 4，池容量给到 16 留充足余量给 probe/close 等非 Reader 阻塞调用，
   以及批量入口 gather 派发的并发调度）。
-- tdx_quant: 10 worker（get 调用可并发，init/close 由 `_dll_lock` 串行）。
+- tdx_quant: 4 worker（DLL 有效并行约 2；get 由 client ``call_limit`` 闸门
+  钉死，池容量留一点给 close/init/探活。init/close 另由 `_dll_lock` 串行。
+  ``strategy_instances>1`` 时这些线程只等子进程 Pipe, 真正的 DLL 在子进程里）。
 - thsdk: 1 worker（hq.dll 内部 RLock 串行；单 worker 把"僵尸 DLL 调用"
   上限钉死为 1）。
 
@@ -30,7 +32,7 @@ from typing import Optional
 # 各上游默认 worker 数：阻塞点在本地库/网络 I/O，线程可适当多于 CPU。
 # 可用对应的 env 覆盖。
 _MOOTDX2_DEFAULT_SIZE = 16
-_TDX_QUANT_DEFAULT_SIZE = 10
+_TDX_QUANT_DEFAULT_SIZE = 4
 
 
 def _pool_size(env_var: Optional[str], default: int) -> int:
@@ -221,10 +223,10 @@ def shutdown_mootdx2_executor() -> None:
 
 # tdx_quant
 def get_tdx_quant_executor() -> ThreadPoolExecutor:
-    """返回 tdx_quant 专用的阻塞调用线程池（惰性创建，默认 10 worker）。
+    """返回 tdx_quant 专用的阻塞调用线程池（惰性创建，默认 4 worker）。
 
-    与 mootdx2 拆开: get 调用可并发, init/close 由 ``_dll_lock`` 串行; 共享池
-    会把两者占用混进同一快照, 监控行不诚实。
+    与 mootdx2 拆开: get 调用由 client ``call_limit`` 闸门限制, init/close 由
+    ``_dll_lock`` 串行; 共享池会把两者占用混进同一快照, 监控行不诚实。
     """
     return _tdx_quant.get()
 

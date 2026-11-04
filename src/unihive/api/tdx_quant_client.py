@@ -28,6 +28,13 @@ from ..exceptions.tdx_quant_errors import (
 from .upstream_client import ToolResult, UpstreamStatus
 from ..core.blocking_pool import get_tdx_quant_executor
 from ..core.config_db import resolve_project_path
+from .tdx_quant_instance_pool import (
+    MAX_STRATEGY_INSTANCES,
+    TdxQuantInstancePool,
+    TdxQuantPoolBusy,
+    TdxQuantPoolTimeout,
+    write_strategy_files,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +116,29 @@ def _invalid_input_error(arguments: dict[str, Any]) -> str | None:
     return None
 
 
+class _TdxQuantDraining(Exception):
+    """close/reconnect 正在排空在途调用, 新请求应快速失败。"""
+
+
+#: 依赖进程级公式输入缓冲的接口, 必须互斥, 避免 MCP 多会话交叉覆盖。
+_FORMULA_STATEFUL_TOOLS: frozenset[str] = frozenset({
+    "formula_set_data",
+    "formula_set_data_info",
+    "formula_zb",
+    "formula_xg",
+    "formula_exp",
+    "formula_get_data",
+    "formula_get_all",
+    "formula_get_info",
+})
+
+#: 下单/撤单互斥, 避免并发打进同一账户句柄。
+_TRADE_MUTATING_TOOLS: frozenset[str] = frozenset({
+    "order_stock",
+    "cancel_order_stock",
+})
+
+
 class TdxQuantClient:
     """进程内直调 tqcenter.py 的上游客户端。"""
 
@@ -132,6 +162,27 @@ class TdxQuantClient:
         # - _stopped: 阻止已停 client 被晚到的健康循环/late recovery 复活。
         self._dll_lock = threading.Lock()
         self._stopped = False
+        try:
+            n_inst = int(getattr(config.settings, "strategy_instances", 1) or 1)
+        except (TypeError, ValueError):
+            n_inst = 1
+        self._strategy_instances = max(1, min(MAX_STRATEGY_INSTANCES, n_inst))
+        self._pool: Optional[TdxQuantInstancePool] = None
+        try:
+            self._call_limit = max(1, int(config.settings.call_limit))
+        except (TypeError, ValueError):
+            self._call_limit = 2
+        if self._strategy_instances > 1:
+            self._call_limit = max(self._call_limit, self._strategy_instances)
+        self._call_sema = asyncio.Semaphore(self._call_limit)
+        self._formula_lock = asyncio.Lock()
+        self._trade_lock = asyncio.Lock()
+        # 含闸门排队 + 已提交到阻塞池 (含 wait_for 超时后仍卡在 DLL 的僵尸)。
+        self._inflight = 0
+        self._draining = False
+        self._cooldown_until = 0.0
+        # "pool" = 饱和熔断, worker 空闲后可直接恢复; "failures" 才走 start/reconnect。
+        self._unavail_reason: Optional[str] = None
 
     @property
     def status(self) -> UpstreamStatus:
@@ -216,11 +267,15 @@ class TdxQuantClient:
             self._status = UpstreamStatus.DEGRADED
         else:
             self._status = UpstreamStatus.HEALTHY
+            self._unavail_reason = None
+            self._cooldown_until = 0.0
 
         self._start_health_loop()
         logger.info(
             f"[{self.name}] initialized (tdx_root={self.config.tdx_root_path}, "
-            f"strategy_id={self._strategy_id}, status={self._status.value})"
+            f"strategy_id={self._strategy_id}, "
+            f"instances={getattr(self, '_strategy_instances', 1)}, "
+            f"status={self._status.value})"
         )
         return True
 
@@ -245,6 +300,19 @@ class TdxQuantClient:
             return
         await self.start()
 
+    def _use_process_pool(self) -> bool:
+        return int(getattr(self, "_strategy_instances", 1) or 1) > 1
+
+    def _make_pool(self) -> TdxQuantInstancePool:
+        n = int(getattr(self, "_strategy_instances", 1) or 1)
+        base = resolve_project_path(None, "logs/tdx_quant_instances")
+        paths = write_strategy_files(base, self._strategy_id, n)
+        return TdxQuantInstancePool(
+            n=n,
+            tqcenter_dir=str(self.config.tqcenter_dir),
+            strategy_paths=paths,
+        )
+
     def _dll_initialize(self, tdx_root: str) -> None:
         """tq.initialize 的持锁包装, 串行化所有 DLL initialize 调用
         (首次初始化 / reconnect / 超时后的 late recovery)。
@@ -257,6 +325,12 @@ class TdxQuantClient:
                 f"[{self.name}] client has been stopped; call start() first"
             )
         with self._dll_lock:
+            if self._use_process_pool():
+                if self._pool is None:
+                    self._pool = self._make_pool()
+                self._pool.start()
+                self._tq = self._pool
+                return
             self._tq.initialize(tdx_root)
 
     def _dll_import_and_initialize(
@@ -269,12 +343,21 @@ class TdxQuantClient:
         DLL), 可能冻结 boot 且 wait_for 无法打断。整体移入 unihive-upstream
         阻塞池并持 _dll_lock, 与 reconnect / stop() 的 close 串行。
         必须在 worker thread 经 run_in_executor 调用。
+
+        strategy_instances>1 时父进程不 import tqcenter (类级单例), 改拉 N
+        个子进程, 各自 initialize 一个独立 .py 策略路径。
         """
         with self._dll_lock:
             if self._stopped:
                 raise RuntimeError(
                     f"[{self.name}] client has been stopped; call start() first"
                 )
+            if self._use_process_pool():
+                if self._pool is None:
+                    self._pool = self._make_pool()
+                self._pool.start()
+                self._tq = self._pool
+                return
             if tqcenter_dir and tqcenter_dir not in sys.path:
                 sys.path.insert(0, tqcenter_dir)
             import tqcenter
@@ -286,6 +369,10 @@ class TdxQuantClient:
         """tq.close 的持锁包装, 与 initialize 互斥, 复刻 reconnect 的
         close→init 次序, 不留半初始化窗口。"""
         with self._dll_lock:
+            pool = getattr(self, "_pool", None)
+            if pool is not None:
+                pool.stop()
+                return
             tq = self._tq
             if tq is not None:
                 tq.close()
@@ -310,10 +397,7 @@ class TdxQuantClient:
         if self._tq is None:
             return False
         try:
-            await asyncio.get_running_loop().run_in_executor(
-                get_tdx_quant_executor(),
-                lambda: self._tq.get_user_sector(),
-            )
+            await self._call_tq(method="get_user_sector", timeout=5.0)
             # 调通即视为 OK: 返回 [] 表示 DLL 通但无数据(可能是用户没建
             # 自选股, 也可能是 TdxW.exe 未登录), 实际请求的 ErrorId 会
             # 在 call_tool 阶段自然反映真实状态。
@@ -391,6 +475,7 @@ class TdxQuantClient:
                 await asyncio.gather(*pending, return_exceptions=True)
         if self._tq:
             try:
+                await self._drain_inflight()
                 # tq.close() 同步调 DLL, 在主线程跑会阻塞 event loop 0.5s+
                 # (HIGH2). executor 跑让其他 in-flight 请求继续调度。
                 # M2 (round 11): 持 _dll_lock 与在途/晚到 initialize 互斥。
@@ -399,7 +484,10 @@ class TdxQuantClient:
                 )
             except Exception as e:
                 logger.warning(f"[{self.name}] close warning: {e}")
+            finally:
+                self._draining = False
         self._tq = None
+        self._pool = None
         self._status = UpstreamStatus.UNAVAILABLE
 
     def _record_failure(self) -> None:
@@ -422,15 +510,28 @@ class TdxQuantClient:
                 f"{self._fail_count} failed calls (health loop will retry)"
             )
 
-    def _trip_unavailable(self, reason: str) -> None:
-        """置 UNAVAILABLE 并记一条 error（幂等）。
+    def _trip_unavailable(self, reason: str, *, kind: str = "failures") -> None:
+        """置 UNAVAILABLE 并开冷却窗（幂等）。
 
-        健康循环 / reconnect 成功后会把它复位成 HEALTHY。
+        kind=slots: 闸门已满, worker 空出来即可恢复, 不必 close+initialize。
+        kind=failures: DLL/探活失败, 冷却后再 start/reconnect。
         """
+        self._unavail_reason = kind
+        cooldown = float(getattr(self.config.settings, "unavailable_cooldown_sec", 30) or 0)
+        if cooldown > 0:
+            self._cooldown_until = time.monotonic() + cooldown
         if self._status == UpstreamStatus.UNAVAILABLE:
             return
         self._status = UpstreamStatus.UNAVAILABLE
         logger.error(f"[{self.name}] marked UNAVAILABLE: {reason}")
+
+    def _blocked_from_recovery(self) -> bool:
+        """熔断后是否还不能拉回 HEALTHY: 冷却未到, 或槽位/线程池仍饱和。"""
+        if time.monotonic() < self._cooldown_until:
+            return True
+        if self._call_sema.locked():
+            return True
+        return self._pool_exhausted()
 
     def _pool_exhausted(self) -> bool:
         """阻塞池是否已无空闲 worker（全部卡在 DLL 内部）。
@@ -469,6 +570,93 @@ class TdxQuantClient:
         self._reconnect_tasks.add(task)
         task.add_done_callback(self._reconnect_tasks.discard)
 
+    async def _drain_inflight(self, timeout: float = 5.0) -> None:
+        """挡住新 get, 等到在途 DLL 调用结束再 close。超时仍 close (僵尸杀不掉)。"""
+        self._draining = True
+        deadline = time.monotonic() + timeout
+        while self._inflight > 0 and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        if self._inflight > 0:
+            logger.warning(
+                f"[{self.name}] drain timed out with {self._inflight} in-flight call(s)"
+            )
+
+    async def _call_tq(
+        self,
+        fn=None,
+        timeout: float | None = None,
+        *,
+        method: str | None = None,
+        params: dict[str, Any] | None = None,
+        sticky: bool = False,
+    ) -> Any:
+        """带 call_limit 闸门的阻塞 DLL 调用。
+
+        wait_for 超时后线程仍在 DLL 里: 槽位交给 future 的 done 回调释放,
+        新请求在槽位满时快速失败, 而不是再往池里堆僵尸。
+
+        method= 走策略进程池 (N>1) 或 getattr(tq, method); fn= 留给旧测试。
+        """
+        if self._draining:
+            raise _TdxQuantDraining()
+        if timeout is None:
+            timeout = float(self.config.settings.call_timeout_sec)
+        payload = params or {}
+        if method is not None:
+            pool = getattr(self, "_pool", None)
+            if pool is not None:
+                def fn() -> Any:
+                    try:
+                        return pool.call(
+                            method,
+                            payload,
+                            timeout=timeout,
+                            sticky=sticky,
+                        )
+                    except TdxQuantPoolBusy as exc:
+                        raise _TdxQuantDraining() from exc
+                    except TdxQuantPoolTimeout as exc:
+                        raise TimeoutError(str(exc)) from exc
+            else:
+                def fn() -> Any:
+                    return getattr(self._tq, method)(**payload)
+        if fn is None:
+            raise TypeError("_call_tq requires fn or method")
+        try:
+            await asyncio.wait_for(self._call_sema.acquire(), timeout=0.05)
+        except asyncio.TimeoutError as exc:
+            self._trip_unavailable(
+                "call_limit 已满 (在途调用仍占 DLL 槽位)",
+                kind="slots",
+            )
+            raise _TdxQuantDraining() from exc
+        self._inflight += 1
+        held = True
+        loop = asyncio.get_running_loop()
+        try:
+            if self._draining:
+                raise _TdxQuantDraining()
+            wait_timeout = timeout + 2.0 if getattr(self, "_pool", None) is not None else timeout
+            fut = loop.run_in_executor(get_tdx_quant_executor(), fn)
+            try:
+                return await asyncio.wait_for(asyncio.shield(fut), timeout=wait_timeout)
+            except asyncio.TimeoutError:
+                held = False
+
+                def _on_done(_f) -> None:
+                    def _release() -> None:
+                        self._inflight -= 1
+                        self._call_sema.release()
+
+                    loop.call_soon_threadsafe(_release)
+
+                fut.add_done_callback(_on_done)
+                raise
+        finally:
+            if held:
+                self._inflight -= 1
+                self._call_sema.release()
+
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
         """调用 tq.{tool_name}(**arguments)。
 
@@ -495,15 +683,38 @@ class TdxQuantClient:
                 source=self.name,
                 duration_ms=0,
             )
+        if self._draining:
+            return ToolResult(
+                success=False,
+                error=f"[{self.name}] upstream reconnecting",
+                source=self.name,
+                duration_ms=0,
+            )
+
+        session_lock = None
+        if tool_name in _FORMULA_STATEFUL_TOOLS:
+            session_lock = self._formula_lock
+        elif tool_name in _TRADE_MUTATING_TOOLS:
+            session_lock = self._trade_lock
+
+        sticky = (
+            tool_name in _FORMULA_STATEFUL_TOOLS
+            or tool_name in _TRADE_MUTATING_TOOLS
+        )
+
+        async def _invoke() -> Any:
+            return await self._call_tq(
+                method=tool_name,
+                params=arguments,
+                sticky=sticky,
+            )
 
         try:
-            result = await asyncio.wait_for(
-                asyncio.get_running_loop().run_in_executor(
-                    get_tdx_quant_executor(),
-                    lambda: getattr(self._tq, tool_name)(**arguments),
-                ),
-                timeout=self.config.settings.call_timeout_sec,
-            )
+            if session_lock is not None:
+                async with session_lock:
+                    result = await _invoke()
+            else:
+                result = await _invoke()
             duration_ms = int((time.time() - start_time) * 1000)
 
             err = translate_errorid(result)
@@ -522,14 +733,23 @@ class TdxQuantClient:
                 source=self.name,
                 duration_ms=duration_ms,
             )
+        except _TdxQuantDraining:
+            duration_ms = int((time.time() - start_time) * 1000)
+            return ToolResult(
+                success=False,
+                error=f"[{self.name}] upstream busy or reconnecting",
+                source=self.name,
+                duration_ms=duration_ms,
+            )
         except asyncio.TimeoutError as e:
             duration_ms = int((time.time() - start_time) * 1000)
             err = classify_exception(e)
             # 超时是最可靠的「DLL 卡死」信号, 必须计入健康判定 (见 _record_failure)
             self._record_failure()
-            if self._pool_exhausted():
+            if self._pool_exhausted() or self._call_sema.locked():
                 self._trip_unavailable(
-                    "阻塞池已无空闲 worker (调用超时, 线程仍卡在 DLL 内)"
+                    "DLL 调用超时且槽位/线程池已饱和",
+                    kind="slots",
                 )
             return ToolResult(
                 success=False,
@@ -581,6 +801,7 @@ class TdxQuantClient:
         from ..core.blocking_pool import tdx_quant_executor_snapshot
         port_reachable = self._probe_port_sync()
         tq_active = self._status == UpstreamStatus.HEALTHY
+        cooldown_left = max(0.0, self._cooldown_until - time.monotonic())
         return {
             "status": self._status.value,
             "available": self.is_available,
@@ -590,6 +811,14 @@ class TdxQuantClient:
             "tdx_root": str(self.config.tdx_root_path),
             "port": self.config.settings.tdx_remote_port,
             "thread_pool": tdx_quant_executor_snapshot(),
+            "call_limit": self._call_limit,
+            "call_inflight": self._inflight,
+            "draining": self._draining,
+            "cooldown_remaining_sec": round(cooldown_left, 1),
+            "strategy_instances": getattr(self, "_strategy_instances", 1),
+            "strategy_pool": (
+                self._pool.snapshot() if getattr(self, "_pool", None) is not None else None
+            ),
         }
 
     async def _health_loop(self):
@@ -605,10 +834,19 @@ class TdxQuantClient:
             await asyncio.sleep(current_interval)
             # UNAVAILABLE 状态下尝试重新初始化
             if self._status == UpstreamStatus.UNAVAILABLE:
+                if self._blocked_from_recovery():
+                    logger.info(
+                        f"[{self.name}] UNAVAILABLE, recovery blocked "
+                        f"(cooldown/slots/pool); retrying later"
+                    )
+                    current_interval = retry_interval
+                    continue
                 logger.info(f"[{self.name}] UNAVAILABLE, attempting reinitialize...")
                 if await self.start():
                     logger.info(f"[{self.name}] reinitialized successfully, resuming health loop")
                     self._fail_count = 0
+                    self._unavail_reason = None
+                    self._cooldown_until = 0.0
                     current_interval = interval
                     continue
                 else:
@@ -620,10 +858,8 @@ class TdxQuantClient:
                 current_interval = retry_interval
                 continue
             try:
-                result = await asyncio.wait_for(
-                    asyncio.get_running_loop().run_in_executor(
-                        get_tdx_quant_executor(), lambda: self._tq.get_user_sector()
-                    ),
+                result = await self._call_tq(
+                    method="get_user_sector",
                     timeout=5.0,
                 )
                 err = translate_errorid(result)
@@ -632,23 +868,33 @@ class TdxQuantClient:
                     if self._fail_count >= self.config.settings.reconnect_threshold:
                         await self._reconnect()
                     if self._fail_count >= self.config.settings.unavailable_threshold:
-                        self._status = UpstreamStatus.UNAVAILABLE
-                        logger.error(
-                            f"[{self.name}] marked UNAVAILABLE after {self._fail_count} failures"
+                        self._trip_unavailable(
+                            f"marked UNAVAILABLE after {self._fail_count} failures"
                         )
                         current_interval = retry_interval
+                elif (
+                    self._status != UpstreamStatus.HEALTHY
+                    and self._blocked_from_recovery()
+                ):
+                    logger.debug(
+                        f"[{self.name}] probe ok but slots/pool still saturated, "
+                        f"not marking HEALTHY"
+                    )
                 else:
                     self._fail_count = 0
+                    self._unavail_reason = None
+                    self._cooldown_until = 0.0
                     self._status = UpstreamStatus.HEALTHY
                     current_interval = interval
+            except _TdxQuantDraining:
+                current_interval = retry_interval
             except (asyncio.TimeoutError, Exception):
                 self._fail_count += 1
                 if self._fail_count >= self.config.settings.reconnect_threshold:
                     await self._reconnect()
                 if self._fail_count >= self.config.settings.unavailable_threshold:
-                    self._status = UpstreamStatus.UNAVAILABLE
-                    logger.error(
-                        f"[{self.name}] marked UNAVAILABLE after {self._fail_count} failures"
+                    self._trip_unavailable(
+                        f"marked UNAVAILABLE after {self._fail_count} failures"
                     )
                     current_interval = retry_interval
 
@@ -656,6 +902,7 @@ class TdxQuantClient:
         """重连：tq.close() + tq.initialize()，asyncio.Lock 串行化。"""
         loop = asyncio.get_running_loop()
         async with self._reconnect_lock:
+            await self._drain_inflight()
             try:
                 if self._tq:
                     # HIGH2: tq.close() 同步 DLL, 必须 run_in_executor;
@@ -676,8 +923,12 @@ class TdxQuantClient:
                     lambda: self._dll_initialize(tdx_root),
                 )
                 self._fail_count = 0
+                self._unavail_reason = None
+                self._cooldown_until = 0.0
                 self._status = UpstreamStatus.HEALTHY
                 logger.info(f"[{self.name}] reconnected")
             except Exception as e:
                 self._status = UpstreamStatus.DEGRADED
                 logger.warning(f"[{self.name}] reconnect failed: {e}")
+            finally:
+                self._draining = False

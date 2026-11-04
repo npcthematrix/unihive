@@ -81,12 +81,19 @@ upstreams:
     strategy_id: "unihive_gateway"
     health_check_interval_sec: 60
     call_timeout_sec: 10
+    # 同时进入 DLL 的 get 调用上限 (对齐 TPythClient 实测 ~2 路吞吐)。
+    call_limit: 2
+    # 官方 1.3.0 多策略实例: 每个 OS 进程一条 tq 连接。>1 时父进程不再
+    # 加载 TPythClient.dll; 超时可杀子进程。config.db 未升级时仍按 1。
+    strategy_instances: 2
     reconnect_threshold: 3
     unavailable_threshold: 10
+    # 熔断后冷却, 避免健康循环立刻 start() 把状态拉回 HEALTHY。
+    unavailable_cooldown_sec: 30
     # 阻塞线程池 worker 数: tqcenter DLL 同步调用 (get/close) 落到这个池。
     # 与 mootdx2 拆开独立定容 (Route A)。env UNIHIVE_TDX_QUANT_WORKER_THREADS
-    # 可临时覆盖 (优先级低于本字段)。
-    worker_threads: 10
+    # 可临时覆盖 (优先级低于本字段)。DLL 有效并行约 2, 4 已够 close/init 余量。
+    worker_threads: 4
     capabilities:
       - market_data
       - market_snapshot

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # === 默认值 (与 blocking_pool / mootdx2_client 内部常量保持一致) ===
 DEFAULT_MOOTDX2_READER_LIMIT = 6
 DEFAULT_MOOTDX2_WORKER_THREADS = 16
-DEFAULT_TDX_QUANT_WORKER_THREADS = 10
+DEFAULT_TDX_QUANT_WORKER_THREADS = 4
 
 # === env 命名 (兼容历史 env 名, 新加可调参数也走 UNIHIVE_<NAME>_<FIELD> 命名) ===
 ENV_MOOTDX2_READER_LIMIT = "UNIHIVE_MOOTDX2_READER_LIMIT"

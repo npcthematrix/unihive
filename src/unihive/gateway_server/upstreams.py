@@ -14,7 +14,11 @@ from ..api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
 from ..api.thsdk_client import ThsdkClient
 from ..api.upstream_client import UpstreamClient, UpstreamConfig, UpstreamStatus
 from ..core.config_db import resolve_project_path
-from ..models.tdx_quant_config import TdxQuantConfig, TdxQuantSettings
+from ..models.tdx_quant_config import (
+    TdxQuantConfig,
+    TdxQuantSettings,
+    clamp_strategy_instances,
+)
 from ..models.thsdk_config import ThsdkConfig
 
 from ._helpers import _parse_mootdx2_servers
@@ -250,8 +254,15 @@ class UpstreamControlMixin:
                 strategy_id=cfg.get("strategy_id", ""),
                 health_check_interval_sec=cfg.get("health_check_interval_sec", 60),
                 call_timeout_sec=cfg.get("call_timeout_sec", 10),
+                call_limit=max(1, int(cfg.get("call_limit", 2) or 2)),
+                strategy_instances=clamp_strategy_instances(
+                    cfg.get("strategy_instances")
+                ),
                 reconnect_threshold=cfg.get("reconnect_threshold", 3),
                 unavailable_threshold=cfg.get("unavailable_threshold", 10),
+                unavailable_cooldown_sec=max(
+                    0, int(cfg.get("unavailable_cooldown_sec", 30) or 0)
+                ),
                 # L3 (round 9 audit): 透传 tdx_remote_port, 否则 YAML 里配的非
                 # 默认端口被静默丢弃, 运行时永远连默认 17709。
                 tdx_remote_port=int(cfg.get("tdx_remote_port", 17709)),
