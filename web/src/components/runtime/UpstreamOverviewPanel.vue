@@ -15,8 +15,10 @@
     </template>
 
     <!-- 汇总计数 — .sum-grid/.sum-cell/.sum-num/.sum-label 与「错误跟踪」共用
-         (styles/main.css), 旧码本页另写一套居中 6 列版式 (B7)。 -->
-    <div v-loading="loading && !rows.length" class="sum-grid summary-grid">
+         (styles/main.css), 旧码本页另写一套居中 6 列版式 (B7)。
+         T-M1: 本页只保留下方表格一个 loading 遮罩 —— 首屏时汇总格与表同时转两个
+         圈是噪音, 而汇总格在 summary 为 null 时本来就渲染 '—', 已是可用空态。 -->
+    <div class="sum-grid summary-grid">
       <div v-for="card in summaryCards" :key="card.key" class="sum-cell">
         <span class="sum-num" :class="card.cls">{{ summary?.[card.key] ?? '—' }}</span>
         <span class="sum-label">{{ card.label }}</span>
@@ -36,49 +38,68 @@
       </el-radio-button>
     </el-radio-group>
 
-    <!-- 上游表 -->
+    <!-- 上游表
+         T-B1/T-B2: 列宽按内容实测重排 —— 固定列 (类型/状态/延迟/错误) 从
+         120/110/110/70 = 410px 压到 88/92/80/48 = 308px, 腾出的宽度交给两个
+         min-width 列 (上游 160 / 说明 200)。el-table 是 table-layout:fixed,
+         min-width 列吃掉全部富余宽度, 所以窄屏下最小总宽从 690 降到 668,
+         宽屏下上游名与说明各得一半富余。
+         T-B6: 不额外加 matchMedia/resize 去隐藏说明列 —— el-table__body-wrapper
+         自带横向滚动 (不受 .view-body 的 overflow-x:hidden 影响), 内容始终可达;
+         「错误跟踪」标签的表也是同一套 min-width + 内部滚动约定。 -->
     <el-table
+      v-loading="loading"
       :data="sortedRows"
-      class="ups-table"
       size="small"
-      :empty-text="rows.length ? '暂无匹配的上游' : '暂无上游数据 (状态未加载或未配置上游)'"
+      :empty-text="emptyText"
       @sort-change="onSortChange"
     >
       <el-table-column
         prop="name"
         label="上游"
         sortable="custom"
-        :sort-orders="['ascending', 'descending']"
-        min-width="180"
+        :sort-orders="['ascending', 'descending', null]"
+        min-width="160"
+        show-overflow-tooltip
       >
         <template #default="{ row }">
           <span class="ups-name">{{ displayName(row.name) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="类型" width="120">
+      <!-- T-B3: tag 会把不认识的类型原样打出来, 也可能因为列窄被省略号截断;
+           :title 保证后端原始 type id 永远可悬停取回。 -->
+      <el-table-column label="类型" width="88">
         <template #default="{ row }">
-          <el-tag size="small" effect="plain" round>{{ typeText(row.type) }}</el-tag>
+          <el-tag size="small" effect="plain" round :title="row.type">
+            {{ typeText(row.type) }}
+          </el-tag>
         </template>
       </el-table-column>
       <el-table-column
         prop="status"
         label="状态"
         sortable="custom"
-        :sort-orders="['ascending', 'descending']"
-        width="110"
+        :sort-orders="['ascending', 'descending', null]"
+        width="92"
       >
         <!-- H3: 徽标一律走 rowStatus() 而不是裸 row.status。后端 _do_probe 对
              http / http_jsonrpc 类型不看 enabled, 照样探活并写 online/degraded/offline,
              于是配置里关掉的 HTTP 上游在这里显示成绿色「在线」, 而同屏汇总卡把它
              算进「已禁用」、过滤片又把它归到「异常」—— 一行数据三种口径。 -->
+        <!-- T-B7: 状态点统一到全局 .status-dot 词汇 (styles/main.css, 6 态齐全),
+             不再用本页独有的 ✓/⚠/✕/? 文字字形 —— 同页缓存三卡已在用那套点,
+             两套词汇表达同一概念。无障碍不受影响: 旁边的中文状态文字才是非颜色
+             通道, 点本身 aria-hidden。 -->
         <template #default="{ row }">
           <span
             class="status-badge"
             :class="['b-' + rowStatus(row), { muted: rowStatus(row) === 'disabled' }]"
           >
-            <span class="status-icon" :class="`icon-${rowStatus(row)}`">
-              {{ statusIcon(rowStatus(row)) }}
-            </span>
+            <span
+              class="status-dot"
+              :class="'status-' + rowStatus(row)"
+              aria-hidden="true"
+            />
             {{ STATUS_TEXT[rowStatus(row)] ?? '未知' }}
           </span>
         </template>
@@ -89,8 +110,8 @@
         prop="latency_ms"
         label="延迟"
         sortable="custom"
-        :sort-orders="['ascending', 'descending']"
-        width="110"
+        :sort-orders="['ascending', 'descending', null]"
+        width="80"
         align="right"
       >
         <template #default="{ row }">
@@ -104,7 +125,7 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column label="错误" width="70" align="center">
+      <el-table-column label="错误" width="48" align="center">
         <template #default="{ row }">
           <el-tooltip v-if="row.last_error" :content="`${row.last_error} (点击复制)`" placement="top">
             <el-button text class="err-btn" @click.stop="copyError(row.last_error)">
@@ -114,6 +135,15 @@
           <span v-else class="err-empty">—</span>
         </template>
       </el-table-column>
+      <!-- T-B2: 后端 /api/status 每行都带 description (upstreams.yaml 里写的
+           人话说明), 旧码从不展示 —— 读者看到 "fuyao_ashare" 这种 id 只能去翻
+           配置文件。放最后一列, 保证状态/延迟/错误这些可操作列在窄屏下仍靠左。 -->
+      <el-table-column
+        prop="description"
+        label="说明"
+        min-width="200"
+        show-overflow-tooltip
+      />
     </el-table>
   </el-card>
 </template>
@@ -124,11 +154,14 @@ import { Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { copyText } from '@/utils/clipboard'
 import { upstreamDisplayName } from '@/constants/upstreams'
 import { isUsableUpstream } from '@/api/status'
-import type {
-  StatusSummary,
-  UpstreamStatusValue,
-  UpstreamRow,
-} from '@/api/status'
+import type { StatusSummary, UpstreamRow } from '@/api/status'
+import {
+  rowStatus,
+  sortUpstreamRows,
+  typeText,
+  upstreamEmptyText,
+  type UpstreamSortKey,
+} from './upstreamTable'
 
 /** 上游总览: 纯展示 + 过滤/排序。**不自动刷新**, 只在手动「刷新」
  *  (emit refresh → 父层拉取并回传 props) 或首次进入时更新。 */
@@ -137,6 +170,8 @@ const props = defineProps<{
   rows: UpstreamRow[]
   summary: StatusSummary | null
   loading: boolean
+  /** T-M1: 是否曾成功取到过上游状态 —— 空态要区分「没加载成功」与「真没配」。 */
+  everLoaded: boolean
 }>()
 
 const emit = defineEmits<{
@@ -151,32 +186,12 @@ const STATUS_TEXT: Record<string, string> = {
   disabled: '已禁用',
   unknown: '未知',
 }
-const STATUS_ORDER: Record<string, number> = {
-  online: 0,
-  degraded: 1,
-  configured: 2,
-  offline: 3,
-  disabled: 4,
-  unknown: 5,
-}
-const TYPE_TEXT: Record<string, string> = { http: 'HTTP', stdio: 'Stdio', npx: 'NPX' }
 
 const filter = ref<'all' | 'healthy' | 'unhealthy'>('all')
 // L11: 与列上的 prop 一致 (行字段是 latency_ms, 旧码写 'latency')。
-const ALLOWED_SORT_KEYS = ['name', 'status', 'latency_ms'] as const
-type SortKey = (typeof ALLOWED_SORT_KEYS)[number]
-const sortKey = ref<SortKey | null>(null)
+const ALLOWED_SORT_KEYS: readonly UpstreamSortKey[] = ['name', 'status', 'latency_ms']
+const sortKey = ref<UpstreamSortKey | null>(null)
 const sortAsc = ref(true)
-
-/**
- * H3: 展示用的状态一律以 enabled 为准。后端 _do_probe 只对非 HTTP 类型回
- * 'disabled', http / http_jsonrpc 分支不看 enabled, 照样探活并写
- * online/degraded/offline —— 配置里关掉的 HTTP 上游于是顶着绿色「在线」徽标,
- * 而同屏汇总卡算它「已禁用」、过滤片又把它归进「异常」。
- */
-function rowStatus(row: UpstreamRow): UpstreamStatusValue {
-  return row.enabled ? row.status : 'disabled'
-}
 
 /**
  * M2: 后端按实际状态桶动态累加 (console_api.py `summary[bucket] = …`), 启动
@@ -214,47 +229,18 @@ const filteredRows = computed(() => {
   return props.rows
 })
 
-const sortedRows = computed(() => {
-  if (!sortKey.value) return filteredRows.value
-  const key = sortKey.value
-  const dir = sortAsc.value ? 1 : -1
-  return [...filteredRows.value].sort((a, b) => {
-    let va: string | number
-    let vb: string | number
-    if (key === 'name') {
-      va = a.name
-      vb = b.name
-    } else if (key === 'status') {
-      va = STATUS_ORDER[rowStatus(a)] ?? 99
-      vb = STATUS_ORDER[rowStatus(b)] ?? 99
-    } else {
-      va = a.latency_ms === null ? -1 : a.latency_ms
-      vb = b.latency_ms === null ? -1 : b.latency_ms
-    }
-    if (va < vb) return -1 * dir
-    if (va > vb) return 1 * dir
-    return 0
-  })
-})
+const sortedRows = computed(() =>
+  sortUpstreamRows(filteredRows.value, sortKey.value, sortAsc.value))
+
+const emptyText = computed(() =>
+  upstreamEmptyText({
+    rowCount: props.rows.length,
+    filteredCount: filteredRows.value.length,
+    loading: props.loading,
+    everLoaded: props.everLoaded,
+  }))
 
 const displayName = upstreamDisplayName
-
-function typeText(type: string): string {
-  return TYPE_TEXT[type] || type || '-'
-}
-
-function statusIcon(status: UpstreamStatusValue): string {
-  switch (status) {
-    case 'online': return '✓'
-    case 'degraded': return '⚠'
-    case 'offline': return '✕'
-    // M2: unknown = 启动中未探测, 用中性 '?' (旧码与 offline 同 '✕' 红色, 误报故障)。
-    case 'unknown': return '?'
-    case 'configured': return '●'
-    case 'disabled': return '⊘'
-    default: return '?'
-  }
-}
 
 function latencyClass(ms: number): string {
   if (ms > 3000) return 'bad'
@@ -278,6 +264,9 @@ function copyError(text: string): void {
   void copyText(text, '错误信息已复制')
 }
 
+/** T-M2: sort-orders 含 null, 所以第三次点击会带 order=null 进来 —— 复位到
+ *  后端配置顺序。旧码 sort-orders 只列了升/降两态, onSortChange 里的 null
+ *  分支永远走不到 (死代码), 用户一旦排了序就回不去。 */
 function onSortChange(payload: { prop: string | null; order: 'ascending' | 'descending' | null }): void {
   if (payload.prop === null || payload.order === null) {
     sortKey.value = null
@@ -288,7 +277,7 @@ function onSortChange(payload: { prop: string | null; order: 'ascending' | 'desc
     sortKey.value = null
     return
   }
-  sortKey.value = payload.prop as SortKey
+  sortKey.value = payload.prop as UpstreamSortKey
   sortAsc.value = payload.order === 'ascending'
 }
 </script>
@@ -324,14 +313,13 @@ function onSortChange(payload: { prop: string | null; order: 'ascending' | 'desc
   opacity: 0.75;
 }
 
-.ups-table {
-  width: 100%;
-}
-
 .ups-name {
   font-weight: 500;
 }
 
+/* 状态徽标: 胶囊底 + 全局 .status-dot 状态点 (T-B7, 见 styles/main.css)。
+   列宽 92px 下最宽的「已禁用」= 20 padding + 7 dot + 6 gap + 36 文字 = 69,
+   加 small 表格 16px cell padding = 85, 仍有余量。 */
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -341,19 +329,6 @@ function onSortChange(payload: { prop: string | null; order: 'ascending' | 'desc
   font-size: 12px;
   line-height: 20px;
 }
-
-.status-icon {
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.icon-online { color: var(--el-color-success); }
-.icon-degraded { color: var(--el-color-warning); }
-.icon-offline { color: var(--el-color-danger); }
-/* M2: unknown 中性灰, 不与 offline 红色故障同色。 */
-.icon-unknown { color: var(--el-text-color-placeholder); }
-.icon-configured { color: var(--el-color-primary); }
-.icon-disabled { color: var(--el-text-color-secondary); }
 
 .b-online { color: var(--el-color-success); background: var(--el-color-success-light-9); }
 .b-degraded { color: var(--el-color-warning); background: var(--el-color-warning-light-9); }

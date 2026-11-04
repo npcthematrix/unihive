@@ -2551,6 +2551,9 @@ async def errors_api(req: "Request") -> "JSONResponse":
             "in_db": 0,
             "latest_ts": None,
             "history_available": False,
+            "memory_cap": 200,
+            "flush_threshold": 150,
+            "db_cap": 5000,
             "timestamp": int(time.time()),
         })
     try:
@@ -2565,6 +2568,9 @@ async def errors_api(req: "Request") -> "JSONResponse":
         "in_db": stats["in_db"],
         "latest_ts": stats["latest_ts"],
         "history_available": stats["in_db"] > 0 or history,
+        "memory_cap": stats["memory_cap"],
+        "flush_threshold": stats["flush_threshold"],
+        "db_cap": stats["db_cap"],
         "timestamp": int(time.time()),
     })
 

@@ -301,12 +301,15 @@ class ErrorBuffer:
         return merged[:limit]
 
     def stats(self) -> dict[str, Any]:
-        """摘要: 内存/库内条数 + 最近错误时间。"""
+        """摘要: 内存/库内条数 + 最近错误时间 + 容量常量 (供前端展示)。"""
         latest_ts = self._memory[-1].ts if self._memory else 0.0
         return {
             "in_memory": len(self._memory),
             "in_db": self._db_total,
             "latest_ts": _iso(latest_ts) if latest_ts else None,
+            "memory_cap": _MEMORY_MAXLEN,
+            "flush_threshold": _FLUSH_THRESHOLD,
+            "db_cap": _DB_MAX_ROWS,
         }
 
     async def close(self) -> None:

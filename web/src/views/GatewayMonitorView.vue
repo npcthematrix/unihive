@@ -91,6 +91,7 @@
           :rows="upstreamRows"
           :summary="upstreamSummary"
           :loading="overviewLoading"
+          :ever-loaded="overviewEverLoaded"
           @refresh="refreshOverview"
         />
       </section>

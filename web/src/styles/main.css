@@ -779,18 +779,35 @@ details[open] .cfg-section-toggle {
   margin-left: 6px;
 }
 
-/* 状态语义点: 实心绿=启用 / 实心灰=停用 / 虚框=未知。
-   与 RespCacheCard / Mootdx2L1Card / CacheSummaryCard 同款 (M4: 点本身 aria-hidden) */
+/* 状态语义点 — 6 态词汇, 覆盖后端 UpstreamStatusValue 全集。
+   实心绿=在线 / 琥珀=降级 / 红=离线 / 蓝=就绪(已启用但不探活) /
+   实心灰=停用 / 空心虚框=未知(未决, 区别于停用的实心灰)。
+   缓存三卡只用其中 online/disabled/unknown 三态 (缓存只有启用/停用),
+   上游总览表用全集。点本身一律 aria-hidden, 语义由旁边文字承担。 */
 .status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   display: inline-block;
+  /* 常与文字并排放在 inline-flex 里, 不允许被挤扁 */
+  flex-shrink: 0;
 }
 
 .status-online {
   background: var(--el-color-success);
   box-shadow: 0 0 0 3px var(--el-color-success-light-9);
+}
+
+.status-degraded {
+  background: var(--el-color-warning);
+}
+
+.status-offline {
+  background: var(--el-color-danger);
+}
+
+.status-configured {
+  background: var(--el-color-primary);
 }
 
 .status-disabled {
