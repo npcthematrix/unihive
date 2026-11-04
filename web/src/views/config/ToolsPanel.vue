@@ -38,11 +38,17 @@
       </el-table-column>
       <el-table-column label="描述" min-width="240">
         <template #default="{ row }">
-          <span
-            class="tools-desc"
-            :class="{ expandable: row.description.length > 80 }"
+          <!-- 只有真正被截断的描述才渲染成按钮: 短描述不再是可点却无反应的
+               span, 长描述则带 aria-expanded 且原生支持 enter/space + 焦点环。 -->
+          <button
+            v-if="row.description.length > 80"
+            type="button"
+            class="tools-desc expandable"
+            :aria-expanded="isExpanded(row.name)"
+            :aria-label="`${isExpanded(row.name) ? '收起' : '展开'} ${row.name} 的完整描述`"
             @click="toggleExpand(row.name)"
-          >{{ row.descDisplay }}</span>
+          >{{ row.descDisplay }}</button>
+          <span v-else class="tools-desc">{{ row.descDisplay }}</span>
         </template>
       </el-table-column>
       <el-table-column label="缓存键" width="120">
@@ -168,6 +174,10 @@ interface ToolRow {
   searchKey: string
 }
 
+function isExpanded(name: string): boolean {
+  return expandedNames.value.has(name)
+}
+
 function toggleExpand(name: string) {
   const next = new Set(expandedNames.value)
   if (next.has(name)) next.delete(name)
@@ -231,14 +241,29 @@ const emptyText = computed(() => {
 .tools-desc {
   font-size: 0.82rem;
   line-height: 1.4;
+  color: inherit;
 }
 
-.tools-desc.expandable {
+/* 展开控件用原生 button 后, 抹掉按钮外观让它与同列的 span 排版一致。 */
+button.tools-desc {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
+button.tools-desc:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .tools-desc.expandable:hover {
-  color: var(--primary, var(--el-color-primary));
+  color: var(--el-color-primary);
 }
 
 .tools-params {

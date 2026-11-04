@@ -13,15 +13,17 @@
           <span class="tool-name">{{ row.toolName }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="调用链 (上游 → 上游 tool)">
+      <!-- mapping 是 Record<上游, 上游 tool>, 行序即路由优先级, 不是「A 失败降级到 B」
+           的有序调用链。首 pill 高亮标首选, 其余用 · 分隔避免误读成 fallback。 -->
+      <el-table-column label="上游映射 (按行序优先级)">
         <template #default="{ row }">
           <div v-if="row.pills.length" class="chain-list">
             <template v-for="(p, idx) in row.pills" :key="idx">
               <span
                 v-if="idx > 0"
-                class="chain-arrow"
+                class="chain-divider"
                 aria-hidden="true"
-              >→</span>
+              >·</span>
               <el-tooltip
                 :content="`${p.upstream} :: ${p.toolCall}`"
                 placement="top"
@@ -137,9 +139,9 @@ const emptyText = computed(() => {
   opacity: 0.55;
 }
 
-.chain-arrow {
+.chain-divider {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   margin: 0 2px;
 }
 </style>

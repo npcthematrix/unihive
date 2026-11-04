@@ -510,30 +510,27 @@ function close(): void {
   font-size: 0.78rem;
 }
 
+/* 弹窗宽 = min(820px, 100vw - 32px), 内容区在视口 752~900px 时已窄于
+   固定列合计 (~720px)。过去靠 `@media (max-width: 720px)` 触发 wrap,
+   断点看的是视口而不是弹窗内容区, 恰好漏掉这段溢出区间。
+   改为恒可换行 + 弹性 basis: 宽屏自然排一行, 窄屏自动折行, 不依赖断点。 */
 .ted-param-row,
 .ted-mapping-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
-.ted-p-name { flex: 0 0 130px; }
-.ted-p-type { flex: 0 0 110px; }
-.ted-p-desc { flex: 1 1 160px; }
-.ted-p-enum { flex: 1 1 160px; }
+.ted-p-name { flex: 1 1 130px; min-width: 0; }
+.ted-p-type { flex: 1 1 110px; min-width: 0; }
+.ted-p-desc { flex: 2 1 180px; min-width: 0; }
+.ted-p-enum { flex: 2 1 180px; min-width: 0; }
 
-.ted-m-up { flex: 1 1 180px; }
-.ted-m-method { flex: 1 1 180px; }
+.ted-m-up { flex: 1 1 180px; min-width: 0; }
+.ted-m-method { flex: 1 1 180px; min-width: 0; }
 .ted-m-arrow {
   color: var(--el-text-color-secondary);
   flex: 0 0 auto;
-}
-
-@media (max-width: 720px) {
-  .ted-param-row,
-  .ted-mapping-row {
-    flex-wrap: wrap;
-  }
 }
 </style>

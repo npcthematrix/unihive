@@ -3,8 +3,9 @@
  *
  * 后端门控语义: apply 时每条字段冲突都必须在 resolutions 表里显式裁决
  * (key 缺失即 "未裁决", 400 拒绝; 显式 keep_cur 也算已裁决)。
- * 引擎 dry-run 候选对未裁决冲突默认按 keep_cur 合并, 这里据此做初始值,
- * 用户可逐条改判 accept_new, 也可批量裁决。
+ * 引擎 dry-run 候选对未裁决冲突默认按 keep_cur 合并, 但 UI 刻意让裁决表
+ * 初始为空, 要求用户逐条确认或点「全部保留当前」批量裁决才放行 apply,
+ * 避免引擎默认值在无人复核的情况下被直接落库。
  */
 import type {
   ConflictResolution,
@@ -43,18 +44,6 @@ export function pendingConflicts(
   resolutions: ResolutionMap,
 ): UpgradeConflict[] {
   return conflicts.filter((c) => !isConflictDecided(c, resolutions))
-}
-
-/**
- * dry-run 返回后初始化裁决表: 每条冲突都给显式初值, 采用引擎本次候选的
- * 实际解法 (合法值), 否则回落到 keep_cur。用户审阅时看到的就是候选当前态。
- */
-export function seedResolutions(conflicts: UpgradeConflict[]): ResolutionMap {
-  const seeded: ResolutionMap = {}
-  for (const c of conflicts) {
-    seeded[conflictKey(c)] = isResolution(c.resolution) ? c.resolution : 'keep_cur'
-  }
-  return seeded
 }
 
 /** 不可变地写入单条裁决。 */

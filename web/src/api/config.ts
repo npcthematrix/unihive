@@ -530,16 +530,18 @@ export async function applyConfigUpgrade(payload: {
 // /api/proxy/settings — TDX_QUANT 代理 (mootdx2 → tdx_quant) 设置
 // ---------------------------------------------------------------------------
 
+/**
+ * 后端 UpstreamStatus (api/upstream_client.py) 的 .value.upper() 结果,
+ * 外加 proxy_api 在缺少 tdx_quant 上游时补的 MISSING。
+ * 只保留后端真实会下发的值, 不要再加 ONLINE / OFFLINE 等自拟状态 ——
+ * 曾因此漏掉 HEALTHY, 让最常出现的健康态没有提示文案与配色。
+ */
 export type TdxQuantStatus =
-  | 'ONLINE'
+  | 'HEALTHY'
   | 'DEGRADED'
-  | 'OFFLINE'
   | 'UNAVAILABLE'
-  | 'DISABLED'
-  | 'MISSING'
-  | 'FAILED'
-  | 'LOADING'
   | 'UNKNOWN'
+  | 'MISSING'
 
 export interface ProxyCoverageEntry {
   mootdx2_tool: string

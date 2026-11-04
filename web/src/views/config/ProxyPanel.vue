@@ -1,8 +1,10 @@
 <template>
   <div class="proxy-panel">
     <p class="proxy-description">
-      mootdx2 → TDX_QUANT 透明代理。启用后, 以下 <strong>{{ coverageCountText }}</strong> 个行情类
-      工具优先走 TDX_QUANT (本地 DLL, 更稳定), 失败时自动降级到 MOOTDX2 (远程 TDX)。
+      mootdx2 → TDX_QUANT 透明代理。启用后,
+      <template v-if="loading && !proxy">行情类工具</template>
+      <template v-else>以下 <strong>{{ coverageCount }}</strong> 个行情类工具</template>
+      优先走 TDX_QUANT (本地 DLL, 更稳定), 失败时自动降级到 MOOTDX2 (远程 TDX)。
     </p>
 
     <!-- TDX_QUANT 实时状态 -->
@@ -66,6 +68,9 @@
     <div class="proxy-section-non-proxied">
       <h4 class="proxy-section-title">未代理的 mootdx2 行情类工具</h4>
       <p class="proxy-section-hint">以下工具属于行情类但不在代理范围内, 继续走原 mootdx2 链路</p>
+      <p class="proxy-static-note">
+        该清单为静态说明, 以后端 <code>TOOL_MAP</code> 的实际覆盖范围为准; 上表「覆盖范围」才是运行态数据。
+      </p>
       <ul>
         <li><code>get_k_data</code> / <code>get_minutes</code> / <code>get_fzline_local</code> — 其他 K 线/分时入口</li>
         <li><code>get_minute_local</code> / <code>get_daily_local</code> — 本地缓存路径 (走代理会绕过缓存, 故排除)</li>
@@ -78,7 +83,6 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import { setProxySettings } from '@/api/config'
 import type { ProxyCoverageEntry, ProxySettings, TdxQuantStatus } from '@/api/config'
 import { errorMessage } from '@/api/client'
@@ -114,10 +118,6 @@ watch(
 
 const coverage = computed<ProxyCoverageEntry[]>(() => props.proxy?.coverage || [])
 const coverageCount = computed(() => coverage.value.length)
-/** 首屏/重试期间不报「0 个」—— 那是「还没拿到」, 不是「真的没有」。 */
-const coverageCountText = computed(() =>
-  props.loading && !props.proxy ? '…' : String(coverageCount.value),
-)
 const coverageEmpty = computed(() => {
   if (coverageCount.value) return ''
   if (props.loading && !props.proxy) return '加载中…'
@@ -125,24 +125,25 @@ const coverageEmpty = computed(() => {
   return '覆盖范围为空 — TOOL_MAP 未配置或加载失败'
 })
 
-const OFFLINE_STATUSES: TdxQuantStatus[] = ['UNAVAILABLE', 'MISSING']
+/**
+ * 不可启用代理的上游状态。后端 PUT /api/proxy/settings 不校验 tdx_quant 状态
+ * (直接 set_enabled), 所以这里的禁用是唯一防呆, 必须覆盖启动期真实的 UNKNOWN。
+ */
+const BLOCKED_STATUSES: TdxQuantStatus[] = ['UNAVAILABLE', 'MISSING', 'UNKNOWN']
 /** 数据没落地前不给切: 否则默认 enabled=false 会被当成真实状态写回服务端。 */
 const toggleDisabled = computed(() =>
   props.loading ||
   !props.proxy ||
-  OFFLINE_STATUSES.includes(props.proxy?.tdx_quant_status || 'UNKNOWN'),
+  BLOCKED_STATUSES.includes(props.proxy?.tdx_quant_status || 'UNKNOWN'),
 )
 
+/** 键与 TdxQuantStatus 一一对应, 由 Record 强制穷尽后端真实下发的 5 种状态。 */
 const STATUS_HINTS: Record<TdxQuantStatus, string> = {
-  ONLINE: '在线 — 代理可用',
+  HEALTHY: '健康 — 代理可用',
   DEGRADED: '降级 — 部分异常, 仍可走代理',
-  OFFLINE: '离线 — 不可用',
   UNAVAILABLE: '不可用 — 当前状态不允许启用',
-  DISABLED: '未启用 — 启动期被禁用',
+  UNKNOWN: '未知 — 上游状态尚未探明',
   MISSING: '未配置 — 缺少 tdx_quant 上游',
-  FAILED: '探活失败',
-  LOADING: '加载中…',
-  UNKNOWN: '未知状态',
 }
 
 const statusHint = computed(
@@ -159,14 +160,14 @@ async function onToggle(value: boolean | string | number) {
   try {
     const updated = await setProxySettings(next)
     emit('change', updated)
+    // 成功与失败都只走常驻的 saveStatusText: 开关旁持续可见, 比 toast 醒目
+    // 且不会刷屏; 过去成功额外弹一次 ElMessage, 反馈策略不对称。
     saveStatusText.value = '已保存'
-    ElMessage.success(`代理已${next ? '启用' : '关闭'}`)
   } catch (e) {
     saveFailed.value = true
     const msg = errorMessage(e, '保存失败')
     saveStatusText.value = `保存失败: ${msg}`
-    // 不再 ElMessage.error: saveStatusText 在面板头部持续显示, 比 toast 更醒目且不刷屏
-    // 回滚
+    // 回滚: props.proxy 未变, watch 不会触发, 必须手动把开关拨回去
     enabled.value = !next
   } finally {
     saving.value = false
@@ -215,7 +216,7 @@ async function onToggle(value: boolean | string | number) {
   color: var(--el-text-color-regular);
 }
 
-.proxy-status-value.ONLINE {
+.proxy-status-value.HEALTHY {
   color: var(--el-color-success);
   background: var(--el-color-success-light-9);
   border-color: var(--el-color-success-light-7);
@@ -227,17 +228,13 @@ async function onToggle(value: boolean | string | number) {
   border-color: var(--el-color-warning-light-7);
 }
 
-.proxy-status-value.OFFLINE,
 .proxy-status-value.UNAVAILABLE,
-.proxy-status-value.MISSING,
-.proxy-status-value.FAILED {
+.proxy-status-value.MISSING {
   color: var(--el-color-danger);
   background: var(--el-color-danger-light-9);
   border-color: var(--el-color-danger-light-7);
 }
 
-.proxy-status-value.DISABLED,
-.proxy-status-value.LOADING,
 .proxy-status-value.UNKNOWN {
   color: var(--cfg-text-secondary);
 }
@@ -283,6 +280,18 @@ async function onToggle(value: boolean | string | number) {
   margin: 0 0 6px;
   font-size: 0.8rem;
   color: var(--cfg-text-secondary);
+}
+
+.proxy-static-note {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--cfg-text-secondary);
+}
+
+.proxy-static-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
 }
 
 .proxy-coverage-table code {

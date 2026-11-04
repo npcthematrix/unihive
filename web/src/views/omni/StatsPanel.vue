@@ -38,23 +38,15 @@
     </el-alert>
 
     <el-empty v-else description="暂无数据, 请先同步" />
-
-    <!-- 同步日志 -->
-    <section class="sync-logs">
-      <h3 class="panel-section-title">同步日志</h3>
-      <SyncLogList :logs="recentLogs" :loading="loading" />
-    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import type { OmniStatRow, OmniSyncLog } from '@/api/omni'
+import type { OmniStatRow } from '@/api/omni'
 import { displayBoardType, displaySource } from './format'
-import SyncLogList from './SyncLogList.vue'
 
 interface Props {
   stats: OmniStatRow[]
-  recentLogs: OmniSyncLog[]
   loading: boolean
   loadError: string
 }

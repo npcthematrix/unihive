@@ -1,7 +1,7 @@
 <template>
   <div class="db-panel">
     <!-- yaml 逃生模式 (entities 已加载但 source!=db; 加载中不渲染横幅) -->
-    <div v-if="entities && !isDb" class="cfg-banner cfg-banner-warn">
+    <div v-if="isYamlEscape" class="cfg-banner cfg-banner-warn">
       <span class="cfg-info-icon" aria-hidden="true">i</span>
       <span>
         网关以 <code>UNIHIVE_CONFIG_SOURCE=yaml</code> 启动,当前配置事实源是
@@ -163,6 +163,13 @@ interface Props {
 const props = defineProps<Props>()
 
 const isDb = computed(() => isDbEntities(props.entities))
+/**
+ * 逃生模式判定必须单独取名: 模板里的 `entities` 会解析到下方同名的 computed
+ * (非 db 时为 null), 而不是 props.entities。曾因此让 `{ source: 'yaml' }`
+ * 时 v-if / v-else-if 两个分支同时为 false, 整个 tab 空白且不给任何提示。
+ */
+const isYamlEscape = computed(() => props.entities !== null && !isDb.value)
+/** db 模式窄化后的实体快照, 供模板安全访问 revision / upstreams 等字段。 */
 const entities = computed(() =>
   isDbEntities(props.entities) ? props.entities : null,
 )

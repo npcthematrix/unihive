@@ -19,7 +19,6 @@ import {
   kindLabel,
   meaningfulChanges,
   pendingConflicts,
-  seedResolutions,
   withResolution,
 } from '@/views/config/updateCenter'
 
@@ -86,26 +85,14 @@ describe('isResolution', () => {
   })
 })
 
-describe('pendingConflicts / seedResolutions', () => {
+describe('pendingConflicts', () => {
   const conflicts = [
     conflict(),
     conflict({ path: 'spec.description', resolution: 'accept_new' }),
   ]
 
-  it('空裁决表: 全部未裁决', () => {
+  it('空裁决表: 全部未裁决 (apply 前置门控要求逐条确认)', () => {
     expect(pendingConflicts(conflicts, {})).toHaveLength(2)
-  })
-
-  it('seedResolutions 按引擎候选解法给每条冲突显式初值', () => {
-    const seeded = seedResolutions(conflicts)
-    expect(seeded[C1_KEY]).toBe('keep_cur')
-    expect(seeded[C2_KEY]).toBe('accept_new')
-    expect(pendingConflicts(conflicts, seeded)).toHaveLength(0)
-  })
-
-  it('引擎给了非法 resolution 字符串时回落 keep_cur', () => {
-    const seeded = seedResolutions([conflict({ resolution: 'weird' })])
-    expect(seeded[C1_KEY]).toBe('keep_cur')
   })
 
   it('裁决值非法时仍视为未裁决', () => {

@@ -1,1 +1,0 @@
-import{h as s}from"./index-BMQkxCpf.js";function e(t){return t.enabled&&(t.status==="online"||t.status==="configured")}async function i(t){const{data:a}=await s.get("/api/status",t);return a}export{i as g,e as i};

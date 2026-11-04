@@ -318,14 +318,15 @@
       </div>
 
       <!-- apply 结果 -->
-      <el-alert
-        v-if="applyResult?.changed"
-        type="success"
-        :closable="false"
-        show-icon
-        class="uc-alert"
-        :title="`出厂更新已热应用:revision ${applyResult.revision}`"
-      >
+    <el-alert
+      v-if="applyResult?.changed"
+      type="success"
+      :closable="true"
+      show-icon
+      class="uc-alert"
+      :title="`出厂更新已热应用:revision ${applyResult.revision}`"
+      @close="dismissApplyResult"
+    >
         <div>
           模板
           <code>{{ shortTemplateVersion(applyResult.old_version) }}</code>
@@ -461,7 +462,12 @@ function chosenResolutions(): ResolutionMap {
   return chosen
 }
 
-async function runPreview(): Promise<void> {
+/**
+ * @param skipUnchanged apply 成功后的自动复查用: 结果已是最新时不渲染预览卡片,
+ *   避免与上方绿色 applyResult alert 形成同屏两套成功反馈。手动点「检查出厂更新」
+ *   仍走默认路径, 会正常展示「已是最新」。
+ */
+async function runPreview(skipUnchanged = false): Promise<void> {
   previewLoading.value = true
   previewError.value = ''
   try {
@@ -469,6 +475,11 @@ async function runPreview(): Promise<void> {
     const result = await previewConfigUpgrade(
       Object.keys(chosen).length ? chosen : undefined,
     )
+    if (skipUnchanged && !result.changed) {
+      preview.value = null
+      replaceResolutions({})
+      return
+    }
     preview.value = result
     // 新预览可能带来新冲突 key: 保留已裁决项, 新 key 留空待逐条确认。
     const merged: ResolutionMap = {}
@@ -553,8 +564,8 @@ async function onApply(): Promise<void> {
     preview.value = null
     replaceResolutions({})
     await loadStatus()
-    // 自动复查: 成功后应显示 "已是最新", 同时刷新 revision 基线。
-    await runPreview()
+    // 自动复查 revision 基线; 已是最新时不再叠一张预览卡片。
+    await runPreview(true)
   } catch (e) {
     if (axios.isAxiosError(e) && e.response?.status === 409) {
       ElMessage.error('配置已被其他会话修改 (revision 冲突),已为你重新检查更新')
@@ -565,6 +576,11 @@ async function onApply(): Promise<void> {
   } finally {
     applying.value = false
   }
+}
+
+/** 成功 alert 常驻到用户主动关掉或下一次 apply; 关掉即清空, 避免切 tab 回来还在。 */
+function dismissApplyResult(): void {
+  applyResult.value = null
 }
 
 /** apply 结果影响面 → 复用 dry-run 的分组渲染。 */

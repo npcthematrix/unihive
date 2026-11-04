@@ -70,6 +70,9 @@
           （节假日若落在工作日，当天按交易时段短档处理，代价仅是多几次无害重拉）；
           缓存键对全部参数做哈希，不同日期 / 不同标的各自独立，互不影响。
         </p>
+        <p class="rule-note">
+          本页规则与 TTL 档说明为随出厂策略手工维护的静态文案；如与运行态行为不一致，以网关实际配置为准。
+        </p>
       </div>
     </details>
 
@@ -304,47 +307,58 @@ const ttlEmptyText = computed(() => (ttlEntries.value.length ? '' : '无 TTL 配
   white-space: nowrap;
 }
 
+/* 全部走 Element Plus / cfg 主题 token, 不再用硬编码 rgba + 固定深色文字
+   (暗色主题下那套配色会对比度不足)。 */
 .tag-frozen {
-  background: rgba(64, 158, 255, 0.14);
-  color: #2563eb;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary-dark-2);
 }
 
 .tag-session {
-  background: rgba(230, 162, 60, 0.16);
-  color: #b45309;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
 }
 
 .tag-exempt {
-  background: rgba(148, 163, 184, 0.18);
-  color: #475569;
+  background: var(--cfg-bg-soft);
+  color: var(--cfg-text-secondary);
 }
 
 .rule-note {
   margin: 0;
   font-size: 0.8rem;
-  color: var(--cfg-text-muted, #888);
+  color: var(--cfg-text-secondary);
   line-height: 1.6;
 }
 
 /* 时段边界表 */
 .boundary-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.4fr);
-  border: 1px solid var(--cfg-border, #e2e2e6);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  border: 1px solid var(--cfg-border);
   border-radius: 6px;
   overflow: hidden;
   font-size: 0.82rem;
 }
 
 .boundary-head {
-  background: var(--cfg-bg-soft, #f5f6f8);
+  background: var(--cfg-bg-soft);
   font-weight: 600;
   padding: 7px 12px;
 }
 
 .b-cell {
   padding: 6px 12px;
-  border-top: 1px solid var(--cfg-border, #ececf0);
+  border-top: 1px solid var(--cfg-border);
+  overflow-wrap: anywhere;
+}
+
+/* 两列即便可收缩, 375px 屏上仍会把「生效的缓存时长」挤成竖排单词;
+   且本表 overflow:hidden 会直接裁掉溢出内容。窄屏改单列 (标签/值交替)。 */
+@media (max-width: 768px) {
+  .boundary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* 类型徽标 */
@@ -358,18 +372,18 @@ const ttlEmptyText = computed(() => (ttlEntries.value.length ? '' : '无 TTL 配
 }
 
 .badge-session {
-  background: rgba(230, 162, 60, 0.16);
-  color: #b45309;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
 }
 
 .badge-frozen {
-  background: rgba(64, 158, 255, 0.14);
-  color: #2563eb;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary-dark-2);
 }
 
 .badge-regular {
-  background: var(--cfg-bg-soft, #f0f1f4);
-  color: var(--cfg-text-muted, #666);
+  background: var(--cfg-bg-soft);
+  color: var(--cfg-text-secondary);
 }
 
 .ttl-hint {

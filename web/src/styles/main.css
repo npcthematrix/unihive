@@ -154,6 +154,8 @@ body {
   --border: var(--cfg-border);
   --card-bg: var(--cfg-bg);
   --text-secondary: var(--cfg-text-secondary);
+  --primary: var(--el-color-primary);
+  --primary-soft: var(--el-color-primary-light-9);
 }
 
 /* ============================================================================

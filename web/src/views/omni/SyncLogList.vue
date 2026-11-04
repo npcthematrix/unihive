@@ -19,6 +19,7 @@
         {{ statusIcon(l.status) }}{{ displayStatus(l.status) }}
       </el-tag>
       <span class="log-count">{{ l.record_count || 0 }} 条</span>
+      <span v-if="showDuration && durationText(l)" class="log-duration">{{ durationText(l) }}</span>
     </li>
   </ul>
 </template>
@@ -29,16 +30,23 @@ import {
   displayBoardType,
   displaySource,
   displayStatus,
+  formatDuration,
   formatTime,
   statusIcon,
   statusTagType,
 } from './format'
 
-/** 最近同步记录列表 — StatsPanel / SyncPanel 共用。 */
+/** 最近同步记录列表 — SyncPanel 用 (StatsPanel 已聚焦统计数字, 不再展示日志)。 */
 defineProps<{
   logs: OmniSyncLog[]
   loading?: boolean
+  /** 是否展示耗时列; SyncPanel 开启, 轻量场景可关掉省一列。 */
+  showDuration?: boolean
 }>()
+
+function durationText(l: OmniSyncLog): string | null {
+  return formatDuration(l.start_time, l.end_time)
+}
 </script>
 
 <style scoped>
@@ -85,8 +93,17 @@ defineProps<{
   color: var(--el-text-color-regular);
 }
 
-/* ≤640px: 固定 min-width 的时间/源/类型列在窄屏会把行撑爆, 改为换行。 */
-@media (max-width: 640px) {
+.log-duration {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  min-width: 50px;
+  text-align: right;
+}
+
+/* ≤768px: 固定 min-width 的时间/源/类型列在窄屏会把行撑爆, 改为换行。
+   与 QueryPanel 断点一致 (原 640 在 640-768 平板区间仍会溢出)。 */
+@media (max-width: 768px) {
   .log-item {
     flex-wrap: wrap;
   }

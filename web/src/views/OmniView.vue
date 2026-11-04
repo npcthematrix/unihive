@@ -53,7 +53,6 @@
       >
         <StatsPanel
           :stats="stats"
-          :recent-logs="recentLogs"
           :loading="loading"
           :load-error="loadError"
           @reload="loadStats(true)"
@@ -258,6 +257,15 @@ async function runQuery(page: number, trigger: QueryTrigger) {
     const tc = d?.total_count
     totalCount.value = typeof tc === 'number' ? tc : (d?.total ?? sectors.value.length)
     queryPage.value = d?.page ?? page
+    // 刷新后当前页可能超出范围 (同步删除了大量板块), 后端返回空列表但 total_count > 0:
+    // 自动回退到最后一页, 避免用户看到"未找到匹配的板块"的误导空态。
+    if (trigger === 'refresh' && sectors.value.length === 0 && totalCount.value > 0 && queryPageSize.value > 0) {
+      const lastPage = Math.max(1, Math.ceil(totalCount.value / queryPageSize.value))
+      if (lastPage !== page) {
+        void runQuery(lastPage, 'page')
+        return
+      }
+    }
   } catch (e) {
     if (isCanceledError(e)) return
     queryError.value = errorMessage(e, '查询失败')

@@ -40,32 +40,36 @@
     <section class="sync-controls-section">
       <h3 class="panel-section-title">同步控制</h3>
       <div class="sync-controls">
-        <label class="ctrl-label" for="omni-sync-source">数据源:</label>
-        <el-select
-          id="omni-sync-source"
-          v-model="source"
-          class="omni-select"
-          :disabled="syncing"
-        >
-          <el-option label="全部" value="all" />
-          <el-option label="同花顺" value="fuyao" />
-          <el-option label="TDX-QUANT" value="tqquant" />
-        </el-select>
-        <label class="ctrl-label" for="omni-sync-board">板块类型:</label>
-        <el-select
-          id="omni-sync-board"
-          v-model="boardType"
-          class="omni-select"
-          :disabled="syncing"
-        >
-          <el-option label="全部" value="all" />
-          <el-option
-            v-for="key in availableBoardTypes"
-            :key="key"
-            :label="displayBoardType(key)"
-            :value="key"
-          />
-        </el-select>
+        <div class="ctrl-group">
+          <label class="ctrl-label" for="omni-sync-source">数据源:</label>
+          <el-select
+            id="omni-sync-source"
+            v-model="source"
+            class="omni-select"
+            :disabled="syncing"
+          >
+            <el-option label="全部" value="all" />
+            <el-option label="同花顺" value="fuyao" />
+            <el-option label="TDX-QUANT" value="tqquant" />
+          </el-select>
+        </div>
+        <div class="ctrl-group">
+          <label class="ctrl-label" for="omni-sync-board">板块类型:</label>
+          <el-select
+            id="omni-sync-board"
+            v-model="boardType"
+            class="omni-select"
+            :disabled="syncing"
+          >
+            <el-option label="全部" value="all" />
+            <el-option
+              v-for="key in availableBoardTypes"
+              :key="key"
+              :label="displayBoardType(key)"
+              :value="key"
+            />
+          </el-select>
+        </div>
         <el-button
           type="primary"
           :loading="syncing"
@@ -83,7 +87,7 @@
     <!-- 最近 N 次同步历史 -->
     <section class="history-section">
       <h3 class="panel-section-title">最近同步</h3>
-      <SyncLogList :logs="recentLogs" :loading="loading" />
+      <SyncLogList :logs="recentLogs" :loading="loading" show-duration />
     </section>
   </div>
 </template>
@@ -393,6 +397,13 @@ defineExpose({
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+/* label + select 绑定为一组, 换行时不被拆散 */
+.ctrl-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .omni-select {

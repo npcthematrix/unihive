@@ -1,0 +1,1 @@
+import{h as s}from"./index-D09q7xb2.js";function e(t){return t.enabled&&(t.status==="online"||t.status==="configured")}async function i(t){const{data:a}=await s.get("/api/status",t);return a}export{i as g,e as i};

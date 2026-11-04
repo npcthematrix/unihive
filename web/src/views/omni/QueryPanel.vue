@@ -123,6 +123,7 @@
     <el-dialog
       v-model="modalOpen"
       :title="modalTitle"
+      class="sector-dialog"
       width="min(600px, calc(100vw - 32px))"
       :close-on-click-modal="false"
       destroy-on-close
@@ -357,11 +358,14 @@ defineExpose({
   width: 160px;
 }
 
-/* 窄屏: keyword 撑满一行, 两个 select 紧跟其后; 避免 640-768px 区间
+/* 窄屏: keyword 撑满一行, 两个 select 收窄紧跟其后; 避免 640-768px 区间
    320+160+160 = 640 与 padding/gap 叠加撑爆 query-bar 的尴尬换行。 */
 @media (max-width: 768px) {
   .query-keyword {
     width: 100%;
+  }
+  .query-select {
+    width: 130px;
   }
 }
 
@@ -486,5 +490,18 @@ defineExpose({
 
 .status-icon-empty {
   color: var(--el-text-color-secondary);
+}
+</style>
+
+<!-- 弹窗 teleport 到 body, scoped 的 scopeId 不保证能穿透到其内部结构,
+     故用显式 class + 全局规则。仅作用于本页成分股弹窗, 不影响其他 dialog。 -->
+<style>
+.sector-dialog .el-dialog__title {
+  display: block;
+  /* 右上角关闭按钮是 absolute 定位, 留出空间避免遮住标题末尾 */
+  padding-right: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

@@ -233,11 +233,15 @@
             :class="config?.strict_registry ? 'on' : 'off'"
             :title="`启用后启动期校验配置库/YAML 中的工具名都在上游 tools/list 中实际出现 (只读全局开关, 启动时读取生效, 暂不支持热修改)`"
           >strict_registry</span>
+          <!-- role=button 的 span 必须自己给 tabindex, 否则键盘永远聚焦不到,
+               绑定的 enter/space 与 main.css 的 .cfg-switch.interactive:focus-visible
+               都不会生效。逃生模式下移出 tab 序列, 同时去掉 aria-pressed 语义。 -->
           <span
             class="cfg-switch"
             :class="killSwitchClass"
             :role="writeBlocked ? undefined : 'button'"
-            :aria-pressed="Boolean(config?.disable_dangerous)"
+            :tabindex="writeBlocked ? -1 : 0"
+            :aria-pressed="writeBlocked ? undefined : Boolean(config?.disable_dangerous)"
             :title="killSwitchTitle"
             @click="onToggleKillSwitch"
             @keydown.enter.prevent="onToggleKillSwitch"
