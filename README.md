@@ -10,9 +10,8 @@
 | **tdx_quant** | 通达信量化终端 | 54 | 进程内 `tqcenter.py`, 行情 / 板块 / 交易日 / 财务 / 公式 / 交易 / 预警 |
 | **fuyao** | 同花顺 aicubes.cn | 67 | HTTP MCP, 4 端点 (a-share / a-share-index / meta / fund) |
 | **omni** | OMNIDATA | 5 | 本地 SQLite, 行业/概念/地域/风格板块 |
-| **ths_local** | FQGate 本地网关 | 87 | HTTP MCP `:17281`, 行情 / K线 / 资讯 / wencai / ipo / option |
 
-合计 **302 个工具**,按路由优先级链分发; 同一 gateway 工具可在多个上游配置降级路径 (`config/upstreams.yaml` 的 `routing` 段)。
+合计 **218 个工具**,按路由优先级链分发; 同一 gateway 工具可在多个上游配置降级路径 (`config/upstreams.yaml` 的 `routing` 段)。
 
 ## 快速开始
 

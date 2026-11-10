@@ -16,7 +16,6 @@ export const UPSTREAM_ORDER = [
   'fuyao_index',
   'fuyao_meta',
   'fuyao_fund',
-  'THS-LOCAL-GATEWAY',
 ] as const
 
 /** 上游展示名; 事实源见 @/constants/upstreams。 */

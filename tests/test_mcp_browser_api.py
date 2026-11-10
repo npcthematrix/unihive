@@ -25,7 +25,6 @@ from src.unihive.api.mcp_tools_fetch import (
     TRUNCATED_PAGE_CAP,
     fetch_all_raw_tools,
 )
-from src.unihive.api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
 from src.unihive.api.upstream_client import UpstreamStatus
 from src.unihive.utils import console_api
 
@@ -94,12 +93,60 @@ def _tool(name: str) -> dict:
     return {"name": name, "description": f"{name} 描述", "inputSchema": {"type": "object"}}
 
 
-def _ths_pages() -> list[dict]:
-    """THS-LOCAL-GATEWAY 实测形状: 32 / 32 / 23, 游标是 JSON 字符串。"""
+class _StubMcpConfig:
+    """最小 MCP 上游配置 (测试用)。"""
+
+    def __init__(self, name: str, base_url: str):
+        self.name = name
+        self.base_url = base_url
+
+
+class _StubMcpClient:
+    """最小 MCP 上游客户端, 只实现控制台 MCP 浏览器依赖的契约。
+
+    真实适配器已随该数据源下线删除, 但 /api/mcp-browser/* 与
+    fetch_all_raw_tools 是通用能力 (fuyao 等上游共用), 这里用最小 stub
+    保住覆盖: ``list_tools_raw()`` 的存在即「这是 MCP server」的判据。
+    httpx.AsyncClient 在调用期创建, 让 monkeypatch 注入的 MockTransport 生效。
+    """
+
+    def __init__(self, config: _StubMcpConfig):
+        self.config = config
+        self.name = config.name
+        self._status = UpstreamStatus.UNKNOWN
+        self._client: httpx.AsyncClient | None = None
+
+    @property
+    def status(self) -> UpstreamStatus:
+        return self._status
+
+    @property
+    def is_available(self) -> bool:
+        return self._status in (UpstreamStatus.HEALTHY, UpstreamStatus.DEGRADED)
+
+    async def list_tools_raw(self, **kwargs):
+        # 测试可直接注入 MockTransport 客户端; 未注入时现建一个, 让
+        # monkeypatch 的 httpx.AsyncClient 生效。
+        if self._client is not None:
+            return await fetch_all_raw_tools(
+                self._client, self.config.base_url, self.name, **kwargs
+            )
+        async with httpx.AsyncClient() as client:
+            return await fetch_all_raw_tools(
+                client, self.config.base_url, self.name, **kwargs
+            )
+
+    async def list_tools(self) -> list[dict]:
+        result = await self.list_tools_raw()
+        return result.tools if result.ok else []
+
+
+def _three_pages() -> list[dict]:
+    """上游分页实测形状: 32 / 32 / 23, 游标是 JSON 字符串。"""
     return [
-        _page([_tool(f"fqgate_t{i:02d}") for i in range(32)], next_cursor="32"),
-        _page([_tool(f"fqgate_t{i:02d}") for i in range(32, 64)], next_cursor="64"),
-        _page([_tool(f"fqgate_t{i:02d}") for i in range(64, 87)]),
+        _page([_tool(f"vendor_t{i:02d}") for i in range(32)], next_cursor="32"),
+        _page([_tool(f"vendor_t{i:02d}") for i in range(32, 64)], next_cursor="64"),
+        _page([_tool(f"vendor_t{i:02d}") for i in range(64, 87)]),
     ]
 
 
@@ -119,7 +166,7 @@ def _req(upstream: str) -> StarletteRequest:
 
 async def test_paginates_three_pages_to_87_tools():
     """核心回归: 旧 list_tools() 只返回首页 32 个。"""
-    result = await _fetch(_paged_handler(_ths_pages()))
+    result = await _fetch(_paged_handler(_three_pages()))
 
     assert result.ok is True
     assert result.pages == 3
@@ -130,19 +177,19 @@ async def test_paginates_three_pages_to_87_tools():
 
 async def test_page_order_is_preserved():
     """分页拼接顺序必须是上游给的顺序, 不能倒插或去重。"""
-    result = await _fetch(_paged_handler(_ths_pages()))
+    result = await _fetch(_paged_handler(_three_pages()))
 
     names = [t["name"] for t in result.tools]
     assert names == sorted(names)
-    assert names[0] == "fqgate_t00"
-    assert names[-1] == "fqgate_t86"
+    assert names[0] == "vendor_t00"
+    assert names[-1] == "vendor_t86"
     assert len(set(names)) == 87
 
 
 async def test_tools_are_passed_through_verbatim():
     """反归一化契约: 上游发什么就带回来什么, 一个键都不增删不改写。"""
     original = {
-        "name": "fqgate_market_login",
+        "name": "vendor_market_login",
         "title": "登录行情",
         "description": "登录",
         "inputSchema": {"type": "object", "properties": {"a": {"type": "string"}}},
@@ -336,7 +383,7 @@ async def test_connect_error_is_transport():
 async def test_api_key_header_is_sent_on_every_page():
     """提升到循环外就会让第 2 页起丢掉 X-api-key —— 分页化最容易犯的错。"""
     record: list[httpx.Request] = []
-    await _fetch(_paged_handler(_ths_pages(), record=record), headers={"X-api-key": "secret"})
+    await _fetch(_paged_handler(_three_pages(), record=record), headers={"X-api-key": "secret"})
 
     assert len(record) == 3
     assert all(r.headers.get("X-api-key") == "secret" for r in record)
@@ -344,7 +391,7 @@ async def test_api_key_header_is_sent_on_every_page():
 
 async def test_cursor_is_sent_as_jsonrpc_param():
     record: list[httpx.Request] = []
-    await _fetch(_paged_handler(_ths_pages(), record=record))
+    await _fetch(_paged_handler(_three_pages(), record=record))
 
     bodies = [json.loads(r.content.decode("utf-8")) for r in record]
     assert [b["method"] for b in bodies] == ["tools/list"] * 3
@@ -361,7 +408,7 @@ async def test_cursor_is_sent_as_jsonrpc_param():
 async def test_fuyao_adapter_sends_api_key_and_paginates():
     record: list[httpx.Request] = []
     client = FuyaoClient(FuyaoConfig(name="fuyao_meta", base_url="http://fy.test/mcp", api_key="k"))
-    client._client = _client(_paged_handler(_ths_pages(), record=record))
+    client._client = _client(_paged_handler(_three_pages(), record=record))
 
     result = await client.list_tools_raw()
 
@@ -369,10 +416,10 @@ async def test_fuyao_adapter_sends_api_key_and_paginates():
     assert all(r.headers.get("X-api-key") == "k" for r in record)
 
 
-async def test_ths_local_adapter_returns_all_87():
+async def test_mcp_adapter_returns_all_87():
     record: list[httpx.Request] = []
-    client = ThsLocalClient(ThsLocalConfig(name="THS-LOCAL-GATEWAY", base_url="http://ths.test/mcp"))
-    client._client = _client(_paged_handler(_ths_pages(), record=record))
+    client = _StubMcpClient(_StubMcpConfig(name="vendor-gateway", base_url="http://ths.test/mcp"))
+    client._client = _client(_paged_handler(_three_pages(), record=record))
 
     result = await client.list_tools_raw()
 
@@ -398,21 +445,21 @@ class _NonMcpClient:
 
 
 def test_upstreams_lists_only_mcp_clients():
-    mcp = ThsLocalClient(ThsLocalConfig(name="THS-LOCAL-GATEWAY", base_url="http://x/mcp"))
-    console_api.set_upstream_registry({"THS-LOCAL-GATEWAY": mcp, "mootdx2": _NonMcpClient()})
+    mcp = _StubMcpClient(_StubMcpConfig(name="vendor-gateway", base_url="http://x/mcp"))
+    console_api.set_upstream_registry({"vendor-gateway": mcp, "mootdx2": _NonMcpClient()})
 
     body = console_api.get_mcp_browser_upstreams()
 
-    assert [u["name"] for u in body["upstreams"]] == ["THS-LOCAL-GATEWAY"]
-    assert body["upstreams"][0]["type"] == "ThsLocalClient"
+    assert [u["name"] for u in body["upstreams"]] == ["vendor-gateway"]
+    assert body["upstreams"][0]["type"] == "_StubMcpClient"
     assert isinstance(body["timestamp"], int)
 
 
 def test_upstreams_status_is_a_plain_string():
     """UpstreamStatus 是普通 Enum; 直接塞进 JSONResponse 会 TypeError → 500。"""
-    mcp = ThsLocalClient(ThsLocalConfig(name="ths", base_url="http://x/mcp"))
+    mcp = _StubMcpClient(_StubMcpConfig(name="vendor", base_url="http://x/mcp"))
     mcp._status = UpstreamStatus.HEALTHY
-    console_api.set_upstream_registry({"ths": mcp})
+    console_api.set_upstream_registry({"vendor": mcp})
 
     body = console_api.get_mcp_browser_upstreams()
     upstream = body["upstreams"][0]
@@ -446,25 +493,25 @@ async def test_tools_endpoint_400_for_non_mcp_upstream():
 
 
 async def test_tools_endpoint_502_when_upstream_fails():
-    client = ThsLocalClient(ThsLocalConfig(name="ths", base_url="http://ths.test/mcp"))
+    client = _StubMcpClient(_StubMcpConfig(name="vendor", base_url="http://ths.test/mcp"))
     client._client = httpx.AsyncClient(transport=_RaisingTransport(httpx.ConnectError("refused")))
-    console_api.set_upstream_registry({"ths": client})
+    console_api.set_upstream_registry({"vendor": client})
 
-    status_code, body = await console_api.fetch_upstream_raw_tools("ths")
+    status_code, body = await console_api.fetch_upstream_raw_tools("vendor")
 
     assert status_code == 502
     assert body["errorKind"] == ERROR_TRANSPORT
-    assert body["upstream"] == "ths"
+    assert body["upstream"] == "vendor"
     assert "error" in body
 
 
 async def test_tools_endpoint_200_with_empty_tools():
     """空态走 200 —— 前端靠这里区分 "上游没工具" 与 "请求失败"。"""
-    client = ThsLocalClient(ThsLocalConfig(name="ths", base_url="http://ths.test/mcp"))
+    client = _StubMcpClient(_StubMcpConfig(name="vendor", base_url="http://ths.test/mcp"))
     client._client = _client(_paged_handler([_page([])]))
-    console_api.set_upstream_registry({"ths": client})
+    console_api.set_upstream_registry({"vendor": client})
 
-    status_code, body = await console_api.fetch_upstream_raw_tools("ths")
+    status_code, body = await console_api.fetch_upstream_raw_tools("vendor")
 
     assert status_code == 200
     assert body["ok"] is True
@@ -474,14 +521,14 @@ async def test_tools_endpoint_200_with_empty_tools():
 
 
 async def test_tools_endpoint_200_envelope_and_verbatim_tools():
-    client = ThsLocalClient(ThsLocalConfig(name="ths", base_url="http://ths.test/mcp"))
-    client._client = _client(_paged_handler(_ths_pages()))
-    console_api.set_upstream_registry({"ths": client})
+    client = _StubMcpClient(_StubMcpConfig(name="vendor", base_url="http://ths.test/mcp"))
+    client._client = _client(_paged_handler(_three_pages()))
+    console_api.set_upstream_registry({"vendor": client})
 
-    status_code, body = await console_api.fetch_upstream_raw_tools("ths")
+    status_code, body = await console_api.fetch_upstream_raw_tools("vendor")
 
     assert status_code == 200
-    assert body["upstream"] == "ths"
+    assert body["upstream"] == "vendor"
     assert body["ok"] is True
     assert body["error"] is None
     assert body["errorKind"] is None
@@ -490,15 +537,15 @@ async def test_tools_endpoint_200_envelope_and_verbatim_tools():
     assert body["truncatedReason"] is None
     assert body["count"] == 87
     assert body["bytes"] > 0
-    assert body["tools"][0] == _tool("fqgate_t00")
+    assert body["tools"][0] == _tool("vendor_t00")
 
 
 async def test_tools_handler_reads_upstream_from_path_params():
-    client = ThsLocalClient(ThsLocalConfig(name="ths", base_url="http://ths.test/mcp"))
+    client = _StubMcpClient(_StubMcpConfig(name="vendor", base_url="http://ths.test/mcp"))
     client._client = _client(_paged_handler([_page([_tool("a")])]))
-    console_api.set_upstream_registry({"ths": client})
+    console_api.set_upstream_registry({"vendor": client})
 
-    resp = await console_api.mcp_browser_tools_api(_req("ths"))
+    resp = await console_api.mcp_browser_tools_api(_req("vendor"))
     body = json.loads(resp.body)
 
     assert resp.status_code == 200
@@ -525,20 +572,20 @@ def test_routes_are_mounted_in_gateway_server():
 # ---------------------------------------------------------------------------
 
 
-async def test_ths_local_list_tools_returns_all_87():
+async def test_stub_list_tools_returns_all_87():
     """旧实现静默返回首页 32 个; 委托后必须返回全量。"""
-    client = ThsLocalClient(ThsLocalConfig(name="ths", base_url="http://ths.test/mcp"))
-    client._client = _client(_paged_handler(_ths_pages()))
+    client = _StubMcpClient(_StubMcpConfig(name="vendor", base_url="http://ths.test/mcp"))
+    client._client = _client(_paged_handler(_three_pages()))
 
     tools = await client.list_tools()
 
     assert len(tools) == 87
-    assert tools[0]["name"] == "fqgate_t00"
+    assert tools[0]["name"] == "vendor_t00"
 
 
 async def test_fuyao_list_tools_returns_all():
     client = FuyaoClient(FuyaoConfig(name="fy", base_url="http://fy.test/mcp", api_key="k"))
-    client._client = _client(_paged_handler(_ths_pages()))
+    client._client = _client(_paged_handler(_three_pages()))
 
     tools = await client.list_tools()
 
@@ -547,7 +594,7 @@ async def test_fuyao_list_tools_returns_all():
 
 async def test_list_tools_keeps_error_contract():
     """契约不变: ok=False → 记 error + 返回 [], 不抛异常。"""
-    client = ThsLocalClient(ThsLocalConfig(name="ths", base_url="http://ths.test/mcp"))
+    client = _StubMcpClient(_StubMcpConfig(name="vendor", base_url="http://ths.test/mcp"))
     client._client = httpx.AsyncClient(transport=_RaisingTransport(httpx.ConnectError("refused")))
 
     tools = await client.list_tools()

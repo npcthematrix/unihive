@@ -33,7 +33,7 @@ export const STATUS_ORDER: Record<string, number> = {
  * 词汇与 views/config/upstreamEdit.ts 的 KNOWN_UPSTREAM_TYPES 对齐 —— 那里是
  * 后端 config_loader 接受的 type 全集, 配置页的 select 也用它。旧码这里只有
  * http/stdio/npx 三项, 而 stdio 根本不在后端词汇里 (死键), 真实在用的
- * mootdx2 / tdx_quant / omni / thsdk / ths_local_gateway 全部落到兜底分支,
+ * mootdx2 / tdx_quant / omni / thsdk 全部落到兜底分支,
  * 于是「类型」列直接把 snake_case 原始 id 打在徽标里, 又长又撑破列宽。
  * 标签要短 (列宽 88px), 原始 id 由 tag 的 title 悬停取回。
  */
@@ -44,7 +44,6 @@ export const TYPE_TEXT: Record<string, string> = {
   tdx_quant: 'TDX 量化',
   omni: 'OMNI 库',
   thsdk: 'THSDK',
-  ths_local_gateway: 'FQGate',
   python: 'Python',
   npx: 'NPX',
 }

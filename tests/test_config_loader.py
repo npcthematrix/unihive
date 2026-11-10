@@ -118,8 +118,8 @@ class TestValidateConfig:
 
     @pytest.mark.parametrize("retired", ["http_jsonrpc", "python", "npx"])
     def test_retired_types_rejected(self, retired):
-        # Round-12 簇G: 构造表只认 http/mootdx2/tdx_quant/omni/thsdk/
-        # ths_local_gateway/stdio; 历史类型不再静默放行。
+        # Round-12 簇G: 构造表只认 http/mootdx2/tdx_quant/omni/thsdk/stdio;
+        # 历史类型不再静默放行。
         errors = validate_config({
             "upstreams": {"x": {"enabled": True, "type": retired}}
         })

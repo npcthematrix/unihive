@@ -1110,7 +1110,7 @@ class ConfigStore:
         *,
         expected_revision: int | None = None,
     ) -> int:
-        """批量写入 ``origin='user'`` 工具实体 (FQGate OpenAPI 实时导入专用)。
+        """批量写入 ``origin='user'`` 工具实体 (OpenAPI 实时导入专用)。
 
         单事务, 全批最多 bump 一次全局 revision; expected_revision 过期抛
         :class:`RevisionConflict`, 整笔回滚。

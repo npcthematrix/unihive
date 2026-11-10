@@ -23,12 +23,12 @@ import {
 
 /** 测试夹具: 上游返回的原始对象, 形状并不受我们控制。 */
 function makeTool(overrides: RawTool = {}): RawTool {
-  return { name: 'fqgate_market_login', description: '登录行情', ...overrides }
+  return { name: 'vendor_market_login', description: '登录行情', ...overrides }
 }
 
-/** THS-LOCAL 实测形状 */
-const THS_TOOL: RawTool = {
-  name: 'fqgate_market_login',
+/** 带 title/annotations/_meta 的上游实测形状 */
+const ANNOTATED_TOOL: RawTool = {
+  name: 'vendor_market_login',
   title: '登录行情服务器',
   description: '登录本地行情服务器',
   inputSchema: {
@@ -45,7 +45,7 @@ const THS_TOOL: RawTool = {
     idempotentHint: false,
     openWorldHint: true,
   },
-  _meta: { vendor: { name: 'FQGate' } },
+  _meta: { vendor: { name: 'Vendor' } },
 }
 
 /** fuyao 实测形状: 无 title、无 annotations, 但有 outputSchema */
@@ -88,15 +88,15 @@ describe('安全读取', () => {
   })
 
   it('正常字段原样返回', () => {
-    expect(toolName(THS_TOOL)).toBe('fqgate_market_login')
-    expect(toolTitle(THS_TOOL)).toBe('登录行情服务器')
+    expect(toolName(ANNOTATED_TOOL)).toBe('vendor_market_login')
+    expect(toolTitle(ANNOTATED_TOOL)).toBe('登录行情服务器')
     expect(toolDescription(FUYAO_TOOL)).toBe('A 股行情')
   })
 })
 
 describe('rowKeyOf', () => {
   it('有 name 时用 name', () => {
-    expect(rowKeyOf(makeTool())).toBe('fqgate_market_login')
+    expect(rowKeyOf(makeTool())).toBe('vendor_market_login')
   })
 
   it('无名行按对象身份发稳定 id, 多个无名行不会互相撞', () => {
@@ -119,7 +119,7 @@ describe('rowKeyOf', () => {
 
 describe('requiredParams', () => {
   it('正常取到字符串数组', () => {
-    expect(requiredParams(THS_TOOL)).toEqual(['server'])
+    expect(requiredParams(ANNOTATED_TOOL)).toEqual(['server'])
   })
 
   it.each([
@@ -139,8 +139,8 @@ describe('requiredParams', () => {
 })
 
 describe('schemaProperties', () => {
-  it('投影 THS-LOCAL 形状 (含 description 与 enum)', () => {
-    expect(schemaProperties(THS_TOOL)).toEqual([
+  it('投影带注解上游形状 (含 description 与 enum)', () => {
+    expect(schemaProperties(ANNOTATED_TOOL)).toEqual([
       {
         name: 'server',
         type: 'string',
@@ -195,19 +195,19 @@ describe('schemaProperties', () => {
 describe('形状标记', () => {
   it('hasOutputSchema 只认对象', () => {
     expect(hasOutputSchema(FUYAO_TOOL)).toBe(true)
-    expect(hasOutputSchema(THS_TOOL)).toBe(false)
+    expect(hasOutputSchema(ANNOTATED_TOOL)).toBe(false)
     expect(hasOutputSchema({ outputSchema: 'nope' })).toBe(false)
   })
 
   it('hasMeta 认任何非 null 值, null 与 undefined 都不算', () => {
-    expect(hasMeta(THS_TOOL)).toBe(true)
+    expect(hasMeta(ANNOTATED_TOOL)).toBe(true)
     expect(hasMeta({ _meta: {} })).toBe(true)
     expect(hasMeta({ _meta: null })).toBe(false)
     expect(hasMeta({})).toBe(false)
   })
 
   it('hasAnnotations 只认对象', () => {
-    expect(hasAnnotations(THS_TOOL)).toBe(true)
+    expect(hasAnnotations(ANNOTATED_TOOL)).toBe(true)
     expect(hasAnnotations(FUYAO_TOOL)).toBe(false)
     expect(hasAnnotations({ annotations: [] })).toBe(false)
   })
@@ -219,7 +219,7 @@ describe('extraKeys', () => {
   })
 
   it('已渲染的字段一个都不报', () => {
-    expect(extraKeys(THS_TOOL)).toEqual([])
+    expect(extraKeys(ANNOTATED_TOOL)).toEqual([])
   })
 
   it('未知键即使值是 undefined 也算存在', () => {
@@ -229,7 +229,7 @@ describe('extraKeys', () => {
 
 describe('annotationFlags', () => {
   it('实测 payload 给出 4 个白名单序标签', () => {
-    expect(annotationFlags(THS_TOOL)).toEqual([
+    expect(annotationFlags(ANNOTATED_TOOL)).toEqual([
       { key: 'readOnlyHint', label: '只读', value: false },
       { key: 'destructiveHint', label: '破坏性', value: true },
       { key: 'idempotentHint', label: '幂等', value: false },
@@ -284,18 +284,18 @@ describe('hasActiveFilters', () => {
 
 describe('applyToolFilter', () => {
   const off = { meta: false, outputSchema: false, annotations: false }
-  const all = [THS_TOOL, FUYAO_TOOL]
+  const all = [ANNOTATED_TOOL, FUYAO_TOOL]
 
   it('无筛选时原样返回全部', () => {
     expect(applyToolFilter(all, '', off)).toHaveLength(2)
   })
 
   it('按 name 搜索且大小写不敏感', () => {
-    expect(applyToolFilter(all, 'FQGATE', off)).toEqual([THS_TOOL])
+    expect(applyToolFilter(all, 'VENDOR', off)).toEqual([ANNOTATED_TOOL])
   })
 
   it('按 title 搜索', () => {
-    expect(applyToolFilter(all, '登录行情服务器', off)).toEqual([THS_TOOL])
+    expect(applyToolFilter(all, '登录行情服务器', off)).toEqual([ANNOTATED_TOOL])
   })
 
   it('按 description 搜索', () => {
@@ -310,25 +310,25 @@ describe('applyToolFilter', () => {
   })
 
   it('query 两端空白被忽略', () => {
-    expect(applyToolFilter(all, '  fqgate  ', off)).toEqual([THS_TOOL])
+    expect(applyToolFilter(all, '  vendor  ', off)).toEqual([ANNOTATED_TOOL])
   })
 
   it('开关按与逻辑叠加', () => {
-    expect(applyToolFilter(all, '', { ...off, meta: true })).toEqual([THS_TOOL])
+    expect(applyToolFilter(all, '', { ...off, meta: true })).toEqual([ANNOTATED_TOOL])
     expect(applyToolFilter(all, '', { ...off, outputSchema: true })).toEqual([FUYAO_TOOL])
-    expect(applyToolFilter(all, '', { ...off, annotations: true })).toEqual([THS_TOOL])
+    expect(applyToolFilter(all, '', { ...off, annotations: true })).toEqual([ANNOTATED_TOOL])
     expect(applyToolFilter(all, '', { ...off, meta: true, outputSchema: true })).toEqual([])
   })
 
   it('搜索与开关同时生效', () => {
-    expect(applyToolFilter(all, 'fqgate', { ...off, outputSchema: true })).toEqual([])
-    expect(applyToolFilter(all, 'fqgate', { ...off, meta: true })).toEqual([THS_TOOL])
+    expect(applyToolFilter(all, 'vendor', { ...off, outputSchema: true })).toEqual([])
+    expect(applyToolFilter(all, 'vendor', { ...off, meta: true })).toEqual([ANNOTATED_TOOL])
   })
 
   it('不改写输入数组', () => {
     const input = [...all]
 
-    applyToolFilter(input, 'fqgate', off)
+    applyToolFilter(input, 'vendor', off)
 
     expect(input).toEqual(all)
   })
@@ -336,7 +336,7 @@ describe('applyToolFilter', () => {
 
 describe('formatToolJson', () => {
   it('可被 JSON.parse 回原对象 (证明视图不丢信息)', () => {
-    expect(JSON.parse(formatToolJson(THS_TOOL))).toEqual(THS_TOOL)
+    expect(JSON.parse(formatToolJson(ANNOTATED_TOOL))).toEqual(ANNOTATED_TOOL)
   })
 
   it('是缩进过的多行文本', () => {
@@ -350,7 +350,7 @@ describe('formatToolJson', () => {
 
 describe('jsonBytes', () => {
   it('中文描述按 UTF-8 计, 必须大于 text.length', () => {
-    const text = formatToolJson(THS_TOOL)
+    const text = formatToolJson(ANNOTATED_TOOL)
 
     expect(jsonBytes(text)).toBeGreaterThan(text.length)
   })
@@ -360,7 +360,7 @@ describe('jsonBytes', () => {
   })
 
   it('与 TextEncoder 的结果一致', () => {
-    const text = '登录行情 fqgate'
+    const text = '登录行情 vendor'
 
     expect(jsonBytes(text)).toBe(new TextEncoder().encode(text).length)
   })
@@ -383,7 +383,7 @@ describe('formatBytes', () => {
 describe('summarizePayload', () => {
   function makeResponse(overrides: Partial<RawToolsResponse> = {}): RawToolsResponse {
     return {
-      upstream: 'THS-LOCAL-GATEWAY',
+      upstream: 'vendor-gateway',
       timestamp: 1758000000,
       ok: true,
       error: null,

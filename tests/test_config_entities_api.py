@@ -42,18 +42,18 @@ async def test_entities_summary_after_seed(seeded_store):
     assert summary["revision"] == 0
     assert isinstance(summary["template_version"], str) and summary["template_version"]
     assert isinstance(summary["template_imported_at"], str)
-    assert len(summary["upstreams"]) == 9
+    assert len(summary["upstreams"]) == 8
     assert {u["name"] for u in summary["upstreams"]} >= {
         "mootdx2",
         "fuyao_ashare",
-        "THS-LOCAL-GATEWAY",
+        "thsdk",
     }
     for upstream in summary["upstreams"]:
         assert set(upstream) == {"name", "type", "enabled", "origin", "updated_at"}
         assert upstream["origin"] == "builtin"
         assert isinstance(upstream["enabled"], bool)
-    assert summary["tools"]["total"] == 305
-    assert sum(summary["tools"]["by_origin"].values()) == 305
+    assert summary["tools"]["total"] == 218
+    assert sum(summary["tools"]["by_origin"].values()) == 218
     # 出厂 seed 的段与上游 origin 均为 builtin
     assert summary["sections"], "expected seeded sections (cache/logging/gateway/...)"
     assert all(s["origin"] == "builtin" for s in summary["sections"])
@@ -89,8 +89,8 @@ async def test_entities_handler_db_mode(seeded_store):
         payload = json.loads(resp.body.decode())
         assert payload["source"] == "db"
         assert payload["revision"] == 0
-        assert len(payload["upstreams"]) == 9
-        assert payload["tools"]["total"] == 305
+        assert len(payload["upstreams"]) == 8
+        assert payload["tools"]["total"] == 218
     finally:
         ca.set_config_db(None)
         await store.close()

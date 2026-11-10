@@ -56,12 +56,6 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/McpBrowserView.vue'),
         meta: { title: 'MCP 浏览器' },
       },
-      // 旧的专用页面被 MCP 浏览器取代。保留为一条重定向而不是 404: 一行成本,
-      // 保住已有书签, 且正好落回 THS-LOCAL 上游 —— 旧页面的内容, 只是这次是全的。
-      {
-        path: 'ths-local',
-        redirect: { name: 'mcp-browser', query: { upstream: 'THS-LOCAL-GATEWAY' } },
-      },
       {
         path: 'guides',
         name: 'guides',

@@ -5,7 +5,6 @@
   H3 (OmniClient 空 DB 不再假 HEALTHY) /
   M8 (fuyao start 做可达性探测, 死网关 → UNAVAILABLE) /
   L10 (omni worker-thread SQLite 连接泄漏) /
-  L11 (ths_local_gateway start 包 wait_for) /
   L12 (uvicorn timeout_graceful_shutdown).
 """
 from __future__ import annotations
@@ -26,7 +25,6 @@ from src.unihive.api.fuyao_client import FuyaoClient, FuyaoConfig
 from src.unihive.api.mootdx2_client import MooTDX2Client
 from src.unihive.api.omni_client import OmniClient, OmniConfig
 from src.unihive.api.tdx_quant_client import TdxQuantClient
-from src.unihive.api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
 from src.unihive.api.upstream_client import UpstreamStatus
 
 
@@ -249,55 +247,6 @@ async def test_l10_omni_stop_closes_worker_thread_conns(tmp_path):
     for c in registered:
         with pytest.raises(sqlite3.ProgrammingError):
             c.execute("SELECT 1")  # closed conn: ProgrammingError
-
-
-# ---------------------------------------------------------------------------
-# L11: ths_local_gateway start() 包 wait_for
-# ---------------------------------------------------------------------------
-
-
-async def test_l11_ths_local_start_bounded_against_hung_gateway(monkeypatch):
-    """_start_upstream_client 对 ths_local_gateway 特例不走 wait_for (gateway
-    级超时不生效), 而 start() 的 health_check 是 httpx POST, 仅受
-    timeout_seconds (默认 30s) 约束 → 上游挂死时 boot 卡 30s。修复后
-    start() 内部用 wait_for 包 health_check, 挂死在 ~boot-probe 超时返回
-    DEGRADED 而非等满 read timeout。"""
-
-    async def hanging_handler(request: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(30)
-        return httpx.Response(200)
-
-    transport = httpx.MockTransport(hanging_handler)
-
-    _real_async_client = httpx.AsyncClient
-
-    def fake_async_client(**kwargs):
-        kwargs["transport"] = transport
-        return _real_async_client(**kwargs)
-
-    monkeypatch.setattr(httpx, "AsyncClient", fake_async_client)
-
-    cfg = ThsLocalConfig(
-        name="ths_local",
-        base_url="http://127.0.0.1:17281/mcp",
-        timeout_seconds=4.0,
-        connect_timeout_seconds=1.0,
-    )
-    client = ThsLocalClient(cfg)
-    t0 = time.time()
-    try:
-        ok = await client.start()
-        elapsed = time.time() - t0
-        # 挂死上游: 探测在 boot-probe 超时 (≈1s) 被取消 → DEGRADED + True,
-        # 不再等满 httpx read timeout (4s)。
-        assert ok is True, "hung gateway → DEGRADED (still returns True, like boot)"
-        assert client._status == UpstreamStatus.DEGRADED
-        assert elapsed < 3, (
-            "start() must return within boot-probe timeout, not wait full httpx "
-            "read timeout when upstream hangs"
-        )
-    finally:
-        await client.stop()
 
 
 # ---------------------------------------------------------------------------

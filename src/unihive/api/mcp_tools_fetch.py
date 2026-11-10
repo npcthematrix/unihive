@@ -3,8 +3,8 @@
 为什么单独一个模块, 而不是复用各 client 的 ``list_tools()``:
 
 1. 那些 ``list_tools()`` 只读 ``result["tools"]``, 丢弃同级的 ``result["nextCursor"]``。
-   THS-LOCAL-GATEWAY 实测分 3 页 (32/32/23 = 87 个工具), 所以旧实现静默返回了
-   87 个中的 32 个 —— 这正是控制台 "32 tools" 的由来。
+   多页上游 (实测 32/32/23 三页) 的旧实现只返回首页 32 个 ——
+   这正是控制台曾显示 "32 tools" 的由来。
 2. 它们 ``except Exception: return []``, 于是 "上游炸了" 和 "上游就是没有工具"
    塌缩成同一个值。控制台必须区分这两者, 事后无法补救。
 3. 它们不检查 HTTP 状态码, 4xx/5xx 会被喂给 ``response.json()`` 再塌缩成 ``[]``。
@@ -68,7 +68,7 @@ class RawToolsResult:
 def _normalize_cursor(raw: Any) -> str | None:
     """把 nextCursor 归一成非空字符串, 否则 None 表示 "没有下一页"。
 
-    实测 THS-LOCAL 返回的是 JSON 字符串 ('32' / '64'), 但规范没规定类型,
+    实测部分上游返回的是 JSON 字符串 ('32' / '64'), 但规范没规定类型,
     所以 int 也要收; 空串和空白串一律当作结束。
     """
     if raw is None:

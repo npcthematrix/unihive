@@ -211,14 +211,6 @@ upstreams:
       - news
       - watchlist
 
-  THS-LOCAL-GATEWAY:
-    enabled: true
-    type: "ths_local_gateway"
-    base_url: "http://127.0.0.1:17281/mcp"
-    description: "FQGate 本地 MCP 网关"
-    timeout_seconds: 30
-    connect_timeout_seconds: 5.0
-
 # Gateway 全局性能配置
 gateway:
   per_upstream_timeout: 10  # 单个上游调用超时，防止卡死 fallback 链
@@ -359,5 +351,3 @@ tools:
   - {name: fund_portfolio_bond_history, description: "基金债券持仓历史", routing: fund_portfolio_bond_history, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
   - {name: fund_portfolio_bond_report_dates, description: "基金债券持仓报告日", routing: fund_portfolio_bond_report_dates, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
   - {name: fund_portfolio_asset_allocation, description: "基金资产配置", routing: fund_portfolio_asset_allocation, params: [{name: thscode, type: str, required: true, description: "基金 THS 代码，如 '000001.OF'"}], cache_ttl_key: fund_holdings, data_source_type: online}
-
-  # --- 2026-09-17 补全: 其余 55 个 fqgate 工具 (wencai_nlp/timeline/ipo/option/资讯/登录等) ---

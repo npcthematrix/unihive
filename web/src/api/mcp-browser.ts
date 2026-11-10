@@ -4,7 +4,7 @@ import { http } from './client'
  * 上游原样返回的 tool 对象。
  *
  * 刻意不做类型收窄 —— 页面要展示的就是原始 payload。不同上游发出来的形状
- * 并不一致 (THS-LOCAL 有 title/annotations/_meta, fuyao 有 outputSchema),
+ * 并不一致 (有的上游带 title/annotations/_meta, fuyao 带 outputSchema),
  * 用封闭 interface 描述它等于对外宣称我们知道所有上游的字段, 那是假的。
  */
 export type RawTool = Record<string, unknown>
@@ -29,7 +29,7 @@ export interface RawToolsResponse {
   ok: boolean
   error: string | null
   errorKind: string | null
-  /** 实际拉取的页数 (上游分页, 例如 THS-LOCAL 是 3 页) */
+  /** 实际拉取的页数 (上游分页拉取时 > 1) */
   pages: number
   truncated: boolean
   truncatedReason: string | null

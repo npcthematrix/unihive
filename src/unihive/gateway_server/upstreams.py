@@ -10,7 +10,6 @@ from ..api.fuyao_client import FuyaoClient, FuyaoConfig
 from ..api.mootdx2_client import MooTDX2Client, MooTDX2Config
 from ..api.omni_client import OmniClient, OmniConfig
 from ..api.tdx_quant_client import TdxQuantClient
-from ..api.ths_local_gateway_client import ThsLocalClient, ThsLocalConfig
 from ..api.thsdk_client import ThsdkClient
 from ..api.upstream_client import UpstreamClient, UpstreamConfig, UpstreamStatus
 from ..core.config_db import resolve_project_path
@@ -34,20 +33,9 @@ class UpstreamControlMixin:
 
         cfg 是历史签名保留 (L7 回滚): 测试 fixture 替换本方法为
         ``fake_start(name, cfg, client)`` 验证取消/回滚路径, 必须保留 3 参
-        签名。内部已改用 isinstance(client, ThsLocalClient) 判别, cfg 仍
-        接收但不读取。
+        签名。cfg 仍接收但不读取。
         """
         del cfg  # noqa: F841  保留 2nd positional 以兼容测试 fixture
-        if isinstance(client, ThsLocalClient):
-            try:
-                await client.start()
-            except Exception as e:
-                logger.error(f"[{name}] Failed to start: {e}")
-            self.upstreams[name] = client
-            connected = bool(client.is_available)
-            logger.info(f"[{name}] {'Connected' if connected else 'Failed'}")
-            return connected
-
         try:
             await asyncio.wait_for(
                 client.start(), timeout=self._upstream_start_timeout
@@ -179,7 +167,7 @@ class UpstreamControlMixin:
     def _spawn_late_start(self, name: str, client) -> None:
         """为支持 start_after_timeout 的阻塞型 client 挂后台自愈任务。
 
-        无该钩子的 client (fuyao/omni/stdio/ths_local 等, 启动探测本身
+        无该钩子的 client (fuyao/omni/stdio 等, 启动探测本身
         有界或不走 wait_for 特例) 不挂。同名 task 会被新 task 覆盖 (旧 task
         在 stop() 时一并取消即可)。
         """
@@ -308,15 +296,6 @@ class UpstreamControlMixin:
             # 防 config.db 旧 30s 值反超路由 10s 致单 worker 僵尸。
             thsdk_cfg = ThsdkConfig.from_dict(name, cfg, self._per_upstream_timeout)
             return ThsdkClient(thsdk_cfg)
-        if cfg.get("type") == "ths_local_gateway":
-            return ThsLocalClient(
-                ThsLocalConfig(
-                    name=name,
-                    base_url=cfg.get("base_url", ""),
-                    timeout_seconds=cfg.get("timeout_seconds", 30),
-                    connect_timeout_seconds=cfg.get("connect_timeout_seconds", 5.0),
-                )
-            )
         upstream_type = cfg.get("type")
         if upstream_type is None:
             # 历史契约: 缺 type 键 = 通用 stdio MCP 扩展点 (UpstreamClient)。
@@ -330,7 +309,7 @@ class UpstreamControlMixin:
             # fail-fast 并列出合法值。
             valid_types = (
                 "http", "mootdx2", "tdx_quant", "omni",
-                "thsdk", "ths_local_gateway", "stdio",
+                "thsdk", "stdio",
             )
             raise ValueError(
                 f"upstream {name!r}: 未知 type={cfg.get('type')!r}; "

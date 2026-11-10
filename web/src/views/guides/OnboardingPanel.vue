@@ -48,7 +48,6 @@
           <strong>thsdk</strong> — 同花顺 thsdk (社区包): 16 个只读工具常驻, 自选写工具需
           <code>ALLOW_WATCHLIST_WRITE=true</code>
         </li>
-        <li><strong>THS-LOCAL-GATEWAY</strong> — FQGate 本地 MCP 网关: 行情 / K 线 / 资讯 / wencai / IPO / 期权</li>
       </ul>
       <p class="guide-muted">
         上表是能力划分, 不含运行态; 每个上游的启用状态与连通性以「配置信息 → 上游」页为准。

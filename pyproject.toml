@@ -64,7 +64,6 @@ packages = ["src/unihive"]
 "config/tools_mootdx2.yaml" = "config/tools_mootdx2.yaml"
 "config/tools_omni.yaml" = "config/tools_omni.yaml"
 "config/tools_thsdk.yaml" = "config/tools_thsdk.yaml"
-"config/tools_ths_local.yaml" = "config/tools_ths_local.yaml"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

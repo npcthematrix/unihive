@@ -18,7 +18,6 @@ export const KNOWN_UPSTREAM_TYPES = [
   'tdx_quant',
   'omni',
   'thsdk',
-  'ths_local_gateway',
   'python',
   'npx',
 ] as const

@@ -45,7 +45,6 @@ _SEED_TEMPLATE_FILES = (
     "config/tools_mootdx2.yaml",
     "config/tools_omni.yaml",
     "config/tools_thsdk.yaml",
-    "config/tools_ths_local.yaml",
 )
 # config.yaml (真实 session_secret + PBKDF2 口令哈希, git 跟踪但无 ${VAR}
 # 占位) 与 proxy_settings.yaml (fail-soft 默认 disabled) 都不在 wheel 内。

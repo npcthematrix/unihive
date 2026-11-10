@@ -17,23 +17,23 @@ from unihive.utils import console_api as ca
 BUNDLE = {
     "sections": {},
     "upstreams": [
-        {"name": "THS-LOCAL-GATEWAY", "type": "ths_local_gateway",
+        {"name": "demo-gateway", "type": "demo_gateway",
          "enabled": True, "config": {}},
     ],
     "tools": [
         {
-            "name": "fqgate_a",
-            "routing": "fqgate_a",
+            "name": "demo_a",
+            "routing": "demo_a",
             "description": "old desc",
             "cache_ttl_key": None,
             "requires_env": None,
             "publish_mode": "default",
-            "mapping": {"THS-LOCAL-GATEWAY": "fqgate_a"},
-            "spec": {"name": "fqgate_a", "routing": "fqgate_a",
+            "mapping": {"demo-gateway": "demo_a"},
+            "spec": {"name": "demo_a", "routing": "demo_a",
                      "description": "old desc", "params": [],
-                     "upstream_tool_mapping": {"THS-LOCAL-GATEWAY": "fqgate_a"},
+                     "upstream_tool_mapping": {"demo-gateway": "demo_a"},
                      "data_source_type": "online"},
-            "source_file": "tools_ths_local.yaml",
+            "source_file": "tools_demo.yaml",
             "origin": "builtin",
         },
     ],
@@ -123,22 +123,22 @@ async def test_h6_update_tool_rejects_plaintext_secret_without_persisting(tmp_pa
     leaky_bundle = {
         "sections": {},
         "upstreams": [
-            {"name": "THS-LOCAL-GATEWAY", "type": "ths_local_gateway",
+            {"name": "demo-gateway", "type": "demo_gateway",
              "enabled": True, "config": {}},
         ],
         "tools": [
             {
-                "name": "fqgate_a",
-                "routing": "fqgate_a",
+                "name": "demo_a",
+                "routing": "demo_a",
                 "description": "old desc",
                 "cache_ttl_key": None,
                 "requires_env": None,
                 "publish_mode": "default",
-                "mapping": {"THS-LOCAL-GATEWAY": "fqgate_a"},
-                "spec": {"name": "fqgate_a", "routing": "fqgate_a",
+                "mapping": {"demo-gateway": "demo_a"},
+                "spec": {"name": "demo_a", "routing": "demo_a",
                          "description": "old desc", "params": [],
                          "token": "sk-leaked-123"},
-                "source_file": "tools_ths_local.yaml",
+                "source_file": "tools_demo.yaml",
                 "origin": "builtin",
             },
         ],
@@ -148,10 +148,10 @@ async def test_h6_update_tool_rejects_plaintext_secret_without_persisting(tmp_pa
     await s.seed_from_bundle(VERSION, leaky_bundle)
     try:
         with pytest.raises(ValueError, match="[Pp]laintext secret|明文密钥"):
-            await s.update_tool("fqgate_a", {"description": "新描述"})
+            await s.update_tool("demo_a", {"description": "新描述"})
 
         # 行与 revision 都不变 (异常在任何 DML 之前)
-        row = await s.get_tool("fqgate_a")
+        row = await s.get_tool("demo_a")
         assert row["description"] == "old desc"
         assert await s.revision() == 0
     finally:
@@ -161,7 +161,7 @@ async def test_h6_update_tool_rejects_plaintext_secret_without_persisting(tmp_pa
 async def test_h6_update_tool_placeholder_secret_key_is_allowed(store):
     # ${VAR} 占位符是配置库唯一允许的密钥形态 (与上游连接块门同语义)
     rev = await store.update_tool(
-        "fqgate_a",
+        "demo_a",
         {"params": [{"name": "code"}, {"name": "token"}]},
     )
     assert rev  # 正常写入不被误伤
@@ -169,42 +169,42 @@ async def test_h6_update_tool_placeholder_secret_key_is_allowed(store):
 
 async def test_h6_upsert_tools_rejects_plaintext_secret_batch_rolls_back(store):
     bad_entity = {
-        "name": "fqgate_evil",
-        "routing": "fqgate_evil",
+        "name": "demo_evil",
+        "routing": "demo_evil",
         "description": "",
-        "mapping": {"THS-LOCAL-GATEWAY": "fqgate_evil"},
+        "mapping": {"demo-gateway": "demo_evil"},
         "spec": {
-            "name": "fqgate_evil",
-            "routing": "fqgate_evil",
+            "name": "demo_evil",
+            "routing": "demo_evil",
             "params": [{"name": "q", "api_key": "sk-leaked-in-param"}],
-            "upstream_tool_mapping": {"THS-LOCAL-GATEWAY": "fqgate_evil"},
+            "upstream_tool_mapping": {"demo-gateway": "demo_evil"},
         },
         "source_file": "openapi-import",
     }
     good_entity = {
-        "name": "fqgate_good",
-        "routing": "fqgate_good",
+        "name": "demo_good",
+        "routing": "demo_good",
         "description": "",
-        "mapping": {"THS-LOCAL-GATEWAY": "fqgate_good"},
-        "spec": {"name": "fqgate_good", "routing": "fqgate_good", "params": []},
+        "mapping": {"demo-gateway": "demo_good"},
+        "spec": {"name": "demo_good", "routing": "demo_good", "params": []},
         "source_file": "openapi-import",
     }
     with pytest.raises(ValueError, match="[Pp]laintext secret|明文密钥"):
         await store.upsert_tools([good_entity, bad_entity])
 
     # 整笔回滚: 好实体也不得落库, revision 不 bump
-    assert await store.get_tool("fqgate_good") is None
-    assert await store.get_tool("fqgate_evil") is None
+    assert await store.get_tool("demo_good") is None
+    assert await store.get_tool("demo_evil") is None
     assert await store.revision() == 0
 
 
 async def test_h6_upsert_tools_allows_placeholder_under_secret_named_key(store):
     entity = {
-        "name": "fqgate_ph",
-        "routing": "fqgate_ph",
+        "name": "demo_ph",
+        "routing": "demo_ph",
         "description": "",
-        "mapping": {"THS-LOCAL-GATEWAY": "fqgate_ph"},
-        "spec": {"name": "fqgate_ph", "routing": "fqgate_ph", "params": [],
+        "mapping": {"demo-gateway": "demo_ph"},
+        "spec": {"name": "demo_ph", "routing": "demo_ph", "params": [],
                  "password": "${UPSTREAM_PASSWORD}"},
         "source_file": "openapi-import",
     }

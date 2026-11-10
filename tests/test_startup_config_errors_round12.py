@@ -105,7 +105,7 @@ class TestUnknownUpstreamType:
         msg = str(exc.value)
         assert "weird" in msg
         assert "http_jsonrpc" in msg
-        for valid in ("http", "mootdx2", "tdx_quant", "omni", "thsdk", "ths_local_gateway", "stdio"):
+        for valid in ("http", "mootdx2", "tdx_quant", "omni", "thsdk", "stdio"):
             assert valid in msg
 
     def test_stdio_type_still_constructs(self, gateway_server_minimal):

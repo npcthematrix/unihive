@@ -43,8 +43,8 @@ class TestBuildSignature:
 
     def test_optional_with_default(self):
         sig = build_signature([{"name": "limit", "type": "int", "required": False}])
-        # 数值可选参数默认 None（非 0）：0 会被当显式值转发给上游（FQGate
-        # requestTimeoutMs minimum:1 直接 400），None 才表示"调用方未提供"
+        # 数值可选参数默认 None（非 0）：0 会被当显式值转发给上游（有 minimum:1 约束的字段
+        # 会直接 400），None 才表示"调用方未提供"
         assert sig.parameters["limit"].default is None
         # 可选参数自动 union None: 显式传 null 不再被 Pydantic 400
         assert sig.parameters["limit"].annotation == int | None
@@ -54,7 +54,7 @@ class TestBuildSignature:
         assert sig.parameters["x"].annotation is str
 
     def test_array_type_maps_to_list(self):
-        """array 类型必须映射 list: FQGate 运行时只收原生 JSON 数组,
+        """array 类型必须映射 list: 上游运行时只收原生 JSON 数组,
         误回落成 str 会把数组当字符串转发, 上游 REST 层直接 400。"""
         sig = build_signature([{"name": "securities", "type": "array", "required": False}])
         assert sig.parameters["securities"].annotation == list | None
@@ -194,7 +194,7 @@ class TestBuildToolFunction:
         assert server.calls[0][1] == {"symbol": "sh600519"}
 
     def test_optional_numeric_omitted_not_forwarded(self):
-        """可选 int 省略时不许把默认值 0 转发给上游 (FQGate minimum:1 会 400)。"""
+        """可选 int 省略时不许把默认值 0 转发给上游 (有 minimum:1 约束时会 400)。"""
         server = _FakeServer()
         spec = {
             "name": "cal",
