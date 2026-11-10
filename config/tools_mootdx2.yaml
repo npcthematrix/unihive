@@ -1176,6 +1176,16 @@ tools:
       成功: {"success": true, "data": [{"date": "2024-01-02", "open": 10.0, ...}], "source": "mootdx2"}
       歧义: {"success": true, "data": [...], "warn": "代码 000001 为跨市场歧义码…如需上证指数请显式传 sh000001"}
       失败: {"success": false, "error": "TDX 安装目录未配置", "error_kind": "upstream_unavailable"}
+
+      【记录字段】(每条 K 线)
+      - date: 交易日 YYYY-MM-DD
+      - open / high / low / close: 开高低收，单位元
+      - vol: 成交量（A 股为手，1 手 = 100 股；指数/ETF 随本地 .day 原始口径，
+        可用 amount ÷ close 反推校验）
+      - amount: 成交额，单位元
+      - volume: vol 的副本（mootdx2 to_data 补列）；仅 adjust=qfq/hfq 时会被
+        复权因子缩放而与 vol 不一致，做量能分析请固定用 vol
+      - datetime / year / month / day / hour / minute: 时间冗余字段（日线 hour=minute=0）
     routing: get_daily_local
     upstream_tool_mapping:
       mootdx2: get_daily
@@ -1221,6 +1231,8 @@ tools:
       成功: {"success": true, "data": {"sh600036": [...], "sh600519": [...]}, "source": "mootdx2"}
       部分成功: {"success": true, "data": {"sh600036": [...]}, "error_detail": {"warn": "sh123456: invalid_symbol", "recoverable": true}}
       全失败: {"success": false, "error": "批内全部失败: ...", "error_kind": "internal_error"}
+      每条记录字段同 get_daily_local：date / open / high / low / close(元) /
+      vol(成交量) / amount(成交额, 元) / volume(vol 副本) / datetime 等。
     routing: get_daily_batch_local
     upstream_tool_mapping:
       mootdx2: get_daily_batch_local
@@ -1280,6 +1292,14 @@ tools:
       成功: {"success": true, "data": [{"date": "2024-01-02", "open": 10.0, ...}], "source": "mootdx2"}
       指数误传: {"success": false, "error": "sh000001 是指数代码；获取指数日K请使用 get_index_kline_local", "error_kind": "invalid_request"}
       未找到（业务态，不是失败）: {"success": true, "data": null, "error": "未找到 510300 的日线数据", "error_kind": "no_data"}
+
+      【记录字段】(每条 K 线)
+      - date / open / high / low / close（元）
+      - vol: 成交量；ETF 本地 .day 的口径可能为「份」也可能为「手」，
+        不同交易日可能不一致，请用 amount ÷ close 反推校验后再做量能分析
+      - amount: 成交额，单位元
+      - volume: vol 的副本；仅 adjust=qfq/hfq 时会被复权因子缩放而与 vol 不一致
+      - datetime / year / month / day / hour / minute: 时间冗余字段
     routing: get_etf_daily_local
     upstream_tool_mapping:
       mootdx2: get_etf_daily_local
