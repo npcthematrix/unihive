@@ -35,6 +35,11 @@ data/
 .playwright-mcp/
 .playwright-mcp/**
 docs/superpowers/
+# AI 会话记忆与本地评审笔记 (本地产物, 不入库; 评审结论另见 docs/handoffs/)
+.workbuddy-ai/
+.workbuddy-ai/**
+.claude/PRPs/
+.claude/PRPs/**
 
 # One-off debug / scratch
 %TEMP%*
