@@ -1,4 +1,4 @@
-# Install (or uninstall / restart-and-verify) the UniHive gateway as a Windows
+﻿# Install (or uninstall / restart-and-verify) the UniHive gateway as a Windows
 # Scheduled Task so it starts automatically at every user logon — detached from
 # any Claude Code session, with the watchdog_gateway.ps1 monitor keeping the
 # child process alive across crashes.

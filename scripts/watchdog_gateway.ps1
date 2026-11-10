@@ -1,4 +1,4 @@
-# Long-lived watchdog for the UniHive MCP gateway.
+﻿# Long-lived watchdog for the UniHive MCP gateway.
 #
 # Invoked by the UniHiveGateway scheduled task (ONLOGON + user account).
 # Polls every PollSeconds (default 5s); if the gateway child process is gone,

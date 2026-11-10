@@ -1,4 +1,4 @@
-# Clean-stop the UniHive MCP gateway that was started by watchdog_gateway.ps1
+﻿# Clean-stop the UniHive MCP gateway that was started by watchdog_gateway.ps1
 # (or a manual run_gateway_detached.ps1 invocation).
 #
 # Strategy:
@@ -55,14 +55,26 @@ if ($pid_) {
     }
 }
 
-# 3) scheduled task — 让 schtasks 强杀 watchdog host。
+# 3) scheduled task — 让任务计划程序强杀 watchdog host。
 #   /End 立即返回, 实际进程树清理是 task scheduler 在后台做的, 通常 < 5s 完成。
 $taskName = 'UniHiveGateway'
-$taskExists = $true
-try { schtasks /Query /TN $taskName | Out-Null } catch { $taskExists = $false }
+# 旧实现用 schtasks + try/catch: 原生 exe 非零退出不抛异常, catch 恒不触发,
+# 任务不存在时仍会调 /End 并输出「需要 '/TN' 的值」+ 退出码 1。
+# 改用 ScheduledTasks 模块 (纯 cmdlet, 不经过原生 stderr, 不受
+# $ErrorActionPreference='Stop' 干扰), 用 -ErrorAction SilentlyContinue 表达"没有"。
+$taskExists = $false
+try {
+    $taskExists = $null -ne (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)
+} catch {
+    $taskExists = $false
+}
 if ($taskExists) {
     Write-Output "ending scheduled task: $taskName"
-    schtasks /End /TN $taskName 2>$null | Out-Null
+    try {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    } catch {
+        Write-Output "Stop-ScheduledTask failed (ignored): $_"
+    }
 } else {
     Write-Output "no scheduled task '$taskName'; watchdog not running via task scheduler"
 }
